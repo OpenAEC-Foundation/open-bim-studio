@@ -27,25 +27,29 @@ right, and finding out what is harder and more useful than cataloguing complaint
 ## Tools to cover
 
 **BIM authoring**
-- [ ] Revit — the capability benchmark; also the source of most complaints about friction
+- [x] [Revit](revit.md) — the capability benchmark; also the source of most complaints about friction
 - [ ] Archicad — different interaction philosophy, particularly around drawing production
-- [ ] Bonsai (Blender-based) — the closest existing open-source attempt
+- [x] [Bonsai](bonsai.md) (Blender-based) — the closest existing open-source attempt
 - [ ] FreeCAD BIM workbench
 - [ ] Vectorworks, Allplan — worth a shallow pass
 
 **Real-time and general 3D**
-- [ ] Blender — the interaction model we want to learn from
+- [x] [Blender](blender.md) — the interaction model we want to learn from
 - [ ] Unreal Engine — real-time feel at scale
-- [ ] SketchUp — the strongest counter-example: modelling so low-friction that non-experts use
-      it, at the cost of everything else. The most instructive tool on this list.
+- [x] [SketchUp](sketchup.md) — the strongest counter-example: modelling so low-friction that
+      non-experts use it, at the cost of everything else. The most instructive tool on this list.
 
 **Parametric and computational**
-- [ ] Rhino + Grasshopper — the reference for accessible parametric modelling
+- [ ] Rhino + Grasshopper — the reference for accessible parametric modelling. **Priority** —
+      bears directly on our main claimed differentiator
 - [ ] Onshape — modern constraint-based CAD; also a lesson in cloud-first architecture
 
 **Interoperability**
 - [ ] Speckle — model exchange and versioning
 - [ ] IFC tooling ecosystem generally
+
+**Synthesis:** [`synthesis.md`](synthesis.md) — first pass complete, covering the four notes
+above. Treat it as provisional until Rhino/Grasshopper and Onshape are done.
 
 ## Cross-cutting questions
 

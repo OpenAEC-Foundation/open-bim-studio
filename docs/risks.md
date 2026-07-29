@@ -23,7 +23,10 @@ this capability is often absent and rarely documented.
 - **Fail:** re-evaluation requires reprocessing the model, or exceeds 100 ms.
 - **If it fails:** we write our own evaluation layer over a geometry kernel, and the semantic
   kernel becomes I/O only. Significant scope increase.
-- **Status:** open
+- **Status:** open — **confirmed as the critical risk by phase 1.** The prior-art synthesis found
+  that continuous feedback during a gesture is the mechanism the entire interaction thesis rests
+  on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
+  than merely slipping.
 
 ### R-02 · The Manifold ↔ OCCT seam may lose information
 The hybrid hypothesis assumes fast mesh booleans on the interactive path and exact geometry at
@@ -58,6 +61,21 @@ without a number.
 ---
 
 ## High — these shape the architecture
+
+### R-12 · Performance may degrade with model age rather than model size
+Phase 1 prior art found that reported performance problems in the dominant BIM tool are
+overwhelmingly *accumulation* — unused views, in-place families, groups, imported CAD — rather
+than raw element count. Firms employ people to manage this. It is architectural: a data model
+with no pressure against unbounded growth.
+
+Our benchmark set measures scale, not age. A model that is fast at 100k fresh elements may still
+degrade over a project's life, and we would not find out until far too late.
+
+- **Action:** add an ageing scenario to the benchmark set — repeated edit/undo/delete cycles,
+  orphaned views, unused definitions — and measure drift. Design the data model so unused things
+  are genuinely cheap.
+- **Pass:** performance after a simulated project lifetime is within 20% of the fresh model.
+- **Status:** open — raised by [`research/prior-art/synthesis.md`](research/prior-art/synthesis.md)
 
 ### R-05 · 2D drawing production is systematically underestimated
 Generating a section is easy. Producing an *issuable* drawing — annotation, dimensions, tags,

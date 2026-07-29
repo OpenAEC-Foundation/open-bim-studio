@@ -7,7 +7,7 @@ Phases 2 and 3 overlap and are the natural point to divide work between contribu
 | Phase | Content | Artefact | Status |
 |---|---|---|---|
 | **0** | Skeleton, repository rules, vision, non-goals, glossary | A repository others can work in | **done** |
-| **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | next |
+| **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | **in progress** |
 | **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | Completed matrix, shortlist of two | |
 | **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike | |
 | **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | |
@@ -18,10 +18,32 @@ Phases 2 and 3 overlap and are the natural point to divide work between contribu
 Turn "does what a professional BIM tool does" into something countable. Without this the scope
 stays infinite and phase 4 cannot happen.
 
-- Capability inventory, prioritised
-- Prior-art notes, focused on *why* tools succeed or fail rather than what features they list
-- IFC data model written down at the depth we actually need
-- Honest scoping of the 2D drawing subsystem (see R-05)
+- [x] Capability inventory, classified and weighted, with the structural-decision list
+- [x] Prior-art notes: Revit, SketchUp, Blender, Bonsai
+- [x] Prior-art synthesis — first pass
+- [ ] Prior art: Rhino/Grasshopper and Onshape. **Priority** — both bear on visual component
+      authoring, our main claimed differentiator, which is currently an assertion rather than a
+      design
+- [ ] Prior art: Archicad, FreeCAD, Speckle
+- [ ] IFC data model written down at the depth we actually need
+- [ ] Honest scoping of the 2D drawing subsystem (R-05)
+- [ ] Dutch standards, starting with what BIM Basis ILS requires of an authoring tool
+
+### What phase 1 has established so far
+
+The premise survives in a **weakened and more useful form**. BIM modelling is slow for three
+separable reasons — inherent semantic cost, data-model debt, and interface debt — and only the
+last two are addressable. Expect meaningfully faster, not game-engine fast.
+
+The encouraging finding: the mechanisms that make low-friction tools fast (inference-based
+snapping, verb-first modal commands, in-gesture numeric input, instant undo) are **orthogonal to
+semantics** and can be adopted without giving up the data model. That is the project's
+load-bearing claim, and the evidence supports it.
+
+Two new requirements came out of this and are now tracked: the model must stay fast without
+curation (R-12), and R-01 is confirmed as *the* critical risk rather than one of several.
+
+See [`research/prior-art/synthesis.md`](research/prior-art/synthesis.md).
 
 ## Phase 2 — kernel research
 
