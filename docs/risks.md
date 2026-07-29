@@ -28,6 +28,30 @@ this capability is often absent and rarely documented.
   on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
   than merely slipping.
 
+### R-13 · The topological naming problem
+Anything that refers to derived geometry — an associative dimension, a hosted opening, a tag, a
+component instance referencing its definition — stores a *name* for an entity that is the output
+of a computation. When parameters change and the computation re-runs, that entity may have been
+split, merged, or destroyed.
+
+This is a named, well-studied, and **unsolved** problem in parametric CAD. Mature systems mitigate
+rather than prevent: modern CAD ships repair tooling on the stated premise that fixing broken
+references is simply the nature of history-based parametric design.
+
+We will hit this the moment geometry is derived rather than stored — which is our entire
+architecture.
+
+- **Proposed mitigation:** references point at *semantic* entities and their named features —
+  "the inner face of wall W12" — never at derived topology — "face 7 of solid 3". Buildings have
+  a vocabulary that mechanical parts lack, so this option is more available to us than to general
+  CAD. It requires the data model to be designed for it from the start.
+- **Action:** locate the boundary where semantic references are insufficient, and decide
+  explicitly what happens beyond it. Ties to R-07, which is the same boundary approached from the
+  free-modelling direction.
+- **Accept:** some breakage is inevitable. Plan for visible, repairable failure rather than silent
+  corruption.
+- **Status:** open — raised by [`research/prior-art/onshape.md`](research/prior-art/onshape.md)
+
 ### R-02 · The Manifold ↔ OCCT seam may lose information
 The hybrid hypothesis assumes fast mesh booleans on the interactive path and exact geometry at
 the edges. Conversion between the two may lose what 2D derivation and IFC export need.

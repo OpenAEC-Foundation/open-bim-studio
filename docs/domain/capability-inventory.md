@@ -153,7 +153,11 @@ either exists in the data model from the start or never does:
 5. **Command/transaction architecture** for undo.
 6. **Multiple geometric representations per element** for level-of-detail.
 7. **Reference geometry for associative dimensions** — dimensions attach to *something*, and that
-   something must be stable across parametric change.
+   something must be stable across parametric change. This is the **topological naming problem**,
+   it is unsolved in general parametric CAD, and it affects hosted openings, junctions, tags and
+   component versioning as well. Proposed answer: references point at semantic entities, never at
+   derived topology. See R-13 and
+   [`parametric-components.md`](parametric-components.md#the-reference-problem--decide-this-first).
 8. **Units and precision**, globally.
 9. **Variant handling** — phases and design options. Even if unbuilt, the data model must not
    foreclose it.

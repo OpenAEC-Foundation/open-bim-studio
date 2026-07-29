@@ -40,16 +40,17 @@ right, and finding out what is harder and more useful than cataloguing complaint
       non-experts use it, at the cost of everything else. The most instructive tool on this list.
 
 **Parametric and computational**
-- [ ] Rhino + Grasshopper — the reference for accessible parametric modelling. **Priority** —
-      bears directly on our main claimed differentiator
-- [ ] Onshape — modern constraint-based CAD; also a lesson in cloud-first architecture
+- [x] [Rhino + Grasshopper](rhino-grasshopper.md) — the reference for accessible parametric
+      modelling; bears directly on our main claimed differentiator
+- [x] [Onshape](onshape.md) — history-based parametric CAD. **The most technically consequential
+      note in the survey** — source of the topological naming problem (R-13)
 
 **Interoperability**
 - [ ] Speckle — model exchange and versioning
 - [ ] IFC tooling ecosystem generally
 
-**Synthesis:** [`synthesis.md`](synthesis.md) — first pass complete, covering the four notes
-above. Treat it as provisional until Rhino/Grasshopper and Onshape are done.
+**Synthesis:** [`synthesis.md`](synthesis.md) — covers all six notes above. Archicad and FreeCAD
+remain outstanding but are unlikely to overturn it.
 
 ## Cross-cutting questions
 

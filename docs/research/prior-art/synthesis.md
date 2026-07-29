@@ -3,8 +3,8 @@
 **Decision question:** Across all the tools examined, what is the actual opportunity — and which
 parts of the project's premise survive contact with the evidence?
 
-**Status:** first pass — phase 1. Covers Revit, SketchUp, Blender and Bonsai. Archicad,
-Rhino/Grasshopper and Onshape are outstanding and may revise this.
+**Status:** phase 1. Covers Revit, SketchUp, Blender, Bonsai, Rhino/Grasshopper and Onshape.
+Archicad and FreeCAD outstanding; unlikely to overturn this.
 
 ---
 
@@ -127,6 +127,60 @@ attempt at both and is scale-limited below its own domain.
 
 ---
 
+---
+
+## 4b. The technical constraint nobody warned us about
+
+The most consequential finding of the second round, and it did not come from BIM tools at all.
+
+**The topological naming problem.** The moment geometry is *derived* rather than stored,
+everything that refers to that geometry — dimensions, hosted openings, junction cleanup, tags,
+component instances — stores a name for something that is the output of a computation. Change a
+parameter, re-run the computation, and that thing may have been split, merged, or destroyed.
+
+Mechanical CAD has worked on this for three decades. It is **unsolved**. Modern systems ship
+repair tooling rather than claiming robustness, on the stated premise that fixing broken
+references is simply the nature of parametric design.
+
+We inherit it in full, because derived geometry is our entire architecture.
+
+**The available answer is domain-specific and it is the strongest architectural argument for
+building a BIM-specific modeller rather than a general one.** A machined part has no vocabulary
+beyond its topology, so mechanical CAD *must* let users select arbitrary faces. A building has a
+vocabulary: centrelines, sides, levels, grid intersections, hosts. If references point at
+*semantic entities* — inputs to evaluation — rather than derived topology — outputs — they
+survive re-evaluation by construction.
+
+This must be in the data model from the start. See R-13.
+
+Note that R-13 and R-07 arrive at the same boundary from opposite directions: one from
+"what can a reference point at", the other from "how free can modelling be". **Two independent
+lines of enquiry landing on the same seam is evidence the seam is real** and needs an explicit
+decision rather than a compromise.
+
+---
+
+## 4c. Where the differentiator actually is
+
+Every tool examined makes component authoring a separate world. That includes visual programming
+— which removes syntax, and syntax was never the hard part. Decomposing a problem into operations
+on data is programming whether typed or drawn, which is why the accessible visual tool still has
+a steep learning curve and why its learning resources collapse past the beginner stage.
+
+The resolution is not a better authoring environment. It is **noticing that two different tasks
+were being served by one system**:
+
+- *Parameterising a model you already made* — 95% of real components, and a modelling activity.
+  Should use modelling gestures.
+- *Genuine computation* — the exceptional case, and no gestural interface will express it.
+
+**Gestural parameterisation as the primary path; a computational graph as a deliberately-entered
+escape hatch.** This answers R-06 and it is the clearest differentiation opportunity in the
+survey.
+
+It is also still an assertion. How gestural parameterisation actually works is unspecified, and
+that is now the highest-value open design question in the repository.
+
 ## 5. What this changes
 
 Concrete revisions already applied:
@@ -142,14 +196,16 @@ Concrete revisions already applied:
 
 ## 6. What remains unanswered
 
-1. **Is IFC-native authoring viable at scale?** Bonsai does it and is scale-limited. Whether that
+1. **How does gestural parameterisation actually work?** The differentiator is now well argued
+   and entirely unspecified. Highest-value open design question in the repository.
+2. **Is IFC-native authoring viable at scale?** Bonsai does it and is scale-limited. Whether that
    is the approach or the host is R-03.
-2. **Can component authoring genuinely use the same interaction model as modelling?** This is our
-   main claimed differentiator and it is currently an assertion, not a design.
-3. **How much of the inherent cost is really inherent?** Our split between the three causes is
-   reasoned, not measured. It may be too generous to the incumbents.
-4. **Rhino/Grasshopper and Onshape are outstanding**, and both bear directly on question 2. Do
-   them before treating this synthesis as settled.
+3. **Where is the semantic-reference boundary?** R-13 and R-07 meet here. Everything beyond it
+   inherits the unsolved problem.
+4. **How much of the inherent cost is really inherent?** Our three-way split is reasoned, not
+   measured. It may be too generous to the incumbents.
+5. **Archicad and FreeCAD** outstanding. Archicad is the one most likely to add something, given
+   its different philosophy around drawing production.
 
 ## Sources
 

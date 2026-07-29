@@ -19,11 +19,9 @@ Turn "does what a professional BIM tool does" into something countable. Without 
 stays infinite and phase 4 cannot happen.
 
 - [x] Capability inventory, classified and weighted, with the structural-decision list
-- [x] Prior-art notes: Revit, SketchUp, Blender, Bonsai
-- [x] Prior-art synthesis — first pass
-- [ ] Prior art: Rhino/Grasshopper and Onshape. **Priority** — both bear on visual component
-      authoring, our main claimed differentiator, which is currently an assertion rather than a
-      design
+- [x] Prior-art notes: Revit, SketchUp, Blender, Bonsai, Rhino/Grasshopper, Onshape
+- [x] Prior-art synthesis
+- [x] Parametric components: reference model and the two-path authoring position
 - [ ] Prior art: Archicad, FreeCAD, Speckle
 - [ ] IFC data model written down at the depth we actually need
 - [ ] Honest scoping of the 2D drawing subsystem (R-05)
@@ -40,8 +38,20 @@ snapping, verb-first modal commands, in-gesture numeric input, instant undo) are
 semantics** and can be adopted without giving up the data model. That is the project's
 load-bearing claim, and the evidence supports it.
 
-Two new requirements came out of this and are now tracked: the model must stay fast without
-curation (R-12), and R-01 is confirmed as *the* critical risk rather than one of several.
+The second round added the finding with the largest architectural consequence, and it came from
+mechanical CAD rather than BIM: **the topological naming problem** (R-13). Anything referring to
+derived geometry stores a name for the output of a computation, and re-evaluation may destroy it.
+Three decades of mechanical CAD have not solved it. The available answer — references point at
+*semantic* entities rather than derived topology — is only available to a domain-specific
+modeller, and only if the data model is built for it from the start.
+
+It also located the differentiator precisely: **gestural parameterisation as the primary path for
+component authoring, with a computational graph as a deliberately-entered escape hatch.** Every
+existing tool makes authoring a separate world, including the visual-programming ones — because
+visual programming removes syntax, and syntax was never the hard part.
+
+New requirements tracked: R-12 (the model must stay fast without curation), R-13 (topological
+naming), and R-01 confirmed as *the* critical risk rather than one of several.
 
 See [`research/prior-art/synthesis.md`](research/prior-art/synthesis.md).
 
