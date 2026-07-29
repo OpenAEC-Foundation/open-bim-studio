@@ -15,6 +15,7 @@ Every candidate is scored on the same axes. Record unknowns as unknown.
 | **IFC coverage** | Schema versions supported; round-trip loss | High (layer 1) |
 | **Geometry model** | Exact B-rep vs. mesh; boolean robustness; NURBS support | High |
 | **Incremental evaluation** | Can it re-evaluate one changed element, or only convert in batch? | **Critical** |
+| **Numeric precision** | 64-bit internally? A kernel that works only in float32 is **disqualified** — see [`../../domain/spatial-model.md`](../../domain/spatial-model.md) | **Critical** |
 | **Performance** | Load time and memory at 10k / 100k / 1M elements | High |
 | **Embeddability** | Language bindings, WASM, native, threading model | High |
 | **2D derivation** | Section and projection support, hidden-line removal | Medium |
@@ -72,7 +73,11 @@ Layer 3 candidates are evaluated in [`../hosts-and-engines/`](../hosts-and-engin
 3. Can it be driven from the language of our host, in-process, without a subprocess or a file?
 4. What is its threading model, and can geometry evaluation move off the UI thread?
 5. What breaks first at scale — memory, load time, or evaluation time?
-6. Who maintains it, and what happens to us if they stop?
+6. **What numeric precision does it use internally, and can it be configured?** float32-only is
+   disqualifying.
+7. **Can it operate on a subset of the model** — one tile, one region — or does it require the
+   whole model? This decides whether tiling is possible at all. See R-14.
+8. Who maintains it, and what happens to us if they stop?
 
 ## Output of this directory
 

@@ -22,7 +22,11 @@ stays infinite and phase 4 cannot happen.
 - [x] Prior-art notes: Revit, SketchUp, Blender, Bonsai, Rhino/Grasshopper, Onshape
 - [x] Prior-art synthesis
 - [x] Parametric components: reference model and the two-path authoring position
+- [x] Spatial model: georeferencing, tiling and precision
+- [ ] **Decide: unbounded extent only, or streaming too?** Separable, and the second is an order
+      of magnitude more work. Blocks R-14
 - [ ] Prior art: Archicad, FreeCAD, Speckle
+- [ ] Prior art: geospatial tiling approaches — 3D Tiles and comparable formats
 - [ ] IFC data model written down at the depth we actually need
 - [ ] Honest scoping of the 2D drawing subsystem (R-05)
 - [ ] Dutch standards, starting with what BIM Basis ILS requires of an authoring tool

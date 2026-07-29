@@ -49,6 +49,20 @@ that shows it, and the exported model. **That loop is the product.** Everything 
 - Large models stay interactive. A real building is 10⁵–10⁶ elements, and that is the
   requirement, not a stretch goal.
 
+## Geographic extent
+
+The model is **georeferenced and tile-based**, so extent is effectively unbounded while precision
+stays at millimetres. A project is not an island at the origin; it sits somewhere real, next to
+other projects, terrain and infrastructure.
+
+The counterintuitive part: unbounded extent is achieved by **never letting a coordinate get
+large**. Many local origins, each held in high precision, rather than one distant origin.
+`IfcMapConversion` already works this way, so the approach is aligned with IFC rather than bolted
+onto it.
+
+This is structural — a coordinate architecture cannot be retrofitted — and it is larger than it
+looks. See [`../domain/spatial-model.md`](../domain/spatial-model.md).
+
 ## Success criteria
 
 This vision is met when a competent modeller can:

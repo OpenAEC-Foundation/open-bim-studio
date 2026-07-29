@@ -34,7 +34,8 @@ Not a game, not a CAD viewer, and the differences drive the architecture:
 | Dynamic geometry | Cost of regenerating meshes during interaction |
 | Capped clipping | Section views |
 | Line rendering | Hidden-line, silhouette, and technical drawing output |
-| Depth precision | Correctness at building scale |
+| **Camera-relative rendering** | **Required.** Unbounded geographic extent with millimetre precision — see [`../../domain/spatial-model.md`](../../domain/spatial-model.md) |
+| Depth precision | Correctness at building scale, and over geographic extent |
 | Platform reach | Desktop certainly; browser possibly |
 | Maturity and AI familiarity | Delivery speed |
 

@@ -58,7 +58,8 @@ These are genuinely undecided and each materially changes the architecture:
 |---|---|
 | Scripting / visual programming for parametrics | Determines whether the parametric system is a closed component model or an open computational one |
 | Quantity take-off and scheduling | Cheap if the data model anticipates it, expensive to retrofit |
-| Point cloud import | Affects the renderer and spatial data structures profoundly |
+| Point cloud import | Was expensive on its own; now **cheaper**, since it shares the tiling and paging machinery required by [`../domain/spatial-model.md`](../domain/spatial-model.md). Worth reconsidering |
+| Terrain and GIS context layers | Follows directly from georeferencing. Where does "sits in the world" stop and "is a GIS" begin? |
 | Rebar and detailed structural modelling | Very high effort; only in scope if structural is the first discipline |
 | MEP systems | Network topology is a different data model than building elements |
 | Drawing annotation depth | The gap between "generates a section" and "produces an issuable drawing" is much larger than it appears — see [`../domain/drawings-from-model.md`](../domain/drawings-from-model.md) |

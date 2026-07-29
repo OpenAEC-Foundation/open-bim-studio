@@ -94,7 +94,7 @@ The area most likely to be underestimated. See
 | Property sets | core | M | 🟡 | Extensibility must be designed, not discovered |
 | Classification systems | expected | M | 🟡 | Keep generic — see [`nl-standards.md`](nl-standards.md) |
 | Quantities | expected | M | 🟡 | |
-| Units and precision | core | S | 🔴 | Global decision; millimetres over hundreds of metres |
+| Units and precision | core | S | 🔴 | **The defining constraint, not a setting.** Millimetres over unbounded extent — see [`spatial-model.md`](spatial-model.md) |
 | Revisions and change tracking | expected | L | 🔴 | |
 
 ## Interoperability
@@ -112,6 +112,25 @@ The area most likely to be underestimated. See
 published in 2006 — even though IFC4 and IFC4x3 are supported by 2026 tooling. Targeting IFC4x3
 for export while being unable to read what people actually send would be a scoping error made
 out of tidiness. **Read IFC2x3 and IFC4 from day one; decide the export target deliberately.**
+
+## Spatial extent and georeferencing
+
+See [`spatial-model.md`](spatial-model.md). Almost entirely 🔴 — a coordinate architecture cannot
+be retrofitted, because every stored coordinate would have to be reinterpreted.
+
+| Capability | Class | Weight | Retrofit | Notes |
+|---|---|---|---|---|
+| **Tiled coordinate architecture** | core | M | 🔴 | 64-bit tile origins, float32 local coordinates. The minimum viable version is one tile and is cheap |
+| Georeferencing (CRS + map conversion) | core | S | 🔴 | `IfcMapConversion` + `IfcProjectedCRS`. Projected cartesian CRS only |
+| Camera-relative rendering | core | M | 🔴 | Required by the above; avoids GPU double precision |
+| Cross-tile element handling | core | M | 🔴 | Elements spanning boundaries — see R-14 |
+| Tile paging and eviction | *undecided* | L | 🟡 | **Separable from unbounded extent.** Much more expensive. See R-14 |
+| Cross-tile evaluation | *undecided* | L | 🔴 | Only needed if paging is. R-14 |
+| Point cloud import | *undecided* | L | 🟡 | Was a non-goal; shares the tiling machinery, so its cost drops |
+
+**The separable question:** unbounded *extent* needs only the tiled coordinate architecture and is
+cheap. *Streaming* needs paging, eviction and cross-tile evaluation, and is an order of magnitude
+more work. Answer which is required before committing to the second.
 
 ## Project organisation
 

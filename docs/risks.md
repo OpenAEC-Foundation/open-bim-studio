@@ -28,6 +28,43 @@ this capability is often absent and rarely documented.
   on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
   than merely slipping.
 
+### R-14 · Parametric evaluation across unloaded tiles
+The tile-based spatial model (see [`domain/spatial-model.md`](domain/spatial-model.md)) collides
+with the parametric evaluation graph. A wall changes and its junctions must follow — but the
+neighbouring wall may live in a tile that is not in memory. Load it every time and the paging is
+pointless; skip it and the model is not valid.
+
+This directly threatens R-01, which is already the critical risk. It also undermines a claim the
+drawing and export subsystems rely on: that the model is always in a valid, exportable state.
+
+- **Spike:** `spikes/cross-tile-evaluation/` — a model spanning several tiles with dependencies
+  crossing boundaries; change an element near a seam with neighbours unloaded.
+- **Pass:** cross-tile dependencies resolve correctly, or are detectably stale and repaired on
+  load, without loading the whole model.
+- **Fail:** correctness requires the full model in memory — in which case tiling gives extent but
+  not scale, and streaming is off the table.
+- **Mitigations to evaluate:** a one-tile halo (dependency edges are mostly spatially local);
+  lazy resolution with staleness marking; deferred evaluation completed on load. All three change
+  what "valid model" means.
+- **Note:** separating *unbounded extent* from *streaming* may avoid this entirely — see open
+  question 6 in the spatial model document. Extent needs only a tiled coordinate architecture;
+  streaming needs paging and eviction. **Answer that question before committing to this risk.**
+- **Status:** open
+
+### R-15 · Georeferencing degrades on the IFC version people actually use
+IFC4/IFC4x3 support georeferencing natively through `IfcMapConversion` and `IfcProjectedCRS`.
+IFC2x3 carries the same information only through `ePset_MapConversion` and `ePSet_ProjectedCRS`
+property-set conventions on `IfcSite`.
+
+Almost all real exchange is still IFC2x3. So the geographic ambition pulls toward IFC4x3 — which
+was extended for infrastructure, where extent matters — while interoperability reality pulls
+toward IFC2x3.
+
+- **Action:** explicit decision on export target, recorded as an ADR. Not a default.
+- **Also verify:** IFC permits only *projected*, cartesian CRS. Geographic (lat/lon) systems are
+  out of scope by the standard, and reprojection happens outside the model.
+- **Status:** open
+
 ### R-13 · The topological naming problem
 Anything that refers to derived geometry — an associative dimension, a hosted opening, a tag, a
 component instance referencing its definition — stores a *name* for an entity that is the output
