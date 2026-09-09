@@ -585,7 +585,7 @@ real-time 3D application. Written in [DynLex](https://github.com/OpenAEC-Foundat
 kernel/   geometry kernel — B-rep, mesh, point cloud, implicit; exact predicates; f64   (in progress)
 ui/       Vulkan-based UI and viewport library                                          (brief only)
 ifc/      IFC/STEP read-write library                                                   (brief only)
-docs/     vision, domain knowledge, decisions, specs; research-phase archive
+docs/     vision, domain knowledge, research notes and spikes findings, decisions, specs
 scripts/  build.sh and test.sh, which locate the pinned DynLex compiler
 ```
 
