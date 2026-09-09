@@ -16,7 +16,7 @@
 - Never name competing geotechnical or structural calculation software anywhere. BIM and 3D software (OpenCascade, Blender, AutoCAD, Revit, …) may be named.
 - No conversation transcripts, assistant responses or "in this session we…" text anywhere, including commit messages. `PROMPTS.md` is not modified by this plan.
 - Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
-- Archived documents are moved, never edited. Kept documents receive only the link fixes and the f64 amendment named in this plan.
+- Research notes, spikes findings and ADR evidence tables are never edited by this plan; existing documents receive only the status line, roadmap rows and f64 amendment named here.
 - DynLex source files use 4-space indentation and the `.dl` extension. Scripts are Bash (`#!/bin/bash`, `set -euo pipefail`) and run from Git Bash on Windows as well as Linux/macOS.
 - All scripts run from the repository root; import paths in kernel `.dl` files are written relative to the repository root (`import kernel/core/core.dl`), which the DynLex compiler resolves through the working directory. Standard-library imports are written `import lib/std.dl` and resolve through the compiler's own source tree.
 - Run every DynLex-related shell command from Git Bash (the Bash tool), not PowerShell — the dynlex scripts are Bash scripts.
