@@ -38,7 +38,25 @@ Label every claim:
 Most published performance numbers are *claimed*. Treat them as hypotheses to test, not as
 findings.
 
+## Traceability
+
+Decisions must be traceable to evidence years later, by someone who was not there.
+
+- Every note records the **version or commit hash** of what it read or measured. Links point at
+  that commit, not at a moving branch.
+- Every note names the **decision it serves** — an ADR number or a spec section — in its header.
+- Every ADR carries an **evidence table**: claim → note and section → evidence type. An ADR with
+  an empty cell stays `proposed`.
+- [`kernels/problems.md`](kernels/problems.md) indexes problem → root cause → candidates →
+  evidence → our design's answer. It is the cross-reference between what existing kernels get
+  wrong and why our design looks the way it does.
+- Measurements live in [`../../spikes/`](../../spikes/) with hardware, versions, model and
+  method, so the number can be reproduced.
+
 ## Status
 
-Phase 0. Category READMEs define the criteria; individual candidate notes are not yet written.
-See [`../roadmap.md`](../roadmap.md).
+Phase 2 (kernel research) in progress since 2026-09-09, under a revised question: not only
+*which kernel do we build on* but *what does each kernel teach a kernel we build ourselves*. The
+method is in [`kernels/README.md`](kernels/README.md); the order of work in
+[`../superpowers/plans/2026-09-09-kernel-research-programme.md`](../superpowers/plans/2026-09-09-kernel-research-programme.md).
+Phase 1 (prior art, domain) is complete; see [`../roadmap.md`](../roadmap.md).

@@ -24,6 +24,16 @@ probably use X".>
 > Record the rejected options properly. They are the most valuable part of an ADR: they are what
 > stops the decision being reopened every time somebody new joins and has the same idea.
 
+## Evidence
+
+> Every claim the decision rests on, with where it is shown. An ADR with an empty cell in this
+> table stays `proposed`. Evidence type is **measured** (a `spikes/*/FINDINGS.md`), **claimed**
+> (documentation or a third party, with URL) or **inferred** (reasoning shown in the note).
+
+| Claim | Where shown | Evidence type |
+|---|---|---|
+| | `docs/research/<category>/<note>.md` § | |
+
 ## Consequences
 
 **What this makes easier:**

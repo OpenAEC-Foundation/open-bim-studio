@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn this research repository into a build repository whose `scripts/test.sh` compiles and runs a first DynLex kernel test against a pinned DynLex compiler, with the reversed kernel decision recorded in ADRs.
+> **Blocked until** ADR-0004, 0005 and 0006 are `accepted` by Task 16 of `2026-09-09-kernel-research-programme.md`. If ADR-0004 is withdrawn there, this plan is retired. Revised 2026-09-09: research documents are no longer archived (the research phase continues); the ADRs are written as `proposed` by the research programme and only *accepted* here.
 
-**Architecture:** Milestone 0 of `docs/superpowers/specs/2026-09-09-geometry-kernel-design.md`. Research documents move unmodified to `docs/archive/`; vision, domain and UX documents stay. Three new ADRs record the decisions; `kernel/` gets its first module and test; `scripts/` locates the DynLex compiler from a sibling checkout pinned by commit hash.
+**Goal:** Turn this research repository into a build repository whose `scripts/test.sh` compiles and runs a first DynLex kernel test against a pinned DynLex compiler, with the accepted kernel decisions in force.
+
+**Architecture:** Milestone 0 of `docs/superpowers/specs/2026-09-09-geometry-kernel-design.md`. Research, vision, domain and UX documents stay where they are; the superseded layered hypothesis is marked as such. The accepted ADRs are verified; `kernel/` gets its first module and test; `scripts/` locates the DynLex compiler from a sibling checkout pinned by commit hash.
 
 **Tech Stack:** DynLex (pinned commit `7cacbc97f0cc2fdbe72bdbd310129bbc2da228cd` of `https://github.com/OpenAEC-Foundation/dynlex`, checked out at `../dynlex`), Git Bash on Windows for scripts, Markdown for documents.
 
@@ -34,15 +36,9 @@ kernel/tests/smoke/main.dl             first test: prints the kernel version
 kernel/tests/smoke/expected.txt
 ui/README.md                           brief for the UI library sub-project
 ifc/README.md                          brief for the IFC library sub-project
-docs/archive/README.md                 why these documents are archived and what superseded them
-docs/archive/research/                 moved from docs/research/
-docs/archive/architecture/layers.md    moved from docs/architecture/layers.md
-docs/archive/architecture/overview.md  moved from docs/architecture/overview.md
-docs/archive/roadmap.md, risks.md, BUILD-BRIEF.md   moved from docs/
-docs/architecture/decisions/0003-build-on-an-existing-kernel.md   status → superseded
-docs/architecture/decisions/0004-build-our-own-kernel-in-dynlex.md
-docs/architecture/decisions/0005-multi-representation-kernel.md
-docs/architecture/decisions/0006-f64-local-coordinates-in-tile-frames.md
+docs/architecture/layers.md            status line: superseded hypothesis, points at the kernel spec
+docs/roadmap.md                        phase 4 done, phase 6 (kernel milestones) in progress
+docs/architecture/decisions/0003-build-on-an-existing-kernel.md   already superseded by Task 16 of the research programme — verified only
 docs/domain/spatial-model.md           amended: f64 local coordinates
 docs/domain/capability-inventory.md    amended: one row
 README.md, CLAUDE.md, CONTRIBUTING.md  rewritten for a build repository
@@ -422,349 +418,57 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Archive the research documents
+### Task 3: Mark the superseded hypothesis and advance the roadmap
 
 **Files:**
-- Move: `docs/research/` → `docs/archive/research/`
-- Move: `docs/architecture/layers.md`, `docs/architecture/overview.md` → `docs/archive/architecture/`
-- Move: `docs/roadmap.md`, `docs/risks.md`, `docs/BUILD-BRIEF.md` → `docs/archive/`
-- Create: `docs/archive/README.md`
-- Modify: links in `docs/vision/*.md`, `docs/domain/*.md`, `docs/ux/*.md` that point at moved files
+- Modify: `docs/architecture/layers.md` (status line)
+- Modify: `docs/roadmap.md` (phase table)
 
-**Interfaces:**
-- Produces: `docs/` containing only `archive/`, `architecture/decisions/`, `domain/`, `superpowers/`, `ux/`, `vision/`.
+- [ ] **Step 1: Mark layers.md**
 
-- [ ] **Step 1: Move with git so history follows**
-
-```bash
-mkdir -p docs/archive/architecture
-git mv docs/research docs/archive/research
-git mv docs/architecture/layers.md docs/archive/architecture/layers.md
-git mv docs/architecture/overview.md docs/archive/architecture/overview.md
-git mv docs/roadmap.md docs/archive/roadmap.md
-git mv docs/risks.md docs/archive/risks.md
-git mv docs/BUILD-BRIEF.md docs/archive/BUILD-BRIEF.md
-```
-
-- [ ] **Step 2: Verify the layout**
-
-Run: `ls docs docs/architecture docs/archive docs/archive/architecture`
-Expected: `docs`: `archive architecture domain superpowers ux vision`; `docs/architecture`: `decisions`; `docs/archive`: `BUILD-BRIEF.md README.md architecture research risks.md roadmap.md` (README appears after Step 3); `docs/archive/architecture`: `layers.md overview.md`.
-
-- [ ] **Step 3: Write the archive README**
-
-Create `docs/archive/README.md`:
+Directly under the title of `docs/architecture/layers.md` insert:
 
 ```markdown
-# Archive
-
-Documents from the research phase (July–September 2026), kept unmodified for their reasoning
-and their sources. Relative links inside them may be stale.
-
-They were written under [ADR-0003](../architecture/decisions/0003-build-on-an-existing-kernel.md),
-which chose to build on existing geometry and IFC kernels. That decision is superseded by
-[ADR-0004](../architecture/decisions/0004-build-our-own-kernel-in-dynlex.md): a new kernel is
-written in DynLex. The kernel design is in
-[`../superpowers/specs/2026-09-09-geometry-kernel-design.md`](../superpowers/specs/2026-09-09-geometry-kernel-design.md).
-
-| Archived | What it was |
-|---|---|
-| `research/` | Evaluations of kernels, renderers, hosts, and prior-art notes on existing BIM and 3D tools |
-| `architecture/layers.md` | The layered hypothesis built on existing kernels — falsified by decision, not by measurement |
-| `architecture/overview.md` | System overview for that hypothesis |
-| `roadmap.md` | The research-phase plan (phases 0–5) |
-| `risks.md` | The research-phase risk register; R-01 (evaluation), R-13 (topological naming) and R-14 (cross-tile evaluation) remain real and are re-addressed in the application design |
-| `BUILD-BRIEF.md` | The intended handover document, never completed |
-
-Still current, and therefore not archived: `docs/vision/`, `docs/domain/`, `docs/ux/`.
+**Status (2026-09-09):** superseded hypothesis. This document described building on existing
+kernels under ADR-0003. The research programme (`../research/kernels/synthesis.md`) led to
+ADR-0004; the current architecture is `../superpowers/specs/2026-09-09-geometry-kernel-design.md`.
+Kept for the reasoning; do not update.
 ```
 
-- [ ] **Step 4: Fix links in the kept documents**
+- [ ] **Step 2: Advance the roadmap**
 
-Run from the repository root:
+In `docs/roadmap.md` set phase 4 to `**done**` (ADRs accepted in the research programme's Task 16) and the phase 6 row (kernel milestones) to `**in progress — M0**`.
 
-```bash
-grep -rln '\.\./research/\|\.\./architecture/layers\.md\|\.\./architecture/overview\.md\|\.\./roadmap\.md\|\.\./risks\.md\|\.\./BUILD-BRIEF\.md' docs/vision docs/domain docs/ux
-```
+- [ ] **Step 3: Verify and commit**
 
-For every listed file apply, in Bash:
-
-```bash
-sed -i \
-  -e 's#\.\./research/#../archive/research/#g' \
-  -e 's#\.\./architecture/layers\.md#../archive/architecture/layers.md#g' \
-  -e 's#\.\./architecture/overview\.md#../archive/architecture/overview.md#g' \
-  -e 's#\.\./roadmap\.md#../archive/roadmap.md#g' \
-  -e 's#\.\./risks\.md#../archive/risks.md#g' \
-  -e 's#\.\./BUILD-BRIEF\.md#../archive/BUILD-BRIEF.md#g' \
-  <file>
-```
-
-- [ ] **Step 5: Verify no dangling links remain in kept documents**
-
-Run:
+Run: `head -5 docs/architecture/layers.md && grep -n "in progress — M0" docs/roadmap.md`
+Expected: the status paragraph, and one matching roadmap line.
 
 ```bash
-grep -rn '\.\./research/\|\.\./architecture/layers\.md\|\.\./architecture/overview\.md\|\.\./roadmap\.md\|\.\./risks\.md\|\.\./BUILD-BRIEF\.md' docs/vision docs/domain docs/ux; echo "exit=$?"
-```
-
-Expected: no output and `exit=1` (grep found nothing).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add -A docs
-git commit -m "Archive the research-phase documents
+git add docs/architecture/layers.md docs/roadmap.md
+git commit -m "Mark the layered hypothesis superseded and advance the roadmap to M0
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 4: Architecture decision records
+### Task 4: Verify the accepted decision records
+
+The ADRs were written as `proposed` and accepted by Task 16 of the research programme. This task only verifies the state M0 depends on.
 
 **Files:**
-- Modify: `docs/architecture/decisions/0003-build-on-an-existing-kernel.md:3`
-- Create: `docs/architecture/decisions/0004-build-our-own-kernel-in-dynlex.md`
-- Create: `docs/architecture/decisions/0005-multi-representation-kernel.md`
-- Create: `docs/architecture/decisions/0006-f64-local-coordinates-in-tile-frames.md`
+- Read: `docs/architecture/decisions/0003-build-on-an-existing-kernel.md`, `0004-build-our-own-kernel-in-dynlex.md`, `0005-multi-representation-kernel.md`, `0006-f64-local-coordinates-in-tile-frames.md`
 
-**Interfaces:**
-- Consumes: the ADR template at `docs/architecture/decisions/_template.md` (sections: Status/Date, Context, Decision, Options considered, Consequences, Sources).
-
-- [ ] **Step 1: Mark ADR-0003 superseded**
-
-In `docs/architecture/decisions/0003-build-on-an-existing-kernel.md` replace line 3
-
-```
-**Status:** accepted
-```
-
-with
-
-```
-**Status:** superseded by [ADR-0004](0004-build-our-own-kernel-in-dynlex.md)
-```
-
-Change nothing else in that file.
-
-- [ ] **Step 2: Write ADR-0004**
-
-Create `docs/architecture/decisions/0004-build-our-own-kernel-in-dynlex.md`:
-
-```markdown
-# ADR-0004 — Build our own geometry kernel, in DynLex
-
-**Status:** accepted
-**Date:** 2026-09-09
-
-## Context
-
-ADR-0003 chose to build on existing geometry and IFC kernels, on the grounds that a kernel is a
-multi-year effort and not a differentiator. Two things changed.
-
-First, the maintainer has DynLex: a natural-language-like language compiling to native code and
-SPIR-V through LLVM, with a Vulkan runtime and a standard library written in the language
-itself. A kernel in DynLex is the largest program the language will have carried, and building
-it is part of the language's purpose.
-
-Second, the research phase found that every candidate kernel imposes architectural assumptions
-(single origin, float32 tessellation paths, evaluation models built for batch rather than
-interactive use) that conflict with structural requirements in
-`docs/domain/spatial-model.md` and `docs/domain/capability-inventory.md`. Working around a
-kernel's assumptions is a different kind of multi-year effort.
-
-## Decision
-
-We build our own geometry kernel, in DynLex, as the first of three libraries in this
-repository: `kernel/`, `ui/` (Vulkan-based UI and viewport), `ifc/` (IFC/STEP read-write). The
-application is built on the three.
-
-Where DynLex lacks a facility the kernel needs (threading, memory-mapped allocation), the
-language is extended in its own repository following its own rules, rather than the kernel
-working around the gap.
-
-The design is `docs/superpowers/specs/2026-09-09-geometry-kernel-design.md`.
-
-## Options considered
-
-### Build on existing kernels (ADR-0003)
-Rejected, reversing ADR-0003. Its argument — a kernel consumes the whole effort — assumed a
-general-purpose language and a general-purpose kernel. A kernel scoped by the capability
-inventory, in a language the maintainer controls, is a different bet: larger than any single
-library integration, smaller than the industry kernels it is compared with, and free of their
-assumptions.
-
-### Own kernel in an established systems language
-Rejected. It forfeits the reason DynLex exists — a language designed for humans and AI agents
-to write together — and it would leave DynLex without its defining large program.
-
-### Own kernel in DynLex — chosen
-Full control of representation, precision and evaluation model. Costs: the kernel is the
-critical path for everything else, and compiler maturity is now on that path too.
-
-## Consequences
-
-**Easier:** the coordinate architecture, the tolerance model and the evaluation model are ours
-from the first line. No licence coupling to upstream kernels (retires the licence-compatibility
-risk of the research phase).
-
-**Harder:** robustness of booleans and B-rep operations must be earned by us; there is no
-upstream to inherit twenty years of fixes from. Compiler defects block kernel work until fixed.
-
-**Commits us to:** the milestone discipline and performance targets in the kernel design;
-extending DynLex when needed; never working around the compiler.
-
-**To reverse:** adopt an existing kernel behind the kernel API. The API is designed to make
-that possible in principle; the cost would be the representations that kernel lacks.
-```
-
-- [ ] **Step 3: Write ADR-0005**
-
-Create `docs/architecture/decisions/0005-multi-representation-kernel.md`:
-
-```markdown
-# ADR-0005 — The kernel has four equal representations with explicit conversions
-
-**Status:** accepted
-**Date:** 2026-09-09
-
-## Context
-
-BIM geometry is mostly planar solids, but a building model also carries curved façades, terrain
-surfaces, scan data, and free-form elements. The capability inventory lists free-form modelling
-as an unlocated seam and point cloud import as within reach once tiling exists. A kernel with a
-single native representation forces every other kind of geometry through a lossy conversion.
-
-## Decision
-
-The kernel holds four first-class representations: **B-rep** (analytic and NURBS geometry on
-explicit topology, with per-entity tolerances), **mesh** (half-edge, f64, attributed),
-**point cloud** (chunked structure-of-arrays with an octree) and **implicit** (signed-distance
-trees). None is the source of the others.
-
-Conversions between representations are explicit, named operations with their own parameters
-and failure modes. The kernel never converts silently; CSG on mixed representations requires the
-caller to pass a conversion policy.
-
-CSG dispatches on representation: B-rep booleans on B-rep, exact arrangement-based booleans on
-meshes, node composition on implicits.
-
-## Options considered
-
-### B-rep as the single source, mesh derived (the classic CAD kernel)
-Rejected. Exact and complete for engineered solids, but every mesh, scan and organic shape must
-be lifted into B-rep or held outside the kernel. B-rep booleans are the hardest software in the
-field and would gate every other capability.
-
-### Mesh as the single source (the modelling-tool kernel)
-Rejected. Fast and free, but no true curved faces, and IFC export of curved geometry would be
-approximated. Dimensional accuracy depends on tessellation density.
-
-### Four equal representations — chosen
-Most work, most freedom. Each representation is implemented in the form in which it is strong;
-the cost is the conversion matrix, which is kept honest by being explicit.
-
-## Consequences
-
-**Easier:** every geometry class the product needs has a native home; the free-form seam moves
-from "unlocated" to "a conversion with known loss".
-
-**Harder:** four representations to keep valid, four sets of tests, and a conversion matrix
-whose every cell needs a defined behaviour.
-
-**Commits us to:** an API whose operations name their representation, and to never adding an
-implicit conversion for convenience.
-
-**To reverse:** drop a representation by deleting its module; the others do not depend on it.
-```
-
-- [ ] **Step 4: Write ADR-0006**
-
-Create `docs/architecture/decisions/0006-f64-local-coordinates-in-tile-frames.md`:
-
-```markdown
-# ADR-0006 — Coordinates are f64 in tile-local frames; combinatorial decisions are exact
-
-**Status:** accepted
-**Date:** 2026-09-09
-
-## Context
-
-`docs/domain/spatial-model.md` established that unbounded geographic extent is achieved by
-keeping every coordinate small: many tile origins held in high precision, geometry expressed
-relative to its tile. It proposed float32 for local coordinates on the grounds that a tile a
-few hundred metres across keeps float32 below a millimetre.
-
-The kernel's accuracy target is dimensional accuracy of the kind engineering CAD users expect,
-and its boolean operations must be robust on real input. Both push the choice away from float32
-and toward a separation between metric and combinatorial arithmetic.
-
-## Decision
-
-All kernel coordinates are **64-bit floating point in a tile-local frame**. Tile origins are
-64-bit values in the project's projected CRS. Geometry never stores world coordinates; the
-`spatial` module owns the tile grid. Only the `gpu` module produces 32-bit values, camera-relative,
-at upload time.
-
-**Combinatorial decisions** (orientation, intersection existence, in-circle, in-sphere) use
-exact adaptive-precision predicates in the style of Shewchuk. **Metric decisions** (coincidence,
-planarity) use an explicit tolerance model — linear 1e-6 m and angular 1e-9 rad by default,
-overridable per operation, carried per entity in B-rep.
-
-`spatial-model.md` is amended accordingly; its tile architecture is unchanged.
-
-## Options considered
-
-### float32 local coordinates (the research-phase proposal)
-Rejected. Adequate for display, not for modelling: repeated operations accumulate error far
-faster than a single representation bound suggests, and exact predicates on float32 input would
-still not repair a boolean whose constructed points are already coarse.
-
-### f64 everywhere including the GPU
-Rejected. GPU double precision is slow or absent; camera-relative f32 is standard practice for
-large worlds and loses nothing visible.
-
-### Exact rational arithmetic throughout
-Rejected. Orders of magnitude slower and incompatible with the performance targets; exactness
-is needed for decisions, not for stored coordinates.
-
-### f64 local, exact predicates, explicit tolerances — chosen
-
-## Consequences
-
-**Easier:** booleans and intersections can be made robust; dimensional accuracy is a property
-of the kernel rather than of tessellation density.
-
-**Harder:** memory per vertex doubles relative to float32; the GPU packing step must exist
-from the first rendered frame.
-
-**Commits us to:** implementing and fuzz-testing the exact predicates in milestone 1 before any
-operation that relies on them.
-
-**To reverse:** every stored coordinate would have to be reinterpreted — this is the decision
-`spatial-model.md` warned cannot be retrofitted.
-
-## Sources
-
-- [Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates — Shewchuk](https://people.eecs.berkeley.edu/~jrs/papers/robustr.pdf)
-- [Floating origin](https://en.wikipedia.org/wiki/Floating_origin)
-- [Emulating double precision on the GPU to render large worlds — Godot](https://godotengine.org/article/emulating-double-precision-gpu-render-large-worlds/)
-```
-
-- [ ] **Step 5: Verify numbering and status lines**
+- [ ] **Step 1: Verify statuses**
 
 Run: `grep -n '^\*\*Status:\*\*' docs/architecture/decisions/000*.md`
-Expected: 0001 and 0002 `accepted`; 0003 `superseded by [ADR-0004](0004-build-our-own-kernel-in-dynlex.md)`; 0004, 0005, 0006 `accepted`.
+Expected: 0001 and 0002 `accepted`; 0003 `superseded by [ADR-0004](0004-build-our-own-kernel-in-dynlex.md)`; 0004, 0005, 0006 `accepted`. If any differs, stop: M0 is not unblocked.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 2: Verify the evidence tables are complete**
 
-```bash
-git add docs/architecture/decisions
-git commit -m "Record the kernel decisions in ADR-0004, 0005 and 0006
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-```
+Run: `grep -n '^| .* | .* | *|$' docs/architecture/decisions/000[456]*.md; echo "exit=$?"`
+Expected: no output, `exit=1` (no empty evidence-type cell). No commit — nothing changes in this task.
 
 ---
 
@@ -906,7 +610,7 @@ Bash:
 | See the kernel design | [`docs/superpowers/specs/2026-09-09-geometry-kernel-design.md`](docs/superpowers/specs/2026-09-09-geometry-kernel-design.md) |
 | See the decisions | [`docs/architecture/decisions/`](docs/architecture/decisions/) |
 | Work in the kernel | [`kernel/README.md`](kernel/README.md) |
-| Read the research that preceded this | [`docs/archive/`](docs/archive/) |
+| Read the research behind the decisions | [`docs/research/`](docs/research/) — start with `kernels/synthesis.md` and `kernels/problems.md` |
 
 ## Status
 
@@ -983,7 +687,7 @@ adjusted silently.
 
 - Do not commit large binaries. Reference models go in `reference/` with acquisition
   instructions; see `reference/README.md` and `.gitignore`.
-- Do not edit anything under `docs/archive/`.
+- Do not change a research note's verdict or an ADR's evidence table without a new measurement or source; decisions stay traceable to what was actually shown.
 - Do not add a representation, a conversion, or an operation that is not in the kernel design
   without updating the design first.
 - Do not fill stubs with plausible prose. An honest "not started" is more useful than filler.
@@ -1067,24 +771,20 @@ Its design spec will live in `docs/superpowers/specs/` and is written after kern
 when there is a B-rep to map to.
 ```
 
-- [ ] **Step 5: Mark the kernel spec accepted**
+- [ ] **Step 5: Mark the kernel spec as in implementation**
 
-In `docs/superpowers/specs/2026-09-09-geometry-kernel-design.md` replace line 4
-
-```
-**Status:** draft for review
-```
-
-with
+The research programme's Task 16 already set the spec's status paragraph to `accepted <date>` (or amended it). Append to that status paragraph:
 
 ```
-**Status:** accepted 2026-09-09; M0 implemented by `../plans/2026-09-09-m0-repository-restart.md`
+M0 implemented by `../plans/2026-09-09-m0-repository-restart.md`.
 ```
 
-- [ ] **Step 6: Verify no document outside the archive still describes this as a research repository**
+Do not touch the rest of the paragraph; it records what the acceptance rested on.
 
-Run: `grep -rn "research repository\|no product code\|Preparation repository" --include=*.md . | grep -v "^./docs/archive/" | grep -v "^./docs/superpowers/" | grep -v "^./docs/architecture/decisions/000[34]"; echo "exit=$?"`
-Expected: no output, `exit=1`. (The spec, the plan and ADR-0003/0004 legitimately describe the former state.)
+- [ ] **Step 6: Verify no entry document still describes this as a research-only repository**
+
+Run: `grep -n "research repository\|no product code\|Preparation repository" README.md CLAUDE.md CONTRIBUTING.md; echo "exit=$?"`
+Expected: no output, `exit=1`. (Research notes, the spec, the plans and the ADRs legitimately describe the former state.)
 
 - [ ] **Step 7: Run the full verification**
 
@@ -1116,4 +816,4 @@ Expected: `1 library file(s) compile.` and `1 passed, 0 failed`. Then:
 ls docs && grep -n '^\*\*Status:\*\*' docs/architecture/decisions/000*.md && git log --oneline -7
 ```
 
-Expected: `docs` lists `archive architecture domain superpowers ux vision`; ADR statuses as in Task 4 Step 5; six commits from Tasks 1–6 on top of the spec commit `cdd3745`.
+Expected: `docs` lists `architecture domain kernel-design.html research superpowers ux vision` plus `roadmap.md`, `risks.md`, `BUILD-BRIEF.md`; ADR statuses as in Task 4 Step 1; five commits from Tasks 1, 2, 3, 5 and 6 on top of the research programme's final commit.

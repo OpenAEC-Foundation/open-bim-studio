@@ -1,7 +1,10 @@
 # Geometry kernel — design
 
 **Date:** 2026-09-09
-**Status:** draft for review
+**Status:** working hypothesis — reviewed 2026-09-09, **not accepted**. Every fundamental choice
+below is to be substantiated by the research programme in
+`../plans/2026-09-09-kernel-research-programme.md` before ADR-0004, 0005 and 0006 are accepted
+(see §15). Until then ADR-0003 remains in force and no kernel code is written.
 **Scope:** the geometry kernel sub-project of the open-bim-studio restart. The UI library and the
 IFC library are separate sub-projects and get their own specs; this document fixes only what
 they need to know about the kernel.
@@ -273,3 +276,23 @@ is never named; BIM and 3D software may be named; no conversation transcripts an
 
 Semantic BIM objects, parameters and evaluation, drawings beyond planar sections and outlines,
 IFC, rendering, materials, undo (a concern of `app/` built on kernel handles), multi-user.
+
+## 15. Evidence required before acceptance
+
+Each fundamental choice in this document maps to a research question. The choice is accepted,
+amended or withdrawn on the evidence; the evidence lives in `docs/research/kernels/` and
+`spikes/`, and the ADR's evidence table cites it by section.
+
+| Choice (section) | Research question | Where answered | Decision record |
+|---|---|---|---|
+| Build our own kernel rather than build on one (§1) | Can any candidate be built on without inheriting a disqualifying assumption — batch evaluation, float32 paths, single origin, licence? | every candidate note, verdict axis *build on*; `problems.md` P-05, P-06, P-14 | ADR-0004 |
+| Write it in DynLex (§1, §8) | Does DynLex compile and run kernel-shaped code at native speed, and can it be extended where it falls short? | spikes `dynlex-performance/`, `dynlex-scale/` (R-18, R-19) | ADR-0004 |
+| Four equal representations (§4) | Which representations do existing kernels hold, what do their conversions lose, and where does a single-representation design fail? | candidate notes question 10; `problems.md` P-09, P-11, P-12 | ADR-0005 |
+| Explicit conversions, no silent conversion (§4) | Where do silent conversions cause loss or surprise in existing kernels? | candidate notes question 10; IfcOpenShell and web-ifc notes on IFC geometry mapping | ADR-0005 |
+| CSG by representation; exact arrangement for meshes (§4) | Which boolean algorithms are robust on the torture set, at what cost? | spike `boolean-torture/` (R-16) across OCCT, Blender, Manifold, CGAL | ADR-0005 |
+| f64 local coordinates in tile frames (§5) | What precision do existing kernels use, and what fails far from the origin? | spike `precision-set/` (R-17); candidate notes question 6 | ADR-0006 |
+| Exact predicates for combinatorial decisions (§5) | Which kernel failures trace to floating-point topology decisions? | `problems.md` P-01, P-03; OCCT, Blender and CGAL notes | ADR-0006 |
+| Explicit tolerance model, per entity for B-rep (§5) | How do tolerances accumulate in tolerant B-rep, and what does it cost users? | OCCT note; FreeCAD case study; `problems.md` P-02 | ADR-0006 |
+| Data-oriented layout and generational handles (§6) | Which scale ceilings trace to per-object overhead? | `problems.md` P-07; Blender/Bonsai note; R-03 spike | ADR-0004 (design rationale) |
+| Kernel-owned GPU buffer layouts, compute in SPIR-V (§3, §6) | How do existing kernels and engines move geometry to the GPU, and what does the DynLex runtime already provide? | `research/renderers/` GPU-paths note | ADR-0004 (design rationale) |
+| Milestone order and performance targets (§9, §10) | What do the mature kernels measure on the benchmark set, so the targets are relative to something? | candidate measurements on the benchmark set | none — targets are recorded, not decided |

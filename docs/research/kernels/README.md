@@ -1,85 +1,159 @@
-# Kernels — evaluation method and candidates
+# Kernels — evaluation method, candidates, and what each one teaches
 
-**The decisive research area.** Everything downstream is speculation until this is settled.
+**Decision question: which kernels do we build on, borrow from, or build ourselves — and if we
+build, what must our design take from each existing kernel, and what must it avoid?**
 
-Read [`../../architecture/layers.md`](../../architecture/layers.md) first: "kernel" covers two
-independent layers, and conflating them wastes effort.
+**Status:** method revised 2026-09-09. The working hypothesis changed from "build on an existing
+kernel" ([ADR-0003](../../architecture/decisions/0003-build-on-an-existing-kernel.md), still in
+force) to "build our own multi-representation kernel in DynLex"
+([spec](../../superpowers/specs/2026-09-09-geometry-kernel-design.md), proposed
+[ADR-0004](../../architecture/decisions/0004-build-our-own-kernel-in-dynlex.md)). **Neither is
+settled.** This directory produces the evidence that accepts one and supersedes the other.
+
+---
+
+## The rule
+
+No architecture decision is accepted until its evidence table (see the ADR template) points, for
+every claim, at a section of a note in this directory or at a `FINDINGS.md` in `spikes/`. A
+claim without a pointer is an opinion, and opinions do not accept ADRs.
+
+The reverse also holds: a note that does not feed a decision is not research, it is reading.
+Every note names the decision it serves.
+
+## Three verdicts, not one
+
+A candidate note used to end in *recommend / reject / shortlist*. With "build our own" on the
+table, each candidate is judged on three separate questions, and the verdict answers all three:
+
+| Verdict axis | Question | Feeds |
+|---|---|---|
+| **Build on** | Could this be the kernel, or a layer of it, for the product? | ADR-0003 vs ADR-0004 |
+| **Borrow from** | Which of its designs, algorithms and data structures should our kernel adopt — with citation? | the kernel spec, per section |
+| **Avoid** | Which of its documented problems come from its design, and how does our design not repeat them? | [`problems.md`](problems.md), ADR-0005/0006 |
+
+"Borrow from" and "avoid" are the parts that make this research useful even when "build on" is
+answered no. They are also the parts that turn "we build our own" from ambition into a design
+with a paper trail.
 
 ## Weighting matrix
 
-Every candidate is scored on the same axes. Record unknowns as unknown.
+Every candidate is scored on every axis. Unknowns are recorded as unknown, never skipped.
 
 | Criterion | Why it matters | Weight |
 |---|---|---|
-| **License** | LGPL / MPL / commercial — determines whether open-sourcing later is possible | High |
-| **IFC coverage** | Schema versions supported; round-trip loss | High (layer 1) |
-| **Geometry model** | Exact B-rep vs. mesh; boolean robustness; NURBS support | High |
-| **Incremental evaluation** | Can it re-evaluate one changed element, or only convert in batch? | **Critical** |
-| **Numeric precision** | 64-bit internally? A kernel that works only in float32 is **disqualified** — see [`../../domain/spatial-model.md`](../../domain/spatial-model.md) | **Critical** |
-| **Performance** | Load time and memory at 10k / 100k / 1M elements | High |
-| **Embeddability** | Language bindings, WASM, native, threading model | High |
-| **2D derivation** | Section and projection support, hidden-line removal | Medium |
-| **Maturity** | Community, release cadence, bus factor | Medium |
-| **AI familiarity** | Volume of public code and documentation — see note below | Medium |
+| **License** | Determines whether open-sourcing later is possible, and whether *borrowing* code (not just ideas) is possible | High |
+| **Representations held natively** | B-rep, mesh, point cloud, implicit, and which conversions exist between them — the kernel spec's central bet | High |
+| **Boolean robustness** | Documented failure modes on coplanar, touching and degenerate input; whether the algorithm is exact, tolerant, or heuristic | **Critical** |
+| **Tolerance and precision model** | Internal precision; whether tolerances are per-entity, global, or absent; how they accumulate through operations. float32-only is disqualifying for *build on* | **Critical** |
+| **Incremental evaluation** | Can one changed element be re-evaluated without reprocessing the model? | **Critical** (build on) |
+| **Threading model** | What runs in parallel, what is locked, what is single-threaded by design | High |
+| **GPU path** | How geometry reaches the GPU (tessellation, buffer layout, instancing, culling, picking) and how results come back | High |
+| **IFC coverage** | Schema versions; round-trip loss; how geometry representations map | High (IFC candidates) |
+| **Performance** | Measured on the benchmark set: load, boolean, tessellation, pick at 10k / 100k / 1M | High |
+| **Embeddability** | Bindings, WASM, native, in-process use from DynLex | Medium (build on) |
+| **2D derivation** | Section, projection, hidden-line | Medium |
+| **Maturity** | Community, release cadence, bus factor, issue-tracker health | Medium |
+| **AI familiarity** | Public code and documentation volume; one column, never a tiebreaker (R-09) | Medium |
 
-### On incremental evaluation
+### On boolean robustness and the tolerance model
 
-This is weighted critical because it is the axis most likely to be silently fatal. A kernel that
-converts a whole model quickly but cannot cheaply re-evaluate a *single changed element* is a
-viewer engine, not a modeller engine. Most IFC tooling was built for the viewing case, so this
-capability is often absent and rarely documented.
-
-**Test it explicitly for every candidate.** Do not infer it from load-time benchmarks.
-
-### On AI familiarity
-
-The build strategy depends on AI assistance, so how well models know a stack genuinely affects
-delivery speed. It is a legitimate criterion.
-
-It is also a trap: it rewards popularity over fitness. It is one column, not the matrix. A
-kernel that is a poor technical fit does not become a good one by being well documented.
+These are weighted critical because they are where geometry kernels fail in practice and where
+the failures are hardest to diagnose afterwards. The research must go past "booleans sometimes
+fail" to *why*: exact arithmetic vs. floating filters, tolerant modelling vs. exact topology,
+which inputs trigger which failure, and which design choice each failure traces back to. Issue
+trackers are primary sources here; so is the source code at a pinned commit.
 
 ## Benchmark set
 
-Defined once in [`../../../reference/`](../../../reference/), used by every candidate:
+Fixed once in [`../../../reference/`](../../../reference/), used by every candidate. Extended
+for the kernel questions:
 
-1. **A realistic IFC model** from an open test set — representative complexity, not a demo cube.
+1. **A realistic IFC model** from an open test set.
 2. **Synthetic scale tests** at 10k / 100k / 1M elements.
-3. **A parametric change that forces re-evaluation** — move a wall, and require that its
-   openings, its junctions with adjoining walls, and every 2D view showing it follow.
+3. **A parametric change that forces re-evaluation** — move a wall; openings, junctions and 2D
+   views must follow.
+4. **A boolean torture set** — coplanar faces, shared edges, touching vertices, near-degenerate
+   triangles, a wall with many openings; each case with a known correct volume so
+   V(A∪B) + V(A∩B) = V(A) + V(B) can be checked.
+5. **A precision set** — the same geometry placed at the origin and at 500 km from it; results
+   must agree to the stated tolerance.
 
-Test 3 is the sharpest. It measures precisely what separates a viewer from a modeller, and it is
-the one most likely to eliminate candidates.
+Cases 4 and 5 are the ones that separate "works on the demo" from "works on a building".
 
 ## Candidates
 
-### Layer 1 — semantic / BIM kernel
-- [ ] IfcOpenShell — *current hypothesis*
-- [ ] web-ifc (That Open Engine)
+Grouped by the representation they are strongest in. A candidate may appear in two groups.
 
-### Layer 2 — geometry kernel
-- [ ] OCCT (Open CASCADE Technology)
-- [ ] CGAL
-- [ ] Manifold — *current hypothesis for the interactive path*
-- [ ] Truck
-- [ ] Fornjot
+### A — B-rep kernels
+- [ ] **OCCT** (Open CASCADE Technology) — tolerant B-rep, the kernel under FreeCAD and
+      IfcOpenShell; the richest source of documented boolean and tolerance problems
+- [ ] **FreeCAD** as a case study on OCCT — the topological naming problem in production (R-13)
+- [ ] **Truck** and **Fornjot** — small B-rep kernels in Rust; useful for design clarity
+- [ ] **Parasolid-class commercial kernels** — documentation-only reference for what "engineering
+      accuracy" is taken to mean in industry; not a candidate to build on
 
-Layer 3 candidates are evaluated in [`../hosts-and-engines/`](../hosts-and-engines/).
+### B — Mesh and boolean libraries
+- [ ] **Blender** — BMesh, the exact boolean (and the earlier Carve/BMesh booleans it replaced —
+      a root-cause case), geometry-nodes evaluation, the GPU module
+- [ ] **Manifold** — fast, robust mesh booleans on manifold input; its constraints are the point
+- [ ] **CGAL** — exact predicates and constructions, Nef polyhedra, polygon mesh processing;
+      the reference for what exactness costs
+- [ ] **libigl** — mesh arrangements and booleans; the research lineage behind Blender's exact
+      boolean
+- [ ] **OpenMesh** — half-edge data structure design reference
+
+### C — Point cloud and implicit
+- [ ] **PCL**, **Open3D**, **PDAL** — point cloud storage, indexing, filtering, normal estimation
+- [ ] **Potree** — out-of-core octree LOD for 10⁸–10⁹ points; the paging design reference
+- [ ] **OpenVDB** — sparse volumes and signed distance fields; the implicit-representation reference
+- [ ] **libfive** — implicit modelling with dual contouring / manifold contouring
+
+### D — IFC and the GPU path
+- [ ] **IfcOpenShell** — IFC parsing and geometry through OCCT, and its CGAL-based kernel option
+- [ ] **web-ifc / That Open Engine** (That Open Company) — IFC parsing and geometry written for
+      the browser; a different set of trade-offs from IfcOpenShell
+- [ ] **xBIM** — a third IFC implementation for disagreement analysis
+- [ ] **GPU paths**: Blender's GPU module and Vulkan backend, OCCT's visualisation layer, wgpu /
+      bevy, Filament, That Open's three.js-based viewer, and the DynLex graphics runtime itself —
+      evaluated in [`../renderers/`](../renderers/), summarised here for the kernel's buffer
+      layout decisions
 
 ## Questions every candidate note must answer
 
 1. Can it re-evaluate a single changed element without reprocessing the model?
-2. What exactly happens to geometry on an IFC round trip?
-3. Can it be driven from the language of our host, in-process, without a subprocess or a file?
-4. What is its threading model, and can geometry evaluation move off the UI thread?
+2. What exactly happens to geometry on an IFC round trip? (IFC candidates)
+3. Can it be driven in-process from DynLex, without a subprocess or a file?
+4. What is its threading model, and what is single-threaded by design?
 5. What breaks first at scale — memory, load time, or evaluation time?
-6. **What numeric precision does it use internally, and can it be configured?** float32-only is
-   disqualifying.
-7. **Can it operate on a subset of the model** — one tile, one region — or does it require the
-   whole model? This decides whether tiling is possible at all. See R-14.
+6. What numeric precision does it use internally, and can it be configured?
+7. Can it operate on a subset of the model — one tile, one region? (R-14)
 8. Who maintains it, and what happens to us if they stop?
+9. **What are its documented failure modes**, with issue links, and **what design choice does
+   each trace back to?** This is the section [`problems.md`](problems.md) is built from.
+10. **Which representations does it hold natively, and how does it convert between them?**
+11. **How does geometry reach the GPU and come back?**
+12. **What would we take into our own kernel, and what would we avoid?** With citations.
+
+## Traceability
+
+- Every note records the **version or commit hash** of the source it read, and links to files
+  and line ranges at that commit, not at `main`.
+- Every claim is labelled **claimed / measured / inferred** and carries a URL, an issue number,
+  a paper, or a `spikes/<name>/FINDINGS.md`.
+- Every note names the **decision it serves** (an ADR number or a spec section) in its header.
+- [`problems.md`](problems.md) is the cross-cutting index: problem → root cause → which
+  candidates → evidence. It is updated by every note, not written once.
+- ADRs cite notes by file and section. An ADR whose evidence table has an empty cell stays
+  `proposed`.
 
 ## Output of this directory
 
-A completed matrix and a shortlist of two, carried into phase 3 spikes. See
-[`../../roadmap.md`](../../roadmap.md).
+1. The completed matrix, one row per candidate, every cell labelled.
+2. [`problems.md`](problems.md) complete for every candidate.
+3. A verdict per candidate on all three axes.
+4. Evidence tables filled for ADR-0004, 0005 and 0006 — after which each is accepted, amended,
+   or withdrawn, and ADR-0003 is superseded or reaffirmed.
+
+The order of work, the spikes, and their pass/fail criteria are in
+[`../../superpowers/plans/2026-09-09-kernel-research-programme.md`](../../superpowers/plans/2026-09-09-kernel-research-programme.md).
