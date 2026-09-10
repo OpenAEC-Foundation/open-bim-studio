@@ -63,6 +63,55 @@ SOLVER_LABELS = {
 ZERO_AREA = 1e-14  # m^2; a face below this is reported as degenerate
 
 
+def cpu_model() -> str:
+    """CPU model name. Windows: the registry string; Linux: /proc/cpuinfo; else
+    platform.processor(), which on Windows is only the family/stepping identifier."""
+    try:
+        if platform.system() == "Windows":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            with key:
+                return winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return platform.processor() or "unknown"
+
+
+def total_ram_gb() -> str:
+    """Installed physical memory in GB, or 'unknown'."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32),
+                            ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64),
+                            ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64),
+                            ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64),
+                            ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return "%.0f" % (status.ullTotalPhys / (1024 ** 3))
+        else:
+            return "%.0f" % (os.sysconf("SC_PHYS_PAGES")
+                             * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
+    except Exception:
+        pass
+    return "unknown"
+
+
 @contextlib.contextmanager
 def captured_stdout():
     """Capture Blender's own C-level log output around a call.
@@ -380,6 +429,8 @@ def main() -> int:
     out(f"| bundled python | `{platform.python_version()}` |")
     out(f"| platform | `{platform.system()} {platform.version()} ({platform.machine()})` |")
     out(f"| processor | `{platform.processor()}` |")
+    out(f"| cpu | `{cpu_model()}` |")
+    out(f"| installed RAM | `{total_ram_gb()} GB` |")
     out(f"| solver enum | `{', '.join(solver_enum)}` |")
     out(f"| solvers measured | `{', '.join(solvers)}` |")
     out("| default solver | `%s` |" % bpy.types.BooleanModifier.bl_rna.properties["solver"].default)
@@ -510,7 +561,11 @@ def main() -> int:
     out("and `touching_vertex` cases show it — the mathematically correct union of two solids")
     out("meeting at an edge or a point is **not** manifold, so a solver that returns the right")
     out("volume there is marked invalid by the topological check and is not wrong to be.")
-    out("*Correct* is both volumes within 1e-6 relative of the analytic expectation.")
+    out("*Correct* is both volumes within `1e-6 * max(1.0, abs(expected))` of the analytic")
+    out("expectation — relative for expectations above 1 m³, and an absolute floor of 1e-6 m³")
+    out("below it, so a case whose expected volume is 0 or 1.2e-07 m³ is not judged on a")
+    out("relative error it cannot meet. The Δ notes in the table above use the same shape with")
+    out("1e-9 instead of 1e-6.")
     out("")
     per_solver = {}
     for name, solver, valid, identity, correct in summary_rows:

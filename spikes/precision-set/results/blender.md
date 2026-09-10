@@ -19,6 +19,8 @@ projection's false origin to a project site).
 | bundled python | `3.11.13` |
 | platform | `Windows 10.0.26200 (AMD64)` |
 | processor | `Intel64 Family 6 Model 183 Stepping 1, GenuineIntel` |
+| cpu | `Intel(R) Core(TM) i9-14900HX` |
+| installed RAM | `32 GB` |
 | solvers measured | `EXACT, FLOAT, MANIFOLD` |
 | repeats per timing | 5 (median reported) |
 | startup | `--factory-startup` (no add-ons) |
@@ -57,28 +59,30 @@ Operand round trip per case, worst over all vertices of A and B:
 The offset is applied to the **vertex coordinates**, which is what a project does when
 it models in a national projection. *Vertex deviation* is the worst nearest-neighbour
 distance after translating the far result back by −offset, taken as the worse of both
-matching directions. Times are the median of 5 fresh runs.
+matching directions. *ΔV* is the far volume minus the near volume, absolute and
+relative to the near volume — the same two forms `results/occt.md` reports, so the
+candidates can be compared column for column. Times are the median of 5 fresh runs.
 
 | Case | Solver | Op | Valid near+far? | V near / far | ΔV | Vertex deviation | ms near / far |
 |---|---|---|---|---|---|---|---|
-| `overlap_half` | Exact | union | yes | 1.5 / 1.5 | 0 | **0 m** over 24/24 v | 2.75 / 3.12 |
-| `overlap_half` | Exact | common | yes | 0.5 / 0.5 | 0 | **0 m** over 16/16 v | 2.79 / 3.10 |
-| `overlap_half` | Fast (float) | union | **no** | 1 / 1.91666666667 | 0.916667 | **0.5 m** over 32/43 v | 0.38 / 0.38 |
-| `overlap_half` | Fast (float) | common | **no** | 1 / 1 | 0 | **0.5 m** over 32/30 v | 0.37 / 0.37 |
-| `overlap_half` | Manifold | union | yes | 1.5 / 1.5 | 0 | **0 m** over 16/16 v | 0.69 / 0.57 |
-| `overlap_half` | Manifold | common | yes | 0.5 / 0.5 | 0 | **0 m** over 12/12 v | 0.54 / 0.62 |
-| `coplanar_faces` | Exact | union | yes | 2 / 2 | 0 | **0 m** over 18/18 v | 1.36 / 1.65 |
-| `coplanar_faces` | Exact | common | yes (empty, as expected) | 0 / 0 | 0 | **- m** over 0/0 v | 1.08 / 1.52 |
-| `coplanar_faces` | Fast (float) | union | **no** | 2 / 2 | 0 | **0 m** over 22/23 v | 0.26 / 0.24 |
-| `coplanar_faces` | Fast (float) | common | yes (empty, as expected) | 0 / 0 | 0 | **0 m** over 4/4 v | 0.25 / 0.24 |
-| `coplanar_faces` | Manifold | union | yes | 2 / 2 | 0 | **0 m** over 18/18 v | 0.45 / 0.50 |
-| `coplanar_faces` | Manifold | common | yes (empty, as expected) | 0 / 0 | 0 | **- m** over 0/0 v | 0.24 / 0.24 |
-| `wall_with_openings` | Exact | union | yes | 12.6000000179 / 12.7499997485 | 0.15 | **0.0348212 m** over 320/320 v | 15.59 / 21.57 |
-| `wall_with_openings` | Exact | common | yes | 5.39999982566 / 5.6249995809 | 0.225 | **0.0348212 m** over 216/216 v | 15.53 / 21.67 |
-| `wall_with_openings` | Fast (float) | union | near yes / far **no** | 12.5999999541 / 10.2739276984 | -2.32607 | **0.13758 m** over 320/272 v | 1.12 / 1.10 |
-| `wall_with_openings` | Fast (float) | common | near yes / far **no** | 5.39999939549 / 7.56262934166 | 2.16263 | **0.0947531 m** over 216/264 v | 1.24 / 1.14 |
-| `wall_with_openings` | Manifold | union | yes | 12.6000000179 / 12.7499997485 | 0.15 | **0.0348212 m** over 320/320 v | 1.51 / 1.55 |
-| `wall_with_openings` | Manifold | common | yes | 5.39999982566 / 5.6249995809 | 0.225 | **0.0435011 m** over 216/214 v | 1.02 / 1.08 |
+| `overlap_half` | Exact | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 24/24 v | 3.08 / 3.20 |
+| `overlap_half` | Exact | common | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 16/16 v | 2.78 / 3.25 |
+| `overlap_half` | Fast (float) | union | **no** | 1 / 1.91666666667 | 0.916667 (0.916667 rel) | **0.5 m** over 32/44 v | 0.36 / 0.33 |
+| `overlap_half` | Fast (float) | common | **no** | 1 / 0.0833333333333 | -0.916667 (-0.916667 rel) | **0.5 m** over 32/16 v | 0.48 / 0.49 |
+| `overlap_half` | Manifold | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.54 / 0.51 |
+| `overlap_half` | Manifold | common | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 12/12 v | 0.42 / 0.49 |
+| `coplanar_faces` | Exact | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 1.15 / 1.46 |
+| `coplanar_faces` | Exact | common | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 1.06 / 1.42 |
+| `coplanar_faces` | Fast (float) | union | **no** | 2 / 2 | 0 (0 rel) | **0 m** over 22/23 v | 0.26 / 0.26 |
+| `coplanar_faces` | Fast (float) | common | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.25 / 0.26 |
+| `coplanar_faces` | Manifold | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.59 / 0.47 |
+| `coplanar_faces` | Manifold | common | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 0.40 / 0.27 |
+| `wall_with_openings` | Exact | union | yes | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0348212 m** over 320/320 v | 15.91 / 21.90 |
+| `wall_with_openings` | Exact | common | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0348212 m** over 216/216 v | 15.85 / 21.35 |
+| `wall_with_openings` | Fast (float) | union | near yes / far **no** | 12.5999999541 / 10.2739276984 | -2.32607 (-0.184609 rel) | **0.13758 m** over 320/272 v | 1.06 / 1.15 |
+| `wall_with_openings` | Fast (float) | common | near yes / far **no** | 5.39999939549 / 7.56262934166 | 2.16263 (0.400487 rel) | **0.0947531 m** over 216/264 v | 1.02 / 1.06 |
+| `wall_with_openings` | Manifold | union | yes | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0348212 m** over 320/320 v | 1.53 / 1.42 |
+| `wall_with_openings` | Manifold | common | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0435011 m** over 216/214 v | 1.12 / 1.13 |
 
 **Worst vertex deviation over the whole set: 0.5 m.** R-17's pass line is 1e-6 m and its
 fail line is 1e-4 m.

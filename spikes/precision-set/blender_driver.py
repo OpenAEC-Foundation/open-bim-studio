@@ -45,6 +45,55 @@ from precision_set import OFFSET, offset, signed_volume  # noqa: E402
 SOLVER_LABELS = {"FLOAT": "Fast (float)", "EXACT": "Exact", "MANIFOLD": "Manifold"}
 
 
+def cpu_model() -> str:
+    """CPU model name. Windows: the registry string; Linux: /proc/cpuinfo; else
+    platform.processor(), which on Windows is only the family/stepping identifier."""
+    try:
+        if platform.system() == "Windows":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            with key:
+                return winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return platform.processor() or "unknown"
+
+
+def total_ram_gb() -> str:
+    """Installed physical memory in GB, or 'unknown'."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32),
+                            ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64),
+                            ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64),
+                            ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64),
+                            ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return "%.0f" % (status.ullTotalPhys / (1024 ** 3))
+        else:
+            return "%.0f" % (os.sysconf("SC_PHYS_PAGES")
+                             * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
+    except Exception:
+        pass
+    return "unknown"
+
+
 def wipe_scene() -> None:
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
@@ -219,6 +268,8 @@ def main() -> int:
     out(f"| bundled python | `{platform.python_version()}` |")
     out(f"| platform | `{platform.system()} {platform.version()} ({platform.machine()})` |")
     out(f"| processor | `{platform.processor()}` |")
+    out(f"| cpu | `{cpu_model()}` |")
+    out(f"| installed RAM | `{total_ram_gb()} GB` |")
     out(f"| solvers measured | `{', '.join(solvers)}` |")
     out(f"| repeats per timing | {args.repeats} (median reported) |")
     out("| startup | `--factory-startup` (no add-ons) |")
@@ -264,7 +315,10 @@ def main() -> int:
     out("The offset is applied to the **vertex coordinates**, which is what a project does when")
     out("it models in a national projection. *Vertex deviation* is the worst nearest-neighbour")
     out("distance after translating the far result back by −offset, taken as the worse of both")
-    out("matching directions. Times are the median of %d fresh runs." % args.repeats)
+    out("matching directions. *ΔV* is the far volume minus the near volume, absolute and")
+    out("relative to the near volume — the same two forms `results/occt.md` reports, so the")
+    out("candidates can be compared column for column. Times are the median of %d fresh runs."
+        % args.repeats)
     out("")
     out("| Case | Solver | Op | Valid near+far? | V near / far | ΔV | Vertex deviation | ms near / far |")
     out("|---|---|---|---|---|---|---|---|")
@@ -289,6 +343,9 @@ def main() -> int:
                 deviation = max_nearest_deviation(near["verts"], far_back)
                 far_volume = signed_volume(far_back, far["tris"]) if far["tris"] else 0.0
                 delta_v = far_volume - near["volume"]
+                # Relative to the near volume, the form `results/occt.md` uses, so the two
+                # candidates' precision tables can be compared column for column.
+                delta_v_rel = (delta_v / near["volume"]) if near["volume"] else float("nan")
                 if deviation is not None:
                     worst_overall = max(worst_overall, deviation)
                 rows.append((case.name, solver, operation, deviation))
@@ -301,7 +358,8 @@ def main() -> int:
                     "union" if operation == "UNION" else "common",
                     (near_word if near_word == far_word else
                      "near %s / far %s" % (near_word, far_word)),
-                    g(near["volume"]), g(far_volume), g(delta_v, 6),
+                    g(near["volume"]), g(far_volume),
+                    "%s (%s rel)" % (g(delta_v, 6), g(delta_v_rel, 6)),
                     g(deviation, 6), len(near["verts"]), len(far["verts"]),
                     statistics.median(near_times), statistics.median(far_times),
                 ))

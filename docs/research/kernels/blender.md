@@ -26,9 +26,9 @@ Geometry* — wrapped at both ends in **float32**, which is where its errors com
 from the origin our benchmark wall lost 0.15 m³ of volume and 3.5 cm of vertex position, which is
 the float32 ULP at that distance and has nothing to do with the algorithm. It cannot be built on
 for three independent reasons — GPL, float32 storage, and a per-object evaluation cost we measured
-at 16.8 ms for **one** moved object in a 10k-object scene with no viewport at all — but it is the
+at 16.3 ms for **one** moved object in a 10k-object scene with no viewport at all — but it is the
 richest source of design to borrow after OCCT, and the only candidate so far that shows what an
-exact arrangement costs in practice (0.4–15.6 ms per boolean on the torture set). It also supplies
+exact arrangement costs in practice (0.37–16 ms per boolean on the torture set). It also supplies
 the sharpest single example of what a kernel must never do: its Exact solver returned a valid,
 closed, manifold union of **one** cube when handed two cubes touching at a point, and said nothing.
 
@@ -86,9 +86,9 @@ confirmed with `git rev-parse HEAD`.
 | The Manifold-library binding and its error mapping | [`source/blender/geometry/intern/mesh_boolean_manifold.cc`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean_manifold.cc) |
 | The modifier: options, error reporting, fallback | [`source/blender/modifiers/intern/MOD_boolean.cc`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/modifiers/intern/MOD_boolean.cc) |
 | BMesh element structures and allocation | [`source/blender/bmesh/bmesh_class.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/bmesh/bmesh_class.hh), [`bmesh/tools/bmesh_boolean.cc`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/bmesh/tools/bmesh_boolean.cc), [`bmesh_intersect.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/bmesh/tools/bmesh_intersect.hh) |
-| Mesh and Object storage precision | [`DNA_mesh_types.h`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_mesh_types.h#L251-L257), [`DNA_object_types.h`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L396-L398) |
+| Mesh and Object storage precision | [`DNA_mesh_types.h`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_mesh_types.h#L251-L257), [`DNA_object_types.h#L256`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L256) (`float loc[3]`) and [`#L397-L398`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L397-L398) (the `float4x4` world-matrix accessors) |
 | Depsgraph node model and update flags | [`depsgraph/intern/node/deg_node.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/depsgraph/intern/node/deg_node.hh#L46-L110), [`DNA_ID.h#L1050-L1080`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_ID.h#L1050-L1080) |
-| GPU module and its backends | [`source/blender/gpu/`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu) (`opengl/` 38, `vulkan/` 85, `metal/` 45, `intern/` 67 files), [`GPU_vertex_buffer.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_vertex_buffer.hh), [`GPU_select.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh) |
+| GPU module and its backends | [`source/blender/gpu/`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu) (files directly in each directory: `opengl/` 38, `vulkan/` 82, `metal/` 44, `dummy/` 5, `intern/` 67), [`GPU_vertex_buffer.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_vertex_buffer.hh), [`GPU_select.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh) |
 | Mesh → GPU buffer extraction | [`draw/intern/mesh_extractors/extract_mesh_vbo_pos.cc`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_pos.cc#L73-L84) |
 | Batch evaluation for nodes | [`functions/FN_multi_function.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/functions/FN_multi_function.hh#L9-L17), [`FN_lazy_function.hh`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/functions/FN_lazy_function.hh) |
 | Build-time optionality of both exact solvers | [`CMakeLists.txt#L345-L346`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/CMakeLists.txt#L345-L346) |
@@ -107,14 +107,14 @@ Scored against every criterion in [`README.md`](README.md).
 | Criterion | Finding | Evidence type | Source / method |
 |---|---|---|---|
 | **License** | **GPL.** The project as a whole is GPL-3.0; the boolean and BMesh files are `GPL-2.0-or-later`. Linking a GPL library into our kernel would make the kernel GPL. Designs may be reimplemented from the published paper and the documentation; **source may not be copied** (R-11). GMP, which the Exact solver requires, is itself copyleft — *claimed* by its project as dual LGPLv3+/GPLv2+, <https://gmplib.org/> — so the exact path carries a second copyleft dependency even if Blender's own code were avoided. | claimed | [`README.md#L32-L38`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/README.md#L32-L38); SPDX headers on the files listed above |
-| **Representations held natively** | **Two mesh forms plus separate datablock types.** `Mesh` (structure-of-arrays attributes) and `BMesh` (radial-loop half-edge) with conversions in both directions, used constantly — the boolean modifier's own comment calls its round trip "utterly non-optimal, we may go from a bmesh to a mesh back to a bmesh" ([`MOD_boolean.cc#L547-L549`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/modifiers/intern/MOD_boolean.cc#L547-L549)). Volumes (OpenVDB), point clouds, curves are separate datablocks, not a common representation layer. **No B-rep, no NURBS solids.** | inferred from the source tree | package structure; [`DNA_mesh_types.h`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_mesh_types.h) |
+| **Representations held natively** | **Two mesh forms plus separate datablock types.** `Mesh` (structure-of-arrays attributes) and `BMesh` (radial-loop half-edge) with conversions in both directions, used constantly — the boolean modifier's own comment calls its round trip "utterly non-optimal, we may go from a bmesh to a mesh back to a bmesh" ([`MOD_boolean.cc#L547-L548`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/modifiers/intern/MOD_boolean.cc#L547-L548)). Volumes (OpenVDB), point clouds, curves are separate datablocks, not a common representation layer. **No B-rep, no NURBS solids.** | inferred from the source tree | package structure; [`DNA_mesh_types.h`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_mesh_types.h) |
 | **Boolean robustness** | Measured on the torture set, per solver: **Exact 9/10 numerically correct, 8/10 topologically valid; Fast 7/10 and 5/10; Manifold 10/10 and 10/10.** The Exact solver's one wrong answer is `touching_vertex`, where it returned a valid closed manifold union of volume **1** instead of 2 — an operand silently deleted. The Fast solver is wrong on `overlap_half`, `identical` and `near_degenerate_triangle`, and is **non-deterministic** on `overlap_half` (2 distinct results in 10 identical runs). Algorithm class: exact-arrangement (Exact), floating with a distance threshold (Fast), external exact-ish library (Manifold). | measured | [`spikes/boolean-torture/results/blender.md`](../../../spikes/boolean-torture/results/blender.md) |
 | **Tolerance and precision model** | **float32 storage, exact arithmetic in the middle, float32 out.** `Mesh` positions are `float3`, `BMesh` vertices are `float co[3]`, object transforms are `float4x4`. The Exact solver converts to `mpq_class` rationals for the arrangement and writes `double`→`float` back. There is no per-entity tolerance and no global epsilon; the Fast solver has one threshold (`double_threshold`, default 1e-6 m) and the Exact solver has none. **float32-only storage is disqualifying for *build on* by the README's own rule.** | measured + source | §Precision below; [`spikes/precision-set/results/blender.md`](../../../spikes/precision-set/results/blender.md) |
-| **Incremental evaluation** | **Present — the only candidate read so far that has one** — and still too coarse. The depsgraph tracks relations per *datablock component* (`TRANSFORM`, `GEOMETRY`, `PARAMETERS`, …), tags with `ID_RECALC_*` flags, and re-evaluates only tagged operation nodes. But the granularity is one object = one ID, so cost scales with object count: measured **16.8 ms for one `view_layer.update()` after moving a single object** in a 10k-object scene, against **0.013 ms** for the same triangles in one object. | measured + source | [`deg_node.hh#L46-L110`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/depsgraph/intern/node/deg_node.hh#L46-L110); [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md) |
-| **Threading model** | Parallel by default and pervasive, via TBB behind `threading::parallel_for`: the arrangement, the PWN check ([`mesh_boolean.cc#L1362`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/blenlib/intern/mesh_boolean.cc#L1362)), the raycast fallback and the float32→rational conversion all run threaded. The price is visible on the tracker and in our own numbers: non-determinism. Blender's own developers confirm a threading non-determinism in the Manifold solver ([#143644](https://projects.blender.org/blender/blender/issues/143644)); we measured one in the Fast solver. | measured + source | §Known problems; Probe E in [`results/blender.md`](../../../spikes/boolean-torture/results/blender.md) |
-| **GPU path** | Full backend abstraction (`opengl/`, `vulkan/`, `metal/`, `dummy/`) behind `VertBuf` / `IndexBuf` / `Batch`. Mesh data is turned into buffers by 30 single-purpose extractors; positions upload as `SFLOAT_32_32_32` **per face corner**, not per vertex. Nothing comes back except selection: `GPUSelectResult` is `{id, depth}`. See §GPU. | inferred from source | [`extract_mesh_vbo_pos.cc#L73-L84`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_pos.cc#L73-L84), [`GPU_select.hh#L29-L42`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh#L29-L42) |
+| **Incremental evaluation** | **Present — the only candidate read so far that has one** — and still too coarse. The depsgraph tracks relations per *datablock component* (`TRANSFORM`, `GEOMETRY`, `PARAMETERS`, …), tags with `ID_RECALC_*` flags, and re-evaluates only tagged operation nodes. But the granularity is one object = one ID, so cost scales with object count: measured **16.3 ms for one `view_layer.update()` after moving a single object** in a 10k-object scene, against **0.013 ms** for the same triangles in one object. | measured + source | [`deg_node.hh#L46-L110`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/depsgraph/intern/node/deg_node.hh#L46-L110); [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md) |
+| **Threading model** | Parallel by default and pervasive, via TBB behind `threading::parallel_for`: the arrangement, the PWN check ([`mesh_boolean.cc#L1362`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/blenlib/intern/mesh_boolean.cc#L1362)), the raycast fallback and the float32→rational conversion all run threaded. The price is visible on the tracker and in our own numbers: non-determinism. [#143644](https://projects.blender.org/blender/blender/issues/143644) records a non-determinism in the Manifold solver that the reporter attributes to threading ("When running Blender single threaded, this doesn't happen") and that the exact solver's author reproduced in the standalone library and got fixed upstream; we measured one in the Fast solver ourselves. | measured + source | §Known problems; Probe E in [`results/blender.md`](../../../spikes/boolean-torture/results/blender.md) |
+| **GPU path** | Full backend abstraction (`opengl/`, `vulkan/`, `metal/`, `dummy/`) behind `VertBuf` / `IndexBuf` / `Batch`. Mesh data is turned into buffers by 29 single-purpose extractors (`extract_mesh_{vbo,ibo}_*.cc`); positions upload as `SFLOAT_32_32_32` **per face corner**, not per vertex. Nothing comes back except selection: `GPUSelectResult` is `{id, depth}`. See §GPU. | inferred from source | [`extract_mesh_vbo_pos.cc#L73-L84`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_pos.cc#L73-L84), [`GPU_select.hh#L29-L43`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh#L29-L43) |
 | **IFC coverage** | None. IFC reaches Blender only through the Bonsai add-on, evaluated in [`../prior-art/bonsai.md`](../prior-art/bonsai.md). | inferred | source tree |
-| **Performance** | Torture-set booleans: Exact **0.41–15.6 ms**, Fast **0.21–1.06 ms**, Manifold **0.26–1.43 ms** (median of 5, two-operand cases plus the twelve-opening wall). On the wall the Exact solver is **11× slower than Manifold for an identical result**. `use_self` costs +81% when the input does not need it (15.4 → 27.8 ms). Object-model cost dominates everything: 10k objects = 494 ms to build, 473 ms first evaluation, 16.8 ms per single-object move, 62 kB of memory per object. | measured | [`spikes/boolean-torture/results/blender.md`](../../../spikes/boolean-torture/results/blender.md), [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md) |
+| **Performance** | Torture-set booleans: Exact **0.37–15.95 ms**, Fast **0.23–1.19 ms**, Manifold **0.29–1.76 ms** (median of 5, two-operand cases plus the twelve-opening wall). On the wall the Exact solver is **9× slower than Manifold on the union and 12× on the intersection, for an identical result**. `use_self` costs +83% when the input does not need it (15.96 → 29.16 ms). Object-model cost dominates everything: 10k objects = 480 ms to build, 447 ms first evaluation, 16.3 ms per single-object move, ~63–65 kB of memory per object. | measured | [`spikes/boolean-torture/results/blender.md`](../../../spikes/boolean-torture/results/blender.md), [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md) |
 | **Embeddability** | **Effectively none for our purpose.** The libraries are internal: `blenlib` and `geometry` are static libraries inside the Blender binary with no stable ABI, no packaging and no C API. `bpy` as a Python module exists but embeds the whole application. Driving it as a subprocess is what every measurement here did, and that is exactly the seam ADR-0004 Option B exists to avoid. | inferred; the subprocess path is measured (it ran) | this note's drivers |
 | **2D derivation** | Line Art (`GREASE_PENCIL_LINEART` modifier) produces stylised outlines for rendering, not dimensioned drawings. No section/hidden-line facility comparable to a CAD kernel's. Not measured. | claimed (feature exists) | modifier type enum |
 | **Maturity** | Very high as an application: ~30 years, funded foundation, quarterly releases, an issue tracker with active triage — of the 20 boolean reports surveyed, **12 closed and 8 open**, and the boolean's own author (`howardt`) answers on the tracker by name. That is materially healthier than the comparison in [`occt.md`](occt.md) §Maturity. The countervailing fact: **three solvers coexist because none is sufficient**, and the newest of them was added in 2025. | measured (survey; see §Known problems) | §Known problems |
@@ -165,7 +165,7 @@ sentence in this section. An "exact boolean" that receives a mesh with a hole qu
 heuristic, and the API documents this as intended: "If the meshes don't satisfy those conditions,
 all solvers will try to use ray-shooting to determine whether particular faces survive or not. This
 may or may not work in the way the user hopes"
-([`GEO_mesh_boolean.hh#L66-L72`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/GEO_mesh_boolean.hh#L66-L72)).
+([`GEO_mesh_boolean.hh#L70-L72`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/GEO_mesh_boolean.hh#L70-L72)).
 
 ### How exactness is actually implemented
 
@@ -240,9 +240,12 @@ input** — and the comment's own last sentence says where the fix belongs.
 
 ### Fast (`FLOAT`)
 
-The pre-2.91 BMesh intersection, kept because it is quicker — *measured* at 1.1× (`disjoint`,
-where neither has any work to do) to 15× (the twelve-opening wall) faster than the Exact solver
-across the torture set, and 5–10× on the cases in between. It takes an
+The pre-2.91 BMesh intersection, kept because it is quicker — *measured* at 1.2–1.4× (`disjoint`,
+where neither has any work to do) to 13–15× (the twelve-opening wall) faster than the Exact solver
+across the torture set, and **1.9× to 9.8×** on the eight cases in between — the low end is
+`contained` (1.9× / 2.4×), the high end `near_degenerate_triangle` (9.7× / 9.8×). Both figures in
+each pair are union / intersection, recomputed from the medians in
+[`results/blender.md`](../../../spikes/boolean-torture/results/blender.md). It takes an
 epsilon — and *which* epsilon depends on which caller you are:
 
 - The **modifier** passes the user-visible `double_threshold`
@@ -254,12 +257,18 @@ epsilon — and *which* epsilon depends on which caller you are:
   and [L1115-L1126](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1115-L1126)),
   ignoring any user setting.
 
-It also **cannot report failure**: the dispatcher sets `*r_error = BooleanError::NoError`
-unconditionally on the `Solver::Float` branch
-([L1202-L1208](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1202-L1208)).
-Measured, this is not theoretical: on `identical` and `near_degenerate_triangle` it returned an
-**empty union** (volume 0 where 1 was expected) and an intersection of volume 2, with 8 boundary
-edges, and no error of any kind.
+It also **cannot report failure** — and neither can the Exact solver. In the dispatcher, the
+`Solver::Float` branch sets `*r_error = BooleanError::NoError` before calling
+([L1203-L1204](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1203-L1204)) and the `Solver::MeshArr` branch does the same
+([L1211-L1213](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1211-L1213)); neither passes `r_error` into the solver, so neither can ever
+change it. Only `Solver::Manifold` forwards `r_error` to the implementation
+([L1225-L1228](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1225-L1228)). The one error the other two branches can produce is
+`SolverNotAvailable`, emitted by the `#else` of their build guard — i.e. "not compiled in", never
+"this input defeated me". *Read at the pinned commit.*
+Measured, this is not theoretical: the Fast solver on `identical` and `near_degenerate_triangle`
+returned an **empty union** (volume 0 where 1 was expected) and an intersection of volume 2, with
+8 boundary edges, and no error of any kind; the Exact solver deleted an operand on
+`touching_vertex` (Probe D) equally silently.
 
 ### Manifold (`MANIFOLD`)
 
@@ -284,8 +293,8 @@ The manual states the trade honestly: *Manifold* "Uses a solver that is usually 
 works on Manifold meshes", and the page's warning is unambiguous — "Only Manifold meshes are
 guaranteed to give proper results"
 ([`booleans.rst#L16-L20`, `#L67-L79`](https://projects.blender.org/blender/blender-manual/src/commit/ce0478a5b9329738e2cde9b7cbc22dd93500a8b8/manual/modeling/modifiers/generate/booleans.rst)).
-On our torture set it was the **only solver that got every case right**, and 10× faster than Exact
-on the twelve-opening wall. Its constraint is the point, and it is the same constraint
+On our torture set it was the **only solver that got every case right**, and 9× faster than Exact
+on the twelve-opening wall's union (12× on its intersection). Its constraint is the point, and it is the same constraint
 `problems.md` P-09 predicted.
 
 ## Carve history
@@ -405,18 +414,24 @@ than argued.
 
 **But Blender cannot be the tool that holds that frame**, and this is where the probe stops being
 good news. *Inferred from the source, combined with the measured ULP table above:* `Object` stores
-`float loc[3]` and returns a `float4x4 object_to_world`
-([`DNA_object_types.h#L396-L398`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L396-L398)),
+`float loc[3]` ([`DNA_object_types.h#L256`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L256))
+and `object_to_world()` returns a `float4x4`
+([`#L397-L398`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/makesdna/DNA_object_types.h#L397-L398)),
 so the *frame origin itself* is quantised to 3.125 cm at 500 km. The geometry inside the frame is
 clean and the frame is in the wrong place. ADR-0006's requirement is therefore sharper than "use
 local frames": **the frame origin must be f64 even when the geometry inside it is f32**, which is
 exactly the split ADR-0006 proposes (f64 tile frames, camera-relative f32 at upload) and which
 Blender does not implement.
 
-A user-visible instance of the same thing is on the tracker:
-[#158822](https://projects.blender.org/blender/blender/issues/158822), where a triager reproduces a
-failing sculpt trim and reports it "related to the fact the geomtry is far away from the object
-origin" [sic], fixed by *Origin to Geometry* — i.e. by moving the local frame.
+The tracker has an adjacent case, and it is worth stating precisely *because* it is not the same
+thing: in [#158822](https://projects.blender.org/blender/blender/issues/158822) a triager reproduces a failing sculpt trim, reports it "related to the
+fact the geomtry is far away from the object origin" [sic] and offers *Origin to Geometry* as a
+**workaround** — the ticket is still open. But a later commenter names a different mechanism —
+"when the first click of the gesture doesn't hit the mesh, the object origin is used as the depth
+point to convert screen coordinates to 3D" — and the reporter's distances are "some dozen of
+metres", not 500 km. So it is a depth-reference bug that distance from the origin exposes, not the
+float32 quantisation measured above. It is recorded here so nobody later cites it as evidence for
+the precision finding, which stands on the measurement alone.
 
 ## Incremental evaluation — the depsgraph
 
@@ -449,25 +464,31 @@ has a per-ID cost. Measured on a scene of nothing but boxes, headless, with no v
 
 | Objects | One `view_layer.update()` after moving one object |
 |---|---|
-| 1 000, as 1 000 objects | 1.23 ms |
+| 1 000, as 1 000 objects | 1.14 ms |
 | 1 000, as one 1 000-shell mesh | 0.005 ms |
-| 10 000, as 10 000 objects | **16.8 ms** |
+| 10 000, as 10 000 objects | **16.3 ms** |
 | 10 000, as one 10 000-shell mesh | 0.013 ms |
-| 100 000, as 100 000 objects | **295.3 ms** |
-| 100 000, as one 100 000-shell mesh | 0.028 ms |
+| 100 000, as 100 000 objects | **332.1 ms** |
+| 100 000, as one 100 000-shell mesh | 0.018 ms |
 
 *Measured*, [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md).
-Ten thousand objects is a small building. 16.8 ms is the entire frame budget, spent on the
+Ten thousand objects is a small building. 16.3 ms is the entire frame budget, spent on the
 bookkeeping for one dragged object, before anything is drawn. The same triangles in one object cost
-0.013 ms — a factor of ~1300 — so this is per-object overhead and not geometry volume. Memory says
-the same thing: the 100k-object scene cost **6 224 MB**, about **62 kB per object**, for 1.2 M
-triangles that occupy a few tens of MB when they live in a single mesh.
+0.013 ms — a factor of ~1 270 — so this is per-object overhead and not geometry volume. Memory says
+the same thing: the object scenes cost **81 MB / 619 MB / 6 232 MB** at 1k / 10k / 100k, which is
+**≈63 kB per additional object** between 1k and 10k and **≈65 kB** between 10k and 100k, for 1.2 M
+triangles that occupy a few tens of MB when they live in a single mesh. (Differencing the *separate*
+rows across counts is deliberate: the results file also reports a per-object memory delta against
+the single-mesh variant, and that baseline is unreliable — the single-mesh scenes are measured
+immediately after a multi-gigabyte teardown, and their memory delta has come out negative in one run
+and 2.9 GB in another.)
 
 The tracker carries the user-facing version:
 [#156584](https://projects.blender.org/blender/blender/issues/156584), "Mesh with very slow Boolean
-modifier slows down the whole scene, even when not interacted", where a Blender developer confirms
-"a boolean modifier appears to be needlessly reevaluated" and another commenter replies "though I
-believe this is a known limitation".
+modifier slows down the whole scene, even when not interacted", confirmed by three commenters, the
+first of whom adds "though I believe this is a known limitation". A commenter on that ticket points
+at [#140760](https://projects.blender.org/blender/blender/issues/140760) as "a bit similar, where a boolean modifier appears to be needlessly
+reevaluated" — that phrase belongs to the second ticket, not this one.
 
 ## The GPU module
 
@@ -475,8 +496,11 @@ Summarised here for the kernel's buffer-layout decisions and for Task 11; the re
 belongs in [`../renderers/`](../renderers/).
 
 **Backend abstraction.** `source/blender/gpu/` presents `VertBuf`, `IndexBuf`, `Batch`, `Shader`,
-`FrameBuffer`, `StorageBuf`, `Texture` over four backends: `opengl/` (38 files), `vulkan/` (85),
-`metal/` (45) and `dummy/`. That Vulkan is now the largest backend directory is the clearest
+`FrameBuffer`, `StorageBuf`, `Texture` over four backends: `opengl/` (38 files), `vulkan/` (82),
+`metal/` (44) and `dummy/` (5). *Counting rule, so the numbers can be reproduced:* files directly
+in the backend directory at the pinned commit, subdirectories excluded — `find <dir> -maxdepth 1
+-type f`. Counted recursively, `vulkan/` is 133 and `metal/` 46, the difference being generated and
+shader sources under `vulkan/shaders/`. That Vulkan is now the largest backend directory is the clearest
 available signal of where the project's GPU work is going. Usage hints are explicit
 (`GPU_USAGE_STREAM` / `STATIC` / `DYNAMIC` / `DEVICE_ONLY`,
 [`GPU_vertex_buffer.hh#L42-L54`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_vertex_buffer.hh#L42-L54)),
@@ -484,8 +508,10 @@ which is the interface a kernel wants: the producer says how the data will be us
 decides where it lives.
 
 **Geometry reaches the GPU through single-purpose extractors.** `draw/intern/mesh_extractors/`
-holds 30 files, one per buffer: `extract_mesh_vbo_pos`, `_vnor`, `_lnor`, `_uv`, `_tan`,
-`_select_idx`, `ibo_tris`, `ibo_lines`, … Each turns the `Mesh` attribute arrays into one vertex or
+holds **29** of them, one per buffer: `extract_mesh_vbo_pos`, `_vnor`, `_lnor`, `_uv`, `_tan`,
+`_select_idx`, `ibo_tris`, `ibo_lines`, … *Counting rule:* `extract_mesh_vbo_*.cc` (22) plus
+`extract_mesh_ibo_*.cc` (7); the directory's two remaining files are the shared `extract_mesh.cc`
+and `.hh`, which are not extractors. Each turns the `Mesh` attribute arrays into one vertex or
 index buffer. Positions upload as `SFLOAT_32_32_32` — float32, matching storage exactly, with no
 camera-relative rebasing — and are allocated **per face corner**, not per vertex
 ([`extract_mesh_vbo_pos.cc#L73-L84`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_pos.cc#L73-L84)).
@@ -494,7 +520,7 @@ splitting the source mesh — a deliberate choice worth weighing rather than cop
 
 **What comes back is only identity.** `GPU_select_begin` / `GPU_select_end` fill a buffer of
 `GPUSelectResult { unsigned int id; unsigned int depth; }`
-([`GPU_select.hh#L29-L42`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh#L29-L42)) —
+([`GPU_select.hh#L29-L43`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/gpu/GPU_select.hh#L29-L43)) —
 an id written by the shader and a depth. No geometry, no positions, nothing the kernel could
 consume. The GPU is a display and a picking oracle; it is not part of the modelling path.
 
@@ -521,12 +547,16 @@ Trickey, the author of the exact solver's merge commit
 [`9e09b5c418c0`](https://projects.blender.org/blender/blender/commit/9e09b5c418c0a436e3c84ccf38c065527988b0a0),
 so his diagnoses are the implementer's. Where a comment shows implementer-level work (bisecting,
 naming a commit, running ASAN) without the tracker labelling the role, it is called *developer*.
-Everything else is *reporter* or *triage*.
+Someone who is neither the reporter nor doing triage nor visibly working at implementer level is a
+*commenter* — accurate and deliberately weak, because the tracker does not say more. Everything
+else is *reporter* or *triage*. The distinction is load-bearing and easy to get wrong in this
+tracker, where reporters are often themselves skilled: on 143644, for instance, the "threading"
+diagnosis is the **reporter's**, not a maintainer's.
 
 | # | Solver | Trigger | Traced cause | State | Link |
 |---|---|---|---|---|---|
-| 143644 | Manifold | coplanar + threading | **Developer-confirmed.** `howardt`: the case "creates quite a number of coplanar faces that have to be handled by Manifold"; a Blender developer adds "this is indeed a threading issue… When running Blender single threaded, this doesn't happen"; reported upstream to the Manifold library | closed 2026-05 | [issue](https://projects.blender.org/blender/blender/issues/143644) |
-| 145491 | Fast | large coordinates / object size | Reporter-level but code-level: "Setting epsilon to 1e-7 in `BM_mesh_intersect` makes the flickering disappear… But it can slow down the algorithm". Triage confirms "the issue is gone when using the `Exact` or `Manifold` boolean" | open 2025-09, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/145491) |
+| 143644 | Manifold | coplanar + threading | **Confirmed by the exact solver's author; the *threading* attribution is the reporter's.** `howardt`: the case "creates quite a number of coplanar faces that have to be handled by Manifold", and Manifold "is also trying to do things as parallel as possible". The line "this is indeed a threading issue… When running Blender single threaded, this doesn't happen" is written by **`SimonThommes`, who filed the report** — not by a maintainer. `howardt` then built a test that reproduces the non-determinism in the standalone Manifold library, reported it upstream, and later confirmed a library version that fixes it ships in 5.0 | closed 2026-05, Resolved | [issue](https://projects.blender.org/blender/blender/issues/143644) |
+| 145491 | Fast | a particular pair of operand sizes | **Not large coordinates.** The repro is a 1 m ico sphere against a 0.8 m one at the origin, and the reporter records that it "seems to be just this size combination. a smaller or larger smaller ico sphere doesn't glitch" — the Fast solver's fixed epsilon against the size of the *features* it meets, not distance from the origin. A commenter, at source level: "Setting epsilon to 1e-7 in `BM_mesh_intersect` makes the flickering disappear… But it can slow down the algorithm". Triage confirms "the issue is gone when using the `Exact` or `Manifold` boolean" | open 2025-09, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/145491) |
 | 135135 | (mesh boolean) | precision | Commenter: "I tend to think of this as systematic limitation of the boolean algorithm… It's limited by floating point precision." Triage moved it to the Modeling module and labelled it **Type/Known Issue** | open 2025-02 | [issue](https://projects.blender.org/blender/blender/issues/135135) |
 | 108780 | Exact | thin / planar cutter | Not traced. Triage response points at the manual's non-manifold warning and suggests adding a Solidify modifier "(even with a tiny 0.0001 amount)" as the workaround | open 2023-06, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/108780) |
 | 161732 | Exact | — (regression) | **Developer-bisected** to a specific commit; `howardt`: "Strange, since I haven't changed anything in that code lately. Though there have been some changes in the delaunay triangulation that maybe caused some issue." The bisecting developer adds "it might be something that is revealed by it, rather than caused" | open 2026-07, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/161732) |
@@ -540,10 +570,10 @@ Everything else is *reporter* or *triage*.
 | 155657 | Manifold | duplicate in edit mode | **Developer-level**: an assert reproduced under a debugger with `-t 1`, plus "I don't always get the assert, but if I scale the cutter in objectmode I nearly always hit a scale where it happens" — a hang requiring a force quit | closed 2026-03, Resolved | [issue](https://projects.blender.org/blender/blender/issues/155657) |
 | 154746 | Manifold | coincident vertices | Triage: "Can confirm". A commenter reports "a similar situation with float boolean against perfectly overlapping geometries" — i.e. the same trigger reaching a second solver — and refers it to the boolean's author. Title: multiple vertices on the same point crash Blender | closed 2026-02, Resolved | [issue](https://projects.blender.org/blender/blender/issues/154746) |
 | 99892 | (modifier) | extreme scale | Triage confirmed and reproduced at scale "{1e+29, 1e+29, 1e+29}"; the triager's own analysis: "It looks like the membership check function can't check such coordinates", and the proposed fix was to clamp coordinates. Labelled **Type/Known Issue**; open for 3½ years before archiving | closed 2026-01, Archived | [issue](https://projects.blender.org/blender/blender/issues/99892) |
-| 158822 | (sculpt trim) | distance from origin | Triage: "related to the fact the geomtry is far away from the object origin" [sic]; *Origin to Geometry* fixes it | open 2026-05, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/158822) |
-| 158737 | (mesh unions) | memory | Title: "44x increase in memory usage for geometry nodes + mesh unions", 5.0.1 → 5.1.1. Confirmed by a developer whose **bisection failed to isolate it** ("Bisecting failed to give insights"); another developer suspects "some change in the mesh boolean code". A later commenter reproduces the class of problem on 5.3 alpha | closed 2026-07, Resolved | [issue](https://projects.blender.org/blender/blender/issues/158737) |
-| 156584 | (modifier) | re-evaluation | **Developer-confirmed**: "a boolean modifier appears to be needlessly reevaluated"; a slow boolean on one object slows the whole scene when nothing touches it | open 2026-03, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/156584) |
-| 105652 | Exact + `use_self` | memory | Not traced; triage speculates about available RAM. Open for ~3 years before archiving | closed 2026-03, Archived | [issue](https://projects.blender.org/blender/blender/issues/105652) |
+| 158822 | (sculpt trim) | distance from origin | Triage: "related to the fact the geomtry is far away from the object origin" [sic], with *Origin to Geometry* offered as a **workaround**, not a fix — the ticket is still open. A later commenter names the actual mechanism, and it is not precision: "when the first click of the gesture doesn't hit the mesh, the object origin is used as the depth point to convert screen coordinates to 3D" | open 2026-05, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/158822) |
+| 158737 | (mesh unions) | memory regression | **Bisected and root-caused — and the cause is not Blender's boolean.** Title: "44x increase in memory usage for geometry nodes + mesh unions", 5.0.1 → 5.1.1. A first bisection reported "Bisecting failed to give insights" — a later commenter's explanation: those lite builds "probably didn't find the issue because WITH_MANIFOLD defaults to OFF in them". `JacquesLucke` then "bisected the issue down to f7d920a89b69… (library update for 5.1)", and a commenter isolated the mechanism by patching the library itself: "The hit appears to be Manifold's async deallocation path in `Vec<T>::free_async()`", i.e. frees enqueued onto a TBB arena. Manifold's own maintainer confirmed ("I guess that async thread didn't get a chance to run?") and released the fix as v3.5.2. The earlier guess, "some change in the mesh boolean code", was **disproven** | closed 2026-07, Resolved | [issue](https://projects.blender.org/blender/blender/issues/158737) |
+| 156584 | (modifier) | re-evaluation | Confirmed by three separate commenters — the first: "Can confirm deleting cube causes re-evaluation, though I believe this is a known limitation". A slow boolean on one object slows the whole scene when nothing touches it. *(The phrase "a boolean modifier appears to be needlessly reevaluated" is `kevindietrich`'s, written **about** the related [#140760](https://projects.blender.org/blender/blender/issues/140760), not about this ticket.)* | open 2026-03, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/156584) |
+| 105652 | Exact + `use_self` | memory | **Root cause from `howardt`**, after two triagers had speculated about available RAM: "One of the reasons self-intersection is so expensive is that the algorithm has to test intersection between faces that are close, which means it tests against all of the faces that share an edge with a given face -- a LOT of faces." He declined to optimise it, being "currently working on a completely new implementation of exact boolean". Open for ~3 years before archiving | closed 2026-03, Archived | [issue](https://projects.blender.org/blender/blender/issues/105652) |
 | 115557 | (modifier) | merged edges/faces | Not traced. Reporter, on union of two watertight shapes: "Because faces are missing, the merged shape is no longer manifold", which then corrupts later booleans. Open since 2023 | open 2023-11, Confirmed | [issue](https://projects.blender.org/blender/blender/issues/115557) |
 
 ### What the survey shows, and what it does not
@@ -556,8 +586,8 @@ Everything else is *reporter* or *triage*.
 - **The tracker is healthy, and the boolean's author answers on it by name.** That is a real
   maturity difference from [`occt.md`](occt.md) §Maturity, where 14 of 20 surveyed issues were open
   and several carried "not yet analyzed" as the only response. It is also worth noting what
-  "closed" means here: several of these are `Status/Archived`, i.e. closed without a fix
-  (140590, 105652, 99892).
+  "closed" means here: **five** of them carry `Status/Archived`, i.e. closed without a fix
+  (139370, 140590, 144698, 99892, 105652).
 - **No issue was found in which a boolean produced a wrong volume silently and a maintainer
   confirmed the mechanism.** The closest are 135135 (labelled a known limitation of floating-point
   precision) and 115557 (untraced since 2023). The silent-wrongness case in this note is one *we*
@@ -592,12 +622,12 @@ compare against the analytic values per operation and treat the identity as a *n
 only.
 
 **3. The Fast solver is non-deterministic.** Ten runs of `overlap_half` union, operands rebuilt
-each time in one process, produced **two distinct results** (32 verts / 14 faces nine times, 32 /
-13 once). Volume was the same; topology was not — and an earlier run of the same driver produced
-a 32 / 15 variant that this one did not, so at least three topologies exist for this one input. *Measured*, Probe E. Blender's tracker documents
-a developer-confirmed threading non-determinism in the *Manifold* solver
-([#143644](https://projects.blender.org/blender/blender/issues/143644)); this is the same class in
-a different solver, and we did not find a ticket for it. A kernel whose output varies run to run
+each time in one process, produced **two distinct results** (32 verts / 15 faces six times, 32 /
+14 four times). Volume was the same; topology was not. *Measured*, Probe E. Blender's tracker
+documents a non-determinism in the *Manifold* solver ([#143644](https://projects.blender.org/blender/blender/issues/143644)) — attributed to
+threading by the reporter, then reproduced in the standalone Manifold library and fixed upstream by
+the exact solver's author. Ours is the same class in a different solver, and we did not find a
+ticket for it. A kernel whose output varies run to run
 cannot be diffed, cached, or regression-tested, and in a BIM tool it means two people opening the
 same file can get different geometry.
 
@@ -614,7 +644,9 @@ candidate, which is why both drivers document theirs.
 
 ## Measurements
 
-**Hardware:** Intel Core i9-14900HX (32 threads), 32 GB RAM, Windows 11 Pro 10.0.26200.
+**Hardware:** `Intel(R) Core(TM) i9-14900HX`, 32 GB RAM, Windows 11 Pro 10.0.26200 — the CPU
+model and installed RAM are recorded by each driver in its own environment table, so this line
+has a source rather than being asserted here.
 **Versions:** Blender **5.0.0**, build hash `a37564c4df7a`, built 2025-11-18 11:06:54, bundled
 Python 3.11.13. Run headless with `--background --factory-startup`; the second flag matters,
 because without it the user's installed add-ons are loaded into the measured process.
@@ -655,13 +687,13 @@ Method details that affect the numbers:
 
 | Solver | Topologically valid | Numerically correct | Worst identity residual | Time range (ms) |
 |---|---|---|---|---|
-| Exact | 8 / 10 | **9 / 10** | 1 | 0.41 – 15.6 |
-| Fast (float) | 5 / 10 | 7 / 10 | 4.94e-07 | 0.21 – 1.06 |
-| Manifold | **10 / 10** | **10 / 10** | 1.42e-14 | 0.26 – 1.43 |
+| Exact | 8 / 10 | **9 / 10** | 1 | 0.37 – 15.95 |
+| Fast (float) | 5 / 10 | 7 / 10 | 4.94e-07 | 0.23 – 1.19 |
+| Manifold | **10 / 10** | **10 / 10** | 1.42e-14 | 0.29 – 1.76 |
 
-Against R-16 — pass is every case valid with the identity within 1e-9 relative — **Manifold
-passes, Exact and Fast fail.** Reading the table needs three cautions, all recorded in the results
-file:
+Against R-16 — pass is every case valid with the identity within 1e-9 relative — **Manifold passes
+on the operands Blender gave it, and Exact and Fast fail.** That qualifier is not a formality, and
+it is the first of three cautions the results file records:
 
 - Manifold passes *on the operands Blender gave it*, which for `sliver` were already 19% wrong
   before the boolean ran (§Precision). The identity is computed from measured operand volumes
@@ -686,24 +718,29 @@ result is a different wrong answer from the near one). Attributable purely to pr
 
 | Objects | Variant | Build | First full evaluation | One incremental update | Memory |
 |---|---|---|---|---|---|
-| 1 000 | 1 000 objects | 47 ms | 39 ms | 1.23 ms | 81 MB |
+| 1 000 | 1 000 objects | 45 ms | 34 ms | 1.14 ms | 81 MB |
 | 1 000 | one 1 000-shell mesh | 8 ms | 6 ms | 0.005 ms | 3 MB |
-| 10 000 | 10 000 objects | 494 ms | 473 ms | **16.8 ms** | 619 MB |
-| 10 000 | one 10 000-shell mesh | 207 ms | 172 ms | 0.013 ms | — |
-| 100 000 | 100 000 objects | 26.8 s | 10.0 s | **295.3 ms** | 6 224 MB |
-| 100 000 | one 100 000-shell mesh | 3.1 s | 2.0 s | 0.028 ms | — |
+| 10 000 | 10 000 objects | 480 ms | 447 ms | **16.3 ms** | 619 MB |
+| 10 000 | one 10 000-shell mesh | 229 ms | 198 ms | 0.013 ms | — |
+| 100 000 | 100 000 objects | 35.3 s | 11.5 s | **332.1 ms** | 6 232 MB |
+| 100 000 | one 100 000-shell mesh | 2.5 s | 4.4 s | 0.018 ms | — |
 
-Headless, no viewport, no add-ons, `bpy` only. R-03's criterion is about viewport interactivity, so
-this **cannot** deliver its pass verdict — but it is a lower bound on the cost, and the lower bound
+Headless, no viewport, no add-ons, `bpy` only. Only the incremental column is a median of five;
+build and first-evaluation are single measurements and the 100k row of both moves by tens of
+percent between runs, so read those two columns as orders of magnitude and the incremental column
+as a number. R-03's criterion is about viewport interactivity, so this **cannot** deliver its pass
+verdict — but it is a lower bound on the cost, and the lower bound
 already consumes a frame budget at 10k objects for a single moved object.
 
-At **100 000 objects** the same single-object move costs **295.3 ms**, about eighteen frames; the
-first full evaluation costs **10.0 s** and the scene occupies **6.2 GB**. The same 1.2 M triangles
-as one object cost 0.028 ms per update, so the quantity being measured is per-datablock cost and
-not geometry volume. (The single-object rows' memory is left blank above: their measured deltas
-came out negative, because the working set was still shrinking from the previous scene's teardown.
-The ~62 kB per object quoted here is taken from the *separate* rows alone, where it is consistent
-at both 10k and 100k, so it does not depend on that baseline.)
+At **100 000 objects** the same single-object move costs **332.1 ms**, about twenty frames; the
+first full evaluation costs **11.5 s** and the scene occupies **6.2 GB**. The same 1.2 M triangles
+as one object cost 0.018 ms per update, so the quantity being measured is per-datablock cost and
+not geometry volume. (The single-mesh rows' memory is left blank above because it is not
+trustworthy: each is measured as a working-set delta immediately after tearing down a much larger
+scene, and it has come out negative in one run and 2.9 GB in another. The per-object memory figure
+quoted in §Incremental evaluation is therefore derived by differencing the *separate* rows across
+counts — 81 → 619 → 6 232 MB, i.e. ≈63 kB and ≈65 kB per additional object — which needs no
+single-mesh baseline at all.)
 
 **This settles the part of R-03 the risk register was uncertain about: the ceiling is Blender's,
 not Bonsai's.** No add-on can avoid it, because what is being counted is Blender datablocks, and
@@ -717,8 +754,8 @@ not this note's job.
 
 1. **Re-evaluate a single changed element without reprocessing the model?** **Yes — the only
    candidate read so far that can** — the depsgraph tags per ID *component* and re-runs only
-   the affected operation nodes. The qualifier is the cost per object: 16.8 ms at 10k objects for
-   one move and 295 ms at 100k, measured, headless.
+   the affected operation nodes. The qualifier is the cost per object: 16.3 ms at 10k objects for
+   one move and 332 ms at 100k, measured, headless.
 2. **IFC round trip?** Not applicable — Blender has no IFC. Answered in
    [`../prior-art/bonsai.md`](../prior-art/bonsai.md).
 3. **Driven in-process from DynLex without a subprocess or a file?** **No.** `blenlib` and
@@ -730,9 +767,11 @@ not this note's job.
    found that is single-threaded by design. The cost of that default is measured: the Fast solver
    returned two different topologies for identical input in ten runs.
 5. **What breaks first at scale?** The **object model**, decisively, and long before geometry:
-   16.8 ms per single-object update at 10k objects against 0.013 ms for the same triangles in one
-   object, and 6.2 GB of memory for 100k boxes. Memory follows (the tracker's 44× regression, #158737); boolean time is not the
-   bottleneck at BIM scale.
+   16.3 ms per single-object update at 10k objects against 0.013 ms for the same triangles in one
+   object, and 6.2 GB of memory for 100k boxes. Boolean time is not the bottleneck at BIM scale.
+   (The tracker's 44× memory regression, [#158737](https://projects.blender.org/blender/blender/issues/158737), is *not* evidence for this: it was
+   bisected to a bundled library's threaded deallocator and fixed upstream, so it says nothing
+   about Blender's own scaling.)
 6. **Numeric precision internally, and configurable?** **float32 stored, exact rational internally
    in the Exact solver, float32 out.** Not configurable: there is no double-precision mesh in
    Blender and no option that produces one. The Fast solver's `double_threshold` is a distance
@@ -770,7 +809,9 @@ not this note's job.
 - **Three solvers behind one enum** is an honest interface: the caller chooses the trade, and the
   choice is one property.
 - **Errors are typed**, not boolean: `NoError`, `NonManifold`, `ResultTooBig`, `SolverNotAvailable`,
-  `UnknownError`.
+  `UnknownError` — *but only the Manifold path fills the type in*. The Fast and Exact branches of
+  the dispatcher set `NoError` before calling and never pass the pointer down, so the enum is a
+  good design that two of the three solvers do not participate in.
 - **A healthy tracker** with implementer participation, which is where most of §Known problems
   came from.
 - **The GPU module's backend abstraction and explicit usage hints** are a good model for a
@@ -782,14 +823,15 @@ not this note's job.
   we measured costing 3.5 cm and 0.15 m³ at 500 km.
 - **GPL**, which forecloses code reuse in a differently-licensed kernel and would relicense
   anything that linked it.
-- **Per-object evaluation cost** — 16.8 ms for one move at 10k objects, 295 ms at 100k, headless;
-  and ~62 kB of memory per object, 6.2 GB for a 100k-box scene.
+- **Per-object evaluation cost** — 16.3 ms for one move at 10k objects, 332 ms at 100k, headless;
+  and ~63–65 kB of memory per object, 6.2 GB for a 100k-box scene.
 - **Silent operand loss** on exactly-touching input, with a valid, manifold, checker-approved
   result (Probe D).
-- **Non-determinism** in the Fast solver, measured; developer-confirmed in the Manifold solver on
-  the tracker.
+- **Non-determinism** in the Fast solver, measured; and a tracker report of the same class in the
+  Manifold solver, reproduced upstream by the exact solver's author ([#143644](https://projects.blender.org/blender/blender/issues/143644)).
 - **Exactness is conditional**: non-PWN input silently downgrades to a float ray-cast heuristic.
-- **The Fast solver cannot report failure** — its dispatch branch sets `NoError` unconditionally.
+- **Neither the Fast nor the Exact solver can report failure** — both dispatch branches set
+  `NoError` before calling and never pass `r_error` down; only the Manifold branch does.
 - **A refusal returns the first operand**, so a failed boolean looks like a successful no-op unless
   the caller reads the console.
 - **No embedding path** short of running the application.
@@ -808,7 +850,7 @@ written before the driver.
 The second risk is **the object model**, and it is the one that decides R-03. It cannot be fixed by
 using Blender differently: the cost is per-datablock, and one IFC element is one datablock.
 Modelling a building as few objects with many shells would sidestep it — 0.013 ms instead of
-16.8 ms — and would also throw away the per-element identity that makes it BIM.
+16.3 ms — and would also throw away the per-element identity that makes it BIM.
 
 Both risks are the *reason* to read this note, and neither is an argument that our own kernel will
 do better. Blender's boolean is the product of years of work by people who understood the
@@ -858,10 +900,10 @@ published paper and the documentation, with the citation that justifies it.
 | An operand disappears from a boolean result, which is nonetheless closed, manifold and checker-approved | Cell selection by winding number decides which *cells* survive; nothing in the contract requires each input shape to be represented in the output, and a measure-zero contact produces no cell to keep | `touching_vertex`: V(∪) = 1 where 2 was expected, both operand orders, correct at ±1 mm (measured, Probe D) | Exact predicates decide topology (spec §5) **and** an operation reports what it consumed: a union that dropped an operand is a reported fact, not a silent one. **P-01** |
 | Geometry is quantised before an exact algorithm ever sees it | float32 storage in `Mesh` and `BMesh`, float32 object transforms, with a 1e-6 "hack" to snap transforms back to coplanarity | 0.0348 m deviation and 0.15 m³ volume loss at 500 km (measured); `sliver` operand 19% thick at unit scale (measured); [`clean_transform`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L52-L79) | f64 in tile-local frames with an **f64 frame origin**, camera-relative f32 only at upload (spec §5, ADR-0006). The local-frame probe shows the mitigation works; Blender cannot hold the frame because `loc` is float32. **P-05** |
 | Exactness silently degrades to a heuristic on imperfect input | The PWN test gates the exact branch; failing it falls back to float ray casting, with no error and no change of return type | [`mesh_boolean.cc#L3590-L3600`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/blenlib/intern/mesh_boolean.cc#L3590-L3600), `Array<float> in_shape` at [L2750](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/blenlib/intern/mesh_boolean.cc#L2750); the API's own "may or may not work in the way the user hopes" | A degraded path is a **different result value**, never the same one: the caller learns which algorithm ran (spec §12). Healing is explicit and named (spec §4). **P-01** |
-| A boolean returns different geometry for identical input | Threaded arrangement and threaded post-processing without a canonical ordering at every merge point | Probe E: 2 distinct topologies in 10 runs, and a third across runs (Fast, measured); [#143644](https://projects.blender.org/blender/blender/issues/143644) (Manifold, developer-confirmed as threading) | Determinism is an invariant, not an aspiration: parallel work is over independent handles with results merged in a canonical order (spec §6). A determinism test belongs in the kernel's own suite from the first boolean. **P-16 — added by this note** |
+| A boolean returns different geometry for identical input | Threaded arrangement and threaded post-processing without a canonical ordering at every merge point | Probe E: 2 distinct topologies in 10 runs (Fast, measured); [#143644](https://projects.blender.org/blender/blender/issues/143644) (Manifold — the reporter attributes it to threading, the exact solver's author reproduced it in the standalone library and it was fixed upstream) | Determinism is an invariant, not an aspiration: parallel work is over independent handles with results merged in a canonical order (spec §6). A determinism test belongs in the kernel's own suite from the first boolean. **P-16 — added by this note** |
 | A failed operation returns the unmodified first operand and a console message | The error is reported out-of-band while the return value stays a plausible mesh | Manifold on `near_degenerate_triangle`: "Cannot execute, non-manifold inputs", output = operand A (measured); [`MOD_boolean.cc#L492-L501`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/modifiers/intern/MOD_boolean.cc#L492-L501) | Operations return a result value carrying the failure; there is no "returned the input" path (spec §12). Compare [`occt.md`](occt.md) on IfcOpenShell's first-operand fallback — the same anti-pattern, independently arrived at, which is why it needs an explicit rule. **P-01** |
-| One dragged element costs the whole scene | The evaluation graph's unit is the datablock, and its cost per update scales with datablock count | 16.8 ms for one move at 10k objects and 295 ms at 100k, vs 0.013 ms for the same triangles in one object; ~62 kB of memory per object (measured); [#156584](https://projects.blender.org/blender/blender/issues/156584) | Structure-of-arrays with generational handles, instancing-first GPU layouts, and an evaluation graph whose nodes are not forced to be one-per-element (spec §3, §6). **P-07** |
-| A solver that cannot fail | The Float branch sets `NoError` unconditionally | [`geometry/intern/mesh_boolean.cc#L1202-L1208`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1202-L1208); measured empty unions with no error | Every operation returns a typed result; "no error" is a value that must be justified, not a default. **P-01** |
+| One dragged element costs the whole scene | The evaluation graph's unit is the datablock, and its cost per update scales with datablock count | 16.3 ms for one move at 10k objects and 332 ms at 100k, vs 0.013 ms for the same triangles in one object; ~63–65 kB of memory per object (measured); [#156584](https://projects.blender.org/blender/blender/issues/156584) | Structure-of-arrays with generational handles, instancing-first GPU layouts, and an evaluation graph whose nodes are not forced to be one-per-element (spec §3, §6). **P-07** |
+| Two of three solvers cannot fail | The `Float` and `MeshArr` branches both set `NoError` before calling and never pass `r_error` down; only `Manifold` does | [`geometry/intern/mesh_boolean.cc#L1203-L1204`](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1203-L1204) and [L1211-L1213](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1211-L1213) against [L1225-L1228](https://projects.blender.org/blender/blender/src/commit/a37564c4df7a9b604809e5192918400e46a0205f/source/blender/geometry/intern/mesh_boolean.cc#L1225-L1228); measured empty unions and a deleted operand, both with no error | Every operation returns a typed result; "no error" is a value that must be justified, not a default. **P-01** |
 | The robust algorithm requires manifold input and refuses real models | The Manifold library's correctness proof assumes it | 10/10 on our set, but refused the T-junction operand outright (measured); [#139370](https://projects.blender.org/blender/blender/issues/139370), [#140590](https://projects.blender.org/blender/blender/issues/140590), [#144698](https://projects.blender.org/blender/blender/issues/144698) | Mesh validity is checked explicitly and healing is an explicit operation; the arrangement-based boolean tolerates non-manifold input where the literature allows (spec §4, §12). **P-09** |
 
 ### Corrections and additions this note makes to `problems.md`
@@ -882,8 +924,9 @@ published paper and the documentation, with the citation that justifies it.
   and returns the first operand, and three tracker issues show the same constraint meeting real
   models.
 - **P-16 is new**: "the same operation on the same input returns different geometry on different
-  runs". It had no row, we measured it in the Fast solver, and Blender's own developers confirmed
-  the same class in the Manifold solver. It is added, following the precedent of
+  runs". It had no row, we measured it in the Fast solver, and the tracker carries the same class
+  in the Manifold solver ([#143644](https://projects.blender.org/blender/blender/issues/143644)), reproduced in the standalone library by the exact
+  solver's author. It is added, following the precedent of
   [`occt.md`](occt.md)'s P-15, because the *avoid* table above needed a target for it.
 
 ## Sources

@@ -45,6 +45,55 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _QUADS = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
 
 
+def cpu_model() -> str:
+    """CPU model name. Windows: the registry string; Linux: /proc/cpuinfo; else
+    platform.processor(), which on Windows is only the family/stepping identifier."""
+    try:
+        if platform.system() == "Windows":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            with key:
+                return winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return platform.processor() or "unknown"
+
+
+def total_ram_gb() -> str:
+    """Installed physical memory in GB, or 'unknown'."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32),
+                            ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64),
+                            ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64),
+                            ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64),
+                            ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return "%.0f" % (status.ullTotalPhys / (1024 ** 3))
+        else:
+            return "%.0f" % (os.sysconf("SC_PHYS_PAGES")
+                             * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
+    except Exception:
+        pass
+    return "unknown"
+
+
 def box(x: float, y: float, z: float, size: float = 0.8):
     verts = [
         (x, y, z), (x + size, y, z), (x + size, y + size, z), (x, y + size, z),
@@ -231,6 +280,8 @@ def main() -> int:
     out(f"| build date | `{bpy.app.build_date.decode()} {bpy.app.build_time.decode()}` |")
     out(f"| platform | `{platform.system()} {platform.version()} ({platform.machine()})` |")
     out(f"| processor | `{platform.processor()}` |")
+    out(f"| cpu | `{cpu_model()}` |")
+    out(f"| installed RAM | `{total_ram_gb()} GB` |")
     out(f"| repeats per incremental timing | {args.repeats} (median reported) |")
     out("| startup | `--factory-startup`, `--background` (no interface, no drawing) |")
     out("")
