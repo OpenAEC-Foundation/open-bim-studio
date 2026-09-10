@@ -92,10 +92,10 @@ It maps between two different kinds of name for the same sub-shape
   [`TopoShapeOpCode.h#L65`](https://github.com/FreeCAD/FreeCAD/blob/2fcc5317fe3aee96ca73475986a577719fc78e20/src/Mod/Part/App/TopoShapeOpCode.h#L65)).
 
 **Measured** (§Measurements below): the top face of a Pad in a fresh document mapped to
-`#14:1;:G0;XTR;:H988:8,F` — decoded left to right this is a hashed StringID reference (`#14:1`),
+`#14:1;:G0;XTR;:Hb6d:8,F` — decoded left to right this is a hashed StringID reference (`#14:1`),
 the *generated* marker with disambiguating index 0 (`;:G0`), the extrude op-code (`XTR`), and the
-generating feature's tag encoded in hex (`;:H988`, where `988` differs between document sessions —
-it is a per-document tag salt, not a stable constant). Because `encodeElementName` recurses through
+generating feature's tag encoded in hex (`;:Hb6d`, inferred to be a per-document tag salt that
+differs between sessions, not a stable constant). Because `encodeElementName` recurses through
 `MappedName::findTagInElementName` whenever the previous level's tag differs
 ([`ElementMap.cpp#L625-L648`](https://github.com/FreeCAD/FreeCAD/blob/2fcc5317fe3aee96ca73475986a577719fc78e20/src/App/ElementMap.cpp#L625-L648)),
 a name built several PartDesign features deep chains the tags of every intervening feature that
@@ -150,7 +150,7 @@ Four distinct failure classes, each traced to a specific place in the mechanism 
 index appended to the shared base name
 ([L1518-L1604](https://github.com/FreeCAD/FreeCAD/blob/2fcc5317fe3aee96ca73475986a577719fc78e20/src/Mod/Part/App/TopoShapeExpansion.cpp#L1518-L1604)).
 RealThunder's own algorithm documentation is explicit that this only pushes the problem down one
-level: *"the middle ones still require[s] the index to disambiguat[e], and [the] problem still
+level: *"the middle ones still requires the index to disambiguation, and [the] problem still
 remains"* — claimed, RealThunder fork wiki, [Topological Naming
 Algorithm](https://github.com/realthunder/FreeCAD_assembly3/wiki/Topological-Naming-Algorithm). An
 index is not an identity; if a later edit changes how many pieces something splits into, the
