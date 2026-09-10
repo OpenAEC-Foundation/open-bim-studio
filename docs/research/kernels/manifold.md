@@ -83,16 +83,16 @@ against `manifold3d` 3.5.3 on an Intel Core i9-14900HX with 32 GB of RAM.
 |---|---|---|---|
 | **License** | Apache-2.0. Permissive: code may be borrowed with attribution, not only ideas — the only candidate so far where that is true (OCCT is LGPL-2.1-with-exception, Blender GPL). | source | `LICENSE` at the tag |
 | **Representations held natively** | **One**: an oriented 2-manifold triangle mesh with arbitrary vertex properties. Conversions exist outward — `Slice`/`Project` to 2D polygons, `Extrude`/`Revolve` back, `LevelSet` from an SDF to a mesh — but nothing else is *stored*. No B-rep, no point cloud, no volume. | source | `manifold.h` §Polygons, §Shapes |
-| **Boolean robustness** | Measured on the torture set: **9 of 10 cases numerically correct and topologically valid on every one of four settings**, worst identity residual 3.55e-14. The tenth is not a wrong answer but a **refusal**: the T-junction operand is rejected as `NotManifold` on both the f32 and the f64 path. Algorithm class: floating-point predicates with **symbolic perturbation on exact equality**, not exact arithmetic. | measured + source | [`results/manifold.md`](../../../spikes/boolean-torture/results/manifold.md); `shared.h#L90-L96` |
+| **Boolean robustness** | Measured on the torture set: **9 of 10 cases numerically correct on every one of four settings**, worst identity residual 3.55e-14. Topologically valid on 9/10 at three of the four settings and on **8/10** at `f64, tolerance=1e-6`, where the raised tolerance silently deletes the sliver operand (§Measurements). The tenth case is not a wrong answer but a **refusal**: the T-junction operand is rejected as `NotManifold` on both the f32 and the f64 path. Algorithm class: floating-point predicates with **symbolic perturbation on exact equality**, not exact arithmetic. | measured + source | [`results/manifold.md`](../../../spikes/boolean-torture/results/manifold.md); `shared.h#L90-L96` |
 | **Tolerance and precision model** | Two numbers per solid: `epsilon_`, derived as `kPrecision * Box::Scale()` with `kPrecision = 1e-12`, and `tolerance_`, the caller's promise, floored at epsilon. `Box::Scale()` is the **largest absolute coordinate**, so both scale with distance from the origin. Internal storage is `double` unconditionally; the *input* type chooses the precision — `Mesh`/`MeshGL` is float32, `Mesh64`/`MeshGL64` is float64, and a float32 ingest raises the floor to `FLT_EPSILON * Box::Scale()`. **A double path exists end to end**, which is the answer ADR-0006 needs. | measured + source | `impl.cpp#L682-L692`, `impl.h#L471-L482`, `utils.h#L39`; [`precision results`](../../../spikes/precision-set/results/manifold.md) |
 | **Incremental evaluation** | **None.** `Manifold` is immutable and functional; operators build a deferred CSG tree that is evaluated once and discarded. There is no dependency graph, no handle to a leaf, and no way to re-evaluate one changed operand of a completed result. | inferred from source | `manifold.h` (every operator returns a new `Manifold`), `csg_tree.cpp` |
 | **Threading model** | TBB throughout, chosen per call site by `autoPolicy(size)` with `kSeqThreshold = 1e4`, so small problems stay serial. The Python wheel is built `MANIFOLD_PAR=ON`. The maintainers treat run-to-run determinism as something to fix case by case, not as an invariant, and declined to reinstate a global deterministic mode. | source + tracker | `parallel.h#L34-L60`; `pyproject.toml`; [#1177](https://github.com/elalish/manifold/issues/1177) |
 | **GPU path** | **None, by decision.** CUDA and OpenMP backends were removed in 2023; the v2.2.1 release notes record "Removed OMP and CUDA backends to focus on TBB" ([#525](https://github.com/elalish/manifold/pull/525), [#531](https://github.com/elalish/manifold/pull/531), closing [#524](https://github.com/elalish/manifold/issues/524)). Nothing reaches the GPU from this library; a caller uploads the exported triangles itself. | source + tracker | v2.2.1 release notes; PR #525 body |
 | **IFC coverage** | Not applicable — no schema layer of any kind. | source | — |
 | **Performance** | Measured, f64 path, median of 5, fresh operands per repeat: **0.002–0.84 ms** over the eighteen operations (nine accepted cases x union and intersection); the 0.002 ms floor is `disjoint`'s bounding-box early-out. Twelve-opening wall union **0.837 ms**, intersection 0.588 ms. For scale on the identical case: Blender's Manifold solver 1.76 / 1.33 ms, Blender's exact solver 15.95 / 15.90 ms, OCCT's `BRepAlgoAPI_Fuse` 53.97 / 49.24 ms single-threaded on a B-rep compound. | measured | [`results/manifold.md`](../../../spikes/boolean-torture/results/manifold.md), and the same tables for the other two candidates |
-| **Embeddability** | Strong. No required dependencies, a plain **C ABI binding** (`bindings/c`, `MANIFOLD_CBIND`), a WASM build, and static linking as the wheel's default (`BUILD_SHARED_LIBS=OFF`). A DynLex FFI over the C header is the obvious integration and needs no subprocess and no file. | source | `bindings/c/include`, `pyproject.toml` |
+| **Embeddability** | Strong. No required dependencies, a plain **C ABI binding** (`bindings/c`, `MANIFOLD_CBIND`), a WASM build, and static linking as the wheel's default (`BUILD_SHARED_LIBS=OFF`). A DynLex FFI over the C header is the obvious integration and needs no subprocess and no file. | source + inferred | `bindings/c/include`, `pyproject.toml` |
 | **2D derivation** | `Slice(height)` and `Project()` return polygons; `CrossSection` (Clipper2) does 2D booleans and offsets. **No hidden-line and no section hatching** — a section is a polygon set, not a drawing. | source | `manifold.h` §Polygons; `cross_section.h` |
-| **Maturity** | 26 releases from v1.0.0 (2022-02) to v3.5.3 (2026-09), **nine of them in the last twelve months**. Two principal maintainers, so the bus factor is **2** and arguably 1 for the boolean itself. Downstream users include OpenSCAD, Blender, Godot and BRL-CAD, which is a real check on regressions. | source | `gh release list`; README §Users |
+| **Maturity** | 26 releases from v1.0.0 (2022-02) to v3.5.3 (2026-09), **nine of them in the last twelve months**. Two principal maintainers, so the bus factor is **2** and arguably 1 for the boolean itself. Downstream users include OpenSCAD, Blender, Godot and BRL-CAD, which is a real check on regressions. | source + inferred | `gh release list`; README §Users |
 | **AI familiarity** | Small and heavily commented, with four design PDFs in `docs/`. One column, never a tiebreaker (R-09). | inferred | repository contents |
 
 ## How the boolean works, and why "exact" is the wrong word for it
@@ -115,10 +115,14 @@ the tie-break direction comes from the operands' own normals, and the sense is c
 This is why the torture set's coplanar, shared-edge, touching-vertex and identical cases all come
 out exactly right: those cases are built from coordinates that are *bit-identical*, so `p == q`
 fires and the perturbation decides consistently. It is also precisely the limit the maintainers
-name. On [#676](https://github.com/elalish/manifold/issues/676), where two identical cube pairs
-behaved differently because one sat at `0.0999 * 51`, **`elalish` (OWNER)** answered "This is working as
-intended" and explained that the library "uses the input float coordinates as though they are
-exact". On [#1430](https://github.com/elalish/manifold/issues/1430) he calls symbolic perturbation
+name. On [#676](https://github.com/elalish/manifold/issues/676), the reporter's issue body
+constructs two touching-cube pairs from the same relative offsets — a near pair translated by
+`0.0999 * 1` and `0.0999 * 2`, a far pair by `0.0999 * 50` and `0.0999 * 51` — and reports different
+genus for the two, "should be the same, but further away". **`elalish` (OWNER)**'s comment narrows
+the cause to one coordinate in that pair: "I don't think `0.0999 * 51` is exactly representable in
+binary floating point", answering "this is working as intended" and explaining that the library
+"uses the input float coordinates as though they are exact". On
+[#1430](https://github.com/elalish/manifold/issues/1430) he calls symbolic perturbation
 "more of a best-effort feature", and **`pca006132` (COLLABORATOR)** answers the report with "we don't
 have a good way to fix it as of today".
 
@@ -193,6 +197,12 @@ conclusion is the same one [`blender.md`](blender.md) drew and it is now shown t
 Blender: **the loss is the storage type, not the algorithm.** Give the identical algorithm f64 input
 and the error drops by a factor of 5.6e8.
 
+The far f32 union is also where the driver's own validity check — extended to match the
+boolean-torture driver's, so "valid" means the same thing in both results files — catches a
+zero-area triangle in the result that the volume and deviation numbers alone do not show. It is one
+more instance of the same fact §Known problems already states: an f32-path result at distance can
+be geometrically imperfect while its `status()` still reads `NoError`.
+
 ### Local frames work — and this library shows why the frame origin must be f64
 
 Carrying the 500 km in `Manifold.translate()` instead of in the vertex data leaves the **f32** result
@@ -219,6 +229,24 @@ back-translated vertices, and the probe exists so that choice is auditable. **Ou
 properties must use the differenced-and-compensated form; the naive divergence sum is unusable in a
 national grid.**
 
+**This artefact belongs to `reference.signed_volume`, and it does not contaminate the committed OCCT
+or Blender figures.** Both sibling drivers were checked rather than assumed. Blender's precision
+driver back-translates the far result before integrating, the identical mitigation used here — the
+`far_back = [...]` assignment feeding `signed_volume` at
+[`spikes/precision-set/blender_driver.py`](../../../spikes/precision-set/blender_driver.py), line 341.
+OCCT's precision driver never calls `reference.signed_volume` at all — every `.volume` figure it
+reports comes from OCCT's own volume integrator, `BRepGProp.VolumeProperties_s` over a
+`GProp_GProps`, defined at
+[`spikes/boolean-torture/occt_common.py`](../../../spikes/boolean-torture/occt_common.py), lines
+70-72, and imported by
+[`spikes/precision-set/occt_driver.py`](../../../spikes/precision-set/occt_driver.py). So
+neither sibling figure carries this cancellation error. It is nonetheless a comparability caveat, not
+a non-issue: the OCCT column and the Manifold/Blender columns in the precision-set tables are computed
+by two different volume integrators (OCCT's own `BRepGProp`, and `reference.signed_volume` for the
+mesh candidates), not the same formula applied three times. Task 13's `FINDINGS.md` must state that
+the volume columns are comparable in *what they measure* (the far solid's volume) but not in
+*how they are computed*.
+
 ## Known problems
 
 ### Issue-tracker survey
@@ -233,7 +261,7 @@ speaker's role is the `authorAssociation` the API reports: **OWNER** = `elalish`
 | 1706 | near-coincident operands, 615 of 33,230 tris below 1e-9 area | **Maintainer, as designed.** `elalish` (OWNER): "slivers are very much expected to be produced by Smith's Boolean". The mechanism (`Kernel12` not coalescing near-duplicate verts) is the reporter's, `zmerlynn` (CONTRIBUTOR) | **open** 2026-05 | [issue](https://github.com/elalish/manifold/issues/1706) |
 | 1714 | operands at very different scales | **Reporter only — no maintainer ever commented**, and `elalish` converted it to a discussion. `zmerlynn` (CONTRIBUTOR) traced a result `tolerance_` of 3.4e+26 on a ~50,000-unit output to `max(inP.tolerance_, inQ.tolerance_)`. We verified the line: [`boolean_result.cpp#L828-L836`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/boolean_result.cpp#L828-L836) does exactly that, and never re-derives from the output box | closed 2026-05 | [issue](https://github.com/elalish/manifold/issues/1714) |
 | 1283 | v2.5.1 → v3: 0 → 968 degenerate tris | **Reporter's diagnosis.** `jonathanhogg` (CONTRIBUTOR) found ~1e-6 offsets from his own `sin`/`cos`; rounding coordinates to 19 fractional bits restored the old output. The maintainer sentence that matters for us is `elalish` (OWNER), on the input types: "you'll get float tolerance - only MeshGL64 gives double tolerance" | closed 2025-07 | [issue](https://github.com/elalish/manifold/issues/1283) |
-| 676 | identical geometry at `0.0999*50` vs `0.0999*1` | **Maintainer, working as intended.** `elalish` (OWNER): "This is working as intended", because the coordinates are no longer bit-identical and perturbation cannot fire | closed 2023-12 | [issue](https://github.com/elalish/manifold/issues/676) |
+| 676 | near cube pair at `0.0999*1`/`0.0999*2`, far pair at `0.0999*50`/`0.0999*51` (issue body); different genus reported for the two | **Maintainer, working as intended.** `elalish` (OWNER), in a comment: "I don't think `0.0999 * 51` is exactly representable in binary floating point" — "this is working as intended", because that coordinate is no longer bit-identical and perturbation cannot fire | closed 2023-12 | [issue](https://github.com/elalish/manifold/issues/676) |
 | 1359 | union with several coplanar faces | **Maintainer, in-spec.** `pca006132` (COLLABORATOR): "Degenerate triangle is expected output", per the ε-valid definition | closed 2025-09 | [issue](https://github.com/elalish/manifold/issues/1359) |
 | 1354 | union of a reversed-winding solid with a normal one | **Maintainer, out of scope.** `pca006132` (COLLABORATOR): "not a good idea to support negative volume meshes"; the underlying [#745](https://github.com/elalish/manifold/issues/745) is still open | closed 2025-09 | [issue](https://github.com/elalish/manifold/issues/1354) |
 | 1177 | policy question raised from the Blender integration | **Maintainer, the definitive statement.** `pca006132` (COLLABORATOR): stable sorts, but with parallelism "we do have things that are racy and are not deterministic", and "It is pretty much impossible to get deterministic results across machines". `elalish` (OWNER) on restoring the removed flag: "I don't think we're bringing it back as an option" | closed 2025-03 | [issue](https://github.com/elalish/manifold/issues/1177) |
@@ -294,7 +322,8 @@ example in one artefact.
 - **Method:** fresh operands per setting and per repeat; validity checked by the driver on the
   *exported* triangles (closed, every directed edge used once with a matching opposite halfedge, no
   loose vertices, no triangle below 1e-14 m²) as well as by `status()` and `is_empty()`; volumes by
-  `reference.signed_volume` over those triangles with `Manifold.volume()` recorded beside them;
+  `reference.signed_volume` over those triangles, with `Manifold.volume()` compared against it and
+  noted in the row only when the two disagree by more than 1e-12 relative;
   timing `time.perf_counter`, five repeats, median, with the `status()` call that forces the deferred
   CSG node inside the timed region.
 
@@ -327,6 +356,35 @@ tolerance deleted an operand. Three details are worth carrying:
 The twelve-shell cutting tool is a non-issue: Manifold accepts one mesh of twelve disconnected
 closed shells as **one** `Manifold` and `decompose()` reports 12; union, intersection and difference
 are all exact, with the difference at 3.6 m³ against the analytic 3.6 (Probe A).
+
+### Cross-harness check: the standalone f32 path against Blender's embedded Manifold solver
+
+§Evaluation compared timings across harnesses; this table compares the *numbers* case by case, so
+the claim that the two harnesses measure one artefact is checked rather than asserted. Standalone
+is this note's f32 path (the input path Blender feeds the library); Blender-Manifold is the
+`Manifold` solver row for the same case in
+[`spikes/boolean-torture/results/blender.md`](../../../spikes/boolean-torture/results/blender.md).
+
+| Case | Standalone f32 V(∪) / V(∩) | Blender-Manifold V(∪) / V(∩) | Agree? | Why |
+|---|---|---|---|---|
+| `disjoint` | 2 / 0 | 2 / 0 | agree | — |
+| `overlap_half` | 1.5 / 0.5 | 1.5 / 0.5 | agree | — |
+| `coplanar_faces` | 2 / 0 | 2 / 0 | agree | — |
+| `shared_edge` | 2 / 0 | 2 / 0 | agree | — |
+| `touching_vertex` | 2 / 0 | 2 / 0 | agree | — |
+| `identical` | 1 / 1 | 1 / 1 | agree | — |
+| `contained` | 1 / 0.125 | 1 / 0.125 | agree | — |
+| `sliver` | 1 / **1.19209289551e-07** | 1 / **1.19209289551e-07** | agree | the same 19%-too-thick slab (`0.5 + 1e-7` not representable in f32), to the digit |
+| `near_degenerate_triangle` | 0 / 0, both refused (`NotManifold`, empty) | 1 / 1, unmodified operand A | **differ** | not a library disagreement — the binding, not the algorithm: standalone returns an empty result with a typed status, Blender's modifier returns operand A unchanged with a console warning (§The one we found ourselves) |
+| `wall_with_openings` | 12.6000000179 / 5.39999982566 | 12.6000000179 / 5.39999982566 | agree | — |
+
+Nine of ten cases agree to the digit across two independent harnesses (a Python binding and
+Blender's modifier stack) built from different versions of the library (v3.5.3 vs v3.2.1) fed
+through different code paths. The tenth disagrees only in what the *binding* does with a refusal,
+not in what the boolean computed — Blender's Manifold solver never receives operand B far enough to
+run the boolean at all. The twelve-shell difference is the same second data point: this note's
+Probe A f32 difference and `results/blender.md`'s Probe B Manifold `DIFFERENCE` both report
+**3.60000053197 m³** on the identical twelve-opening wall.
 
 Determinism: 10 runs of each of four case/operation pairs produced **1 signature each** (Probe D),
 on a TBB-enabled build. That is the state at v3.5.3, after the fixes in #1233, #1320 and the one
@@ -401,8 +459,14 @@ demonstration of ADR-0006's premise we have.
    `autoPolicy(size)` against `kSeqThreshold = 1e4`; polygon triangulation is serial by design
    (README). *(source.)*
 5. **What breaks first at scale?** **Unmeasured by us.** The library's own failure valve is
-   `Error::ResultTooLarge`, raised when an intersection index set exceeds `INT_MAX`
-   ([`boolean_result.cpp#L774-L782`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/boolean_result.cpp#L774-L782)).
+   `Error::ResultTooLarge`, raised when an intersection index set exceeds `INT_MAX`. The bound,
+   `constexpr size_t INT_MAX_SZ`, is defined at
+   [`boolean3.cpp#L505-L506`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/boolean3.cpp#L505-L506);
+   the condition that trips it, `xv12_.x12.size() > INT_MAX_SZ || xv21_.x12.size() > INT_MAX_SZ`,
+   sets `valid = false` at
+   [`boolean3.cpp#L542-L543`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/boolean3.cpp#L542-L543);
+   and `valid == false` is what turns into the actual `Error::ResultTooLarge` status at
+   [`boolean_result.cpp#L774-L782`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/boolean_result.cpp#L774-L782).
    The one large-scale datum we have is second-hand and *memory*: Blender's
    [#158737](https://projects.blender.org/blender/blender/issues/158737) traced a 44× memory
    regression to a library-side async deallocation path, fixed in v3.5.2. That symbol is absent from
@@ -445,7 +509,7 @@ argument. **Recommendation: shortlist for M5's mesh path, behind the IFC refusal
 | What | Why | Where |
 |---|---|---|
 | **The typed `Error` enum, carried by an empty result and propagated through later operations** | Fifteen enumerators, fourteen of them named failures, instead of a bool. `Status()` on a chain still reports the failure that occurred in its middle. This is kernel spec §12's contract, already implemented | [`manifold.h#L124-L146`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/include/manifold/manifold.h#L124-L146). **P-09, P-01** |
-| **`ExecutionContext`: cancel, cancelled, progress; permanent cancellation with `Error::Cancelled`** | The exact API P-15 found missing in OCCT, in a library 1/100th the size. Cancellation is checked between phases and inside parallel chunks | [`common.h#L250-L299`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/include/manifold/common.h#L250-L299), [`parallel.h#L396-L440`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/parallel.h#L396-L440). **P-15** |
+| **`ExecutionContext`: cancel, cancelled, progress; permanent cancellation with `Error::Cancelled`** | The exact API P-15 found missing in OCCT. Cancellation is checked between phases and inside parallel chunks | [`common.h#L250-L299`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/include/manifold/common.h#L250-L299), [`parallel.h#L396-L440`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/parallel.h#L396-L440). **P-15** |
 | **The mass-property integrand: difference-then-cross, with Kahan compensation** | Measured: 12.5999999999 against a naive divergence sum's 12.5999143 on the same solid at 500 km. Cheap, and the difference is five orders of magnitude | [`properties.cpp#L265-L294`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/properties.cpp#L265-L294). **P-05** |
 | **The LBVH collider: Morton codes, Karras radix tree, built and queried in parallel, with a sequential threshold** | The broad phase every boolean and every pick needs, in one header, with a written design document in the tree | [`collider.h`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/collider.h), [`docs/ParallelBVH.pdf`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/docs/ParallelBVH.pdf) |
 | **`BatchBoolean` — an n-ary boolean with tree reordering, not a chain of pairwise calls** | A wall against twelve openings is one operation. Chaining twelve differences accumulates twelve tolerance maxima and twelve arrangements | [`csg_tree.cpp`](https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/src/csg_tree.cpp) |
@@ -462,7 +526,7 @@ argument. **Recommendation: shortlist for M5's mesh path, behind the IFC refusal
 | **float32 as the default mesh type.** `MeshGL`/`Mesh` is float32; `MeshGL64` exists but is not the default, and `elalish` (OWNER) confirms the consequence on #1283 | An interchange type designed for GPU upload doubles as the ingest type | f64 storage; f32 only in the camera-relative upload buffer (spec §5, ADR-0006). **P-05** |
 | **Result tolerance is `max(inP, inQ)` and never re-derived from the output** | Tolerance is treated as an operand property carried forward, not a property of the result's own geometry | Tolerances grow but never shrink **and are reported per operation**, so a caller can see when a result's tolerance no longer matches its size (spec §5). **P-02**, source-verified, #1714 |
 | **A raised tolerance deletes a thin feature and reports `NoError`** | `SetTolerance` above the current value runs `SimplifyTopology` as a side effect | A simplification that removes a shell is a *reported* fact with a changed result value, never a `NoError` (spec §12). **P-01/P-02**, measured |
-| **Slivers and degenerate triangles are in-spec output** | The ε-valid contract promises manifoldness, not geometric cleanliness | Our contract states what the *geometry* guarantees, not only the topology; a result that needed cleanup says so (spec §4, §12) |
+| **Slivers and degenerate triangles are in-spec output** | The ε-valid contract promises manifoldness, not geometric cleanliness | Our contract states what the *geometry* guarantees, not only the topology; a result that needed cleanup says so (spec §4, §12). **P-02**, tracker-verified (#1359, #1706) |
 | **Determinism is a bug class, fixed case by case; a deterministic mode was removed and not restored (#1177)** | Parallel scheduling without a canonical merge order, with performance preferred | Determinism is an invariant with a test in the suite from the first boolean (spec §6). **P-16** |
 
 ### Corrections and additions this note makes to `problems.md`
@@ -492,7 +556,9 @@ argument. **Recommendation: shortlist for M5's mesh path, behind the IFC refusal
   from that tag with `MANIFOLD_PAR=ON`.
 - [Manifold Library wiki](https://github.com/elalish/manifold/wiki/Manifold-Library) — the
   manifoldness and ε-valid definitions. Unpinnable; quoted as *claimed*.
-- Issue tracker: [#676](https://github.com/elalish/manifold/issues/676),
+- Issue tracker, thirteen tickets cited (twelve surveyed in §Known problems; #745 is mentioned there
+  as the still-open issue underlying #1354, not separately rowed):
+  [#676](https://github.com/elalish/manifold/issues/676),
   [#745](https://github.com/elalish/manifold/issues/745),
   [#1177](https://github.com/elalish/manifold/issues/1177),
   [#1233](https://github.com/elalish/manifold/issues/1233),

@@ -71,6 +71,17 @@ absolute and relative — the same two forms [`results/occt.md`](occt.md) and
 [`results/blender.md`](blender.md) report, so the candidates compare column for column.
 *Tolerance* is `get_tolerance()` on the near and the far result.
 
+**Comparability caveat.** "Compare column for column" is about what each *ΔV* column
+measures (the far solid's volume, near vs. far), not about a shared formula. This
+driver's *V near / far* is `reference.signed_volume` over exported triangles;
+`results/blender.md`'s precision driver back-translates before integrating, with the
+same function (`blender_driver.py#L341`, the `far_back = [...]` assignment feeding
+`signed_volume`). `results/occt.md`'s driver never calls `reference.signed_volume` at
+all — every volume there is OCCT's own `BRepGProp.VolumeProperties_s` integrator
+(`spikes/boolean-torture/occt_common.py#L70-L72`). So this driver's and Blender's
+columns share a measurement method; OCCT's does not. `docs/research/kernels/manifold.md`
+§A warning about measuring volume at 500 km states this explicitly.
+
 **The far volume is computed on the back-translated vertices**, for the reason the
 last probe in this file measures: `reference.signed_volume` sums
 `x0*(y1*z2 − z1*y2)` over raw coordinates, and at 5e5 m each term is ~1e17 against a
@@ -80,18 +91,18 @@ Manifold.
 
 | Case | Setting | Op | Valid near+far? | V near / far | ΔV | Vertex deviation | ms near / far | tol near / far |
 |---|---|---|---|---|---|---|---|---|
-| `overlap_half` | f64 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.165 / 0.239 | 1.5e-12 / 5e-07 |
-| `overlap_half` | f64 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.155 / 0.139 | 1.5e-12 / 5e-07 |
-| `overlap_half` | f32 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.178 / 0.116 | 1.788e-07 / 0.0596 |
-| `overlap_half` | f32 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.123 / 0.077 | 1.788e-07 / 0.0596 |
-| `coplanar_faces` | f64 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.128 / 0.101 | 2e-12 / 5e-07 |
-| `coplanar_faces` | f64 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.104 / 0.069 | 2e-12 / 5e-07 |
-| `coplanar_faces` | f32 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.104 / 0.087 | 2.384e-07 / 0.0596 |
-| `coplanar_faces` | f32 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.063 / 0.062 | 2.384e-07 / 0.0596 |
-| `wall_with_openings` | f64 | union | yes | 12.6 / 12.5999999999 | -1.39659e-10 (-1.1084e-11 rel) | **3.29273e-11 m** over 200/200 v | 1.137 / 0.959 | 1e-11 / 5e-07 |
-| `wall_with_openings` | f64 | intersection | yes | 5.4 / 5.39999999979 | -2.0955e-10 (-3.88055e-11 rel) | **2.60313e-11 m** over 96/96 v | 0.794 / 0.805 | 1e-11 / 5e-07 |
-| `wall_with_openings` | f32 | union | yes | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0185826 m** over 200/200 v | 0.847 / 0.927 | 1.192e-06 / 0.05961 |
-| `wall_with_openings` | f32 | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0185826 m** over 96/96 v | 0.781 / 0.742 | 1.192e-06 / 0.05961 |
+| `overlap_half` | f64 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.184 / 0.294 | 1.5e-12 / 5e-07 |
+| `overlap_half` | f64 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.293 / 0.163 | 1.5e-12 / 5e-07 |
+| `overlap_half` | f32 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.157 / 0.178 | 1.788e-07 / 0.0596 |
+| `overlap_half` | f32 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.111 / 0.080 | 1.788e-07 / 0.0596 |
+| `coplanar_faces` | f64 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.109 / 0.127 | 2e-12 / 5e-07 |
+| `coplanar_faces` | f64 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.073 / 0.059 | 2e-12 / 5e-07 |
+| `coplanar_faces` | f32 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.105 / 0.113 | 2.384e-07 / 0.0596 |
+| `coplanar_faces` | f32 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.084 / 0.073 | 2.384e-07 / 0.0596 |
+| `wall_with_openings` | f64 | union | yes | 12.6 / 12.5999999999 | -1.39659e-10 (-1.1084e-11 rel) | **3.29273e-11 m** over 200/200 v | 1.120 / 1.010 | 1e-11 / 5e-07 |
+| `wall_with_openings` | f64 | intersection | yes | 5.4 / 5.39999999979 | -2.0955e-10 (-3.88055e-11 rel) | **2.60313e-11 m** over 96/96 v | 0.743 / 0.751 | 1e-11 / 5e-07 |
+| `wall_with_openings` | f32 | union | near: yes; far: **no** — 1 zero-area faces | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0185826 m** over 200/200 v | 1.001 / 0.950 | 1.192e-06 / 0.05961 |
+| `wall_with_openings` | f32 | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0185826 m** over 96/96 v | 0.712 / 0.699 | 1.192e-06 / 0.05961 |
 
 **Worst vertex deviation over the whole set: 0.0185826 m.** R-17's pass line is 1e-6 m
 and its fail line is 1e-4 m.

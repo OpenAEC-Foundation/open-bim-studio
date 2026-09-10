@@ -73,6 +73,9 @@ def export(man):
 
 
 def check_mesh(verts, faces):
+    """Validity check, matching the boolean-torture driver's `check_mesh` so a mesh
+    is judged "valid" the same way in both results files.
+    """
     problems = []
     directed = {}
     for i0, i1, i2 in faces:
@@ -88,6 +91,18 @@ def check_mesh(verts, faces):
         used.update(f)
     if len(verts) - len(used):
         problems.append(f"{len(verts) - len(used)} loose verts")
+    tiny = 0
+    for i0, i1, i2 in faces:
+        p0, p1, p2 = verts[i0], verts[i1], verts[i2]
+        u = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+        v = (p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2])
+        cx = u[1] * v[2] - u[2] * v[1]
+        cy = u[2] * v[0] - u[0] * v[2]
+        cz = u[0] * v[1] - u[1] * v[0]
+        if 0.5 * (cx * cx + cy * cy + cz * cz) ** 0.5 < 1e-14:
+            tiny += 1
+    if tiny:
+        problems.append(f"{tiny} zero-area faces")
     return problems
 
 
@@ -117,18 +132,28 @@ def fmt(x, digits=12):
 
 
 def timed(op, va, fa, vb, fb, precision, repeats):
+    """Times `repeats` fresh builds of both operands plus the boolean.
+
+    Also checks `status()` on each operand *before* the boolean runs, the way
+    `boolean-torture/manifold_driver.py`'s `measure()` does — an operand that is
+    itself rejected (e.g. `NotManifold`) must be visible in the result, not
+    silently absorbed into an empty-and-therefore-"valid" boolean result.
+    """
     times = []
     result = None
+    status_a = status_b = "NoError"
     for _ in range(repeats):
         t0 = time.perf_counter()
         a = build(va, fa, precision)
         b = build(vb, fb, precision)
+        status_a = str(a.status()).replace("Error.", "")
+        status_b = str(b.status()).replace("Error.", "")
         result = op(a, b)
         result.status()
         result.is_empty()
         t1 = time.perf_counter()
         times.append((t1 - t0) * 1000.0)
-    return statistics.median(times), result
+    return statistics.median(times), result, status_a, status_b
 
 
 def storage_round_trip():
@@ -190,19 +215,45 @@ def operand_round_trip():
     return rows
 
 
+def op_valid(result, result_status, status_a, status_b, expected, problems):
+    """The Valid? verdict for one boolean result, in the same shape
+    `boolean-torture/manifold_driver.py`'s `valid_cell()` uses: an operand
+    rejected before the boolean, a result whose own `status()` is not
+    `NoError`, and an empty-but-unexpected result are all **not** valid — an
+    empty or errored result is never silently reported as "yes".
+    """
+    if status_a != "NoError":
+        return f"**no** — operand A `{status_a}`"
+    if status_b != "NoError":
+        return f"**no** — operand B `{status_b}`"
+    if result_status != "NoError":
+        return f"**no** — result `{result_status}`"
+    if result.is_empty():
+        if abs(expected) < 1e-9:
+            return "yes (empty, as expected)"
+        return "**no** — empty result"
+    if problems:
+        return "**no** — " + ", ".join(problems)
+    return "yes"
+
+
 def near_far_table(repeats):
     rows = []
     worst_overall = 0.0
     for case in pset.cases():
         for label, precision in SETTINGS:
             for op_name, op in OPS:
-                ms_near, near = timed(
+                ms_near, near, near_sa, near_sb = timed(
                     op, case.a.vertices, case.a.faces, case.b.vertices, case.b.faces,
                     precision, repeats,
                 )
                 fa = offset(case.a.vertices, case.offset)
                 fb = offset(case.b.vertices, case.offset)
-                ms_far, far = timed(op, fa, case.a.faces, fb, case.b.faces, precision, repeats)
+                ms_far, far, far_sa, far_sb = timed(
+                    op, fa, case.a.faces, fb, case.b.faces, precision, repeats
+                )
+                near_status = str(near.status()).replace("Error.", "")
+                far_status = str(far.status()).replace("Error.", "")
 
                 nv, nf = ([], []) if near.is_empty() else export(near)
                 fv, ff = ([], []) if far.is_empty() else export(far)
@@ -227,16 +278,9 @@ def near_far_table(repeats):
                             else case.expected_volume_intersection)
                 pn = check_mesh(nv, nf) if nf else []
                 pf = check_mesh(fv, ff) if ff else []
-                if near.is_empty() and far.is_empty() and abs(expected) < 1e-9:
-                    valid = "yes (empty, as expected)"
-                elif not pn and not pf:
-                    valid = "yes"
-                elif pn and pf:
-                    valid = "**no** near and far"
-                elif pn:
-                    valid = "near **no** — " + ", ".join(pn)
-                else:
-                    valid = "far **no** — " + ", ".join(pf)
+                near_ok = op_valid(near, near_status, near_sa, near_sb, expected, pn)
+                far_ok = op_valid(far, far_status, far_sa, far_sb, expected, pf)
+                valid = near_ok if near_ok == far_ok else f"near: {near_ok}; far: {far_ok}"
 
                 rows.append(
                     "| `{c}` | {s} | {o} | {v} | {vn} / {vf} | {dv} ({rel} rel) | **{dev} m** over {nn}/{nfv} v | {mn:.3f} / {mf:.3f} | {tn} / {tf} |".format(
@@ -407,6 +451,17 @@ def main():
         "absolute and relative — the same two forms [`results/occt.md`](occt.md) and",
         "[`results/blender.md`](blender.md) report, so the candidates compare column for column.",
         "*Tolerance* is `get_tolerance()` on the near and the far result.",
+        "",
+        "**Comparability caveat.** \"Compare column for column\" is about what each *ΔV* column",
+        "measures (the far solid's volume, near vs. far), not about a shared formula. This",
+        "driver's *V near / far* is `reference.signed_volume` over exported triangles;",
+        "`results/blender.md`'s precision driver back-translates before integrating, with the",
+        "same function (`blender_driver.py#L341`, the `far_back = [...]` assignment feeding",
+        "`signed_volume`). `results/occt.md`'s driver never calls `reference.signed_volume` at",
+        "all — every volume there is OCCT's own `BRepGProp.VolumeProperties_s` integrator",
+        "(`spikes/boolean-torture/occt_common.py#L70-L72`). So this driver's and Blender's",
+        "columns share a measurement method; OCCT's does not. `docs/research/kernels/manifold.md`",
+        "§A warning about measuring volume at 500 km states this explicitly.",
         "",
         "**The far volume is computed on the back-translated vertices**, for the reason the",
         "last probe in this file measures: `reference.signed_volume` sums",
