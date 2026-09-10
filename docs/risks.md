@@ -26,7 +26,8 @@ this capability is often absent and rarely documented.
 - **Status:** open — **confirmed as the critical risk by phase 1.** The prior-art synthesis found
   that continuous feedback during a gesture is the mechanism the entire interaction thesis rests
   on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
-  than merely slipping.
+  than merely slipping. Now also measured for IfcOpenShell and web-ifc as evidence for ADR-0004's
+  *build on* verdicts.
 
 ### R-14 · Parametric evaluation across unloaded tiles
 The tile-based spatial model (see [`domain/spatial-model.md`](domain/spatial-model.md)) collides
@@ -117,6 +118,48 @@ without a number.
   capped section clipping.
 - **Pass:** 60 fps with picking, reached in under two weeks of effort.
 - **Fail:** below 30 fps, or the effort estimate exceeds a month.
+- **Status:** open
+
+### R-16 · Boolean robustness — ours and theirs
+No boolean algorithm is trusted until it survives the torture set. The same set measures the
+candidates we might build on or borrow from, and later our own kernel.
+
+- **Spike:** `spikes/boolean-torture/` — the cases in `reference/boolean_torture_set.py` run
+  through OCCT, Blender (exact), Manifold and CGAL; each result checked for closed manifold
+  output and V(A∪B) + V(A∩B) = V(A) + V(B).
+- **Pass (per candidate):** every case produces a valid closed result and the volume identity
+  holds within 1e-9 relative.
+- **Fail:** any invalid result, or a volume error above 1e-6 relative; each failure recorded
+  with the input, the version and the traced cause in `problems.md`.
+- **Status:** open
+
+### R-17 · Precision far from the origin
+The tile-frame design assumes f64 local coordinates are necessary and sufficient.
+
+- **Spike:** `spikes/precision-set/` — identical geometry at the origin and at 500 km, through
+  each candidate's boolean and tessellation, then re-centred and compared.
+- **Pass:** maximum deviation below 1e-6 m in f64 paths.
+- **Fail:** deviation above 1e-4 m — which for a float32 path is the expected outcome and the
+  evidence ADR-0006 needs.
+- **Status:** open
+
+### R-18 · DynLex may not compile a kernel-sized program acceptably
+The kernel will be the largest DynLex program. Compile time is on the inner loop of every
+kernel developer.
+
+- **Spike:** `spikes/dynlex-scale/` — generate synthetic DynLex programs of 5k, 20k and 50k
+  lines in the kernel's style (classes, patterns, intrinsics); measure compile time and memory.
+- **Pass:** 20k lines compile in under 30 s on the reference machine.
+- **Fail:** over 120 s, or the compiler exhausts memory — a blocker to fix in dynlex before M1.
+- **Status:** open
+
+### R-19 · DynLex runtime performance may fall short of native
+The performance targets assume native-speed code.
+
+- **Spike:** `spikes/dynlex-performance/` — triangle–triangle intersection over 10⁶ random
+  pairs, BVH build over 10⁶ boxes, and an f64 orient3d loop, each in DynLex and C++ -O2.
+- **Pass:** DynLex within 1.5× of C++ on every workload.
+- **Fail:** over 3× on any — a codegen issue to root-cause in dynlex before M1.
 - **Status:** open
 
 ---

@@ -8,10 +8,11 @@ Phases 2 and 3 overlap and are the natural point to divide work between contribu
 |---|---|---|---|
 | **0** | Skeleton, repository rules, vision, non-goals, glossary | A repository others can work in | **done** |
 | **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | **in progress** |
-| **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | Completed matrix, shortlist of two | |
+| **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | Completed matrix, shortlist of two | **in progress** |
 | **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike | |
 | **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | |
 | **5** | Consolidate into the handover document | `BUILD-BRIEF.md` | |
+| **6** | Kernel build milestones M0–M8 | working kernel | blocked on phase 4 |
 
 ## Phase 1 — domain and prior art
 
@@ -67,6 +68,10 @@ so this stays an evaluation rather than an exchange of preferences.
 
 Note that layer 3 (host vs. standalone) can proceed in parallel with layers 1 and 2 — they are
 independent decisions.
+
+Revised 2026-09-09: the question now includes what each kernel teaches a kernel of our own.
+Method: `research/kernels/README.md`. Order of work:
+`superpowers/plans/2026-09-09-kernel-research-programme.md`.
 
 ## Phase 3 — spikes
 
