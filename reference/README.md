@@ -25,6 +25,7 @@ One IFC2x3 model and one IFC4 model, so both schema paths are exercised.
   unrestricted use", with a request for attribution when used in publications.
 - **SHA-256:** `70cc8ff245fc0894201d96496c031005a5cbd7a96b22d8a1b87c5a883fb77994`
   (measured: `python -c "import hashlib; print(hashlib.sha256(open('reference/models/AC20-FZK-Haus.ifc','rb').read()).hexdigest())"`)
+- **File size:** 2,570,803 bytes (measured: `python -c "import os; print(os.path.getsize('reference/models/AC20-FZK-Haus.ifc'))"`)
 - **Schema:** IFC4 (measured: `ifcopenshell.open(...).schema`)
 - **Element count:** 127 `IfcProduct` (measured with `ifcopenshell` 0.8.4). By class: 42
   `IfcMember`, 17 `IfcOpeningElement`, 14 `IfcAnnotation`, 13 `IfcWallStandardCase`, 11
@@ -53,6 +54,7 @@ One IFC2x3 model and one IFC4 model, so both schema paths are exercised.
   (<http://creativecommons.org/licenses/by/4.0/>)
 - **SHA-256:** `2c3565ca1904f2aa61adab92024cf3755b2c5b21a498144d3094d7cb58cebec7`
   (measured the same way as 1a, over `reference/models/IFC_Schependomlaan.ifc`)
+- **File size:** 49,286,967 bytes (measured: `python -c "import os; print(os.path.getsize('reference/models/IFC_Schependomlaan.ifc'))"`)
 - **Schema:** IFC2X3 (measured: `ifcopenshell.open(...).schema`)
 - **Element count:** 3822 `IfcProduct` (measured with `ifcopenshell` 0.8.4). By class: 1262
   `IfcCovering`, 652 `IfcWall`, 282 `IfcWallStandardCase`, 279 `IfcSlab`, 277
@@ -63,7 +65,8 @@ One IFC2x3 model and one IFC4 model, so both schema paths are exercised.
   (`-1 fundering`, `00 begane grond`, `01 eerste verdieping`, `02 tweede verdieping`,
   `03 derde verdieping`, `04 dak`); 11987 `IfcPropertySet`; 1675 `IfcRelSpaceBoundary`; 618
   `IfcArbitraryClosedProfileDef`; 23 `IfcCircle` and 23 `IfcTrimmedCurve` (curved geometry,
-  unlike 1a); file size ~47 MB, two orders of magnitude larger than 1a.
+  unlike 1a); file size 49,286,967 bytes (~47.0 MiB), about 19x the size of 1a's 2,570,803
+  bytes (~2.45 MiB) — roughly one order of magnitude, not two.
 - **Why this one:** the only real (non-demo) project among the candidates in the brief;
   IFC2x3 schema path; large enough to stress load time and memory on its own, independent of
   the synthetic scale tests below.

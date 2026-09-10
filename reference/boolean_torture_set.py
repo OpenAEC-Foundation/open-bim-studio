@@ -193,12 +193,18 @@ def cases() -> list[Case]:
     inter = 0.5 * 1.0 * 1.0
     result.append(Case("overlap_half", a, b, expected_volume_union=1.0 + 1.0 - inter, expected_volume_intersection=inter))
 
-    # 3. coplanar_faces -- A's face at x=1 and B's face at x=1 share a plane, with
-    # B's y/z extent (0.25-0.75) a strict subset of A's (0-1): touching only, zero
-    # intersection volume. B = 1 x 0.5 x 0.5 m box, volume 0.25.
+    # 3. coplanar_faces -- A's face at x=1 (y,z in [0,1]) and B's face at x=1
+    # (y,z in [0.5,1.5]) share the plane x=1, and the two footprints genuinely
+    # cross: each spans [0.5,1] in common with the other, but A alone covers
+    # y,z in [0,0.5) and B alone covers y,z in (1,1.5] -- a real partial overlap
+    # of the two coplanar boundary loops, not containment. Since A occupies
+    # x in [0,1] and B occupies x in [1,2], they meet only at the x=1 plane
+    # regardless of the y/z overlap, so the intersection volume is still 0
+    # (this case stresses face/boundary matching, not volume). B = 1 x 1 x 1 m
+    # box, volume 1.0.
     a = _box(0, 0, 0, 1, 1, 1)
-    b = _box(1, 0.25, 0.25, 2, 0.75, 0.75)
-    v_b = 1.0 * 0.5 * 0.5
+    b = _box(1, 0.5, 0.5, 2, 1.5, 1.5)
+    v_b = 1.0 * 1.0 * 1.0
     result.append(Case("coplanar_faces", a, b, expected_volume_union=1.0 + v_b, expected_volume_intersection=0.0))
 
     # 4. shared_edge -- cubes touching along the line x=1,y=1,z in [0,1] only.
