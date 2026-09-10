@@ -240,8 +240,9 @@ input** — and the comment's own last sentence says where the fix belongs.
 
 ### Fast (`FLOAT`)
 
-The pre-2.91 BMesh intersection, kept because it is quicker — *measured* at 2× (`disjoint`) to
-15× (the twelve-opening wall) faster than the Exact solver across the torture set. It takes an
+The pre-2.91 BMesh intersection, kept because it is quicker — *measured* at 1.1× (`disjoint`,
+where neither has any work to do) to 15× (the twelve-opening wall) faster than the Exact solver
+across the torture set, and 5–10× on the cases in between. It takes an
 epsilon — and *which* epsilon depends on which caller you are:
 
 - The **modifier** passes the user-visible `double_threshold`
