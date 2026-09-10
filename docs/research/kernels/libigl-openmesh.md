@@ -182,11 +182,44 @@ non-PWN input; its own example does not act on being told.
 topology handles:
 
 ```cpp
-class Vertex   { HalfedgeHandle halfedge_handle_; };                              // 1 handle
-class Halfedge { FaceHandle face_handle_; VertexHandle vertex_handle_;
-                 HalfedgeHandle next_halfedge_handle_; HalfedgeHandle prev_halfedge_handle_; }; // 4 handles
-class Edge     { Halfedge halfedges_[2]; };                                       // 2 halfedges
-class Face     { HalfedgeHandle halfedge_handle_; };                              // 1 handle
+class Vertex
+{
+  friend class ArrayKernel;
+  HalfedgeHandle  halfedge_handle_;
+};
+
+// …
+
+class Halfedge_without_prev
+{
+  friend class ArrayKernel;
+  FaceHandle      face_handle_;
+  VertexHandle    vertex_handle_;
+  HalfedgeHandle  next_halfedge_handle_;
+};
+
+class Halfedge_with_prev : public Halfedge_without_prev
+{
+  friend class ArrayKernel;
+  HalfedgeHandle  prev_halfedge_handle_;
+};
+
+//TODO: should be selected with config.h define
+typedef Halfedge_with_prev                Halfedge;
+
+// …
+
+class Edge
+{
+  friend class ArrayKernel;
+  Halfedge  halfedges_[2];
+};
+
+class Face
+{
+  friend class ArrayKernel;
+  HalfedgeHandle  halfedge_handle_;
+};
 ```
 
 — [`ArrayItems.hh#L64-L118`](https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh/-/blob/adebfb1ec0c14a43f5503a2dfea3d76599eb28ab/src/OpenMesh/Core/Mesh/ArrayItems.hh#L64-L118).
