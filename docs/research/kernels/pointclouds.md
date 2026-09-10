@@ -49,11 +49,14 @@ rows explicitly rather than treat this paragraph as one.
 The kernel spec's point cloud design is right about the two things that matter and can be made
 much more specific by copying Potree's converter — but P-13's *stated* root cause turns out to
 be wrong, and the measurement is what shows it. **Measured**, Open3D's in-core array of 10⁸
-points costs 24.0 bytes per point and fits easily in 34.0 GB of RAM (4.91 GB peak); its depth-8
-octree over the same points also fits, at 13.13 GB — but takes **324 s on one of thirty-two
-cores** and is **2.7× the size of the data it indexes**. Nothing ran out of memory. So P-13's
-root cause is not "in-core storage": it is *an in-core index whose cost is paid per point per
-level*, and what it breaks first at 10⁸ is interactivity, not allocation. **Measured**, the same
+points costs 24.011 bytes per point — 2.40 GB of data — and fits easily in 34.0 GB of RAM (the
+*construct* stage's own process peaked at 4.91 GB, which is the source numpy array and the built
+cloud held at once, not the size of the stored points); its depth-8 octree over the same points
+also fits, at 102.9 bytes per point — **4.3× the bytes per point of the data it indexes** — but
+takes **324 s on one of thirty-two cores** (that stage's own process peaked at 13.13 GB). Nothing
+ran out of memory. So P-13's root cause is not "in-core storage": it is *an in-core index whose
+cost is paid per point per level*, and what it breaks first at 10⁸ is interactivity, not
+allocation. **Measured**, the same
 10⁷ points stored as float32 at 500 km from the origin lose 0.015625 m — half a float32 ULP at
 that magnitude, the worst case round-to-nearest allows — against 2.9 × 10⁻¹¹ m in f64, and a
 factor of 4 096 worse than the same f32 storage at the origin; that settles the ADR-0006 storage
@@ -141,7 +144,7 @@ padding — the opposite of PCL's choice.
 PDAL's point storage is not a struct at all: a `PointLayout` is assembled from *dimensions*, each
 with a declared type, and the default type of X, Y and Z is `double`:
 
-- [`pdal/Dimension.json#L1-L12`](https://github.com/PDAL/PDAL/blob/27008f6241be44585c866a29dfc13bb16d678dab/pdal/Dimension.json#L1-L12) —
+- [`pdal/Dimension.json#L1-L16`](https://github.com/PDAL/PDAL/blob/27008f6241be44585c866a29dfc13bb16d678dab/pdal/Dimension.json#L1-L16) —
   `{ "name": "X", "type": "double", … }`, and Y and Z identically
 
 Two in-memory tables implement that layout, and the difference between them is precisely the
@@ -211,13 +214,20 @@ most 256³ ≈ 16.8 M leaves, so past ~10⁷ points the node count stops growing
 per-point index payload does, approaching the 72 bytes/point floor the source predicts.
 
 **This is the correction P-13 needs, and it goes the other way from the hypothesis.** Nothing ran
-out of memory. 10⁸ points stored in 4.91 GB (f64) or 3.71 GB (f32); the depth-8 octree over them
-built successfully in 13.13 GB — **38.6 % of this machine's 34.0 GB, and 2.7× the size of the
-points it indexes** — in **324.4 s on one core of thirty-two**. The failure is not an allocation
-error, it is that a single index build over a single cloud eats five and a half minutes and two
-fifths of the machine, leaving nothing for a second cloud, a mesh, or the model the point cloud is
-supposed to be measured against. Extrapolated linearly (and this is extrapolation, from one
-saturated data point), 10⁹ points would need ≈103 GB for the index alone.
+out of memory. The data itself costs 24.011 bytes/point (f64) or 12.009 bytes/point (f32) — 2.40
+GB and 1.20 GB respectively at 10⁸ points; the depth-8 octree over them costs 102.910 bytes/point,
+**4.3× the bytes per point of the data it indexes** (102.910 / 24.011 = 4.29), and built in **324.4
+s on one core of thirty-two**. The octree build's own process peaked at 13.13 GB — **38.6 % of
+this machine's 34.0 GB**. (The *construct* stage's process peaks — 4.91 GB for f64, 3.71 GB for
+f32 — are a different stage's process, source array plus cloud held at once; they are not
+comparable to the octree stage's peak, and dividing one by the other, as an earlier draft of this
+note did, compares peaks of two different processes rather than the index's actual cost per point.)
+The failure is not an allocation error, it is that a single index build over a single cloud eats
+five and a half minutes and two fifths of the machine, leaving nothing for a second cloud, a mesh,
+or the model the point cloud is supposed to be measured against. **Against the kernel spec's own
+target** (§10: "Build octree over 10⁸ points < 10 s"), 324.4 s misses by more than 32×. Extrapolated
+linearly (and this is extrapolation, from one saturated data point), 10⁹ points would need ≈103 GB
+for the index alone.
 
 ### Nearest-neighbour search costs a second full copy
 
@@ -307,7 +317,10 @@ the attribute list
 - [`Converter/include/HierarchyBuilder.h#L49-L53`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/HierarchyBuilder.h#L49-L53) —
   the fields those 22 bytes hold: `numPoints`, `childMask`, `byteOffset`, `byteSize`, `type`
 - [`#L102-L104`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/HierarchyBuilder.h#L102-L104) —
-  the reader's byte offsets into a record, `numPoints` at +31, `byteOffset` at +35, `byteSize` at +43
+  **not the 22-byte `hierarchy.bin` record above.** These lines parse the converter's own
+  *intermediate* batch record — `numNodes = size / 48`, each record at offset `48 × i`, preceded
+  by a 31-byte name prefix — used while the hierarchy is being built, not the 22-byte record the
+  converter writes to disk. An earlier draft of this note conflated the two; corrected here
 
 The hierarchy is itself chunked so a viewer never loads all of it: nodes are grouped into subtrees
 `hierarchyStepSize = 4` levels deep, and a node at the bottom of a chunk becomes a `PROXY` record
@@ -476,7 +489,8 @@ decision to *read* them for design does not, which is all this note does.
 ## Measurements
 
 - **Hardware:** Windows 11 Pro 10.0.26200; Intel Core i9-14900HX, 32 logical processors; 32 GB
-  installed RAM (`Get-CimInstance Win32_ComputerSystem` reports 34 049 179 648 bytes)
+  installed RAM (`psutil.virtual_memory().total`, as recorded by the driver's `env` stage, reports
+  34 049 179 648 bytes)
 - **Versions:** Python 3.12.10, `open3d` 0.19.0, `numpy` 2.3.5, `psutil` 7.2.2
 - **Benchmark model:** none from `reference/` — this is the *synthetic scale test* of the README's
   benchmark set, extended to point counts, plus the *precision set* placement (500 km) applied to a
@@ -496,6 +510,7 @@ decision to *read* them for design does not, which is all this note does.
 | `Octree(max_depth=8)`, 10⁶ / 10⁷ points | 3.07 s / 35.93 s; 466.6 / 220.9 bytes per point |
 | `Octree(max_depth=6)`, 10⁷ points | 16.51 s; 91.2 bytes per point |
 | `Octree(max_depth=8)`, 10⁸ points | **324.38 s; 102.9 bytes per point; 13.13 GB peak RSS — it fits, single-threaded, in 38.6 % of RAM.** The P-13 case, and it is a *time* result |
+| Index-to-data ratio, 10⁸ points | 102.910 / 24.011 = **4.29 bytes of index per byte of f64 data** (not the 13.13/4.91 GB peak-RSS ratio, which compares two different processes' peaks) |
 | `KDTreeFlann` build, 10⁶ / 10⁷ / 10⁸ points | 0.512 s / 8.72 s / 178.0 s; 43.1 / 42.6 / 41.0 bytes per point |
 | Nearest-neighbour query, 10⁶ / 10⁷ / 10⁸ points | 3.99 / 4.86 / 6.48 µs per query |
 | Nearest-neighbour correctness | 100 of 1 000 queries verified against a chunked f64 brute-force scan at each size; **300 of 300 returned the same point**, 0 mismatches |
@@ -531,8 +546,8 @@ diagnosis is a *report*, not a maintainer's confirmation.
 | [Open3D#6525](https://github.com/isl-org/Open3D/issues/6525) — "Unable to load UTM based objects correctly" (2023-12-06, `fratopa`, **NONE**) | **open**, and **no replies at all** in the 2 years 9 months since | Reporter: "the values are too big for the Float32 used by open3d. This manifests as a vague 'shimmering'… translating the mesh to be close to the centre stops the 'shimmering' But leaves the mesh distorted… the translation occurs already after the precision has been lost". Reporter diagnosis; our own measurement of the same mechanism is above | **P-05.** f32 storage of world coordinates, and a translate applied after the loss. Exactly the "the frame origin must be f64 even when the geometry inside it is f32" half [`blender.md`](blender.md) established |
 | [Open3D#6043](https://github.com/isl-org/Open3D/issues/6043) — "Tensor API can't write .pcd files beyond 2.1 GB" (2023-03-30, `jpaulos`, **NONE**) | **open**, **no replies at all** | "fails with a 'MemoryError: std::bad_alloc' (the system is certainly not out of memory)… The threshold of writable point clouds is about 2.1 GB". A 2³¹-byte ceiling in the writer, on the API that is meant to be the scalable one | A 32-bit size in an IO path. Our 10⁸-point f64 cloud is 2.4 GB, i.e. **past this ceiling** |
 | [Open3D#3321](https://github.com/isl-org/Open3D/issues/3321) — LAS/LAZ import/export request (2021-04-21, `weinacker`, **NONE**) | **closed** 2021-04-22 | Closed the next day; the only substantive reply is from `aweinmann` (**NONE**) suggesting `laspy`. Still absent at v0.19.0, confirmed in source above | Scope: Open3D is a 3D-perception library, not a geospatial one |
-| [PCL#4756](https://github.com/PointCloudLibrary/pcl/issues/4756) — "Is all pcl point type's x y z base on float?" (2021-05-12, `OrdinaryChen`, **NONE**) | **closed** 2024-08-22 | `mvieth` (**MEMBER**): "All of PCL's native point types use float for x, y, and z. You can create your own point type with double precision, but only few functions and classes will work correctly with double precision since PCL is designed for float/single precision". A maintainer stating the design, not a user guessing | **P-05.** A whole-library commitment to single precision |
-| [PCL#1010](https://github.com/PointCloudLibrary/pcl/issues/1010) — "KDTree with double precision" (2014-11-21, `kode9`, **NONE**) | **closed** 2020-06-14 by the stale bot | `taketwo` (**MEMBER**): "the code in PCL is not precision type agnostic. It is usually written with the implicit assumption that points' coordinates are encoded with floats… you will see that `float`s are hard-coded everywhere". Six years open, closed by inactivity | The same commitment, now load-bearing in the *index* — matching the `new float[…]` we read in `kdtree_flann.hpp` |
+| [PCL#4756](https://github.com/PointCloudLibrary/pcl/issues/4756) — "Is all pcl point type's x y z base on float?…" (2021-05-12, `OrdinaryChen`, **NONE**) | **closed** 2024-08-22 | `mvieth` (**MEMBER**): "All of PCL's native point types use float for x, y, and z. You can create your own point type with double precision, but only few functions and classes will work correctly with double precision since PCL is designed for float/single precision". A maintainer stating the design, not a user guessing | **P-05.** A whole-library commitment to single precision |
+| [PCL#1010](https://github.com/PointCloudLibrary/pcl/issues/1010) — "KDTree with double precision" (2014-11-21, `kode9`, **NONE**) | **closed** 2020-06-14 | `taketwo` (**MEMBER**): "the code in PCL is not precision type agnostic. It is usually written with the implicit assumption that points' coordinates are encoded with floats… you will see that `float`s are hard-coded everywhere". The stale bot marked it stale on 2020-05-19; it was a maintainer, `kunaltyagi`, who closed it 25 days later on 2020-06-14 (`state_reason: COMPLETED`), with no resolving comment — six years open, closed without a stated fix, not merely swept up by the bot | The same commitment, now load-bearing in the *index* — matching the `new float[…]` we read in `kdtree_flann.hpp` |
 | [PDAL#1818](https://github.com/PDAL/PDAL/issues/1818) — "PDAL runs out of memory with big .asc files" (2018-02-25, `gabri94`, **NONE**) | **closed** 2018-03-14 | `abellgithub` (**CONTRIBUTOR**): "The chipper filter requires all points in memory to properly operate, so this pipeline won't work with streaming mode. I don't have much to recommend at this point other than to increase the swap on your system or find a system with adequate memory." | **Streaming is per stage.** One non-streamable filter in a pipeline reverts the whole pipeline to in-core |
 | [PDAL#4193](https://github.com/PDAL/PDAL/issues/4193) — "Is there a bug with readers.las truncating precision on larger decimal values?" (2023-09-27, `DrewScatterday`, **NONE**) | **closed** 2024-03-06 | The reporter's own follow-up is the useful part: "I naively didn't know that las files are stored as 32 ints. Then at runtime they can be converted to their decimal values using the scale and offset values stored in the header", with `offset_x: 575410, scale_x: 0.001`. `abellgithub` (**CONTRIBUTOR**) declined to investigate without an isolated test case. No maintainer confirmation of a defect | The int32-scale-offset scheme is invisible until it is not: users hit its *quantum*, not a float's exponent. A design that hides its resolution surprises people |
 | [PotreeConverter#501](https://github.com/potree/PotreeConverter/issues/501) — "Converting a large quantity and size of las files (1.2TB)" (2021-02-04, `Nogbit`, **NONE**) | **open** | Two independent third-party reports, both **NONE**: `smcavoy12` processed "about 60 billion points… with a 32gb RAM university computer lab workstation… I run out of disk space constantly, but never RAM"; `nikste` reports ">100gb" of RAM on ~6.5 billion points. `ditlef` (**NONE**) attributes the slowdown to "thread_local vector<Point> dbgAccepted(1'000'000)" — the exact fixed buffer we read in source | Out-of-core works for the *streaming* phases; the in-node sampler is the in-core part, and it is where both the memory and the speed reports land |
@@ -555,7 +570,7 @@ unknowns are recorded rather than skipped.
 | **Threading model** | octree build serial; parallelism is opt-in via separate `*OMP` classes | octree build serial; normals OpenMP-parallel | streaming is inherently pipelined; `filters.*` are per-stage | converter parallel (`std::execution::par_unseq`); viewer single-threaded JS with ≤4 concurrent node loads | claimed (source) + measured (35.93 s / 324.4 s single-core octree build at 10⁷ / 10⁸) | §Threading |
 | **GPU path** | visualisation module (VTK) | tensor point cloud can live on a CUDA device; a rendering module exists | none — PDAL is headless by design | the whole point: WebGL, screen-space LOD, per-frame budget | claimed | §Out-of-core, `Device("CPU:0")` default in [`PointCloud.h#L742`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/t/geometry/PointCloud.h#L742) |
 | **IFC coverage** | **not applicable** — none reads IFC, and none should | — | — | — | — | — |
-| **Performance** | not measured (no reliable Windows wheel) | measured at 10⁶/10⁷/10⁸ | not measured (wheel needs the native library) | not measured | measured for Open3D only | §Measurements |
+| **Performance** | not measured — no PCL install was attempted; the note makes no claim about how easy one would be | measured at 10⁶/10⁷/10⁸ | not measured (wheel needs the native library) | not measured | measured for Open3D only | §Measurements |
 | **Embeddability** | C++ library; **no C ABI for its own API** | C++ library with a maintained Python wheel; **no C ABI for its own API** | C++ library; **no C ABI for its own API** — the public header is `pdal/pdal.hpp`; `find . -iname 'pdal.h' -o -iname '*capi*'` returns nothing. What it has that the others do not is a **JSON pipeline description**, drivable over a subprocess or a file | not a library — a CLI converter and a JS viewer. Its *format* is the embeddable thing | claimed (source, negative result) | §Verdict, build on; rule below |
 | **2D derivation** | **not applicable** — a point cloud has no section or hidden-line problem in the B-rep sense | — | — | — | — | — |
 | **Maturity** | 2009–, wide use, active releases (1.15.1, 2025-08); the out-of-core module self-describes as under development | 2018–, corporate origin (Intel ISL), release 0.19.0 2025-01 | 2010s–, Hobu Inc., commercial support offered on the tracker, release 2.10.2 2026-06 | one principal author; converter released 2026-06, **viewer's last release 2023-12** | claimed | release tags, §What was read |
@@ -580,12 +595,16 @@ unknowns are recorded rather than skipped.
    serial in both PCL and Open3D. The Potree *viewer* is single-threaded JavaScript that loads at
    most 4 nodes per frame; the Potree *converter* is parallel.
 5. **What breaks first at scale — memory, load time, or evaluation time?** Measured, and the answer
-   corrects the hypothesis twice over. Not storage: 10⁸ points store in 4.91 GB (f64) or 3.71 GB
-   (f32) of 34.0 GB. And not, at 10⁸ on this machine, memory at all — **index build time is what
-   breaks first**: 324.4 s single-threaded for the depth-8 octree and 178.0 s for the kd-tree,
-   against 0.57 s to load the points. Memory is the *second* wall, not the first: the octree's
-   13.13 GB is 38.6 % of the machine for one index over one cloud, so a second cloud, or 10⁹
-   points, is where allocation actually fails.
+   corrects the hypothesis twice over. Not storage: 10⁸ points cost 24.011 bytes/point (f64) or
+   12.009 bytes/point (f32) — 2.40 GB or 1.20 GB of 34.0 GB (the *construct* stage's own process
+   peaked higher, at 4.91 GB / 3.71 GB, because it holds the source array and the built cloud at
+   once — that peak is the stage's cost, not the stored size). And not, at 10⁸ on this machine,
+   memory at all — **index build time is what breaks first**: 324.4 s single-threaded for the
+   depth-8 octree and 178.0 s for the kd-tree, against 0.57 s to load the points. Memory is the
+   *second* wall, not the first: the octree's own process peaked at 13.13 GB, 38.6 % of the machine
+   for one index over one cloud, so a second cloud, or 10⁹ points, is where allocation actually
+   fails — **inferred/extrapolated, not measured**: no run here holds two clouds or reaches 10⁹
+   points.
 6. **What numeric precision internally, and can it be configured?** PCL: float32, not configurable
    in practice (PCL#1010, a MEMBER: "`float`s are hard-coded everywhere"). Open3D: f64 legacy,
    f32-or-f64 tensor, configurable per cloud. PDAL: f64 XYZ by dimension type, configurable
@@ -627,8 +646,8 @@ mostly useless because the algorithms are not precision-agnostic.
 
 **Open3D — no, and the measurement is the reason rather than the licence.** MIT, a maintained
 wheel, f64 available, and the friendliest API of the four; but its depth-8 octree over 10⁸ points
-costs 102.9 bytes per point — 2.7× the points themselves — and 324.4 s on one core, its kd-tree
-duplicates the whole cloud to index it, it
+costs 102.9 bytes per point — 4.3× the 24.0 bytes/point the data itself costs — and 324.4 s on one
+core, its kd-tree duplicates the whole cloud to index it, it
 reads none of LAS, LAZ or E57, and its scalable API cannot write past 2.1 GB (Open3D#6043). Those
 are not gaps to fill — they are the parts we would have to replace, which is the whole module.
 
@@ -666,23 +685,24 @@ taken.
 
 ### Avoid
 
-| Avoid | Evidence |
-|---|---|
-| **Array-of-structs point storage with a padded fourth component.** PCL's `float data[4]` pays 16 bytes for a 12-byte payload and forces every access to pull y, z and a pad into cache | [`point_types.hpp#L211-L219`](https://github.com/PointCloudLibrary/pcl/blob/3346843ea6b97697a1577293aa9cdf236b5c7ffb/common/include/pcl/impl/point_types.hpp#L211-L219). Spec §6 already says structure-of-arrays; this is the concrete thing it is avoiding |
-| **float32 world coordinates.** Measured: 0.015625 m at 500 km, 4 096× the same storage's error at the origin, RMS 7 mm. Reported independently as visible shimmering | measured, §Precision; Open3D#6525; PCL#4756 and PCL#1010 for the library-wide version. **P-05** |
-| **An index that stores a point's identity once per level.** Open3D's octree appends the point index to every internal node on the path — 72 bytes/point of payload at depth 8 before any object overhead, 102.9 bytes/point measured at saturation, and **2.7× the size of the points it indexes** | [`Octree.cpp#L131-L138`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.cpp#L131-L138), [`Octree.h#L160-L162`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.h#L160-L162); measured, §The index. **P-13, root cause corrected** |
-| **An index that owns a private copy of the coordinates.** Both kd-tree implementations duplicate the cloud; a memory-mapped chunk store whose index re-materialises the same points in RAM has mapped nothing | [`KDTreeFlann.h#L100-L106`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/KDTreeFlann.h#L100-L106), [`kdtree_flann.hpp#L440`](https://github.com/PointCloudLibrary/pcl/blob/3346843ea6b97697a1577293aa9cdf236b5c7ffb/kdtree/include/pcl/kdtree/impl/kdtree_flann.hpp#L440); measured 41–43 bytes/point on top. **Spec §8** |
-| **A single-threaded index build.** 35.93 s at 10⁷ points and **324.4 s at 10⁸** on one of 32 cores, in a library that parallelises normal estimation in the same directory. This, not memory, is what actually broke first in the measurement | measured; [`Octree.cpp#L564-L575`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.cpp#L564-L575) against [`EstimateNormals.cpp#L301`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/EstimateNormals.cpp#L301) |
-| **A fixed-size accumulation buffer with no bounds check on a hot path.** Potree's sampler writes into a `thread_local vector<Point>(1'000'000)` by index; two tracker reports (a slowdown attributed to that line by name, and a segfault in that function) | [`sampler_poisson.h#L112`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/sampler_poisson.h#L112), [`#L213-L215`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/sampler_poisson.h#L213-L215); PotreeConverter#501, #550. **Borrow the layout, not this loop** |
-| **A budget that caps drawing but not residency.** Potree's `pointBudget` stops the traversal; no eviction of loaded nodes was found, and the tracker carries "crashing after some time" with a 41.6 M budget | [`Potree_update_visibility.js#L282-L284`](https://github.com/potree/potree/blob/3013577379b5c8530ebca3cdc980f7585ae2320f/src/Potree_update_visibility.js#L282-L284); Potree#1002. Our `pointcloud` module needs an eviction policy stated alongside the budget, or it inherits this |
-| **A 32-bit byte count anywhere in an IO path.** Open3D's tensor writer fails past 2.1 GB with `std::bad_alloc` on a machine with free memory; our 10⁸-point f64 cloud is already 2.4 GB | Open3D#6043 |
+| Avoid | Evidence | Our design's answer |
+|---|---|---|
+| **Array-of-structs point storage with a padded fourth component.** PCL's `float data[4]` pays 16 bytes for a 12-byte payload and forces every access to pull y, z and a pad into cache | [`point_types.hpp#L211-L219`](https://github.com/PointCloudLibrary/pcl/blob/3346843ea6b97697a1577293aa9cdf236b5c7ffb/common/include/pcl/impl/point_types.hpp#L211-L219) | Spec §4/§6 already commit the `pointcloud` module to chunked structure-of-arrays; this is the concrete thing that choice avoids. No dedicated `problems.md` row exists for this one — it is a design-efficiency observation, not a tracked user-facing failure, so none is added here |
+| **float32 world coordinates.** Measured: 0.015625 m at 500 km, 4 096× the same storage's error at the origin, RMS 7 mm. Reported independently as visible shimmering | measured, §Precision; Open3D#6525; PCL#4756 and PCL#1010 for the library-wide version | f64 in tile-local frames, camera-relative f32 only at upload (spec §5, ADR-0006). **P-05** |
+| **An index that stores a point's identity once per level.** Open3D's octree appends the point index to every internal node on the path — 72 bytes/point of payload at depth 8 before any object overhead, 102.9 bytes/point measured at saturation, and **4.3× the bytes per point of the data it indexes** | [`Octree.cpp#L131-L138`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.cpp#L131-L138), [`Octree.h#L160-L162`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.h#L160-L162); measured, §The index | Borrow Potree's partition LOD instead: an accepted point is moved out of the child into the parent, so an LOD tree over N points stores exactly N points (spec §4). **P-13, root cause corrected** |
+| **An index that owns a private copy of the coordinates.** Both kd-tree implementations duplicate the cloud; a memory-mapped chunk store whose index re-materialises the same points in RAM has mapped nothing | [`KDTreeFlann.h#L100-L106`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/KDTreeFlann.h#L100-L106), [`kdtree_flann.hpp#L440`](https://github.com/PointCloudLibrary/pcl/blob/3346843ea6b97697a1577293aa9cdf236b5c7ffb/kdtree/include/pcl/kdtree/impl/kdtree_flann.hpp#L440); measured 41–43 bytes/point on top | An index over memory-mapped chunks (spec §8) must address them, never copy them. This is the second, independent term already recorded under **P-13**'s root cause, not a separate row |
+| **A single-threaded index build.** 35.93 s at 10⁷ points and **324.4 s at 10⁸** on one of 32 cores, in a library that parallelises normal estimation in the same directory. This, not memory, is what actually broke first in the measurement | measured; [`Octree.cpp#L564-L575`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/Octree.cpp#L564-L575) against [`EstimateNormals.cpp#L301`](https://github.com/isl-org/Open3D/blob/1e7b17438687a0b0c1e5a7187321ac7044afe275/cpp/open3d/geometry/EstimateNormals.cpp#L301) | Spec §6 already lists "octree build" among the `parallel for` targets; this measurement, and the miss against spec §10's 10 s target, is why. **P-17** (new) |
+| **A fixed-size accumulation buffer with no bounds check on a hot path.** Potree's sampler writes into a `thread_local vector<Point>(1'000'000)` by index; two tracker reports (a slowdown attributed to that line by name, and a segfault in that function) | [`sampler_poisson.h#L112`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/sampler_poisson.h#L112), [`#L213-L215`](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/Converter/include/sampler_poisson.h#L213-L215); PotreeConverter#501, #550 | Borrow the layout, not this loop: any accumulation buffer in `pointcloud`'s sampler must be bounds-checked or dynamically sized (spec §4/§8). **P-19** (new) |
+| **A budget that caps drawing but not residency.** Potree's `pointBudget` stops the traversal; no eviction of loaded nodes was found, and the tracker carries "crashing after some time" with a 41.6 M budget | [`Potree_update_visibility.js#L282-L284`](https://github.com/potree/potree/blob/3013577379b5c8530ebca3cdc980f7585ae2320f/src/Potree_update_visibility.js#L282-L284); Potree#1002 | Spec §6 item 4 already asks for the screen-pixel-radius budget itself; it does **not** yet pair it with an eviction or residency policy, which is an open question against spec §4/§8, not settled here. **P-18** (new) |
+| **A 32-bit byte count anywhere in an IO path.** Open3D's tensor writer fails past 2.1 GB with `std::bad_alloc` on a machine with free memory; our 10⁸-point f64 cloud is already 2.4 GB | Open3D#6043 | Chunked storage (spec §4/§8) avoids a single monolithic byte count by construction; the kernel's `io/` binary format (spec §7) must still state 64-bit sizes and offsets as an explicit constraint, which it does not yet do. **P-20** (new) |
 
 ## Risks
 
 **P-13 was not reproduced as written, and this note does not pretend otherwise.** The row predicted
 that point clouds exceed memory; on this machine, at 10⁸ points, nothing did. Neither the cloud nor
 the index nor the kd-tree raised a `MemoryError`. What the measurement found instead — an index
-2.7× the size of its data, built in 324 s on one core — is a *worse* problem for an interactive
+costing 4.3× the bytes per point of its data, built in 324 s on one core — is a *worse* problem for
+an interactive
 modeller and a *different* one for the row to record, so P-13's root cause and status are edited
 rather than confirmed. A row that gets ticked by a measurement that did not actually happen is
 worse than an open one.
@@ -732,7 +752,8 @@ decision is not made here.
   M. Schütz, *Potree: Rendering Large Point Clouds in Web Browsers*, master's thesis, TU Wien, 2016
   ([PDF](https://www.cg.tuwien.ac.at/research/publications/2016/SCHUETZ-2016-POT/SCHUETZ-2016-POT-thesis.pdf));
   M. Schütz, S. Ohrhallinger, M. Wimmer, *Fast Out-of-Core Octree Generation for Massive Point
-  Clouds*, 2020
+  Clouds*, Computer Graphics Forum 39(7), Pacific Graphics 2020, DOI
+  [10.1111/cgf.14134](https://doi.org/10.1111/cgf.14134)
   ([page](https://www.cg.tuwien.ac.at/research/publications/2020/SCHUETZ-2020-MPC/)). Both are
   named as the basis of the design in
   [PotreeConverter's README](https://github.com/potree/PotreeConverter/blob/a70ef212198b0e5ae1d071713a0c8cbda8fcc9a7/README.md).

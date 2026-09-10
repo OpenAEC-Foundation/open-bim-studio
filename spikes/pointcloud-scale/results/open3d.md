@@ -53,7 +53,7 @@ All five repeats, 10⁷ points, seconds:
 - tensor f32: 0.01979, 0.02346, 0.02394, 0.02314, 0.02281
 
 **All three representations hold 10⁸ points on this machine.** 24.011 bytes/point is
-`3 × sizeof(double)` to five significant figures, so `Eigen::Vector3d` and the f64 tensor add no
+`3 × sizeof(double)` to three significant figures, so `Eigen::Vector3d` and the f64 tensor add no
 per-point padding. The legacy row's higher *peak* (7.312 GB against the tensor's 4.914 GB for the
 same bytes stored) is `Vector3dVector`'s intermediate copy; the tensor constructor has none.
 
@@ -72,11 +72,21 @@ numpy array is released before the baseline is taken, so bytes/point is the tree
 Repeats where more than one was run, seconds: 10⁶/d8 — 2.106, 3.625, 3.072; 10⁷/d6 — 18.320,
 13.554, 16.515. The 10⁷/d8 and 10⁸/d8 rows are **single runs**; at 324 s a repeat was not run.
 
+**Caveat for the 10⁶/d8 and 10⁷/d6 rows (repeats = 3).** Each repeat builds and discards a tree in
+the *same* process; `peak_wset` is that process's cumulative high-water mark across all three
+builds, not necessarily the peak of any single build, since freed memory is not always returned to
+the OS between repeats. The single-run 10⁷/d8 and 10⁸/d8 rows have no such ambiguity.
+
 **The 10⁸ octree did not fail.** It built, in 13.131 GB of peak working set — **38.6 % of the
 machine's 34.0 GB** — and 324.4 s on one of 32 cores. That is the P-13 result and it is not the one
 the hypothesis predicted: on this machine the wall is *time and headroom*, not an allocation
-failure. For comparison, the points themselves cost 4.914 GB, so **the index is 2.7× the data it
-indexes**.
+failure. **Comparing bytes per point, the fair like-for-like figure** — the octree costs 102.910
+bytes/point against 24.011 bytes/point for the f64 data (§Construction) — **the index is 4.3× the
+data it indexes** (102.910 / 24.011 = 4.29). The 13.131 GB octree peak and the 4.914 GB construct-
+stage peak quoted in §Construction are each that stage's *own* process peak (for the construct
+stage, source array plus cloud held at once) — they are peaks of two different processes, not
+directly comparable, so 13.131 / 4.914 = 2.67 is **not** the index-to-data ratio, even though an
+earlier draft of this note presented it as one.
 
 Bytes per point **falls** with N at fixed depth (466.6 → 220.9 → 102.9 at 10⁶ → 10⁷ → 10⁸) because
 the tree saturates: at depth 8 there are at most 256³ ≈ 16.8 M leaves, so past ~10⁷ points the node
@@ -94,13 +104,25 @@ different node count at the same depth.
 `o3d.geometry.KDTreeFlann(cloud)` — which is a **nanoflann** index over an `Eigen::MatrixXd` copy,
 despite the class name — then 1 000 calls to `search_knn_vector_3d(q, 1)`.
 
-| N | Repeats | Index build (s, median) | Query (µs, median of 1 000) | Bytes/point | Peak RSS (GB) | Verified |
+| N | Repeats | Index build (s, median) | Query (µs/query, batch mean, median across repeats) | Bytes/point | Peak RSS (GB) | Verified |
 |---|---|---|---|---|---|---|
 | 10⁶ | 3 | 0.512 | 3.988 | 43.106 | 0.764 | 100 / 100 |
 | 10⁷ | 3 | 8.721 | 4.861 | 42.580 | 1.579 | 100 / 100 |
 | 10⁸ | 1 | 177.994 | 6.480 | 41.038 | 9.578 | 100 / 100 |
 
+**What the query column is.** Each repeat times one batch of 1 000 calls to
+`search_knn_vector_3d`, not each call individually; that batch time divided by 1 000 is the
+*batch mean* per query for that repeat. The table reports the **median of those per-repeat batch
+means** (3 repeats at 10⁶/10⁷, 1 at 10⁸), not a median over 1 000 individually-timed queries — no
+per-query timing was collected.
+
 Index-build repeats, seconds: 10⁶ — 0.4830, 0.5120, 0.5176; 10⁷ — 8.2495, 8.7210, 8.9477.
+
+**Caveat for the 10⁶/10⁷ rows (repeats = 3).** Each repeat builds and discards an index in the
+*same* process rather than a fresh subprocess per repeat, so `peak_wset` is the process's
+cumulative high-water mark across all repeats in that stage, not necessarily the peak of any one
+build alone — Python's allocator does not always return freed memory to the OS between repeats.
+The 10⁸ row (repeats = 1) has no such ambiguity: it is the only build in its process.
 
 **Verification.** For each N, the first 100 of the 1 000 query points were re-solved by a chunked
 f64 brute-force scan over the entire cloud in numpy (100 000-point chunks, squared Euclidean
