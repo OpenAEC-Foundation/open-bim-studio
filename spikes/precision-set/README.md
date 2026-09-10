@@ -17,6 +17,7 @@ three cases reused verbatim from the boolean torture set, each carrying
 ```
 occt_driver.py         the OCCT driver (reuses the helpers in ../boolean-torture/occt_common.py,
                        so the construction method is identical between the two spikes)
+blender_driver.py      the Blender driver (runs inside Blender's own Python)
 results/<candidate>.md raw results, one file per candidate
 FINDINGS.md            assembled across candidates once they have all run
 ```
@@ -39,6 +40,26 @@ vertices in any order.
 Operands are rebuilt for every repeat at both locations: `BOPAlgo` mutates its arguments by default,
 so reusing one pair would compare a near result from pristine operands against a far result from
 operands a dozen booleans old.
+
+## Running the Blender driver
+
+```bash
+"C:/Program Files/Blender Foundation/Blender 5.0/blender.exe" --background \
+    --factory-startup --python spikes/precision-set/blender_driver.py -- --repeats 5
+```
+
+from the repository root. It writes [`results/blender.md`](results/blender.md). Operands are
+rebuilt for every repeat, every solver and both locations here as well.
+
+For a candidate that stores vertex positions in **float32**, the question is decided before any
+boolean runs, so this driver reports three things rather than one:
+
+1. the float32 round trip of the coordinates themselves — write, read back, compare — which is the
+   storage cost with no algorithm involved;
+2. the boolean result near vs. far, matched nearest-neighbour after translating back;
+3. the same far case with the 500 km carried by the **object transform** instead of the vertex
+   data, which measures whether a local frame rescues the result — the mitigation ADR-0006
+   proposes, measured on the candidate instead of assumed.
 
 ## Rules
 
