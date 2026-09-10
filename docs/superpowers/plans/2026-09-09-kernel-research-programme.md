@@ -582,6 +582,38 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
+### Task 15b: Open CAD Studio note (added 2026-09-10 at the maintainer's request)
+
+Open CAD Studio (OCS; `https://github.com/HakanSeven12/OpenCADStudio`, MIT-licensed Rust CAD application; local clone at `C:\Users\rickd\Documents\GitHub\OpenCADStudio`) is a 2D drafting and 3D modelling application with native DWG/DXF read-write, solid primitives, extrude/revolve/loft/sweep, a boolean command, ACIS-entity tessellation, STEP AP203 export and a wgpu renderer with a browser build. The maintainer asks whether its geometry code is usable as, or inside, our kernel — the *build on* axis is the point of this note, with the *borrow from* and *avoid* axes as usual.
+
+**Files:**
+- Create: `docs/research/kernels/opencadstudio.md`
+- Modify: `docs/research/kernels/README.md` (add the candidate under group A or B with a one-line description), `docs/research/kernels/problems.md` (rows the note supports)
+- Create (if measurable): `spikes/boolean-torture/ocs_driver/` and `spikes/precision-set/ocs_driver/` (a small Rust crate depending on the OCS crates by path, running the same cases), with results in `spikes/*/results/opencadstudio.md`
+
+- [ ] **Step 1: Pin and read**
+
+Record the OCS commit hash of the local clone (`git -C <clone> rev-parse HEAD`) and the upstream tag/release it corresponds to. Read the workspace layout (`Cargo.toml`, `crates/`), and locate: the geometry representation (mesh? B-rep? what `src/entities/mesh.rs` holds), the boolean implementation (`src/modules/model/boolean_cmd.rs` and whatever it calls — own code or a crate such as `csgrs`, `manifold-rs`, `parry`, `truck`), the solid primitives and extrude/revolve/loft/sweep, the ACIS/SAT tessellation path, the precision model (f32 or f64 storage; a global origin or not), the DWG/DXF layer, the wgpu pipeline (`src/scene/pipeline/mesh_gpu.rs`, `src/shaders/mesh.wgsl`) and the web build. Cite every file at the pinned commit as `https://github.com/HakanSeven12/OpenCADStudio/blob/<commit>/<path>#L<n>-L<m>`. Read the issue tracker for geometry/boolean/precision reports (`gh issue list -R HakanSeven12/OpenCADStudio --state all --search "boolean"`, `"solid"`, `"precision"`); collect what exists (fewer than eight is acceptable for a young project — say how many exist in total).
+
+- [ ] **Step 2: Measure if the geometry is reachable as a library**
+
+If the boolean and the mesh/solid types are exposed by a crate in the workspace (not only through the application's command layer), write a spike crate that depends on it by path, builds the torture and precision cases (translate `reference/boolean_torture_set.py` cases into Rust literals or read them from a JSON dump you generate with a tiny Python script committed next to the driver), runs union and intersection with fresh operands per repeat, checks validity with your own closed/manifold/zero-area check, computes volume with your own signed-volume function, five repeats, median, and writes the two results files with the same columns as the siblings (torture: Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms | Note; precision with relative ΔV, far result translated back before integrating). Record the Rust toolchain version and hardware. If the geometry is only reachable through the application (no library crate boundary), say exactly why measurement was skipped, and label every behaviour claim *inferred from source* or *claimed* — do not spend more than one hour on wiring.
+
+- [ ] **Step 3: Note and verdict**
+
+Matrix with every criterion labelled; the twelve questions; three-axis verdict. *Build on* must answer concretely: which OCS crates could be a dependency of, or a starting point for, our kernel (Rust + DynLex boundary: in-process FFI is required — state what OCS exposes as a C ABI, if anything); what representation and precision it commits us to; what its DWG/DXF and wgpu layers would give the `ui/` and `app/` sub-projects. *Borrow from* and *avoid* as for the other candidates. Connect to `docs/research/hosts-and-engines/README.md` ("Standalone — Rust core" was a candidate there) in one paragraph.
+
+- [ ] **Step 4: Update README and problems.md, commit**
+
+```bash
+git add docs/research/kernels/opencadstudio.md docs/research/kernels/README.md docs/research/kernels/problems.md spikes/boolean-torture spikes/precision-set
+git commit -m "Add the Open CAD Studio research note
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 16: Synthesis and ADR acceptance
 
 **Files:**
