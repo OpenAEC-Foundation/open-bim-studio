@@ -31,7 +31,18 @@ python spikes/boolean-torture/occt_driver.py
 ```
 
 from the repository root. It writes [`results/occt.md`](results/occt.md) and prints a one-line
-summary. `--repeats N` changes how many times each boolean is timed (the fastest is reported).
+summary. `--repeats N` changes how many times each boolean is timed (the fastest is reported);
+**each repeat rebuilds its operands**, because `BOPAlgo` mutates its arguments by default and a
+loop over one pair would time progressively degraded input (Probe B measures exactly that).
+
+Besides the torture set the driver runs four probes into the same results file:
+
+| Probe | Question |
+|---|---|
+| A | Does fuzzy tolerance growth compound over a chain of booleans? |
+| B | Does a boolean raise the tolerance of its *input* shapes? |
+| C | Is a sewing tolerance below `Precision::Confusion()` honoured? (BREP output hashed) |
+| D | How thin a solid will `BRepPrimAPI_MakeBox` build? |
 
 The construction method — triangle soup to `TopoDS_Solid` — is documented in `occt_common.py` and
 is part of the measurement: a case whose operands OCCT cannot build is a finding about OCCT.

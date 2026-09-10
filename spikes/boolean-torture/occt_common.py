@@ -177,17 +177,30 @@ def _run(op_class, a, b, fuzzy: float | None, parallel: bool):
 
 
 def boolean(kind: str, a, b, fuzzy: float | None = None, parallel: bool = False,
-            repeats: int = 3) -> OpResult:
+            repeats: int = 3, rebuild=None) -> OpResult:
     """Run one boolean `repeats` times, keep the fastest, report the last result.
 
     Timing is min-of-repeats because that is the number least polluted by the OS
-    scheduler; the reported shape is from the final run, which is identical to the
-    others (the operation is deterministic on identical input).
+    scheduler.
+
+    `rebuild`, when given, is a zero-argument callable returning a **fresh** `(a, b)`
+    pair; it is called before every repeat and its result replaces `a` and `b`. This
+    is not an optimisation, it is a correctness requirement: `BOPAlgo` is destructive
+    by default (`SetNonDestructive(false)`) and Probe B measures it raising the
+    tolerance of its own arguments. Looping over one operand pair therefore times a
+    progressively mutated input, and the second and later runs are not the same
+    experiment as the first. With `rebuild` every repeat starts from an identically
+    constructed pair, which is what makes "the reported shape is the last run's and
+    the others are the same" true rather than assumed.
     """
     op_class = {"fuse": BRepAlgoAPI_Fuse, "common": BRepAlgoAPI_Common}[kind]
     best = float("inf")
     op = None
     for _ in range(repeats):
+        if rebuild is not None:
+            a, b = rebuild()
+            if a is None or b is None:
+                return OpResult(False, False, 0.0, 0.0, 0.0, "operand rebuild failed")
         t0 = time.perf_counter()
         try:
             op = _run(op_class, a, b, fuzzy, parallel)

@@ -23,7 +23,7 @@ error and `BRepCheck_Analyzer` still says the result is valid. It is not a candi
 for reasons that have nothing to do with boolean quality: it has no incremental evaluation, no
 mesh or implicit representation to speak of, and it needs 4.4 s to tessellate 10k planar boxes.
 It is the single most valuable candidate to *borrow* from, because its tolerance model, its
-argument preconditions and its 38-category shape check are twenty years of accumulated knowledge
+argument preconditions and its 37-category shape check are twenty years of accumulated knowledge
 about what actually goes wrong.
 
 ## What it is
@@ -88,16 +88,16 @@ Scored against every criterion in [`README.md`](README.md).
 |---|---|---|---|
 | **License** | LGPL 2.1 plus an OCCT-specific exception allowing object-code distribution of header-derived material under terms of your choice; commercial licence available as an alternative. Permits linking and shipping; **borrowing source into a differently-licensed kernel is not permitted** — designs and algorithms may be reimplemented, code may not be copied (R-11). | claimed | [`README.md`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/README.md#L5-L11), [`OCCT_LGPL_EXCEPTION.txt`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/OCCT_LGPL_EXCEPTION.txt) |
 | **Representations held natively** | **One.** B-rep (`TopoDS` + `Geom`). `Poly_Triangulation` is a tessellation cached on a face, produced by `BRepMesh` and not modellable. `BRepLib_PointCloudShape` samples points *from* a shape; `AIS_PointCloud` is a display object. No implicit / SDF representation exists. Conversions are therefore one-directional: B-rep → mesh (`BRepMesh`), B-rep → points (`BRepLib_PointCloudShape`). Mesh → B-rep exists only as `BRepBuilderAPI_Sewing` over per-triangle faces, which is what our drivers use and which produces one face per triangle. | inferred from the source tree at the pinned commit | package listing above; [`Poly_Triangulation.hxx`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/FoundationClasses/TKMath/Poly/Poly_Triangulation.hxx) |
-| **Boolean robustness** | 30 of 30 case×setting combinations produced results `BRepCheck_Analyzer` calls valid, and 9 of 10 cases were numerically exact (identity residual ≤1.4e-14 absolute). The tenth — `sliver`, a 1e-7 m slab — returned an **empty intersection with no error**. Against R-16's threshold: 9 cases pass (identity ≤8e-16 relative), `sliver` is between the pass line (1e-9 relative) and the fail line (1e-6 relative) at 3.3e-8 relative. Algorithm class: **tolerant, not exact** — see §Tolerance model. | measured | [`spikes/boolean-torture/results/occt.md`](../../../spikes/boolean-torture/results/occt.md) |
+| **Boolean robustness** | 30 of 30 case×setting combinations produced results `BRepCheck_Analyzer` calls valid, and 9 of 10 cases were numerically exact (identity residual ≤1.5e-14 absolute). The tenth — `sliver`, a 1e-7 m slab — returned an **empty intersection with no error**. Against R-16's threshold: 9 cases pass (identity ≤8e-16 relative), `sliver` is between the pass line (1e-9 relative) and the fail line (1e-6 relative) at 3.3e-8 relative. Algorithm class: **tolerant, not exact** — see §Tolerance model. | measured | [`spikes/boolean-torture/results/occt.md`](../../../spikes/boolean-torture/results/occt.md) |
 | **Tolerance and precision model** | f64 throughout. Per-entity tolerances stored on vertex, edge and face; grown by `UpdateTolerance` (monotone) but settable downward by `Tolerance(T)`. Three global constants (`Confusion` 1e-7, `Angular` 1e-12, `Intersection` 1e-9) are `constexpr` and act as hard floors that no API can go below. Not float32 anywhere in the modelling path. See §Tolerance model. | measured + source | §Tolerance model below |
 | **Incremental evaluation** | **Absent.** There is no evaluation graph, no dependency tracking and no parametric model in the kernel; `TopoDS_Shape` is a value with no history. `BRepTools_History` records generated / modified / removed relations for **one operation's** inputs and outputs only. Rebuilding a changed element means re-running the operations that produced it, which the caller must have recorded itself. This is what FreeCAD builds on top and where its topological-naming problem lives (R-13). | inferred from source; no evidence of the contrary found | [`BRepTools_History.hxx`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingData/TKBRep/BRepTools/BRepTools_History.hxx#L27-L41) |
-| **Threading model** | Opt-in and per-operation. `BOPAlgo_Options::SetRunParallel(bool)` defaults to **false**; there is also a process-global `SetParallelMode`. `BRepMesh_IncrementalMesh` takes an `isInParallel` flag, also default false. The default thread pool reports 32 threads on the test machine. Measured: the mesh parallel flag gives **9.8×** on curved faces and **−8%** (i.e. slower) on 10k planar boxes. No documentation statement bounding BOP's thread safety was found. | measured + source | [`BOPAlgo_Options.hxx#L104-L118`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.hxx#L104-L118); [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md) |
+| **Threading model** | Opt-in and per-operation. `BOPAlgo_Options::SetRunParallel(bool)` defaults to **false**; there is also a process-global `SetParallelMode`. `BRepMesh_IncrementalMesh` takes an `isInParallel` flag, also default false. The default thread pool reports 32 threads on the test machine. Measured: the mesh parallel flag gives **9.5×** on curved faces and costs **+8% on average** (i.e. is slower: +1.3%, +8.2%, +10.0%, +13.5% over the four paired deflections) on 10k planar boxes. No documentation statement bounding BOP's thread safety was found. | measured + source | [`BOPAlgo_Options.hxx#L104-L118`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.hxx#L104-L118); [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md) |
 | **GPU path** | Out of scope for this note beyond the kernel seam: geometry reaches the GPU only after `BRepMesh` has produced a `Poly_Triangulation` per face, so the tessellation cost below *is* the GPU-upload cost. OCCT's own visualisation layer (`TKV3d`, `TKOpenGl`) is evaluated in [`../renderers/`](../renderers/). Nothing comes back from the GPU into the kernel. | inferred | package structure; §Measurements |
 | **IFC coverage** | None natively. IFC reaches OCCT through IfcOpenShell, evaluated separately. OCCT's own exchange formats are STEP, IGES, glTF, OBJ, STL (`src/DataExchange/`). | inferred | source tree |
-| **Performance** | 10k planar boxes: 4.2–4.7 s to tessellate (120,000 triangles, ~37 µs/triangle), ~250 ms to construct. Wall with 12 openings: 52 ms union, 49 ms intersection. Simple two-box boolean: 0.6–4.6 ms. 100k / 1M not run — the 10k number already answers the question this note needed. | measured | [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md), [`spikes/boolean-torture/results/occt.md`](../../../spikes/boolean-torture/results/occt.md) |
+| **Performance** | 10k planar boxes: 4.2–4.7 s to tessellate (120,000 triangles, 35–40 µs/triangle), ~250 ms to construct. Wall with 12 openings: 52–54 ms union, 48–49 ms intersection. Two-solid booleans on the rest of the torture set: 0.42–4.53 ms. 100k / 1M not run — the 10k number already answers the question this note needed. | measured | [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md), [`spikes/boolean-torture/results/occt.md`](../../../spikes/boolean-torture/results/occt.md) |
 | **Embeddability** | C++ library; Python bindings (`OCP`/`cadquery-ocp`, `pythonocc`) are mature enough that this whole note's measurements ran through them. In-process use from DynLex would require a C ABI shim over a large C++ template-and-handle API — no C API exists. WASM builds exist in the wild but were not evaluated here. | inferred; the Python path is measured (it ran) | this note's drivers |
 | **2D derivation** | Present and substantial: `HLRBRep` / `HLRAlgo` for hidden-line removal, section via `BRepAlgoAPI_Section`. Not measured. Unknown whether the quality is drawing-grade. | claimed (package exists) | source tree |
-| **Maturity** | 26 years open-source, commercial maintainer, ~2 releases/year. Issue-tracker health is the concern: of ~20 boolean/tolerance issues surveyed, 13 are open, 3 closed with a merged fix and a stated cause, 1 closed as not-reproducible-on-latest with the reporter disputing it, 1 closed within 8 minutes with no comment. Several open tickets carry maintainer replies of the form "not planned for closest releases" or "not yet analyzed". | measured (survey; see §Known problems) | §Known problems |
+| **Maturity** | 26 years open-source, commercial maintainer, ~2 releases/year. Issue-tracker health is the concern: of the 20 boolean/tolerance issues surveyed, **14 are open and 6 closed** — 3 with a merged fix and a stated cause, 1 closed by a maintainer who confirmed the defect and said there is no fast solution, 1 closed as not-reproducible-on-latest with the reporter disputing it, 1 closed within 8 minutes with no comment. Several open tickets carry maintainer replies of the form "not planned for closest releases" or "not yet analyzed". | measured (survey; see §Known problems) | §Known problems |
 | **AI familiarity** | High — 26 years of public code, a 3562-line boolean specification, and heavy downstream use. Recorded as one column and not used as a tiebreaker (R-09). | inferred | — |
 
 ## Tolerance model
@@ -121,20 +121,25 @@ has no unit system, so the same constant means a different physical distance in 
 model than in a metre model — a 1000× difference in effective precision decided by nothing more
 than the units the file happened to use.
 
-**They are floors, not defaults.** Measured: every API that accepts a tolerance clamps upward to
-`Confusion()`.
+**They are floors, not defaults.** Every API that accepts a tolerance clamps upward to
+`Confusion()`. Three separate places, two of them measured against a committed probe and one read
+from the source:
 
-- `BOPAlgo_Options::SetFuzzyValue` is literally `myFuzzyValue = std::max(theFuzz, Precision::Confusion())`
+- *Inferred from source.* `BOPAlgo_Options::SetFuzzyValue` is literally `myFuzzyValue = std::max(theFuzz, Precision::Confusion())`
   ([`BOPAlgo_Options.cxx#L105-L108`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.cxx#L105-L108)),
   and the default fuzzy value is `Confusion()` itself ([L53](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.cxx#L53)).
-- `BRepBuilderAPI_Sewing::Init` does the same: `myTolerance = std::max(tolerance, Precision::Confusion())`
+- *Measured* ([Probe C](../../../spikes/boolean-torture/results/occt.md)).
+  `BRepBuilderAPI_Sewing::Init` does the same: `myTolerance = std::max(tolerance, Precision::Confusion())`
   ([`BRepBuilderAPI_Sewing.cxx#L2105-L2122`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKTopAlgo/BRepBuilderAPI/BRepBuilderAPI_Sewing.cxx#L2105-L2122)).
-  **Measured:** asking for a sewing tolerance of 1e-8, 1e-9 or 1e-12 produced byte-identical
-  results to 1e-7.
-- `BRepPrim_GWedge::IsDegeneratedShape()` rejects any box extent `<= Precision::Confusion()`
+  Sewing the same operand at 1e-8, 1e-9 and 1e-12 produced output whose SHA-256 over the ASCII
+  BREP written by `BRepTools::Write` is identical to the 1e-7 run — for the ordinary unit cube and
+  for the `sliver` slab whose own thickness sits at the clamp.
+- *Measured* ([Probe D](../../../spikes/boolean-torture/results/occt.md)).
+  `BRepPrim_GWedge::IsDegeneratedShape()` rejects any box extent `<= Precision::Confusion()`
   ([L1134-L1138](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKPrim/BRepPrim/BRepPrim_GWedge.cxx#L1134-L1138)).
-  **Measured:** `BRepPrimAPI_MakeBox(p, 1, 1, 1e-7)` throws `Standard_DomainError`; at `1.0001e-7`
-  it succeeds. OCCT cannot represent a solid thinner than 0.1 µm, at any setting.
+  `BRepPrimAPI_MakeBox(p, 1, 1, t)` throws `Standard_DomainError` at `t` = 1e-7, 9.9999e-8 and
+  1e-9, and succeeds at 1.0001e-7 and 1e-6. OCCT cannot represent a solid thinner than 0.1 µm, at
+  any setting.
 
 The answer to question 6 ("what precision does it use internally, and can it be configured?") is
 therefore: f64 storage, and **no** — precision is a compile-time constant of the library, tunable
@@ -269,10 +274,10 @@ marked *fixed* have a merged PR naming the cause.
 | 1360 | curved-intersection | Traced in the report: `IntTools_SurfaceRangeLocalizeData::SetFrame` returns early leaving indices at 0, so `GetUParamInFrame(1)` reads unallocated memory from `IntTools_BeanFaceIntersector::BuildBox`. **The crash occurs inside fuzzy mode.** Labelled "Not validated" | open 2026-07 (migrated Mantis 33090) | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1360) |
 | 1496 | tangent | `BRepAlgoAPI_Common` returns empty or negative for two geometrically identical swept solids while `IsDone()` is true; fails when the operands are independently constructed, succeeds when they are the same in-memory shape. Closed 8 minutes after opening, no comment | closed 2026-08 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1496) |
 | 724 | curved-intersection | >10 GB for a boolean between two faces; reporter localises to face–face intersection and reports it worse than 7.6.x. Maintainer acknowledged only | open 2025-09 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/724) |
-| 344 | curved-intersection | 0.035 mm discontinuity in a section on a 100 mm bounding box; a commenter attributes it to a missing short intersection curve. **`ShapeFix` reported as producing wrong results on this input** | open 2025-02 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/344) |
+| 344 | curved-intersection | `BRepAlgoAPI_Cut` of two STEP-imported parts keeps an outer region that should have been removed (A−B wrong, B−A right). The reporter later measures a **0.035 mm discontinuity** in the result on a model whose **bounding-box diagonal is 100 mm**, and finds that scaling the operands by 2 makes the cut correct. A third-party commenter attributes the discontinuity to "a missing short intersection curve between the two surfaces". Not traced by a maintainer | open 2025-02 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/344) |
 | 485 | curved-intersection | `BRepAlgoAPI_Common` returns an empty compound for two visually intersecting faces. Not traced. Maintainer: "not planned for closest releases" | open 2025-04 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/485) |
 | 245 | coplanar (shared edge) | Cut misbehaves when argument and tool share an edge; a third-party commenter blames revolution×sphere intersection at singular points. Workaround: rotate or offset to remove the shared edge | open 2025-01 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/245) |
-| 1041 | coplanar / tangent | Fuse of N rotated copies meeting on shared faces collapses surface area; reporter contributed failing unit tests. Not traced | open 2026-02 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1041) |
+| 1041 | curved-intersection (interpenetrating cones) | Polar pattern: a tapered cone (`BRepPrimAPI_MakeCone`, base r 6, top r 3, height 40, axis along X through the origin) is rotated about Z by 360/N and the copies are sequentially fused, so they interpenetrate near the common axis. The surface area of the result collapses below the reporter's expectation for several N. Reporter contributed the failing gtests in draft [PR #1042](https://github.com/Open-Cascade-SAS/OCCT/pull/1042); no coplanar, tangent or shared-face condition is described anywhere in the issue or the PR. Not traced | open 2026-02 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1041) |
 | 1124 | other (API path) | The same input gives wrong sections through `BRepAlgoAPI` and correct ones through `bopsection`. Not traced | open 2026-02 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1124) |
 | 1534 | other (periodic parametrisation) | Reporter measures adjacent p-curves on a periodic root face differing by exactly 9×2π in U while the 3D vertices coincide; self-declared novice diagnosis, no maintainer comment. Moving the cutter by 0.0005 mm fixes it | open 2026-09 | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/1534) |
 | 303 | curved-intersection | Double-cone draft face × cylinder: intersection is multiple mostly-disconnected curves and "the portion that we want is often not found" | open 2025-01 (Mantis 32857) | [issue](https://github.com/Open-Cascade-SAS/OCCT/issues/303) |
@@ -286,7 +291,7 @@ Secondary, from downstream consumers — useful because they show what the failu
 |---|---|---|---|
 | IfcOpenShell #7815 | tangent / degenerate | `BRepAlgoAPI_Cut` reports `IsDone` on a complete no-op — a void does not void — and the no-op passes every post-boolean validity check, so no retry fires. Reported that raising fuzziness **up to 1 cm** does not recover it; the CGAL kernel cuts correctly. Diagnosis is by a non-maintainer contributor: treat as claimed | [issue](https://github.com/IfcOpenShell/IfcOpenShell/issues/7815) |
 | IfcOpenShell #6867 | coplanar | Mitred walls with half-space cuts: a coincident duplicate face lands on two topologically distinct edges at the same location, defeating the manifoldness check. Non-maintainer diagnosis: claimed | [issue](https://github.com/IfcOpenShell/IfcOpenShell/issues/6867) |
-| IfcOpenShell #821 | policy | When an OCCT boolean cannot complete, IfcOpenShell substitutes the **unclipped first operand** and logs it. A wall with no opening, silently | [issue](https://github.com/IfcOpenShell/IfcOpenShell/issues/821) |
+| IfcOpenShell #821 | policy | When an OCCT boolean cannot complete, IfcOpenShell substitutes the **unclipped first operand**: a wall shipped with its opening missing. **The mechanism is read from the source, not from the ticket** — [`boolean_utils.cpp#L962-L966`](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L962-L966) (`GEO 132 "No other operands remaining, using first operand"`, then `result = a; return true;`) and [`#L1387-L1392`](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L1387-L1392) (`GEO 152 "Invalid operands. Using first operand"`, then `result = a; success = true;`). The ticket itself is a 2020 bug report with no maintainer diagnosis; the analysis attributing its symptoms to this fallback is a **2026 comment by a non-maintainer contributor** and is cited as claimed, not as a maintainer finding | [issue](https://github.com/IfcOpenShell/IfcOpenShell/issues/821) |
 | IfcOpenShell #992 | coplanar | **Control case.** Maintainer states the failure "is actually fully caused by IfcOpenShell. There are boolean operands that share an edge" — not every downstream boolean failure is OCCT's | [issue](https://github.com/IfcOpenShell/IfcOpenShell/issues/992) |
 | FreeCAD #25169 | curved-intersection | `Part: Boolean Common` empty result on two spline extrusions; labelled `3rd party: OCC` and `Confirmed` by FreeCAD. Extending one extrusion to full overlap makes it succeed | [issue](https://github.com/FreeCAD/FreeCAD/issues/25169) |
 | FreeCAD #24115 | curved-intersection | `part.section` returns incomplete and wrong results roughly 1 in 100 attempts; labelled `3rd party: OCC` | [issue](https://github.com/FreeCAD/FreeCAD/issues/24115) |
@@ -298,9 +303,22 @@ Three honest negatives, because they change how the "borrow" list is written:
 - **No OCCT issue was found in which `SetFuzzyValue` rescued a failing boolean.** Only two or three
   fuzzy-related tickets exist on the whole tracker, and the substantial one (#1360) is a crash
   *inside* fuzzy mode. The strongest real-world evidence for fuzzy as a strategy is downstream:
-  IfcOpenShell's [`boolean_utils.cpp`](https://github.com/IfcOpenShell/IfcOpenShell/blob/master/src/ifcgeom/kernels/opencascade/boolean_utils.cpp)
-  starts at `precision/100` and retries at ×10 per attempt up to `precision*10000`, a four-decade
-  sweep — and #7815 is a case where the whole ladder still fails.
+  IfcOpenShell's `boolean_utils.cpp`, at commit
+  [`e1be4332`](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp),
+  starts at `settings.precision / 100`
+  ([L854-L856](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L854-L856))
+  and retries at ×10 per attempt while `new_fuzziness - 1e-15 <= settings.precision * 10000.`
+  ([L1019-L1020](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L1019-L1020),
+  recursion at [L1406](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L1406)).
+  That is `precision/100` to `precision×10000`: a factor of 1e6, so **six decades and seven rungs**,
+  not four. Two details matter for anyone copying the strategy: the ladder can stop early, because
+  the same guard also requires `new_fuzziness < min_length_orig` (the shortest edge or vertex–edge
+  distance in either operand), and the value actually handed to `SetFuzzyValue` is re-clamped to
+  `min(min_length_orig / 3, fuzziness)`
+  ([L1015](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L1015),
+  [L1134](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp#L1134)) —
+  so the nominal rung and the applied fuzzy value are not the same number. #7815 is a case where
+  the whole ladder still fails.
 - **No boolean thread-safety defect was found.** A search for `RunParallel` on the tracker returns
   zero issues. The one concurrency investigation (#1179) turned out to be a missing null guard in
   `ShapeUpgrade_FaceDivide::Perform()`, fixed in PR #1203, not a threading bug. The absence is the
@@ -311,8 +329,11 @@ Three honest negatives, because they change how the "borrow" list is written:
   traceability warning for anyone who wants to re-derive this section later.
 - **The trigger distribution above must not be read as a frequency distribution.** Searching for
   "coplanar" returns 3 tickets and "tangent" returns 5, yet several of the coplanar-triggered
-  reports above (#800, #245, #1041, #1456) never use the word. The catalogue is a sample of
-  failure *mechanisms*, not a measurement of their incidence.
+  reports above (#800, #245, #1456) never use the word. The catalogue is a sample of
+  failure *mechanisms*, not a measurement of their incidence. The trigger column is our
+  classification from reading each ticket, and it is only as good as that reading: #1041 was
+  classified as coplanar/tangent in an earlier draft of this note and is not — it is
+  interpenetrating cones.
 
 ### The one we found ourselves
 
@@ -320,7 +341,8 @@ Three honest negatives, because they change how the "borrow" list is written:
 the design's failure mode, and it needed no issue tracker:
 
 1. The slab **cannot be constructed** by `BRepPrimAPI_MakeBox` at all (`Standard_DomainError`,
-   because 1e-7 ≤ `Confusion()`), and when sewn from triangles it comes out with volume 3.33e-8
+   because 1e-7 ≤ `Confusion()` — measured, [Probe D](../../../spikes/boolean-torture/results/occt.md)),
+   and when sewn from triangles it comes out with volume 3.33e-8
    instead of 1e-7 — a factor of 3 — while `BRepCheck_Analyzer` calls it **valid** and its own
    entity tolerance (1.525e-7) already exceeds its thickness.
 2. `BRepAlgoAPI_Common` between the cube and the slab returns an **empty result**, at every fuzzy
@@ -352,14 +374,31 @@ in each spike's `results/occt.md`; those files are the reproducible record, this
 summary.
 
 The construction method is part of the measurement and is stated here because it affects the
-numbers: each benchmark triangle becomes a planar face
-(`BRepBuilderAPI_MakePolygon` closed → `BRepBuilderAPI_MakeFace`), the faces are sewn
-(`BRepBuilderAPI_Sewing` at `Precision::Confusion()`), and each resulting shell becomes a solid
-(`BRepBuilderAPI_MakeSolid` + `BRepLib::OrientClosedSolid`). Where sewing yields several disjoint
-shells — the `wall_with_openings` tool is twelve separate opening boxes — the operand is a
-**compound of twelve solids**, not one solid with twelve shells: the latter is what a naive
-translation produces and `BRepCheck_Analyzer` rejects it, which is itself worth knowing.
-Timings are the fastest of five runs with `SetRunParallel(false)`.
+numbers. **Two methods are used, and which one applies depends on the spike:**
+
+- *Boolean torture set and precision set* (`spikes/boolean-torture/occt_common.py`) — each
+  benchmark triangle becomes a planar face (`BRepBuilderAPI_MakePolygon` closed →
+  `BRepBuilderAPI_MakeFace`), the faces are sewn (`BRepBuilderAPI_Sewing` at
+  `Precision::Confusion()`), and each resulting shell becomes a solid (`BRepBuilderAPI_MakeSolid` +
+  `BRepLib::OrientClosedSolid`). Where sewing yields several disjoint shells — the
+  `wall_with_openings` tool is twelve separate opening boxes — the operand is a **compound of
+  twelve solids**, not one solid with twelve shells: the latter is what a naive translation
+  produces and `BRepCheck_Analyzer` rejects it, which is itself worth knowing.
+- *Tessellation* (`spikes/tessellation/occt_driver.py`) — the scale model is 10k axis-aligned
+  unit boxes, so each is rebuilt as a **native `BRepPrimAPI_MakeBox`** from its parsed corner
+  rather than sewn from twelve triangles. Sewing 10k boxes would make construction rather than
+  tessellation dominate the wall clock, and the question there is about `BRepMesh_IncrementalMesh`.
+  The parser asserts each box is axis-aligned and unit-sized, so nothing is assumed about the file
+  that is not checked. This means the tessellation numbers are **not** comparable to the boolean
+  numbers as measurements of construction, only as measurements of meshing.
+
+Boolean timings are the fastest of five runs with `SetRunParallel(false)`, and **every repeat
+rebuilds its operands from scratch**. (Tessellation timings are single runs on a freshly built
+compound per row; the spread between the rows is the only noise estimate they carry.) That is not tidiness: Probe B measures a fuse permanently raising the
+tolerance of its own arguments, so a timing loop over one operand pair would run each later
+iteration — and each later fuzzy setting — on progressively degraded input, and the settings could
+not then be compared with each other. An earlier draft of this note reported numbers from such a
+loop; the tables below are from the rebuilt version.
 
 ### Boolean torture set (R-16)
 
@@ -370,8 +409,8 @@ Full table: [`spikes/boolean-torture/results/occt.md`](../../../spikes/boolean-t
 | Case×setting combinations valid per `BRepCheck_Analyzer` | **30 / 30** (10 cases × {default, fuzzy 1e-5, fuzzy 1e-3}) |
 | Cases numerically exact (identity residual ≤1.5e-14 absolute, ≤8e-16 relative) | **9 / 10** |
 | Cases failing R-16's 1e-9 relative identity threshold | **1** — `sliver`, at 3.3e-8 relative (below the 1e-6 fail line, so neither pass nor fail) |
-| Worst case time | `wall_with_openings`: 52 ms union, 49 ms intersection |
-| Simple two-box boolean | 0.6–4.6 ms |
+| Worst case time | `wall_with_openings`: 52–54 ms union, 48–49 ms intersection across the three settings |
+| Two-solid booleans, the other nine cases | 0.42–4.53 ms (fastest `disjoint` intersection, slowest `overlap_half` union) |
 
 Two derived numbers worth writing down. A wall with twelve openings at ~50 ms means the
 Schependomlaan benchmark model's 934 walls would cost roughly **47 seconds** of boolean time alone
@@ -380,8 +419,14 @@ model, and openings per wall there are far fewer, so treat it as an order-of-mag
 rather than a prediction. And 50 ms is three frames at 60 Hz: re-cutting one wall during a drag
 gesture is not free at OCCT's speed.
 
-Fuzzy settings changed no result on this set except by raising the result's tolerance. That is the
-important negative: **fuzzy did not fix anything here, it only made the answer vaguer.**
+Fuzzy settings changed no result on this set except by raising the result's tolerance: every
+volume, every identity residual and every validity verdict is identical across `default`,
+`fuzzy=1e-5` and `fuzzy=1e-3`, while the result's maximum entity tolerance rises to roughly
+fuzzy/2 wherever an interference had to be resolved. That is the important negative: **fuzzy did
+not fix anything here, it only made the answer vaguer.** The claim survives the operand rebuild —
+each setting now runs on freshly constructed operands rather than on operands a dozen booleans
+old, so the identical results are genuinely the setting's doing and not an artefact of the three
+settings sharing one progressively mutated pair.
 
 ### Precision set (R-17) — passes
 
@@ -405,30 +450,44 @@ needs a different candidate.
 
 Full table: [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md).
 
-| Linear deflection | Mode | Mesh time | Triangles |
-|---|---|---|---|
-| 1.0 | single | 4218 ms | 120,000 |
-| 0.1 | single | 4488 ms | 120,000 |
-| 0.01 | single | 4523 ms | 120,000 |
-| 0.001 | single | 4606 ms | 120,000 |
-| 0.001 | parallel | 4724 ms | 120,000 |
-| 400 spheres, deflection 5e-4 | single | 76,245 ms | 12,881,600 |
-| 400 spheres, deflection 5e-4 | **parallel** | **7,783 ms** | 12,881,600 |
+| Linear deflection | Mode | Mesh time | Triangles | Parallel vs. single |
+|---|---|---|---|---|
+| 1.0 | single | 4171 ms | 120,000 | — |
+| 1.0 | parallel | 4732 ms | 120,000 | **+13.5%** |
+| 0.1 | single | 4489 ms | 120,000 | — |
+| 0.1 | parallel | 4856 ms | 120,000 | **+8.2%** |
+| 0.01 | single | 4453 ms | 120,000 | — |
+| 0.01 | parallel | 4899 ms | 120,000 | **+10.0%** |
+| 0.001 | single | 4741 ms | 120,000 | — |
+| 0.001 | parallel | 4804 ms | 120,000 | **+1.3%** |
+| 400 spheres, deflection 5e-4 | single | 77,431 ms | 12,881,600 | — |
+| 400 spheres, deflection 5e-4 | **parallel** | **8,149 ms** | 12,881,600 | **9.5× faster** |
 
-Three findings:
+Four findings:
 
-1. **4.4 s to tessellate 10k boxes**, ~37 µs per triangle, plus 250 ms to construct them. For a
-   model that is nothing but axis-aligned boxes this is a large number, and it is the number that
-   would sit between a model change and a redraw if OCCT were the kernel.
-2. **Deflection is nearly free to change on planar geometry** — the triangle count is constant and
-   the time varies by 9% across four decades. So `problems.md` P-11's "quality vs. speed" tension
-   is *not* general: on planar BIM geometry there is no tension, and holding two tessellations of a
-   wall costs storage, not computation. The cost is real on curved geometry, where the sphere rows
-   show 12.9 M triangles from 400 objects.
-3. **The parallel flag is not a free win.** It costs 8% on the box model and gives 9.8× on the
-   sphere model. The default thread pool has 32 threads, so this is not a build without threading —
-   it is per-face work too small to amortise the parallel path. Any threading design that
-   parallelises per-object without checking the per-object work will reproduce this.
+1. **4.2–4.7 s to tessellate 10k boxes**, 35–40 µs per triangle, plus ~250 ms to construct them.
+   For a model that is nothing but axis-aligned boxes this is a large number, and it is the number
+   that would sit between a model change and a redraw if OCCT were the kernel.
+2. **Deflection is nearly free to change on planar geometry** — the triangle count is identical at
+   every deflection and the single-threaded time varies by 14% (4171 → 4741 ms) across four
+   decades. So `problems.md` P-11's "quality vs. speed" tension is *not* general: on planar BIM
+   geometry there is no tension, and holding two tessellations of a wall costs storage, not
+   computation. The cost is real on curved geometry, where the sphere rows show 12.9 M triangles
+   from 400 objects.
+3. **The parallel flag is not a free win.** On the box model it costs time at every deflection —
+   +1.3%, +8.2%, +10.0%, +13.5%, mean **+8%** — and on the sphere model it gives **9.5×**. The
+   default thread pool has 32 threads, so this is not a build without threading — it is per-face
+   work too small to amortise the parallel path. Any threading design that parallelises per-object
+   without checking the per-object work will reproduce this.
+4. **A second tessellation of the same shape replaces the first, and only in one direction.**
+   Measured (the re-meshing probe in the same results file): a sphere meshed at deflection 0.1
+   gives 306 triangles / 168 nodes on its first face; re-meshing the *same* shape at 0.001 costs a
+   full 32.2 ms and leaves 10,108 triangles / 5106 nodes, so the cached triangulation was
+   **replaced**. Asking for 0.1 again afterwards takes 0.2 ms and changes nothing: a **coarser**
+   request is silently ignored. On planar boxes the second mesh costs the same as the first
+   (894 ms against 901 ms fresh and 914 ms rebuilt) even though the result is unchanged. So a
+   face holds exactly one `Poly_Triangulation`, refining is a full re-mesh, and getting a coarse
+   mesh back requires rebuilding the shape.
 
 ## The twelve questions
 
@@ -443,7 +502,7 @@ Three findings:
    ran these measurements are machine-generated from the headers.
 4. **Threading model, and what is single-threaded by design?** Opt-in parallelism per operation,
    off by default, both for booleans (`SetRunParallel`) and tessellation (`isInParallel`). Measured
-   to work (9.8× on curved tessellation). Nothing found that is single-threaded *by design*; the
+   to work (9.5× on curved tessellation). Nothing found that is single-threaded *by design*; the
    defaults are conservative rather than the architecture being serial. No documented thread-safety
    bound for BOP, and no tracker evidence of a threading defect. **This partially refutes
    `problems.md` P-08 as written for OCCT** — see below.
@@ -452,8 +511,10 @@ Three findings:
    operations, so memory is a tail risk on hard inputs rather than a scaling limit on easy ones.
 6. **Numeric precision internally, and configurable?** f64 everywhere in modelling. Not
    configurable downward: `Precision::Confusion()` is `constexpr 1.e-7` and every tolerance-taking
-   API clamps up to it (measured three separate ways in §Tolerance model). Unit-relative, since
-   OCCT has no unit system.
+   API clamps up to it — established three separate ways in §Tolerance model, one read from the
+   source (`SetFuzzyValue`'s `std::max`) and two measured against committed probes (Probe C for
+   the sewing clamp, Probe D for the box-extent floor). Unit-relative, since OCCT has no unit
+   system.
 7. **Operate on a subset — one tile, one region?** Yes, trivially: shapes are independent values
    with no global registry, so a boolean on two solids touches nothing else. This is a genuine
    strength for R-14 and a direct consequence of having no evaluation graph — the same design
@@ -461,8 +522,8 @@ Three findings:
 8. **Who maintains it, and what if they stop?** Open Cascade SAS, commercially, with LGPL source.
    If they stopped, the code would remain usable and forkable, but a 26-year C++ codebase with a
    3562-line specification for one algorithm is not a codebase a small team maintains. The tracker
-   suggests the practical bus factor is already tight: 13 of 20 surveyed boolean issues open,
-   several with "not yet analyzed" as the only maintainer response.
+   suggests the practical bus factor is already tight: 14 of the 20 surveyed boolean issues are
+   open, several with "not yet analyzed" as the only maintainer response.
 9. **Documented failure modes and the design choice behind each?** §Known problems. Every trigger
    class traces to the same root: topology is decided by comparing distances against tolerances,
    so the decision is made on rounded values and can contradict itself, and anything below the
@@ -484,7 +545,7 @@ Three findings:
   most of the *avoid* column below comes from.
 - **Argument preconditions are stated**, so a caller can check them: valid, non-self-interfered,
   C1 or better.
-- **38 named failure categories** in `BRepCheck_Status` — not a boolean valid/invalid.
+- **37 named failure categories** in `BRepCheck_Status` — not a boolean valid/invalid.
 - **Passes the precision set** at 500 km with room to spare.
 - **Independent shapes**: no global registry, so subset operation and R-14 are unproblematic.
 
@@ -500,7 +561,11 @@ Three findings:
 - **`Confusion()` is a compile-time constant with no unit system**, so effective precision depends
   on the file's units.
 - **Healing can make things worse** — #1193 shows `ShapeUpgrade_UnifySameDomain` introducing
-  self-intersections into a shape that was clean; #344 reports `ShapeFix` producing wrong results.
+  self-intersections into a shape that had passed `bopargcheck` after the fuse. A second,
+  weaker report is in #344, where the reporter, having found that scaling operands by 2 fixes
+  *that* model, says of a **different** model that scaling it instead produces self-intersections
+  "where even running ShapeFix produces wrong results". That is a claim about a scaled input to a
+  different case and it is cited as such; #1193 carries this point on its own.
 - **C++-only embedding**, with a large handle-based API and no C ABI.
 
 ## Risks
@@ -551,12 +616,12 @@ below is an idea to reimplement, with the citation that justifies it.
 | **A whole-shape `MaxTolerance` query** | One number that says how much a shape has degraded. Cheap to maintain, and it is the thing to show a user when a boolean "worked". | [`BRep_Tool::MaxTolerance`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingData/TKBRep/BRep/BRep_Tool.hxx#L379) |
 | **An explicit per-operation tolerance parameter (the fuzzy value)** | Naming the tolerance at the call site instead of inheriting a global is right, even though the tracker shows fuzzy rarely rescues a failure. Take the *interface*, not the expectation. | [`BOPAlgo_Options::SetFuzzyValue`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.cxx#L105-L108) |
 | **Non-destructive as the *default*, not an option** | OCCT has the right mechanism (`SetNonDestructive`) and the wrong default. Measured: a fuse raised its inputs' tolerance by 3300×. Our operations never mutate their arguments. | [boolean_operations.md#L2808-L2816](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/dox/specification/boolean_operations/boolean_operations.md#L2808-L2816), [Probe B](../../../spikes/boolean-torture/results/occt.md) |
-| **Categorised validity, not a boolean** | 38 named statuses (`BRepCheck_InvalidCurveOnSurface`, `BRepCheck_SelfIntersectingWire`, `BRepCheck_NotClosed`, …). A validity check that returns `false` is nearly useless; one that returns *which* invariant broke is a debugging tool. | [`BRepCheck_Status.hxx#L20-L58`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Status.hxx#L20-L58) |
+| **Categorised validity, not a boolean** | 37 named statuses, `BRepCheck_NoError` through `BRepCheck_CheckFail` (`BRepCheck_InvalidCurveOnSurface`, `BRepCheck_SelfIntersectingWire`, `BRepCheck_NotClosed`, …). A validity check that returns `false` is nearly useless; one that returns *which* invariant broke is a debugging tool. | [`BRepCheck_Status.hxx#L22-L58`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Status.hxx#L22-L58) |
 | **Stated argument preconditions, checked at the boundary** | "Valid, non-self-interfered, C1 or better" is a contract. Our boolean states its preconditions and *rejects* violating input rather than producing something. | [boolean_operations.md#L405-L426](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/dox/specification/boolean_operations/boolean_operations.md#L405-L426) |
 | **The interference taxonomy** (V/V, V/E, V/F, E/E, E/F, F/F + the four solid cases) | A complete enumeration of what two B-rep entities can do to each other. Any B-rep boolean has to handle exactly these ten, and having them named is half the design. | [boolean_operations.md#L139-L276](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/dox/specification/boolean_operations/boolean_operations.md#L139-L276) |
 | **Per-operation history as generated / modified / removed** | The right *shape* for an operation's output mapping — three relations, defined only for vertex, edge, face, solid. Feed it to a stable-handle layer instead of to a name-matching layer (P-04, R-13). | [`BRepTools_History.hxx#L27-L41`](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/src/ModelingData/TKBRep/BRepTools/BRepTools_History.hxx#L27-L41) |
 | **Writing down the limitations** | The single most valuable thing in the whole codebase is the chapter that admits what does not work. Our kernel's spec gets the same chapter. | [boolean_operations.md#L2443-L2470](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/dox/specification/boolean_operations/boolean_operations.md#L2443-L2470) |
-| **Threading as an opt-in flag with a measured threshold** | The measured 9.8× / −8% split says the flag is right and a blanket default is wrong. Parallelise on measured per-item work, not on item count. | [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md) |
+| **Threading as an opt-in flag with a measured threshold** | The measured 9.5× / +8% split says the flag is right and a blanket default is wrong. Parallelise on measured per-item work, not on item count. | [`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md) |
 
 ### Avoid — each failure class mapped to the design choice behind it
 
@@ -565,27 +630,31 @@ below is an idea to reimplement, with the citation that justifies it.
 | Geometry below tolerance vanishes silently, and the validity check cannot see it | Topology decided by distance-vs-tolerance comparison; validity itself defined in terms of the same tolerances | `sliver` (measured); IfcOpenShell [#7815](https://github.com/IfcOpenShell/IfcOpenShell/issues/7815) | Exact predicates decide topology; constructed points are rounded but never decide (spec §5). A predicate cannot "not see" a slab. **P-01** |
 | Boolean succeeds and the result is metrically wrong | Tolerance *is* the resolution mechanism: interferences are resolved by growing tolerance spheres until they enclose the discrepancy | Probe A: +3.33e-6 m³ per glued 5e-6 gap, linear over 8 steps (measured); spec's `Tol(Vi)=Max(Tol(Vi), D+Tol(Ej))` | Tolerances explicit per operation and per entity, and **reported** — a growth is a returned fact, not a silent field update (spec §5). **P-02** |
 | An operation degrades its own inputs | `SetNonDestructive` defaults to off | Probe B: 1.525e-7 → 5.001e-4 on the inputs (measured) | Operations are pure with respect to their arguments. Non-destructive is not an option. **P-02** |
-| Healing introduces new defects | Healing is defined as widening tolerance until the contradiction disappears, with no invariant that it may not create a new one | OCCT [#1193](https://github.com/Open-Cascade-SAS/OCCT/issues/1193), [#344](https://github.com/Open-Cascade-SAS/OCCT/issues/344); shape_healing.md L132-L144 | Healing is an explicit, named operation with a validity check before and after; a heal that lowers validity is rejected (spec §4, §12). **P-02** |
-| Curved-surface booleans fail where planar ones succeed | Surface–surface intersection by marching/approximation over 92 + 61 files of special cases; the spec says a wrong section makes a correct result impossible | OCCT [#724](https://github.com/Open-Cascade-SAS/OCCT/issues/724), [#485](https://github.com/Open-Cascade-SAS/OCCT/issues/485), [#344](https://github.com/Open-Cascade-SAS/OCCT/issues/344), [#275](https://github.com/Open-Cascade-SAS/OCCT/issues/275), [#303](https://github.com/Open-Cascade-SAS/OCCT/issues/303); FreeCAD [#25169](https://github.com/FreeCAD/FreeCAD/issues/25169), [#24115](https://github.com/FreeCAD/FreeCAD/issues/24115) | Planar B-rep booleans first (M5), curved only at M8 after measurement; the mesh path stays available as a caller-chosen fallback (spec §9). **P-12** |
+| Healing introduces new defects | Healing is defined as widening tolerance until the contradiction disappears, with no invariant that it may not create a new one | OCCT [#1193](https://github.com/Open-Cascade-SAS/OCCT/issues/1193) — `ShapeUpgrade_UnifySameDomain` introducing self-intersections into a shape that had passed `bopargcheck`; [shape_healing.md#L132-L144](https://github.com/Open-Cascade-SAS/OCCT/blob/b8f597c677811d1f9f4d8a97f5ae2825c0353a42/dox/user_guides/shape_healing/shape_healing.md#L132-L144) for the mechanism. (#344's `ShapeFix` remark is about a different, scaled model and is not counted here — see §Weaknesses) | Healing is an explicit, named operation with a validity check before and after; a heal that lowers validity is rejected (spec §4, §12). **P-02** |
+| Curved-surface booleans fail where planar ones succeed | Surface–surface intersection by marching/approximation over 92 + 61 files of special cases; the spec says a wrong section makes a correct result impossible | OCCT [#724](https://github.com/Open-Cascade-SAS/OCCT/issues/724), [#485](https://github.com/Open-Cascade-SAS/OCCT/issues/485), [#344](https://github.com/Open-Cascade-SAS/OCCT/issues/344), [#275](https://github.com/Open-Cascade-SAS/OCCT/issues/275), [#303](https://github.com/Open-Cascade-SAS/OCCT/issues/303), [#1041](https://github.com/Open-Cascade-SAS/OCCT/issues/1041); FreeCAD [#25169](https://github.com/FreeCAD/FreeCAD/issues/25169), [#24115](https://github.com/FreeCAD/FreeCAD/issues/24115) | Planar B-rep booleans first (M5), curved only at M8 after measurement; the mesh path stays available as a caller-chosen fallback (spec §9). **P-12** |
 | Loose tolerance from an exchange round trip crashes or breaks a later boolean | Tolerances are inherited from whatever produced the shape, with no re-derivation | OCCT [#1456](https://github.com/Open-Cascade-SAS/OCCT/issues/1456) (a ~1e-3 operand tolerance "as is common after a round trip") | Imported geometry's tolerance is set explicitly at the import boundary and recorded as provenance, never silently inherited (spec §5). **P-02** |
-| One boolean consumes >10 GB, or runs for 619 s with no way to cancel | Unbounded intermediate structures; no cooperative cancellation inside the intersection loop | OCCT [#724](https://github.com/Open-Cascade-SAS/OCCT/issues/724), [#800](https://github.com/Open-Cascade-SAS/OCCT/issues/800), [#1385](https://github.com/Open-Cascade-SAS/OCCT/issues/1385) | Every long kernel operation takes a cancellation token and a budget, checked in the inner loop (spec §6, §8). |
-| Tessellation quality is a per-shape property, so one quality serves everything | `Poly_Triangulation` is cached *on the face*; a second quality overwrites the first | `BRepMesh` caches on the face (source); measured: re-meshing a meshed shape is a no-op unless rebuilt | Tessellation is a conversion producing a value, not a mutation of the source; several results per object are allowed (spec §4). **P-11** — but note the measurement below tempers this. |
+| One boolean consumes >10 GB, or runs for 619 s with no way to cancel | Unbounded intermediate structures; no cooperative cancellation inside the intersection loop | OCCT [#724](https://github.com/Open-Cascade-SAS/OCCT/issues/724), [#800](https://github.com/Open-Cascade-SAS/OCCT/issues/800), [#1385](https://github.com/Open-Cascade-SAS/OCCT/issues/1385) | Partly answered: work is per-object over independent handles (spec §3, §6) and operations return a result value rather than aborting (spec §12), so one runaway operation cannot take the model with it. **The spec does not yet define a cancellation token, a progress report or a resource budget** — that gap is the point of the row. **[P-15](problems.md)** |
+| Tessellation quality is a per-shape property, so one quality serves everything | `Poly_Triangulation` is cached *on the face*, so a face holds exactly one | measured (re-meshing probe): re-meshing the same sphere at a 100× finer deflection **replaces** the cache (306 → 10,108 triangles) at full cost, and asking for the coarse deflection again is silently ignored (0.2 ms, mesh unchanged) — so a shape cannot hold two qualities and cannot be coarsened without being rebuilt | Tessellation is a conversion producing a value, not a mutation of the source; several results per object are allowed (spec §4). **P-11** — but note the measurement above tempers the *cost* half of that row. |
 
 ### Corrections this note makes to `problems.md`
 
-Two rows were hypotheses that the evidence partly contradicts, and saying so is the point of the
-file:
+Two rows were hypotheses that the evidence partly contradicts, and one failure class had no row at
+all. Saying so is the point of the file:
 
 - **P-08 ("single-threaded evaluation … seen in OCCT (partially)")** is **not shown** for OCCT.
-  Parallelism is opt-in and off by default, but it exists, it works (9.8× measured), and no
+  Parallelism is opt-in and off by default, but it exists, it works (9.5× measured), and no
   threading defect or documented thread-safety bound was found. The real finding is different and
   more useful: *a parallel flag applied without regard to per-item work makes things slower*
-  (−8% measured). The row should be restated in those terms rather than kept as "OCCT is
-  single-threaded".
+  (+8% measured on 10k planar boxes). The row should be restated in those terms rather than kept
+  as "OCCT is single-threaded".
 - **P-11 ("tessellation quality vs. speed")** is **partly shown**. The architectural half is real —
-  one triangulation is cached per face, so a second quality displaces the first. The *cost* half is
-  not: on planar geometry, four decades of deflection changed the time by 9% and the triangle count
-  not at all. The tension P-11 describes is a curved-geometry problem, not a BIM-geometry problem.
+  one triangulation is cached per face, a finer request replaces it and a coarser one is ignored.
+  The *cost* half is not: on planar geometry, four decades of deflection changed the time by 14%
+  and the triangle count not at all. The tension P-11 describes is a curved-geometry problem, not a
+  BIM-geometry problem.
+- **P-15 is new.** "A single operation consumes unbounded memory or time with no way to cancel it"
+  had no row, yet three surveyed tickets describe it and the Avoid table needed a target. It is
+  added with the honest note that our spec answers only half of it today.
 
 ## Sources
 
@@ -604,10 +673,11 @@ pre-migration tickets are reachable only through their migrated GitHub issues.
 
 Downstream, labelled secondary throughout:
 <https://github.com/IfcOpenShell/IfcOpenShell/issues>, <https://github.com/FreeCAD/FreeCAD/issues>,
-and IfcOpenShell's fuzzy retry ladder in
-[`src/ifcgeom/kernels/opencascade/boolean_utils.cpp`](https://github.com/IfcOpenShell/IfcOpenShell/blob/master/src/ifcgeom/kernels/opencascade/boolean_utils.cpp)
-(linked at `master`, not a pinned commit — it is cited for the existence of the strategy, not for
-a line number).
+and IfcOpenShell's fuzzy retry ladder and first-operand fallback in
+[`src/ifcgeom/kernels/opencascade/boolean_utils.cpp`](https://github.com/IfcOpenShell/IfcOpenShell/blob/e1be433207bee6f539b8f295dca561b60b00379a/src/ifcgeom/kernels/opencascade/boolean_utils.cpp),
+pinned at commit `e1be433207bee6f539b8f295dca561b60b00379a` on branch `v0.9.0` (the repository's
+default branch; `master` is stale since 2024, which is why an earlier draft's `master` link pointed
+at different code). Line numbers cited inline are at that commit.
 
 Measurements — the reproducible record, not a summary:
 

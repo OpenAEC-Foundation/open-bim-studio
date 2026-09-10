@@ -36,6 +36,10 @@ result back by −offset, and reports the worst nearest-neighbour vertex distanc
 difference. Matching is nearest-neighbour rather than by index, because a kernel is free to emit
 vertices in any order.
 
+Operands are rebuilt for every repeat at both locations: `BOPAlgo` mutates its arguments by default,
+so reusing one pair would compare a near result from pristine operands against a far result from
+operands a dozen booleans old.
+
 ## Rules
 
 Spike code is throwaway (see [`../README.md`](../README.md)).

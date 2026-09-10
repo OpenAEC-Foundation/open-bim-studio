@@ -116,13 +116,26 @@ def main() -> int:
             rows.append(f"| `{case.name}` | - | construction failed | - | - | - | - |")
             continue
 
+        # Fresh operands for every repeat, at both locations. BOPAlgo is destructive by
+        # default, so reusing one pair across two settings x two operations x N repeats
+        # would compare a near result built from pristine operands against a far result
+        # built from operands a dozen booleans old. `build_solid` is deterministic, so
+        # each rebuild is the same shape.
+        def fresh_near(c=case):
+            return (build_solid(c.a.vertices, c.a.faces).shape,
+                    build_solid(c.b.vertices, c.b.faces).shape)
+
+        def fresh_far(c=case):
+            return (build_solid(precision_set.offset(c.a.vertices, delta), c.a.faces).shape,
+                    build_solid(precision_set.offset(c.b.vertices, delta), c.b.faces).shape)
+
         for label, fuzz in SETTINGS:
             for kind, expected in (
                 ("fuse", case.expected_volume_union),
                 ("common", case.expected_volume_intersection),
             ):
-                n = boolean(kind, near_a.shape, near_b.shape, fuzz, repeats=args.repeats)
-                f = boolean(kind, far_a.shape, far_b.shape, fuzz, repeats=args.repeats)
+                n = boolean(kind, None, None, fuzz, repeats=args.repeats, rebuild=fresh_near)
+                f = boolean(kind, None, None, fuzz, repeats=args.repeats, rebuild=fresh_far)
                 if not (n.ok and f.ok):
                     rows.append(
                         f"| `{case.name}` | {label} | {kind} | **not done** | - | - | - |"
@@ -193,30 +206,6 @@ def main() -> int:
         fh.write("\n".join(text))
     print(f"wrote {out}")
     return 0
-
-
-def _vertices(kind, a, b, fuzz, repeats):
-    """Re-run one boolean purely to get at its result shape's vertices."""
-    r = boolean(kind, a.shape, b.shape, fuzz, repeats=1)
-    if not r.ok:
-        return []
-    # `boolean` returns metrics, not the shape; rebuild the operation here.
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Fuse
-    from OCP.collections import List_TopoDS_Shape
-
-    op = {"fuse": BRepAlgoAPI_Fuse, "common": BRepAlgoAPI_Common}[kind]()
-    la, lb = List_TopoDS_Shape(), List_TopoDS_Shape()
-    la.Append(a.shape)
-    lb.Append(b.shape)
-    op.SetArguments(la)
-    op.SetTools(lb)
-    op.SetRunParallel(False)
-    if fuzz is not None:
-        op.SetFuzzyValue(fuzz)
-    op.Build()
-    if not op.IsDone() or op.Shape().IsNull():
-        return []
-    return vertices_of(op.Shape())
 
 
 if __name__ == "__main__":

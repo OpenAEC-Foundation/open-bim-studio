@@ -52,36 +52,36 @@ union / intersection.
 
 | Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
 |---|---|---|---|---|---|---|---|
-| `disjoint` | default | yes | 2 | 0 | 0 | 1.16 / 0.75 | tol≤1e-07 |
-| `disjoint` | fuzzy=1e-5 | yes | 2 | 0 | 0 | 0.95 / 0.59 | tol≤1e-07 |
-| `disjoint` | fuzzy=1e-3 | yes | 2 | 0 | 0 | 0.68 / 0.37 | tol≤1e-07 |
-| `overlap_half` | default | yes | 1.5 | 0.5 | 6.66e-16 | 4.28 / 3.80 | tol≤1e-07 |
-| `overlap_half` | fuzzy=1e-5 | yes | 1.5 | 0.5 | 6.66e-16 | 4.08 / 3.73 | tol≤1e-07 |
-| `overlap_half` | fuzzy=1e-3 | yes | 1.5 | 0.5 | 6.66e-16 | 4.24 / 3.86 | tol≤1e-07 |
-| `coplanar_faces` | default | yes | 2 | 0 | 4.44e-16 | 1.54 / 1.05 | tol≤1e-07 |
-| `coplanar_faces` | fuzzy=1e-5 | yes | 2 | 0 | 4.44e-16 | 1.54 / 1.07 | tol≤1e-07 |
-| `coplanar_faces` | fuzzy=1e-3 | yes | 2 | 0 | 4.44e-16 | 1.48 / 1.07 | tol≤1e-07 |
-| `shared_edge` | default | yes | 2 | 0 | 2.22e-16 | 1.59 / 1.08 | tol≤1e-07 |
-| `shared_edge` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.53 / 1.15 | tol≤1e-07 |
-| `shared_edge` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.50 / 1.04 | tol≤1e-07 |
-| `touching_vertex` | default | yes | 2 | 0 | 2.22e-16 | 1.16 / 0.74 | tol≤1e-07 |
-| `touching_vertex` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.13 / 0.73 | tol≤1e-07 |
-| `touching_vertex` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.14 / 0.70 | tol≤1e-07 |
-| `identical` | default | yes | 1 | 1 | 0 | 2.35 / 2.16 | tol≤1e-07 |
-| `identical` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.29 / 2.13 | tol≤1e-07 |
-| `identical` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.28 / 2.16 | tol≤1e-07 |
-| `contained` | default | yes | 1 | 0.125 | 0 | 1.43 / 1.23 | tol≤1e-07 |
-| `contained` | fuzzy=1e-5 | yes | 1 | 0.125 | 0 | 1.36 / 1.21 | tol≤1e-07 |
-| `contained` | fuzzy=1e-3 | yes | 1 | 0.125 | 0 | 1.33 / 1.19 | tol≤1e-07 |
-| `sliver` | default | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.29 / 2.66 | tol≤1.76e-07 |
-| `sliver` | fuzzy=1e-5 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.11 / 2.67 | tol≤5.1e-06 |
-| `sliver` | fuzzy=1e-3 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.02 / 2.78 | tol≤0.0005 |
-| `near_degenerate_triangle` | default | yes | 1 | 1 | 2.22e-16 | 2.58 / 2.33 | tol≤1e-07 |
-| `near_degenerate_triangle` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.31 / 2.20 | tol≤1.02e-06 |
-| `near_degenerate_triangle` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.52 / 2.38 | tol≤1.02e-06 |
-| `wall_with_openings` | default | yes | 12.6 | 5.4 | 1.42e-14 | 52.57 / 48.17 | tol≤1.5e-07 |
-| `wall_with_openings` | fuzzy=1e-5 | yes | 12.6 | 5.4 | 1.42e-14 | 52.28 / 48.75 | tol≤5.1e-06 |
-| `wall_with_openings` | fuzzy=1e-3 | yes | 12.6 | 5.4 | 1.42e-14 | 52.79 / 49.10 | tol≤0.0005 |
+| `disjoint` | default | yes | 2 | 0 | 0 | 0.63 / 0.46 | tol≤1e-07 |
+| `disjoint` | fuzzy=1e-5 | yes | 2 | 0 | 0 | 0.60 / 0.42 | tol≤1e-07 |
+| `disjoint` | fuzzy=1e-3 | yes | 2 | 0 | 0 | 0.60 / 0.43 | tol≤1e-07 |
+| `overlap_half` | default | yes | 1.5 | 0.5 | 6.66e-16 | 4.39 / 3.80 | tol≤1e-07 |
+| `overlap_half` | fuzzy=1e-5 | yes | 1.5 | 0.5 | 6.66e-16 | 4.53 / 3.81 | tol≤1e-07 |
+| `overlap_half` | fuzzy=1e-3 | yes | 1.5 | 0.5 | 6.66e-16 | 4.21 / 3.81 | tol≤1e-07 |
+| `coplanar_faces` | default | yes | 2 | 0 | 4.44e-16 | 1.62 / 1.20 | tol≤1e-07 |
+| `coplanar_faces` | fuzzy=1e-5 | yes | 2 | 0 | 4.44e-16 | 1.71 / 1.19 | tol≤1e-07 |
+| `coplanar_faces` | fuzzy=1e-3 | yes | 2 | 0 | 4.44e-16 | 1.57 / 1.18 | tol≤1e-07 |
+| `shared_edge` | default | yes | 2 | 0 | 2.22e-16 | 1.58 / 1.14 | tol≤1e-07 |
+| `shared_edge` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.51 / 1.06 | tol≤1e-07 |
+| `shared_edge` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.51 / 1.14 | tol≤1e-07 |
+| `touching_vertex` | default | yes | 2 | 0 | 2.22e-16 | 1.22 / 0.74 | tol≤1e-07 |
+| `touching_vertex` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.31 / 0.78 | tol≤1e-07 |
+| `touching_vertex` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.18 / 0.77 | tol≤1e-07 |
+| `identical` | default | yes | 1 | 1 | 0 | 2.35 / 2.13 | tol≤1e-07 |
+| `identical` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.26 / 2.22 | tol≤1e-07 |
+| `identical` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.37 / 2.24 | tol≤1e-07 |
+| `contained` | default | yes | 1 | 0.125 | 0 | 1.40 / 1.34 | tol≤1e-07 |
+| `contained` | fuzzy=1e-5 | yes | 1 | 0.125 | 0 | 1.37 / 1.28 | tol≤1e-07 |
+| `contained` | fuzzy=1e-3 | yes | 1 | 0.125 | 0 | 1.36 / 1.21 | tol≤1e-07 |
+| `sliver` | default | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.24 / 2.65 | tol≤1.76e-07 |
+| `sliver` | fuzzy=1e-5 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.05 / 2.70 | tol≤5.1e-06 |
+| `sliver` | fuzzy=1e-3 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.31 / 2.62 | tol≤0.0005 |
+| `near_degenerate_triangle` | default | yes | 1 | 1 | 2.22e-16 | 2.62 / 2.42 | tol≤1e-07 |
+| `near_degenerate_triangle` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.55 / 2.32 | tol≤1.02e-06 |
+| `near_degenerate_triangle` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.49 / 2.52 | tol≤1.02e-06 |
+| `wall_with_openings` | default | yes | 12.6 | 5.4 | 1.42e-14 | 53.97 / 49.24 | tol≤1.5e-07 |
+| `wall_with_openings` | fuzzy=1e-5 | yes | 12.6 | 5.4 | 1.42e-14 | 54.47 / 48.72 | tol≤5.1e-06 |
+| `wall_with_openings` | fuzzy=1e-3 | yes | 12.6 | 5.4 | 1.42e-14 | 51.64 / 48.32 | tol≤0.0005 |
 
 **Summary:** 30 of 30 case×setting combinations produced results that
 `BRepCheck_Analyzer` reports valid for both the union and the intersection.
@@ -116,3 +116,35 @@ before and after one `BRepAlgoAPI_Fuse`.
 | `overlap_half` | fuzzy=1e-3 | 1e-07 | 1e-07 | 1e-07 |
 | `sliver` | default | 1.525e-07 | 1.525e-07 | 1.757e-07 |
 | `sliver` | fuzzy=1e-3 | 1.525e-07 | 0.0005001 | 0.0005001 |
+
+## Probe C — is a sewing tolerance below `Precision::Confusion()` honoured?
+
+`BRepBuilderAPI_Sewing::Init` clamps with `std::max(tolerance, Confusion())`. This probe
+sews the same operand at 1e-7, 1e-8, 1e-9 and 1e-12 and hashes the ASCII BREP written by
+`BRepTools::Write` (triangulation included), so *identical* here means byte-identical
+serialised output and not merely equal volume.
+
+| Operand | Requested sewing tolerance | SHA-256 of the BREP (first 16 hex) | Volume | vs. 1e-7 |
+|---|---|---|---|---|
+| `overlap_half` A (unit cube) | 1e-07 | `672b8c827e805dc8` | 1 | same as 1e-7 |
+| `overlap_half` A (unit cube) | 1e-08 | `672b8c827e805dc8` | 1 | same as 1e-7 |
+| `overlap_half` A (unit cube) | 1e-09 | `672b8c827e805dc8` | 1 | same as 1e-7 |
+| `overlap_half` A (unit cube) | 1e-12 | `672b8c827e805dc8` | 1 | same as 1e-7 |
+| `sliver` B (1e-7 m slab) | 1e-07 | `96de201c882ab1ea` | 3.33333333343e-08 | same as 1e-7 |
+| `sliver` B (1e-7 m slab) | 1e-08 | `96de201c882ab1ea` | 3.33333333343e-08 | same as 1e-7 |
+| `sliver` B (1e-7 m slab) | 1e-09 | `96de201c882ab1ea` | 3.33333333343e-08 | same as 1e-7 |
+| `sliver` B (1e-7 m slab) | 1e-12 | `96de201c882ab1ea` | 3.33333333343e-08 | same as 1e-7 |
+
+## Probe D — how thin a solid will `BRepPrimAPI_MakeBox` build?
+
+`BRepPrim_GWedge::IsDegeneratedShape()` rejects any extent `<= Precision::Confusion()`.
+Measured by construction; the *exception type* is reported because "throws" and "returns
+an invalid shape" are different things for a caller to handle.
+
+| Requested thickness (m) | Built? | Exception | Volume |
+|---|---|---|---|
+| 1e-06 | yes | - | 1e-06 |
+| 1.0001e-07 | yes | - | 1.0001e-07 |
+| 1e-07 | **no** | `Standard_DomainError` | - |
+| 9.9999e-08 | **no** | `Standard_DomainError` | - |
+| 1e-09 | **no** | `Standard_DomainError` | - |

@@ -118,6 +118,97 @@ def sphere_control(count: int, deflection: float) -> list[str]:
     return rows
 
 
+def remesh_probe(boxes, coarse: float = 1.0, fine: float = 0.001, count: int = 2000) -> list[str]:
+    """Is re-meshing an already-meshed shape a no-op, or does it replace the cache?
+
+    `Poly_Triangulation` is cached on the face, so a second tessellation of the same
+    shape cannot hold two qualities at once — it either does nothing or it overwrites.
+    Which of the two it is matters for the design claim, so it is measured rather than
+    asserted: a compound is meshed coarse, then meshed again fine *without* rebuilding,
+    and the triangulation object identity, the triangle count and the time are compared
+    against a freshly built compound meshed fine.
+    """
+    subset = boxes[:count]
+
+    def first_triangulation(shape):
+        exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        loc = TopLoc_Location()
+        if not exp.More():
+            return None
+        return BRep_Tool.Triangulation_s(TopoDS.Face(exp.Current()), loc)
+
+    rows = []
+    comp = build_compound(subset)
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(comp, coarse, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    tri_before = first_triangulation(comp)
+    n_before = tri_before.NbNodes() if tri_before is not None else 0
+    rows.append(
+        "| 1. mesh fresh compound at {:g} | {:.0f} | {} | {} | - |".format(
+            coarse, ms, f"{triangle_count(comp):,}", n_before)
+    )
+
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(comp, fine, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    tri_after = first_triangulation(comp)
+    n_after = tri_after.NbNodes() if tri_after is not None else 0
+    same = "yes" if (tri_before is not None and tri_after is not None
+                     and tri_before.get_type_name_s() == tri_after.get_type_name_s()
+                     and n_before == n_after) else "no"
+    rows.append(
+        "| 2. mesh the **same** shape again at {:g} | {:.0f} | {} | {} | first face's triangulation unchanged: {} |".format(
+            fine, ms, f"{triangle_count(comp):,}", n_after, same)
+    )
+
+    comp2 = build_compound(subset)
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(comp2, fine, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    tri_fresh = first_triangulation(comp2)
+    rows.append(
+        "| 3. mesh a **rebuilt** compound at {:g} | {:.0f} | {} | {} | - |".format(
+            fine, ms, f"{triangle_count(comp2):,}",
+            tri_fresh.NbNodes() if tri_fresh is not None else 0)
+    )
+
+    # The box rows cannot show whether the cached triangulation is *replaced*, because a
+    # planar face meshes to the same two triangles at every deflection. A sphere can: its
+    # node count is a direct function of the deflection, so if the second mesh replaces
+    # the cache the node count changes, and if it is skipped the node count stays.
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+
+    sph = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), 1.0).Shape()
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(sph, 0.1, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    n_coarse = first_triangulation(sph).NbNodes()
+    rows.append(
+        "| 4. one sphere, meshed at 0.1 | {:.1f} | {} | {} | - |".format(
+            ms, f"{triangle_count(sph):,}", n_coarse)
+    )
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(sph, 0.001, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    n_fine = first_triangulation(sph).NbNodes()
+    rows.append(
+        "| 5. the **same** sphere, meshed again at 0.001 | {:.1f} | {} | {} | cached triangulation {} |".format(
+            ms, f"{triangle_count(sph):,}", n_fine,
+            "**replaced**" if n_fine != n_coarse else "kept (second quality ignored)")
+    )
+    t0 = time.perf_counter()
+    BRepMesh_IncrementalMesh(sph, 0.1, False, 0.5, False)
+    ms = (time.perf_counter() - t0) * 1000.0
+    n_back = first_triangulation(sph).NbNodes()
+    rows.append(
+        "| 6. the same sphere, back to 0.1 | {:.1f} | {} | {} | {} |".format(
+            ms, f"{triangle_count(sph):,}", n_back,
+            "coarsened again" if n_back != n_fine else "**fine mesh kept — a coarser request is ignored**")
+    )
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--obj", default=os.path.join(_ROOT, "build", "scale_10k.obj"))
@@ -125,6 +216,8 @@ def main() -> int:
     ap.add_argument("--spheres", type=int, default=400,
                     help="how many spheres in the parallel-flag control")
     ap.add_argument("--sphere-deflection", type=float, default=5e-4)
+    ap.add_argument("--remesh-boxes", type=int, default=2000,
+                    help="how many boxes in the re-meshing probe")
     ap.add_argument("--parallel", action="store_true",
                     help="also time each deflection with BRepMesh_IncrementalMesh's parallel flag")
     args = ap.parse_args()
@@ -137,8 +230,11 @@ def main() -> int:
     for deflection in DEFLECTIONS:
         modes = [("single", False)] + ([("parallel", True)] if args.parallel else [])
         for label, parallel in modes:
-            # A fresh compound per run: BRepMesh caches its triangulation on the faces,
-            # so re-meshing the same shape would time a no-op.
+            # A fresh compound per run, so that every row times a tessellation from
+            # nothing. BRepMesh caches its triangulation on the faces, and the re-meshing
+            # probe below measures what a second mesh of an already-meshed shape actually
+            # costs -- do not assume it is either a no-op or a full re-mesh, the probe
+            # says which.
             t0 = time.perf_counter()
             comp = build_compound(boxes)
             build_ms = (time.perf_counter() - t0) * 1000.0
@@ -208,6 +304,20 @@ def main() -> int:
         "| Model | Mode | Done? | Mesh ms | Triangles |",
         "|---|---|---|---|---|",
     ] + control + [
+        "",
+        "## Probe — is re-meshing an already-meshed shape a no-op?",
+        "",
+        f"`BRepMesh` caches a `Poly_Triangulation` on each face, so one shape cannot hold two",
+        f"qualities at once. This probe uses the first {min(args.remesh_boxes, len(boxes)):,} boxes of the model: it meshes them",
+        "coarse, meshes the **same** shape again at a finer deflection, and compares against a",
+        "**rebuilt** compound meshed at the fine deflection. Rows 4–6 repeat the question on a single",
+        "sphere, because a planar face meshes to the same two triangles at every deflection and so",
+        "cannot show whether the cache was replaced. *Nodes* is the node count of the first face's",
+        "cached triangulation.",
+        "",
+        "| Step | Mesh ms | Triangles | Nodes (first face) | Note |",
+        "|---|---|---|---|---|",
+    ] + remesh_probe(boxes, count=args.remesh_boxes) + [
         "",
     ]
     out = os.path.abspath(args.out)

@@ -26,7 +26,14 @@ python spikes/tessellation/occt_driver.py --parallel
 from the repository root. It writes [`results/occt.md`](results/occt.md). `--parallel` adds a
 second row per deflection using `BRepMesh_IncrementalMesh`'s `isInParallel` flag, and the driver
 always runs a sphere control so that a null result from that flag can be told apart from a build
-with no working threading.
+with no working threading. It also runs a re-meshing probe (`--remesh-boxes N` sizes it), which
+answers whether a second tessellation of an already-meshed shape is skipped, is a full re-mesh, or
+replaces the cached triangulation — the fact P-11's architectural half rests on.
+
+**Construction method note.** Unlike the boolean spikes, this driver builds each box as a native
+`BRepPrimAPI_MakeBox` rather than sewing it from twelve triangles, because otherwise construction
+rather than tessellation would dominate the wall clock. The two sets of numbers are therefore not
+comparable as construction measurements.
 
 ## Rules
 
