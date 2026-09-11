@@ -18,7 +18,10 @@ three cases reused verbatim from the boolean torture set, each carrying
 occt_driver.py         the OCCT driver (reuses the helpers in ../boolean-torture/occt_common.py,
                        so the construction method is identical between the two spikes)
 blender_driver.py      the Blender driver (runs inside Blender's own Python)
+manifold_driver.py     the standalone Manifold driver (Mesh64 and Mesh, i.e. f64 and f32 ingest)
+cgal_driver.py         the CGAL driver (Epick, f64 and f32-rounded ingest)
 results/<candidate>.md raw results, one file per candidate
+results/run-<date>.log stdout of one session in which all four drivers ran
 FINDINGS.md            assembled across candidates once they have all run
 ```
 
@@ -60,6 +63,26 @@ boolean runs, so this driver reports three things rather than one:
 3. the same far case with the 500 km carried by the **object transform** instead of the vertex
    data, which measures whether a local frame rescues the result — the mitigation ADR-0006
    proposes, measured on the candidate instead of assumed.
+
+## Running the Manifold and CGAL drivers
+
+```bash
+python spikes/precision-set/manifold_driver.py
+python spikes/precision-set/cgal_driver.py
+```
+
+from the repository root, with `manifold3d==3.5.3` and `cgal==6.0.1.post202410241521` installed.
+They write [`results/manifold.md`](results/manifold.md) and [`results/cgal.md`](results/cgal.md).
+Both run every case on two precision paths — `Mesh64` against `Mesh` for Manifold, f64 input
+against f32-rounded input for CGAL — so the f64 and f32 answers come from one library, one
+algorithm and one machine, with only the ingest precision changed.
+
+Both drivers report the far volume on **back-translated** vertices, and both carry a probe that
+measures why: `reference.signed_volume` sums over raw coordinates, and at 5e5 m the sum loses
+about 1e-4 m³ to cancellation on the twelve-opening wall with no library involved at all.
+Reporting the raw figure would have charged that loss to the candidate. The CGAL driver adds a
+mirror probe — moving the origin result *out* to the far frame instead of bringing the far result
+home — so that the back-translation itself is shown not to be doing the work.
 
 ## Rules
 

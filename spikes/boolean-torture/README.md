@@ -18,7 +18,10 @@ and are the same ten pairs for every candidate. A driver may not add, drop or ad
 occt_common.py        shared OCCT helpers (mesh -> solid, boolean, volume, tolerance)
 occt_driver.py        the OCCT driver
 blender_driver.py     the Blender driver (runs inside Blender's own Python)
+manifold_driver.py    the standalone Manifold driver
+cgal_driver.py        the CGAL driver (Epick corefinement)
 results/<candidate>.md raw results, one file per candidate, written by that candidate's driver
+results/run-<date>.log stdout of one session in which all four drivers ran
 FINDINGS.md           assembled across candidates once they have all run
 ```
 
@@ -76,6 +79,54 @@ The construction method is part of the measurement here too, and differs deliber
 OCCT driver where the representations differ: `wall_with_openings` B is built as **one mesh object
 with twelve disconnected shells** — the natural reading of the benchmark for a mesh kernel —
 where the OCCT driver had to sew it into a compound of twelve solids.
+
+## Running the Manifold driver
+
+```bash
+pip install manifold3d==3.5.3
+python spikes/boolean-torture/manifold_driver.py
+```
+
+from the repository root. It writes [`results/manifold.md`](results/manifold.md). `--repeats N` and
+`--determinism-runs N` change the timing and Probe D loop counts. Every case runs on four settings
+— `Mesh64` (f64) at the default tolerance, at 1e-9 and at 1e-6, and `Mesh` (f32) at the default —
+because the tolerance and the input precision are the two axes this library actually exposes.
+Operands are rebuilt for every setting and every repeat: Manifold does not mutate its inputs, but
+the rebuild re-runs the `Mesh -> Manifold` constructor, which is where the epsilon, the tolerance
+and the float32 rounding are decided.
+
+| Probe | Question |
+|---|---|
+| A | What does the twelve-shell cutting tool become, including `DIFFERENCE`? |
+| B | At what tolerance does the 1e-7 m slab silently disappear? |
+| C | What do the library and its `Merge` helper do with the T-junction operand? |
+| D | Is the output identical across repeated runs of identical input, on a TBB build? |
+| E | Does `ExecutionContext` actually cancel a running boolean? |
+
+## Running the CGAL driver
+
+```bash
+pip install cgal==6.0.1.post202410241521
+python spikes/boolean-torture/cgal_driver.py
+```
+
+from the repository root. It writes [`results/cgal.md`](results/cgal.md). CGAL exposes no tolerance
+parameter, so the two settings are ingest precisions — the reference coordinates verbatim, and the
+same coordinates rounded through the nearest float32 and back. `orient_polygon_soup` is deliberately
+**not** called: whether the reference set's operands are already consistently oriented is part of
+what is measured. Both operands are rebuilt inside every repeat because PMP corefinement modifies
+them in place (Probe F).
+
+| Probe | Question |
+|---|---|
+| A | What does the twelve-shell cutting tool become, including `DIFFERENCE`? |
+| B | Does a 1e-7 m feature survive ingest and the boolean with no tolerance to raise? |
+| C | What happens to the T-junction operand, and does `stitch_borders` repair it? |
+| D | The three contact cases side by side — which one is refused, and why? |
+| E | Is the output identical across runs? Distinct geometries vs. distinct emission orders |
+| F | How much does corefinement change its own operands? |
+| G | Which kernel is actually bound — Epick or Epeck? |
+| H | Do the exact predicates decide cases plain doubles get wrong? |
 
 ## Rules
 

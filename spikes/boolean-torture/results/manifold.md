@@ -5,7 +5,7 @@ Produced by [`../manifold_driver.py`](../manifold_driver.py). This file is raw d
 [`../../../docs/research/kernels/manifold.md`](../../../docs/research/kernels/manifold.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 
 ## Environment
 
@@ -92,46 +92,46 @@ the deferred CSG node to evaluate.
 
 | Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
 |---|---|---|---|---|---|---|---|
-| `disjoint` | f64, default tolerance | yes | 2 | 0 | 0 | 0.011 / 0.002 | tol(A)=1e-12, tol(B)=5e-12 |
-| `disjoint` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.023 / 0.004 | tol(A)=1e-09, tol(B)=1e-09 |
-| `disjoint` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.012 / 0.002 | tol(A)=1e-06, tol(B)=1e-06 |
-| `disjoint` | f32, default tolerance | yes | 2 | 0 | 0 | 0.010 / 0.002 | tol(A)=1.192e-07, tol(B)=5.96e-07 |
-| `overlap_half` | f64, default tolerance | yes | 1.5 | 0.5 | 0 | 0.103 / 0.075 | tol(A)=1e-12, tol(B)=1.5e-12 |
-| `overlap_half` | f64, tolerance=1e-9 | yes | 1.5 | 0.5 | 0 | 0.102 / 0.070 | tol(A)=1e-09, tol(B)=1e-09 |
-| `overlap_half` | f64, tolerance=1e-6 | yes | 1.5 | 0.5 | 0 | 0.099 / 0.077 | tol(A)=1e-06, tol(B)=1e-06 |
-| `overlap_half` | f32, default tolerance | yes | 1.5 | 0.5 | 0 | 0.086 / 0.058 | tol(A)=1.192e-07, tol(B)=1.788e-07 |
-| `coplanar_faces` | f64, default tolerance | yes | 2 | 0 | 0 | 0.080 / 0.041 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-12, tol(B)=2e-12 |
-| `coplanar_faces` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.062 / 0.040 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-09, tol(B)=1e-09 |
-| `coplanar_faces` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.066 / 0.039 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-06, tol(B)=1e-06 |
-| `coplanar_faces` | f32, default tolerance | yes | 2 | 0 | 0 | 0.062 / 0.036 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1.192e-07, tol(B)=2.384e-07 |
-| `shared_edge` | f64, default tolerance | yes | 2 | 0 | 0 | 0.086 / 0.049 | tol(A)=1e-12, tol(B)=2e-12 |
-| `shared_edge` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.082 / 0.046 | tol(A)=1e-09, tol(B)=1e-09 |
-| `shared_edge` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.075 / 0.043 | tol(A)=1e-06, tol(B)=1e-06 |
-| `shared_edge` | f32, default tolerance | yes | 2 | 0 | 0 | 0.071 / 0.050 | tol(A)=1.192e-07, tol(B)=2.384e-07 |
-| `touching_vertex` | f64, default tolerance | yes | 2 | 0 | 0 | 0.058 / 0.048 | tol(A)=1e-12, tol(B)=2e-12 |
-| `touching_vertex` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.066 / 0.048 | tol(A)=1e-09, tol(B)=1e-09 |
-| `touching_vertex` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.052 / 0.050 | tol(A)=1e-06, tol(B)=1e-06 |
-| `touching_vertex` | f32, default tolerance | yes | 2 | 0 | 0 | 0.091 / 0.078 | tol(A)=1.192e-07, tol(B)=2.384e-07 |
-| `identical` | f64, default tolerance | yes | 1 | 1 | 0 | 0.112 / 0.043 | tol(A)=1e-12, tol(B)=1e-12 |
-| `identical` | f64, tolerance=1e-9 | yes | 1 | 1 | 0 | 0.301 / 0.051 | tol(A)=1e-09, tol(B)=1e-09 |
-| `identical` | f64, tolerance=1e-6 | yes | 1 | 1 | 0 | 0.154 / 0.044 | tol(A)=1e-06, tol(B)=1e-06 |
-| `identical` | f32, default tolerance | yes | 1 | 1 | 0 | 0.144 / 0.043 | tol(A)=1.192e-07, tol(B)=1.192e-07 |
-| `contained` | f64, default tolerance | yes | 1 | 0.125 | 0 | 0.011 / 0.012 | tol(A)=1e-12, tol(B)=7.5e-13 |
-| `contained` | f64, tolerance=1e-9 | yes | 1 | 0.125 | 0 | 0.012 / 0.010 | tol(A)=1e-09, tol(B)=1e-09 |
-| `contained` | f64, tolerance=1e-6 | yes | 1 | 0.125 | 0 | 0.011 / 0.011 | tol(A)=1e-06, tol(B)=1e-06 |
-| `contained` | f32, default tolerance | yes | 1 | 0.125 | 0 | 0.012 / 0.011 | tol(A)=1.192e-07, tol(B)=8.941e-08 |
-| `sliver` | f64, default tolerance | yes | 1 | 9.99999999474e-08 | 4.44e-16 | 0.190 / 0.101 | tol(A)=1e-12, tol(B)=1e-12 |
-| `sliver` | f64, tolerance=1e-9 | yes | 1 | 9.99999999474e-08 | 4.44e-16 | 0.152 / 0.116 | tol(A)=1e-09, tol(B)=1e-09 |
-| `sliver` | f64, tolerance=1e-6 | ∪ ok; ∩: **no** — empty result | 1 | 0 | 0 | 0.003 / 0.002 | Δ∩=-1e-07; tol(A)=1e-06, tol(B)=1e-06 |
-| `sliver` | f32, default tolerance | yes | 1 | 1.19209289551e-07 | 0 | 0.129 / 0.095 | Δ∩=1.92e-08; tol(A)=1.192e-07, tol(B)=1.192e-07 |
-| `near_degenerate_triangle` | f64, default tolerance | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.002 / 0.002 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1e-12, tol(B)=0 |
+| `disjoint` | f64, default tolerance | yes | 2 | 0 | 0 | 0.015 / 0.003 | tol(A)=1e-12, tol(B)=5e-12 |
+| `disjoint` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.023 / 0.002 | tol(A)=1e-09, tol(B)=1e-09 |
+| `disjoint` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.013 / 0.002 | tol(A)=1e-06, tol(B)=1e-06 |
+| `disjoint` | f32, default tolerance | yes | 2 | 0 | 0 | 0.013 / 0.002 | tol(A)=1.192e-07, tol(B)=5.96e-07 |
+| `overlap_half` | f64, default tolerance | yes | 1.5 | 0.5 | 0 | 0.293 / 0.093 | tol(A)=1e-12, tol(B)=1.5e-12 |
+| `overlap_half` | f64, tolerance=1e-9 | yes | 1.5 | 0.5 | 0 | 0.171 / 0.125 | tol(A)=1e-09, tol(B)=1e-09 |
+| `overlap_half` | f64, tolerance=1e-6 | yes | 1.5 | 0.5 | 0 | 0.194 / 0.074 | tol(A)=1e-06, tol(B)=1e-06 |
+| `overlap_half` | f32, default tolerance | yes | 1.5 | 0.5 | 0 | 0.148 / 0.109 | tol(A)=1.192e-07, tol(B)=1.788e-07 |
+| `coplanar_faces` | f64, default tolerance | yes | 2 | 0 | 0 | 0.125 / 0.043 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-12, tol(B)=2e-12 |
+| `coplanar_faces` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.116 / 0.064 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-09, tol(B)=1e-09 |
+| `coplanar_faces` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.229 / 0.059 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1e-06, tol(B)=1e-06 |
+| `coplanar_faces` | f32, default tolerance | yes | 2 | 0 | 0 | 0.139 / 0.063 | ∩ is a non-empty zero-volume shell (4 tris); tol(A)=1.192e-07, tol(B)=2.384e-07 |
+| `shared_edge` | f64, default tolerance | yes | 2 | 0 | 0 | 0.113 / 0.090 | tol(A)=1e-12, tol(B)=2e-12 |
+| `shared_edge` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.169 / 0.073 | tol(A)=1e-09, tol(B)=1e-09 |
+| `shared_edge` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.114 / 0.072 | tol(A)=1e-06, tol(B)=1e-06 |
+| `shared_edge` | f32, default tolerance | yes | 2 | 0 | 0 | 0.122 / 0.086 | tol(A)=1.192e-07, tol(B)=2.384e-07 |
+| `touching_vertex` | f64, default tolerance | yes | 2 | 0 | 0 | 0.106 / 0.087 | tol(A)=1e-12, tol(B)=2e-12 |
+| `touching_vertex` | f64, tolerance=1e-9 | yes | 2 | 0 | 0 | 0.083 / 0.071 | tol(A)=1e-09, tol(B)=1e-09 |
+| `touching_vertex` | f64, tolerance=1e-6 | yes | 2 | 0 | 0 | 0.091 / 0.056 | tol(A)=1e-06, tol(B)=1e-06 |
+| `touching_vertex` | f32, default tolerance | yes | 2 | 0 | 0 | 0.069 / 0.065 | tol(A)=1.192e-07, tol(B)=2.384e-07 |
+| `identical` | f64, default tolerance | yes | 1 | 1 | 0 | 0.173 / 0.054 | tol(A)=1e-12, tol(B)=1e-12 |
+| `identical` | f64, tolerance=1e-9 | yes | 1 | 1 | 0 | 0.142 / 0.046 | tol(A)=1e-09, tol(B)=1e-09 |
+| `identical` | f64, tolerance=1e-6 | yes | 1 | 1 | 0 | 0.169 / 0.066 | tol(A)=1e-06, tol(B)=1e-06 |
+| `identical` | f32, default tolerance | yes | 1 | 1 | 0 | 0.157 / 0.053 | tol(A)=1.192e-07, tol(B)=1.192e-07 |
+| `contained` | f64, default tolerance | yes | 1 | 0.125 | 0 | 0.011 / 0.014 | tol(A)=1e-12, tol(B)=7.5e-13 |
+| `contained` | f64, tolerance=1e-9 | yes | 1 | 0.125 | 0 | 0.011 / 0.010 | tol(A)=1e-09, tol(B)=1e-09 |
+| `contained` | f64, tolerance=1e-6 | yes | 1 | 0.125 | 0 | 0.011 / 0.010 | tol(A)=1e-06, tol(B)=1e-06 |
+| `contained` | f32, default tolerance | yes | 1 | 0.125 | 0 | 0.012 / 0.014 | tol(A)=1.192e-07, tol(B)=8.941e-08 |
+| `sliver` | f64, default tolerance | yes | 1 | 9.99999999474e-08 | 4.44e-16 | 0.224 / 0.137 | tol(A)=1e-12, tol(B)=1e-12 |
+| `sliver` | f64, tolerance=1e-9 | yes | 1 | 9.99999999474e-08 | 4.44e-16 | 0.178 / 0.099 | tol(A)=1e-09, tol(B)=1e-09 |
+| `sliver` | f64, tolerance=1e-6 | ∪ ok; ∩: **no** — empty result | 1 | 0 | 0 | 0.004 / 0.002 | Δ∩=-1e-07; tol(A)=1e-06, tol(B)=1e-06 |
+| `sliver` | f32, default tolerance | yes | 1 | 1.19209289551e-07 | 0 | 0.186 / 0.137 | Δ∩=1.92e-08; tol(A)=1.192e-07, tol(B)=1.192e-07 |
+| `near_degenerate_triangle` | f64, default tolerance | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.003 / 0.003 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1e-12, tol(B)=0 |
 | `near_degenerate_triangle` | f64, tolerance=1e-9 | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.003 / 0.002 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1e-09, tol(B)=-1 |
-| `near_degenerate_triangle` | f64, tolerance=1e-6 | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.003 / 0.002 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1e-06, tol(B)=-1 |
+| `near_degenerate_triangle` | f64, tolerance=1e-6 | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.002 / 0.002 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1e-06, tol(B)=-1 |
 | `near_degenerate_triangle` | f32, default tolerance | ∪: **no** — status `NotManifold`; ∩: **no** — status `NotManifold` | 0 | 0 | 1 | 0.002 / 0.002 | Δ∪=-1; Δ∩=-1; operand B rejected: `NotManifold`; tol(A)=1.192e-07, tol(B)=0 |
-| `wall_with_openings` | f64, default tolerance | yes | 12.6 | 5.4 | 3.55e-14 | 0.837 / 0.588 | tol(A)=1e-11, tol(B)=9.9e-12 |
-| `wall_with_openings` | f64, tolerance=1e-9 | yes | 12.6 | 5.4 | 3.55e-14 | 0.949 / 0.564 | tol(A)=1e-09, tol(B)=1e-09 |
-| `wall_with_openings` | f64, tolerance=1e-6 | yes | 12.6 | 5.4 | 3.55e-14 | 0.820 / 0.517 | tol(A)=1e-06, tol(B)=1e-06 |
-| `wall_with_openings` | f32, default tolerance | yes | 12.6000000179 | 5.39999982566 | 2.49e-14 | 0.791 / 0.544 | Δ∪=1.79e-08; Δ∩=-1.74e-07; tol(A)=1.192e-06, tol(B)=1.18e-06 |
+| `wall_with_openings` | f64, default tolerance | yes | 12.6 | 5.4 | 3.55e-14 | 0.997 / 0.650 | tol(A)=1e-11, tol(B)=9.9e-12 |
+| `wall_with_openings` | f64, tolerance=1e-9 | yes | 12.6 | 5.4 | 3.55e-14 | 1.000 / 0.604 | tol(A)=1e-09, tol(B)=1e-09 |
+| `wall_with_openings` | f64, tolerance=1e-6 | yes | 12.6 | 5.4 | 3.55e-14 | 1.104 / 0.670 | tol(A)=1e-06, tol(B)=1e-06 |
+| `wall_with_openings` | f32, default tolerance | yes | 12.6000000179 | 5.39999982566 | 2.49e-14 | 0.990 / 0.556 | Δ∪=1.79e-08; Δ∩=-1.74e-07; tol(A)=1.192e-06, tol(B)=1.18e-06 |
 
 **Summary:** 35 of 40 case×setting combinations produced a result this
 driver's check accepts for both the union and the intersection.

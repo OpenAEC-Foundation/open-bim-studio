@@ -5,7 +5,7 @@ Produced by [`../cgal_driver.py`](../cgal_driver.py). Raw data for
 [`../../../docs/research/kernels/cgal.md`](../../../docs/research/kernels/cgal.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 **Offset:** `(500000.0, 500000.0, 0.0)` (500 km east, 500 km north — a plausible distance from a national
 projection's false origin to a project site).
 
@@ -90,18 +90,18 @@ Reporting the raw-coordinate figure here would have charged that to CGAL.
 
 | Case | Setting | Op | Valid near+far? | V near / far | ΔV | Vertex deviation | ms near / far |
 |---|---|---|---|---|---|---|---|
-| `overlap_half` | f64 input | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 24/24 v | 0.365 / 0.363 |
-| `overlap_half` | f64 input | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.404 / 0.360 |
-| `overlap_half` | f32-rounded input | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 24/24 v | 0.463 / 0.429 |
-| `overlap_half` | f32-rounded input | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.359 / 0.345 |
-| `coplanar_faces` | f64 input | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.098 / 0.092 |
-| `coplanar_faces` | f64 input | intersection | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 0.088 / 0.082 |
-| `coplanar_faces` | f32-rounded input | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.090 / 0.088 |
-| `coplanar_faces` | f32-rounded input | intersection | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 0.081 / 0.078 |
-| `wall_with_openings` | f64 input | union | yes | 12.6 / 12.5999999999 | -1.397e-10 (-1.10873e-11 rel) | **1.28585e-10 m** over 320/320 v | 7.865 / 6.727 |
-| `wall_with_openings` | f64 input | intersection | yes | 5.4 / 5.39999999979 | -2.09545e-10 (-3.88047e-11 rel) | **1.28585e-10 m** over 216/216 v | 7.461 / 6.263 |
-| `wall_with_openings` | f32-rounded input | union | yes | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.034821 m** over 320/320 v | 6.025 / 4.326 |
-| `wall_with_openings` | f32-rounded input | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.034821 m** over 216/216 v | 5.852 / 4.232 |
+| `overlap_half` | f64 input | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 24/24 v | 0.395 / 0.357 |
+| `overlap_half` | f64 input | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.367 / 0.367 |
+| `overlap_half` | f32-rounded input | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 24/24 v | 0.374 / 0.385 |
+| `overlap_half` | f32-rounded input | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.362 / 0.373 |
+| `coplanar_faces` | f64 input | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.106 / 0.110 |
+| `coplanar_faces` | f64 input | intersection | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 0.090 / 0.083 |
+| `coplanar_faces` | f32-rounded input | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.101 / 0.109 |
+| `coplanar_faces` | f32-rounded input | intersection | yes (empty, as expected) | 0 / 0 | 0 (nan rel) | **- m** over 0/0 v | 0.088 / 0.090 |
+| `wall_with_openings` | f64 input | union | yes | 12.6 / 12.5999999999 | -1.397e-10 (-1.10873e-11 rel) | **1.28585e-10 m** over 320/320 v | 8.663 / 7.701 |
+| `wall_with_openings` | f64 input | intersection | yes | 5.4 / 5.39999999979 | -2.09545e-10 (-3.88047e-11 rel) | **1.28585e-10 m** over 216/216 v | 8.337 / 7.594 |
+| `wall_with_openings` | f32-rounded input | union | yes | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.034821 m** over 320/320 v | 6.851 / 4.885 |
+| `wall_with_openings` | f32-rounded input | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.034821 m** over 216/216 v | 6.727 / 4.635 |
 
 **Worst vertex deviation over the whole set: 0.034821 m.** R-17's pass line is
 1e-6 m and its fail line is 1e-4 m.
@@ -155,8 +155,8 @@ therefore carries the same cancellation rather than avoiding it.
 
 | Case | Op | Near | Near, coords shifted | Far, raw | Far, back-translated | Far, `PMP::volume()` |
 |---|---|---|---|---|---|---|
-| `overlap_half` | union | 1.5 | 1.5 | 1.5 | 1.5 | 1.49999999992 |
+| `overlap_half` | union | 1.5 | 1.5 | 1.5 | 1.5 | 1.49999999991 |
 | `overlap_half` | intersection | 0.5 | 0.5 | 0.5 | 0.5 | 0.500000000007 |
-| `coplanar_faces` | union | 2 | 2 | 2 | 2 | 1.99999999999 |
-| `wall_with_openings` | union | 12.6 | 12.5997471293 | 12.5995943646 | 12.5999999999 | 12.6002807614 |
-| `wall_with_openings` | intersection | 5.4 | 5.40016343781 | 5.40009218897 | 5.39999999979 | 5.39990234401 |
+| `coplanar_faces` | union | 2 | 2 | 2 | 2 | 2 |
+| `wall_with_openings` | union | 12.6 | 12.5998451544 | 12.5999895013 | 12.5999999999 | 12.6002807617 |
+| `wall_with_openings` | intersection | 5.4 | 5.4002605346 | 5.40003036136 | 5.39999999979 | 5.39990234377 |

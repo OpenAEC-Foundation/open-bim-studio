@@ -5,7 +5,7 @@ Produced by [`../blender_driver.py`](../blender_driver.py). This file is raw dat
 [`../../../docs/research/kernels/blender.md`](../../../docs/research/kernels/blender.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 
 ## Environment
 
@@ -86,36 +86,36 @@ self-reported `execution_time`, which excludes the evaluated-mesh copy.
 
 | Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
 |---|---|---|---|---|---|---|---|
-| `disjoint` | Exact | yes | 2 | 0 | 0 | 0.47 / 0.37 (0.219 / 0.181) | - |
-| `disjoint` | Fast (float) | yes | 2 | 0 | 0 | 0.38 / 0.27 (0.133 / 0.0592) | threshold=1e-06 |
-| `disjoint` | Manifold | yes | 2 | 0 | 0 | 0.51 / 0.34 (0.324 / 0.112) | - |
-| `overlap_half` | Exact | yes | 1.5 | 0.5 | 0 | 2.87 / 2.78 (2.68 / 2.59) | - |
-| `overlap_half` | Fast (float) | ∪: **no** — 0 boundary edges, 24 non-manifold edges, 24 wire edges; ∩: **no** — 0 boundary edges, 25 non-manifold edges, 25 wire edges | 1 | 1 | 0 | 0.37 / 0.38 (0.197 / 0.188) | Δ∪=-0.5, Δ∩=0.5, threshold=1e-06 |
-| `overlap_half` | Manifold | yes | 1.5 | 0.5 | 0 | 0.66 / 0.61 (0.392 / 0.399) | - |
-| `coplanar_faces` | Exact | yes | 2 | 0 | 0 | 1.23 / 1.09 (1.04 / 0.924) | - |
-| `coplanar_faces` | Fast (float) | ∪: **no** — 0 boundary edges, 4 non-manifold edges, 4 wire edges; ∩ ok | 2 | 0 | 0 | 0.28 / 0.27 (0.0952 / 0.091) | threshold=1e-06 |
-| `coplanar_faces` | Manifold | yes | 2 | 0 | 0 | 0.46 / 0.29 (0.273 / 0.125) | - |
-| `shared_edge` | Exact | ∪: **no** — 1 non-manifold edges; ∩ ok | 2 | 0 | 0 | 1.31 / 1.28 (1.13 / 1.11) | - |
-| `shared_edge` | Fast (float) | yes | 2 | 0 | 0 | 0.26 / 0.24 (0.0788 / 0.0739) | threshold=1e-06 |
-| `shared_edge` | Manifold | yes | 2 | 0 | 0 | 0.45 / 0.33 (0.266 / 0.127) | - |
-| `touching_vertex` | Exact | yes | 1 | 0 | 1 | 1.19 / 1.42 (0.973 / 1.12) | Δ∪=-1 |
-| `touching_vertex` | Fast (float) | yes | 2 | 0 | 0 | 0.25 / 0.23 (0.0682 / 0.0603) | threshold=1e-06 |
-| `touching_vertex` | Manifold | yes | 2 | 0 | 0 | 0.53 / 0.38 (0.35 / 0.138) | - |
-| `identical` | Exact | yes | 1 | 1 | 0 | 2.50 / 2.47 (2.33 / 2.31) | - |
-| `identical` | Fast (float) | ∪: **no** — 8 boundary edges, 8 non-manifold edges; ∩: **no** — 8 boundary edges, 8 non-manifold edges | 0 | 2 | 0 | 0.29 / 0.29 (0.108 / 0.0957) | Δ∪=-1, Δ∩=1, threshold=1e-06 |
-| `identical` | Manifold | yes | 1 | 1 | 0 | 0.39 / 0.37 (0.215 / 0.192) | - |
-| `contained` | Exact | yes | 1 | 0.125 | 0 | 0.44 / 0.56 (0.254 / 0.369) | - |
-| `contained` | Fast (float) | yes | 1 | 0.125 | 0 | 0.23 / 0.23 (0.0563 / 0.0557) | threshold=1e-06 |
-| `contained` | Manifold | yes | 1 | 0.125 | 0 | 0.33 / 0.42 (0.144 / 0.175) | - |
-| `sliver` | Exact | ∪: **no** — 4 zero-area faces; ∩: **no** — 4 zero-area faces | 1 | 1.19209289551e-07 | 0 | 3.02 / 3.00 (2.84 / 2.82) | Δ∩=1.92e-08 |
-| `sliver` | Fast (float) | ∪: **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges; ∩: **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 1 | 1.19209289551e-07 | 0 | 0.36 / 0.33 (0.181 / 0.163) | Δ∩=1.92e-08, threshold=1e-06 |
-| `sliver` | Manifold | yes | 1 | 1.19209289551e-07 | 0 | 0.38 / 0.54 (0.188 / 0.33) | Δ∩=1.92e-08 |
-| `near_degenerate_triangle` | Exact | yes | 1 | 1 | 0 | 2.80 / 2.74 (2.61 / 2.54) | - |
-| `near_degenerate_triangle` | Fast (float) | ∪: **no** — 8 boundary edges, 8 non-manifold edges; ∩: **no** — 11 boundary edges, 11 non-manifold edges | 0 | 2 | 0 | 0.29 / 0.28 (0.117 / 0.107) | Δ∪=-1, Δ∩=1, threshold=1e-06 |
-| `near_degenerate_triangle` | Manifold | yes | 1 | 1 | 0 | 0.38 / 0.36 (0.115 / 0.161) | `WARNING Object: "A", Modifier: "bool", Cannot execute, non-manifold inputs`, `WARNING Object: "A", Modifier: "bool", Cannot execute, non-manifold inputs` |
-| `wall_with_openings` | Exact | yes | 12.6000000179 | 5.39999982566 | 3.2e-14 | 15.95 / 15.90 (15.7 / 15.6) | Δ∪=1.79e-08, Δ∩=-1.74e-07 |
-| `wall_with_openings` | Fast (float) | yes | 12.5999999541 | 5.39999939549 | 4.94e-07 | 1.06 / 1.19 (0.875 / 0.934) | Δ∪=-4.59e-08, Δ∩=-6.05e-07, threshold=1e-06 |
-| `wall_with_openings` | Manifold | yes | 12.6000000179 | 5.39999982566 | 1.42e-14 | 1.76 / 1.33 (1.56 / 1.14) | Δ∪=1.79e-08, Δ∩=-1.74e-07 |
+| `disjoint` | Exact | yes | 2 | 0 | 0 | 0.74 / 0.66 (0.328 / 0.195) | - |
+| `disjoint` | Fast (float) | yes | 2 | 0 | 0 | 0.31 / 0.32 (0.0751 / 0.0717) | threshold=1e-06 |
+| `disjoint` | Manifold | yes | 2 | 0 | 0 | 0.48 / 0.32 (0.188 / 0.108) | - |
+| `overlap_half` | Exact | yes | 1.5 | 0.5 | 0 | 3.21 / 3.31 (3 / 3.1) | - |
+| `overlap_half` | Fast (float) | ∪: **no** — 0 boundary edges, 26 non-manifold edges, 26 wire edges; ∩: **no** — 0 boundary edges, 25 non-manifold edges, 25 wire edges | 1 | 1 | 0 | 0.55 / 0.48 (0.302 / 0.278) | Δ∪=-0.5, Δ∩=0.5, threshold=1e-06 |
+| `overlap_half` | Manifold | yes | 1.5 | 0.5 | 0 | 0.63 / 0.66 (0.408 / 0.418) | - |
+| `coplanar_faces` | Exact | yes | 2 | 0 | 0 | 1.43 / 1.21 (1.21 / 1.02) | - |
+| `coplanar_faces` | Fast (float) | ∪: **no** — 0 boundary edges, 4 non-manifold edges, 4 wire edges; ∩ ok | 2 | 0 | 0 | 0.38 / 0.36 (0.143 / 0.118) | threshold=1e-06 |
+| `coplanar_faces` | Manifold | yes | 2 | 0 | 0 | 0.49 / 0.38 (0.261 / 0.137) | - |
+| `shared_edge` | Exact | ∪: **no** — 1 non-manifold edges; ∩ ok | 2 | 0 | 0 | 1.71 / 1.73 (1.51 / 1.48) | - |
+| `shared_edge` | Fast (float) | yes | 2 | 0 | 0 | 0.27 / 0.26 (0.0848 / 0.0773) | threshold=1e-06 |
+| `shared_edge` | Manifold | yes | 2 | 0 | 0 | 0.46 / 0.30 (0.252 / 0.122) | - |
+| `touching_vertex` | Exact | yes | 1 | 0 | 1 | 1.59 / 1.30 (1.24 / 1.09) | Δ∪=-1 |
+| `touching_vertex` | Fast (float) | yes | 2 | 0 | 0 | 0.26 / 0.25 (0.0818 / 0.0618) | threshold=1e-06 |
+| `touching_vertex` | Manifold | yes | 2 | 0 | 0 | 0.57 / 0.42 (0.296 / 0.218) | - |
+| `identical` | Exact | yes | 1 | 1 | 0 | 2.81 / 2.91 (2.6 / 2.69) | - |
+| `identical` | Fast (float) | ∪: **no** — 8 boundary edges, 8 non-manifold edges; ∩: **no** — 8 boundary edges, 8 non-manifold edges | 0 | 2 | 0 | 0.29 / 0.30 (0.106 / 0.105) | Δ∪=-1, Δ∩=1, threshold=1e-06 |
+| `identical` | Manifold | yes | 1 | 1 | 0 | 0.44 / 0.50 (0.252 / 0.309) | - |
+| `contained` | Exact | yes | 1 | 0.125 | 0 | 0.48 / 0.47 (0.281 / 0.273) | - |
+| `contained` | Fast (float) | yes | 1 | 0.125 | 0 | 0.32 / 0.25 (0.0686 / 0.0628) | threshold=1e-06 |
+| `contained` | Manifold | yes | 1 | 0.125 | 0 | 0.39 / 0.52 (0.181 / 0.27) | - |
+| `sliver` | Exact | ∪: **no** — 4 zero-area faces; ∩: **no** — 4 zero-area faces | 1 | 1.19209289551e-07 | 0 | 3.45 / 3.62 (3.24 / 3.4) | Δ∩=1.92e-08 |
+| `sliver` | Fast (float) | ∪: **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges; ∩: **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 1 | 1.19209289551e-07 | 0 | 0.37 / 0.41 (0.176 / 0.204) | Δ∩=1.92e-08, threshold=1e-06 |
+| `sliver` | Manifold | yes | 1 | 1.19209289551e-07 | 0 | 0.43 / 0.48 (0.235 / 0.279) | Δ∩=1.92e-08 |
+| `near_degenerate_triangle` | Exact | yes | 1 | 1 | 0 | 3.31 / 3.15 (3.03 / 2.95) | - |
+| `near_degenerate_triangle` | Fast (float) | ∪: **no** — 8 boundary edges, 8 non-manifold edges; ∩: **no** — 11 boundary edges, 11 non-manifold edges | 0 | 2 | 0 | 0.33 / 0.40 (0.124 / 0.202) | Δ∪=-1, Δ∩=1, threshold=1e-06 |
+| `near_degenerate_triangle` | Manifold | yes | 1 | 1 | 0 | 0.45 / 0.35 (0.231 / 0.131) | `WARNING Object: "A", Modifier: "bool", Cannot execute, non-manifold inputs`, `WARNING Object: "A", Modifier: "bool", Cannot execute, non-manifold inputs` |
+| `wall_with_openings` | Exact | yes | 12.6000000179 | 5.39999982566 | 3.2e-14 | 17.80 / 18.26 (17.4 / 17.9) | Δ∪=1.79e-08, Δ∩=-1.74e-07 |
+| `wall_with_openings` | Fast (float) | yes | 12.5999999541 | 5.39999939549 | 4.94e-07 | 1.13 / 1.18 (0.88 / 0.918) | Δ∪=-4.59e-08, Δ∩=-6.05e-07, threshold=1e-06 |
+| `wall_with_openings` | Manifold | yes | 12.6000000179 | 5.39999982566 | 1.42e-14 | 1.91 / 1.43 (1.68 / 1.18) | Δ∪=1.79e-08, Δ∩=-1.74e-07 |
 
 **Summary:** 23 of 30 case×solver combinations produced a closed manifold result for
 both the union and the intersection.
@@ -152,12 +152,12 @@ reports what the intersection returns. Expected intersection volume is 1e-7 m³.
 
 | Solver | `double_threshold` | V(intersection) | Faces | Valid? | ms |
 |---|---|---|---|---|---|
-| Fast (float) | 1e-06 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 0.48 |
-| Fast (float) | 1e-07 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 0.47 |
-| Fast (float) | 1e-08 | 1.98682149251e-07 | 21 | **no** — 8 boundary edges, 16 non-manifold edges, 3 zero-area faces | 0.52 |
-| Fast (float) | 0 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 19 non-manifold edges, 19 wire edges, 1 loose verts, `validate()` corrected | 0.52 |
-| Exact | 1e-06 | 1.19209289551e-07 | 20 | **no** — 4 zero-area faces | 3.12 |
-| Manifold | 1e-06 | 1.19209289551e-07 | 12 | yes | 0.46 |
+| Fast (float) | 1e-06 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 0.41 |
+| Fast (float) | 1e-07 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 16 non-manifold edges, 16 wire edges | 0.39 |
+| Fast (float) | 1e-08 | 1.98682149251e-07 | 21 | **no** — 8 boundary edges, 16 non-manifold edges, 3 zero-area faces | 0.39 |
+| Fast (float) | 0 | 1.19209289551e-07 | 12 | **no** — 0 boundary edges, 15 non-manifold edges, 15 wire edges, 1 loose verts | 0.43 |
+| Exact | 1e-06 | 1.19209289551e-07 | 20 | **no** — 4 zero-area faces | 3.73 |
+| Manifold | 1e-06 | 1.19209289551e-07 | 12 | yes | 0.59 |
 
 ## Probe B — the twelve-shell cutting tool
 
@@ -168,15 +168,15 @@ union/intersection identity does not exercise.
 
 | Solver | Operation | V(result) | Verts | Faces | Shells | Valid? | ms | Blender's own message |
 |---|---|---|---|---|---|---|---|---|
-| Exact | UNION | 12.6000000179 | 320 | 264 | 1 | yes | 16.41 | - |
-| Exact | INTERSECT | 5.39999982566 | 216 | 132 | 12 | yes | 15.81 | - |
-| Exact | DIFFERENCE | 3.60000053197 | 224 | 120 | 1 | yes | 15.61 | - |
-| Fast (float) | UNION | 12.5999999541 | 320 | 256 | 1 | yes | 0.99 | - |
-| Fast (float) | INTERSECT | 5.39999939549 | 216 | 132 | 12 | yes | 0.99 | - |
-| Fast (float) | DIFFERENCE | 3.60000139556 | 224 | 112 | 1 | yes | 0.94 | - |
-| Manifold | UNION | 12.6000000179 | 320 | 261 | 1 | yes | 1.49 | - |
-| Manifold | INTERSECT | 5.39999982566 | 216 | 132 | 12 | yes | 1.06 | - |
-| Manifold | DIFFERENCE | 3.60000053197 | 224 | 117 | 1 | yes | 1.35 | - |
+| Exact | UNION | 12.6000000179 | 320 | 264 | 1 | yes | 19.79 | - |
+| Exact | INTERSECT | 5.39999982566 | 216 | 132 | 12 | yes | 18.16 | - |
+| Exact | DIFFERENCE | 3.60000053197 | 224 | 120 | 1 | yes | 19.03 | - |
+| Fast (float) | UNION | 12.5999999541 | 320 | 256 | 1 | yes | 1.34 | - |
+| Fast (float) | INTERSECT | 5.39999939549 | 216 | 132 | 12 | yes | 1.19 | - |
+| Fast (float) | DIFFERENCE | 3.60000139556 | 224 | 112 | 1 | yes | 1.21 | - |
+| Manifold | UNION | 12.6000000179 | 320 | 261 | 1 | yes | 1.88 | - |
+| Manifold | INTERSECT | 5.39999982566 | 216 | 132 | 12 | yes | 1.23 | - |
+| Manifold | DIFFERENCE | 3.60000053197 | 224 | 117 | 1 | yes | 1.50 | - |
 
 The analytic expectation for `DIFFERENCE` is V(A) − V(A∩B) = 9 − 5.4 = **3.6 m³**.
 
@@ -188,14 +188,14 @@ robustness option defensively.
 
 | Case | Options | V(union) | Valid? | ms |
 |---|---|---|---|---|
-| `wall_with_openings` | none | 12.6000000179 | yes | 15.96 |
-| `wall_with_openings` | `use_self` | 12.6000000179 | yes | 29.16 |
-| `wall_with_openings` | `use_hole_tolerant` | 12.6000000179 | yes | 16.02 |
-| `wall_with_openings` | both | 12.6000000179 | yes | 28.65 |
-| `near_degenerate_triangle` | none | 1 | yes | 3.15 |
-| `near_degenerate_triangle` | `use_self` | 1 | yes | 4.63 |
-| `near_degenerate_triangle` | `use_hole_tolerant` | 1 | yes | 2.71 |
-| `near_degenerate_triangle` | both | 1 | yes | 4.44 |
+| `wall_with_openings` | none | 12.6000000179 | yes | 17.76 |
+| `wall_with_openings` | `use_self` | 12.6000000179 | yes | 31.67 |
+| `wall_with_openings` | `use_hole_tolerant` | 12.6000000179 | yes | 17.67 |
+| `wall_with_openings` | both | 12.6000000179 | yes | 32.09 |
+| `near_degenerate_triangle` | none | 1 | yes | 3.28 |
+| `near_degenerate_triangle` | `use_self` | 1 | yes | 5.09 |
+| `near_degenerate_triangle` | `use_hole_tolerant` | 1 | yes | 3.13 |
+| `near_degenerate_triangle` | both | 1 | yes | 4.92 |
 
 ## Probe D — `touching_vertex`, where the Exact solver loses an operand
 
@@ -241,7 +241,7 @@ regression-tested.
 | Case | Solver | Op | Runs | Signatures | Distinct results |
 |---|---|---|---|---|---|
 | `overlap_half` | Exact | UNION | 10 | 1 | identical every run |
-| `overlap_half` | Fast (float) | UNION | 10 | **2** | 32v/15f/V=1 ×6; 32v/14f/V=1 ×4 |
+| `overlap_half` | Fast (float) | UNION | 10 | **3** | 32v/15f/V=1 ×1; 32v/13f/V=1 ×4; 32v/14f/V=1 ×5 |
 | `overlap_half` | Manifold | UNION | 10 | 1 | identical every run |
 | `wall_with_openings` | Exact | UNION | 10 | 1 | identical every run |
 | `wall_with_openings` | Fast (float) | UNION | 10 | 1 | identical every run |

@@ -131,7 +131,17 @@ candidates we might build on or borrow from, and later our own kernel.
   holds within 1e-9 relative.
 - **Fail:** any invalid result, or a volume error above 1e-6 relative; each failure recorded
   with the input, the version and the traced cause in `problems.md`.
-- **Status:** open
+- **Findings:** [`spikes/boolean-torture/FINDINGS.md`](../spikes/boolean-torture/FINDINGS.md) —
+  twelve candidate×setting combinations measured in one session; every failure traced to a
+  `problems.md` row.
+- **Status:** in progress — measured for four candidates. **Nine of the twelve candidate×setting
+  combinations fail outright**; OCCT is valid on all thirty case×setting combinations but its
+  `sliver` identity residual (3.33e-08 relative) sits between the pass and fail lines, which the
+  criterion as written does not name; and the single pass, Blender's embedded Manifold solver,
+  rests on a refusal the criterion cannot see — it returns operand A unchanged on
+  `near_degenerate_triangle`, which happens to be the right answer for that case. Not resolved:
+  our own kernel is not measured, the set is planar and single-operation, and the four candidates
+  were handed materially different constructions of two of the ten cases.
 
 ### R-17 · Precision far from the origin
 The tile-frame design assumes f64 local coordinates are necessary and sufficient.
@@ -141,7 +151,18 @@ The tile-frame design assumes f64 local coordinates are necessary and sufficient
 - **Pass:** maximum deviation below 1e-6 m in f64 paths.
 - **Fail:** deviation above 1e-4 m — which for a float32 path is the expected outcome and the
   evidence ADR-0006 needs.
-- **Status:** open
+- **Findings:** [`spikes/precision-set/FINDINGS.md`](../spikes/precision-set/FINDINGS.md) — nine
+  candidate×path combinations measured in one session, with the local-frame mitigation measured
+  on each candidate rather than assumed.
+- **Status:** in progress — measured for four candidates, and the two populations are cleanly
+  separated: **every f64 path passes** (OCCT 3.61e-10 m, CGAL Epick 1.29e-10 m, Manifold `Mesh64`
+  3.29e-11 m, all one to three ULP of a 5e5 m coordinate) and **every float32 path fails**
+  (Manifold `Mesh` 0.0186 m, CGAL f32-rounded 0.0348 m, Blender Exact 0.0348 m, Blender Manifold
+  0.0435 m, Blender Fast 0.5 m), with three orders of magnitude of clear air between them and no
+  candidate in between. That is the evidence ADR-0006 needs. Not resolved: the spike sentence
+  names "each candidate's boolean **and tessellation**" and **no driver tessellates at 500 km**;
+  the set is three planar cases of which only `wall_with_openings` discriminates; one distance in
+  one direction; and our own kernel is not measured.
 
 ### R-18 · DynLex may not compile a kernel-sized program acceptably
 The kernel will be the largest DynLex program. Compile time is on the inner loop of every

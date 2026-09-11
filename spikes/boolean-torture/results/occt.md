@@ -5,7 +5,7 @@ Produced by [`../occt_driver.py`](../occt_driver.py). This file is raw data for
 [`../../../docs/research/kernels/occt.md`](../../../docs/research/kernels/occt.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 
 ## Environment
 
@@ -52,36 +52,36 @@ union / intersection.
 
 | Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
 |---|---|---|---|---|---|---|---|
-| `disjoint` | default | yes | 2 | 0 | 0 | 0.63 / 0.46 | tol≤1e-07 |
-| `disjoint` | fuzzy=1e-5 | yes | 2 | 0 | 0 | 0.60 / 0.42 | tol≤1e-07 |
-| `disjoint` | fuzzy=1e-3 | yes | 2 | 0 | 0 | 0.60 / 0.43 | tol≤1e-07 |
-| `overlap_half` | default | yes | 1.5 | 0.5 | 6.66e-16 | 4.39 / 3.80 | tol≤1e-07 |
-| `overlap_half` | fuzzy=1e-5 | yes | 1.5 | 0.5 | 6.66e-16 | 4.53 / 3.81 | tol≤1e-07 |
-| `overlap_half` | fuzzy=1e-3 | yes | 1.5 | 0.5 | 6.66e-16 | 4.21 / 3.81 | tol≤1e-07 |
-| `coplanar_faces` | default | yes | 2 | 0 | 4.44e-16 | 1.62 / 1.20 | tol≤1e-07 |
-| `coplanar_faces` | fuzzy=1e-5 | yes | 2 | 0 | 4.44e-16 | 1.71 / 1.19 | tol≤1e-07 |
-| `coplanar_faces` | fuzzy=1e-3 | yes | 2 | 0 | 4.44e-16 | 1.57 / 1.18 | tol≤1e-07 |
-| `shared_edge` | default | yes | 2 | 0 | 2.22e-16 | 1.58 / 1.14 | tol≤1e-07 |
-| `shared_edge` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.51 / 1.06 | tol≤1e-07 |
-| `shared_edge` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.51 / 1.14 | tol≤1e-07 |
-| `touching_vertex` | default | yes | 2 | 0 | 2.22e-16 | 1.22 / 0.74 | tol≤1e-07 |
-| `touching_vertex` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.31 / 0.78 | tol≤1e-07 |
-| `touching_vertex` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.18 / 0.77 | tol≤1e-07 |
-| `identical` | default | yes | 1 | 1 | 0 | 2.35 / 2.13 | tol≤1e-07 |
-| `identical` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.26 / 2.22 | tol≤1e-07 |
-| `identical` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.37 / 2.24 | tol≤1e-07 |
-| `contained` | default | yes | 1 | 0.125 | 0 | 1.40 / 1.34 | tol≤1e-07 |
-| `contained` | fuzzy=1e-5 | yes | 1 | 0.125 | 0 | 1.37 / 1.28 | tol≤1e-07 |
-| `contained` | fuzzy=1e-3 | yes | 1 | 0.125 | 0 | 1.36 / 1.21 | tol≤1e-07 |
-| `sliver` | default | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.24 / 2.65 | tol≤1.76e-07 |
-| `sliver` | fuzzy=1e-5 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.05 / 2.70 | tol≤5.1e-06 |
-| `sliver` | fuzzy=1e-3 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.31 / 2.62 | tol≤0.0005 |
-| `near_degenerate_triangle` | default | yes | 1 | 1 | 2.22e-16 | 2.62 / 2.42 | tol≤1e-07 |
-| `near_degenerate_triangle` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.55 / 2.32 | tol≤1.02e-06 |
-| `near_degenerate_triangle` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.49 / 2.52 | tol≤1.02e-06 |
-| `wall_with_openings` | default | yes | 12.6 | 5.4 | 1.42e-14 | 53.97 / 49.24 | tol≤1.5e-07 |
-| `wall_with_openings` | fuzzy=1e-5 | yes | 12.6 | 5.4 | 1.42e-14 | 54.47 / 48.72 | tol≤5.1e-06 |
-| `wall_with_openings` | fuzzy=1e-3 | yes | 12.6 | 5.4 | 1.42e-14 | 51.64 / 48.32 | tol≤0.0005 |
+| `disjoint` | default | yes | 2 | 0 | 0 | 0.69 / 0.47 | tol≤1e-07 |
+| `disjoint` | fuzzy=1e-5 | yes | 2 | 0 | 0 | 0.65 / 0.51 | tol≤1e-07 |
+| `disjoint` | fuzzy=1e-3 | yes | 2 | 0 | 0 | 0.64 / 0.49 | tol≤1e-07 |
+| `overlap_half` | default | yes | 1.5 | 0.5 | 6.66e-16 | 4.62 / 3.96 | tol≤1e-07 |
+| `overlap_half` | fuzzy=1e-5 | yes | 1.5 | 0.5 | 6.66e-16 | 4.38 / 4.06 | tol≤1e-07 |
+| `overlap_half` | fuzzy=1e-3 | yes | 1.5 | 0.5 | 6.66e-16 | 4.39 / 4.54 | tol≤1e-07 |
+| `coplanar_faces` | default | yes | 2 | 0 | 4.44e-16 | 1.75 / 1.17 | tol≤1e-07 |
+| `coplanar_faces` | fuzzy=1e-5 | yes | 2 | 0 | 4.44e-16 | 1.70 / 1.25 | tol≤1e-07 |
+| `coplanar_faces` | fuzzy=1e-3 | yes | 2 | 0 | 4.44e-16 | 1.62 / 1.18 | tol≤1e-07 |
+| `shared_edge` | default | yes | 2 | 0 | 2.22e-16 | 1.67 / 1.16 | tol≤1e-07 |
+| `shared_edge` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.66 / 1.19 | tol≤1e-07 |
+| `shared_edge` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.73 / 1.11 | tol≤1e-07 |
+| `touching_vertex` | default | yes | 2 | 0 | 2.22e-16 | 1.24 / 0.78 | tol≤1e-07 |
+| `touching_vertex` | fuzzy=1e-5 | yes | 2 | 0 | 2.22e-16 | 1.24 / 0.80 | tol≤1e-07 |
+| `touching_vertex` | fuzzy=1e-3 | yes | 2 | 0 | 2.22e-16 | 1.21 / 0.86 | tol≤1e-07 |
+| `identical` | default | yes | 1 | 1 | 0 | 2.45 / 2.40 | tol≤1e-07 |
+| `identical` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.57 / 2.40 | tol≤1e-07 |
+| `identical` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 2.48 / 2.25 | tol≤1e-07 |
+| `contained` | default | yes | 1 | 0.125 | 0 | 1.42 / 1.26 | tol≤1e-07 |
+| `contained` | fuzzy=1e-5 | yes | 1 | 0.125 | 0 | 1.43 / 1.34 | tol≤1e-07 |
+| `contained` | fuzzy=1e-3 | yes | 1 | 0.125 | 0 | 1.50 / 1.34 | tol≤1e-07 |
+| `sliver` | default | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.33 / 2.99 | tol≤1.76e-07 |
+| `sliver` | fuzzy=1e-5 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.17 / 2.81 | tol≤5.1e-06 |
+| `sliver` | fuzzy=1e-3 | yes | 1 | 0 (Δ1e-07) | 3.33e-08 | 3.17 / 2.96 | tol≤0.0005 |
+| `near_degenerate_triangle` | default | yes | 1 | 1 | 2.22e-16 | 2.92 / 2.59 | tol≤1e-07 |
+| `near_degenerate_triangle` | fuzzy=1e-5 | yes | 1 | 1 | 0 | 2.68 / 2.81 | tol≤1.02e-06 |
+| `near_degenerate_triangle` | fuzzy=1e-3 | yes | 1 | 1 | 0 | 3.01 / 2.66 | tol≤1.02e-06 |
+| `wall_with_openings` | default | yes | 12.6 | 5.4 | 1.42e-14 | 58.52 / 50.21 | tol≤1.5e-07 |
+| `wall_with_openings` | fuzzy=1e-5 | yes | 12.6 | 5.4 | 1.42e-14 | 54.27 / 51.20 | tol≤5.1e-06 |
+| `wall_with_openings` | fuzzy=1e-3 | yes | 12.6 | 5.4 | 1.42e-14 | 54.03 / 50.65 | tol≤0.0005 |
 
 **Summary:** 30 of 30 case×setting combinations produced results that
 `BRepCheck_Analyzer` reports valid for both the union and the intersection.

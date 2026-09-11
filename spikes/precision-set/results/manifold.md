@@ -5,7 +5,7 @@ Produced by [`../manifold_driver.py`](../manifold_driver.py). Raw data for
 [`../../../docs/research/kernels/manifold.md`](../../../docs/research/kernels/manifold.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 **Offset:** `(500000.0, 500000.0, 0.0)` (500 km east, 500 km north — a plausible distance from a national
 projection's false origin to a project site).
 
@@ -91,18 +91,18 @@ Manifold.
 
 | Case | Setting | Op | Valid near+far? | V near / far | ΔV | Vertex deviation | ms near / far | tol near / far |
 |---|---|---|---|---|---|---|---|---|
-| `overlap_half` | f64 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.184 / 0.294 | 1.5e-12 / 5e-07 |
-| `overlap_half` | f64 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.293 / 0.163 | 1.5e-12 / 5e-07 |
-| `overlap_half` | f32 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.157 / 0.178 | 1.788e-07 / 0.0596 |
-| `overlap_half` | f32 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.111 / 0.080 | 1.788e-07 / 0.0596 |
-| `coplanar_faces` | f64 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.109 / 0.127 | 2e-12 / 5e-07 |
-| `coplanar_faces` | f64 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.073 / 0.059 | 2e-12 / 5e-07 |
-| `coplanar_faces` | f32 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.105 / 0.113 | 2.384e-07 / 0.0596 |
-| `coplanar_faces` | f32 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.084 / 0.073 | 2.384e-07 / 0.0596 |
-| `wall_with_openings` | f64 | union | yes | 12.6 / 12.5999999999 | -1.39659e-10 (-1.1084e-11 rel) | **3.29273e-11 m** over 200/200 v | 1.120 / 1.010 | 1e-11 / 5e-07 |
-| `wall_with_openings` | f64 | intersection | yes | 5.4 / 5.39999999979 | -2.0955e-10 (-3.88055e-11 rel) | **2.60313e-11 m** over 96/96 v | 0.743 / 0.751 | 1e-11 / 5e-07 |
-| `wall_with_openings` | f32 | union | near: yes; far: **no** — 1 zero-area faces | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0185826 m** over 200/200 v | 1.001 / 0.950 | 1.192e-06 / 0.05961 |
-| `wall_with_openings` | f32 | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0185826 m** over 96/96 v | 0.712 / 0.699 | 1.192e-06 / 0.05961 |
+| `overlap_half` | f64 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.175 / 0.388 | 1.5e-12 / 5e-07 |
+| `overlap_half` | f64 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.196 / 0.198 | 1.5e-12 / 5e-07 |
+| `overlap_half` | f32 | union | yes | 1.5 / 1.5 | 0 (0 rel) | **0 m** over 16/16 v | 0.211 / 0.270 | 1.788e-07 / 0.0596 |
+| `overlap_half` | f32 | intersection | yes | 0.5 / 0.5 | 0 (0 rel) | **0 m** over 8/8 v | 0.182 / 0.107 | 1.788e-07 / 0.0596 |
+| `coplanar_faces` | f64 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.210 / 0.168 | 2e-12 / 5e-07 |
+| `coplanar_faces` | f64 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.079 / 0.079 | 2e-12 / 5e-07 |
+| `coplanar_faces` | f32 | union | yes | 2 / 2 | 0 (0 rel) | **0 m** over 18/18 v | 0.144 / 0.169 | 2.384e-07 / 0.0596 |
+| `coplanar_faces` | f32 | intersection | yes | 0 / 0 | 0 (nan rel) | **0 m** over 4/4 v | 0.115 / 0.095 | 2.384e-07 / 0.0596 |
+| `wall_with_openings` | f64 | union | yes | 12.6 / 12.5999999999 | -1.39659e-10 (-1.1084e-11 rel) | **3.29273e-11 m** over 200/200 v | 1.318 / 1.238 | 1e-11 / 5e-07 |
+| `wall_with_openings` | f64 | intersection | yes | 5.4 / 5.39999999979 | -2.0955e-10 (-3.88055e-11 rel) | **2.60313e-11 m** over 96/96 v | 0.981 / 0.855 | 1e-11 / 5e-07 |
+| `wall_with_openings` | f32 | union | near: yes; far: **no** — 1 zero-area faces | 12.6000000179 / 12.7499997485 | 0.15 (0.0119047 rel) | **0.0185826 m** over 200/200 v | 1.148 / 1.134 | 1.192e-06 / 0.05961 |
+| `wall_with_openings` | f32 | intersection | yes | 5.39999982566 / 5.6249995809 | 0.225 (0.0416666 rel) | **0.0185826 m** over 96/96 v | 0.835 / 0.837 | 1.192e-06 / 0.05961 |
 
 **Worst vertex deviation over the whole set: 0.0185826 m.** R-17's pass line is 1e-6 m
 and its fail line is 1e-4 m.

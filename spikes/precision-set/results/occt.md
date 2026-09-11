@@ -4,7 +4,7 @@ Produced by [`../occt_driver.py`](../occt_driver.py). Raw data for `../FINDINGS.
 [`../../../docs/research/kernels/occt.md`](../../../docs/research/kernels/occt.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 **Offset:** `(500000.0, 500000.0, 0.0)` (500 km east, 500 km north — a plausible distance from a national
 projection's false origin to a project site).
 

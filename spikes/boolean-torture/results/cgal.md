@@ -5,7 +5,7 @@ Produced by [`../cgal_driver.py`](../cgal_driver.py). This file is raw data for
 [`../../../docs/research/kernels/cgal.md`](../../../docs/research/kernels/cgal.md)
 §Measurements. Do not edit by hand — re-run the driver.
 
-**Run date:** 2026-09-10
+**Run date:** 2026-09-11
 
 ## Environment
 
@@ -118,26 +118,26 @@ region, so what is timed is the boolean call.
 
 | Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
 |---|---|---|---|---|---|---|---|
-| `disjoint` | Epick, f64 input | yes | 2 | 0 | 0 | 0.019 / 0.011 | - |
-| `disjoint` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.019 / 0.012 | - |
-| `overlap_half` | Epick, f64 input | yes | 1.5 | 0.5 | 0 | 0.389 / 0.405 | - |
-| `overlap_half` | Epick, f32-rounded input | yes | 1.5 | 0.5 | 0 | 0.374 / 0.376 | - |
-| `coplanar_faces` | Epick, f64 input | yes | 2 | 0 | 0 | 0.105 / 0.092 | - |
-| `coplanar_faces` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.092 / 0.088 | - |
-| `shared_edge` | Epick, f64 input | ∪: **no** — the boolean returned `False`; ∩ ok | 0 | 0 | 2 | 0.104 / 0.102 | Δ∪=-2 |
-| `shared_edge` | Epick, f32-rounded input | ∪: **no** — the boolean returned `False`; ∩ ok | 0 | 0 | 2 | 0.100 / 0.098 | Δ∪=-2 |
-| `touching_vertex` | Epick, f64 input | yes | 2 | 0 | 0 | 0.065 / 0.062 | - |
-| `touching_vertex` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.067 / 0.061 | - |
-| `identical` | Epick, f64 input | yes | 1 | 1 | 0 | 0.273 / 0.272 | - |
-| `identical` | Epick, f32-rounded input | yes | 1 | 1 | 0 | 0.284 / 0.273 | - |
-| `contained` | Epick, f64 input | yes | 1 | 0.125 | 0 | 0.024 / 0.024 | - |
-| `contained` | Epick, f32-rounded input | yes | 1 | 0.125 | 0 | 0.023 / 0.022 | - |
-| `sliver` | Epick, f64 input | yes | 1 | 9.99999999612e-08 | 0 | 1.034 / 1.113 | - |
-| `sliver` | Epick, f32-rounded input | yes | 1 | 1.19209289551e-07 | 0 | 0.997 / 1.009 | Δ∩=1.92e-08 |
-| `near_degenerate_triangle` | Epick, f64 input | ∪: **no** — the boolean returned `False`; ∩: **no** — the boolean returned `False` | 0 | 0 | 2 | 0.285 / 0.306 | Δ∪=-1; Δ∩=-1; operand B is **not closed**; operand B **self-intersects** |
-| `near_degenerate_triangle` | Epick, f32-rounded input | ∪: **no** — the boolean returned `False`; ∩: **no** — the boolean returned `False` | 0 | 0 | 2 | 0.303 / 0.307 | Δ∪=-1; Δ∩=-1; operand B is **not closed**; operand B **self-intersects** |
-| `wall_with_openings` | Epick, f64 input | yes | 12.6 | 5.4 | 3.55e-15 | 8.206 / 7.838 | - |
-| `wall_with_openings` | Epick, f32-rounded input | yes | 12.6000000179 | 5.39999982566 | 0 | 6.388 / 6.021 | Δ∪=1.79e-08; Δ∩=-1.74e-07 |
+| `disjoint` | Epick, f64 input | yes | 2 | 0 | 0 | 0.020 / 0.010 | - |
+| `disjoint` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.018 / 0.012 | - |
+| `overlap_half` | Epick, f64 input | yes | 1.5 | 0.5 | 0 | 0.380 / 0.528 | - |
+| `overlap_half` | Epick, f32-rounded input | yes | 1.5 | 0.5 | 0 | 0.481 / 0.388 | - |
+| `coplanar_faces` | Epick, f64 input | yes | 2 | 0 | 0 | 0.102 / 0.075 | - |
+| `coplanar_faces` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.141 / 0.086 | - |
+| `shared_edge` | Epick, f64 input | ∪: **no** — the boolean returned `False`; ∩ ok | 0 | 0 | 2 | 0.103 / 0.087 | Δ∪=-2 |
+| `shared_edge` | Epick, f32-rounded input | ∪: **no** — the boolean returned `False`; ∩ ok | 0 | 0 | 2 | 0.086 / 0.090 | Δ∪=-2 |
+| `touching_vertex` | Epick, f64 input | yes | 2 | 0 | 0 | 0.071 / 0.063 | - |
+| `touching_vertex` | Epick, f32-rounded input | yes | 2 | 0 | 0 | 0.071 / 0.066 | - |
+| `identical` | Epick, f64 input | yes | 1 | 1 | 0 | 0.329 / 0.287 | - |
+| `identical` | Epick, f32-rounded input | yes | 1 | 1 | 0 | 0.260 / 0.277 | - |
+| `contained` | Epick, f64 input | yes | 1 | 0.125 | 0 | 0.022 / 0.021 | - |
+| `contained` | Epick, f32-rounded input | yes | 1 | 0.125 | 0 | 0.020 / 0.021 | - |
+| `sliver` | Epick, f64 input | yes | 1 | 9.99999999566e-08 | 0 | 1.174 / 1.237 | - |
+| `sliver` | Epick, f32-rounded input | yes | 1 | 1.19209289551e-07 | 0 | 1.089 / 0.959 | Δ∩=1.92e-08 |
+| `near_degenerate_triangle` | Epick, f64 input | ∪: **no** — the boolean returned `False`; ∩: **no** — the boolean returned `False` | 0 | 0 | 2 | 0.313 / 0.269 | Δ∪=-1; Δ∩=-1; operand B is **not closed**; operand B **self-intersects** |
+| `near_degenerate_triangle` | Epick, f32-rounded input | ∪: **no** — the boolean returned `False`; ∩: **no** — the boolean returned `False` | 0 | 0 | 2 | 0.300 / 0.282 | Δ∪=-1; Δ∩=-1; operand B is **not closed**; operand B **self-intersects** |
+| `wall_with_openings` | Epick, f64 input | yes | 12.6 | 5.4 | 7.11e-15 | 8.183 / 8.082 | - |
+| `wall_with_openings` | Epick, f32-rounded input | yes | 12.6000000179 | 5.39999982566 | 0 | 6.627 / 6.474 | Δ∪=1.79e-08; Δ∩=-1.74e-07 |
 
 **Summary:** 16 of 20 case×setting combinations produced a result this
 driver's check accepts for both the union and the intersection.
@@ -151,7 +151,7 @@ is not judged on a relative error it cannot meet. The Δ notes above use 1e-09 i
 
 | Setting | Valid (closed manifold) | Numerically correct | Worst identity residual (refusals excluded) |
 |---|---|---|---|
-| Epick, f64 input | 8 / 10 | 8 / 10 | 3.55e-15 |
+| Epick, f64 input | 8 / 10 | 8 / 10 | 7.11e-15 |
 | Epick, f32-rounded input | 8 / 10 | 8 / 10 | 0 |
 
 ## Probe A — the twelve-shell operand
@@ -182,7 +182,7 @@ at all. *Thickness as stored* is read back from the constructed `Polyhedron_3`.
 | Setting | Operation | Thickness as stored | V(B) as stored | Returned | V(result) | Tris |
 |---|---|---|---|---|---|---|
 | Epick, f64 input | union | 9.99999999474e-08 | 9.99999999474e-08 | True | 1 | 52 |
-| Epick, f64 input | intersection | 9.99999999474e-08 | 9.99999999474e-08 | True | 9.99999999612e-08 | 36 |
+| Epick, f64 input | intersection | 9.99999999474e-08 | 9.99999999474e-08 | True | 9.9999999952e-08 | 36 |
 | Epick, f32-rounded input | union | 1.19209289551e-07 | 1.19209289551e-07 | True | 1 | 52 |
 | Epick, f32-rounded input | intersection | 1.19209289551e-07 | 1.19209289551e-07 | True | 1.19209289551e-07 | 36 |
 
@@ -248,9 +248,9 @@ the two happened.
 | Case | Op | Runs | Signatures | Distinct geometries | Distinct emission orders | Distinct results |
 |---|---|---|---|---|---|---|
 | `overlap_half` | union | 10 | 1 | 1 | 10 | 24v/44f/V=1.5 x10 |
-| `wall_with_openings` | union | 10 | 2 | 1 | 10 | 320v/636f/V=12.600000000000003 x7; 320v/636f/V=12.6 x3 |
-| `wall_with_openings` | difference | 10 | 4 | 1 | 10 | 224v/492f/V=3.600000000000017 x6; 224v/492f/V=3.6000000000000143 x2; 224v/492f/V=3.6000000000000205 x1; 224v/492f/V=3.600000000000018 x1 |
-| `sliver` | intersection | 10 | 3 | 1 | 10 | 20v/36f/V=9.99999999612422e-08 x3; 20v/36f/V=9.999999995661628e-08 x4; 20v/36f/V=9.999999995199034e-08 x3 |
+| `wall_with_openings` | union | 10 | 2 | 1 | 10 | 320v/636f/V=12.6 x3; 320v/636f/V=12.600000000000003 x7 |
+| `wall_with_openings` | difference | 10 | 5 | 1 | 10 | 224v/492f/V=3.6000000000000156 x3; 224v/492f/V=3.6000000000000143 x2; 224v/492f/V=3.600000000000017 x3; 224v/492f/V=3.600000000000018 x1; 224v/492f/V=3.600000000000019 x1 |
+| `sliver` | intersection | 10 | 3 | 1 | 10 | 20v/36f/V=9.99999999612422e-08 x2; 20v/36f/V=9.999999995199034e-08 x7; 20v/36f/V=9.999999995661628e-08 x1 |
 
 ## Probe F — corefinement modifies its operands
 
