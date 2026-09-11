@@ -172,7 +172,18 @@ kernel developer.
   lines in the kernel's style (classes, patterns, intrinsics); measure compile time and memory.
 - **Pass:** 20k lines compile in under 30 s on the reference machine.
 - **Fail:** over 120 s, or the compiler exhausts memory — a blocker to fix in dynlex before M1.
-- **Status:** open
+- **Findings:** [`spikes/dynlex-scale/FINDINGS.md`](../spikes/dynlex-scale/FINDINGS.md)
+- **Status:** failed — **20k lines take 72.19 s** against a 30 s budget, and **50k lines take
+  1146.72 s (19 minutes)**, 9.6× the fail threshold. Compile time is superlinear and worsening:
+  the implied exponent is 1.89 from 5k→20k and **3.03** from 20k→50k. Memory is *not* the
+  problem — 2.8 GB peak at 50k on a 32 GB machine, scaling roughly linearly — and neither is
+  correctness: zero diagnostics at every size, and every binary printed exactly the value an
+  independent Python computation produced. A blocker to fix in dynlex before M1, per this
+  criterion's own wording. Note the reading applied: the pass line names 20k, the fail line names
+  no size, and 20k alone (72.19 s) falls between the two; the findings record `failed` on the
+  50k figure and set out the narrower reading. The most useful follow-up is cheap — separate
+  whether the cost scales with pattern count, call-site count or lines, and whether it is
+  per-file or whole-program.
 
 ### R-19 · DynLex runtime performance may fall short of native
 The performance targets assume native-speed code.
@@ -181,7 +192,15 @@ The performance targets assume native-speed code.
   pairs, BVH build over 10⁶ boxes, and an f64 orient3d loop, each in DynLex and C++ -O2.
 - **Pass:** DynLex within 1.5× of C++ on every workload.
 - **Fail:** over 3× on any — a codegen issue to root-cause in dynlex before M1.
-- **Status:** open
+- **Findings:** [`spikes/dynlex-performance/FINDINGS.md`](../spikes/dynlex-performance/FINDINGS.md)
+- **Status:** resolved — **passes.** All three workloads ran in both languages with
+  **bit-identical output**, from a shared xorshift64\* generator whose input checksum is compared
+  too: triangle/triangle 1.12×, BVH build 1.21×, orient3d 1.01× (a tie within noise). Worst case
+  1.21×, nothing near the 3× line. **Conditional on an explicit `-O` flag:** the compiler's
+  default emitted-code optimisation level is `-O0`, not optimised, and unflagged it would fail on
+  all three (8.71×, 6.49×, 21.62×) — the kernel's build must pass `-O2` or better. Not settled:
+  no parallel, SIMD, boolean-pipeline or pointer-chasing workload was measured, and the compiler
+  pin is dirty (see the caveat in the findings).
 
 ---
 
