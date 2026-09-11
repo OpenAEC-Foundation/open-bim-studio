@@ -19,7 +19,7 @@
  *                                loader returns, before and after ResetCache(modelID) --
  *                                the only cache-invalidation call the API exposes -- and
  *                                what ResetCache costs.
- *   8. a per-GUID element table  GUID, IfcClass, triangles, signed volume, bbox -- consumed
+ *   8. a per-GUID element table  GUID, IfcClass, triangles, vertices, signed volume, bbox -- consumed
  *                                by compare.py for the P-10 disagreement analysis
  *
  * Every timed operation opens a fresh model (OpenModel on a freshly read buffer) and closes

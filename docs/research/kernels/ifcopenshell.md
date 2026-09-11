@@ -175,9 +175,7 @@ return false;
 the enclosing `convert` signature is on L83-L84)
 
 The measured consequence of *not* having that guard is in
-[`compare.md`](../../../spikes/incremental-evaluation/results/compare.md): run `cgal-simple`
-
-alone and a wall with an opening comes back with **zero triangles and zero volume**, silently.
+[`compare.md`](../../../spikes/incremental-evaluation/results/compare.md): run `cgal-simple` alone and a wall with an opening comes back with **zero triangles and zero volume**, silently.
 Four `IfcWallStandardCase` on AC20-FZK-Haus and eight rows on IFC_Schependomlaan disappear that
 way, and 17 of the 20 volume disagreements between the two kernels are over 0.5 relative.
 
