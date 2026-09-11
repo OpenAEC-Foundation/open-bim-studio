@@ -2,8 +2,10 @@
 
 **Decision question:** Our kernel spec proposes a B-rep module with generational handles, a
 per-entity tolerance model and exact predicates for topology (spec §4, §5, §6), written in DynLex.
-Truck and Fornjot are the two actively-documented from-scratch B-rep kernels written in Rust —
-small enough to read whole, and both written without twenty years of accretion. This note answers:
+Truck and Fornjot are the two well-documented from-scratch B-rep kernels written in Rust — small
+enough to read whole, and both written without twenty years of accretion (Fornjot's own
+documentation and repository are archived as of this note's pinned commit; see §Fornjot, below,
+for what that means for this note's findings). This note answers:
 **what does a clean B-rep data model look like when it is built once, in a memory-safe language,
 rather than inherited — and where does each one stop (booleans, tolerances, maintenance)?**
 
@@ -33,10 +35,10 @@ is ever freed, so a handle can never dangle, at the cost of never reclaiming mem
 per-entity tolerance model: Truck has one global `TOLERANCE = 1.0e-6` constant used everywhere;
 Fornjot has one process-wide `ValidationConfig` tolerance (default 0.001) from which two derived
 distance thresholds are computed. Truck's boolean is real and tested but is documented as
-transversal-only (no tangency) and panics via internal `.expect()` on some coincident-geometry
+transversal-only (no tangency) and panics via internal `.unwrap()` on some coincident-geometry
 input rather than returning an error — three independent GitHub reports confirm this, one with a
 maintainer-adjacent fix already published as a fork. Fornjot never shipped a 3D boolean at all:
-issue #42 tracked partial implementation for over three years before its owner closed it,
+issue #42 tracked partial implementation for one year and ten months before its owner closed it,
 unresolved, as the whole repository was archived. Both are read for design, not to be built on.
 
 ## What was read, and at which commit
@@ -120,7 +122,8 @@ geometry. **Identity is the allocation, not a value.** `Vertex::new()` (and `Edg
 `Face::new`) allocate a fresh `Arc<Mutex<_>>` every call, "even if the end vertices are the same
 one" for two edges — the doc-tested example constructs `edge0`/`edge1` between the same two
 vertices and asserts `edge0.id() != edge1.id()`
-([`lib.rs#L112-L121`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-topology/src/lib.rs#L112-L121)).
+([`lib.rs#L113-L124`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-topology/src/lib.rs#L113-L124) —
+the doc-comment quote is at L116, the `assert_ne!` at L123).
 `id()` is `ID::new(Arc::as_ptr(&self.point))`
 ([`vertex.rs`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-topology/src/vertex.rs), method `id`),
 so identity is the pointer, sharing is `Arc::clone`, and — unlike Fornjot — the geometry **is
@@ -171,7 +174,7 @@ pub trait Tolerance: AbsDiffEq<Epsilon = f64> + Debug {
 — [`truck-base/src/tolerance.rs#L6-L17`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-base/src/tolerance.rs#L6-L17),
 *measured* by reading the whole 130-line file. `TOLERANCE` is a single process-wide `f64`
 constant, blanket-implemented for every type that satisfies `AbsDiffEq<Epsilon = f64>`
-([`#L19`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-base/src/tolerance.rs#L19))
+([`#L20`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-base/src/tolerance.rs#L20))
 — there is no per-vertex, per-edge or per-face tolerance field anywhere in the `Vertex`/`Edge`/
 `Face` structs quoted above, and no way to raise or lower it for one entity or one operation
 without recompiling. This answers question 6 directly: f64, and the constant is not overridable
@@ -213,32 +216,48 @@ confirms the same root cause independently with a proposed fix, and cross-links
 [#123](https://github.com/ricosjp/truck/issues/123) as the same defect reported earlier by a third,
 `NONE`-association reporter (`yuunnn-w`). Separately,
 [#114](https://github.com/ricosjp/truck/issues/114) (`NONE`, `LdotJdot`) reports `and`/`or`
-panicking outright (not returning `None`) on solids with a shared face or shared vertex/edge —
-`.expect()` calls inside `truck-shapeops` itself, not caller error handling. `NONE`-association
-`joeblew999` points to a maintained fork,
-[monstertruck](https://github.com/virtualritz/monstertruck), that changes every boolean function's
-signature from `Option<Solid>` to `Result<Solid, ShapeOpsError>` to fix exactly this class of
-crash — a working counter-design under the same licence (Apache-2.0), not merely a complaint.
+panicking outright (not returning `None`) on solids with a shared face or shared vertex/edge.
+**Verified in source, not only from the tracker:** `and` and `or` each call `.unwrap()` on the
+first element of the input solids' boundary iterators before any tolerance-based work begins
+([`transversal/integrate/mod.rs#L142-L143`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-shapeops/src/transversal/integrate/mod.rs#L142-L143)
+for `and`,
+[`#L165-L166`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-shapeops/src/transversal/integrate/mod.rs#L165-L166)
+for `or`) — `grep -rn 'expect('` across every `.rs` file under `truck-shapeops/` at the pinned
+commit returns zero matches, so the panicking call is `.unwrap()`, not `.expect()`.
+**`NONE`-association `joeblew999` claims, in a comment on #114, that the panic comes from
+`.expect()`** ("internally it uses `.expect()` in places where a proper error would be safer") and
+points to a maintained fork, [monstertruck](https://github.com/virtualritz/monstertruck), that
+changes every boolean function's signature from `Option<Solid>` to `Result<Solid, ShapeOpsError>`
+to fix exactly this class of crash — a working counter-design under the same licence (Apache-2.0),
+not merely a complaint, but the `.expect()` wording itself is this commenter's claim, contradicted
+by the source read above, not a verified fact.
 
 ### Issue tracker, roles
 
 `gh api search/issues` (the only path that exposes `author_association`) for "boolean",
 "tolerance" and "precision" returned the issues cited above plus:
-[#17](https://github.com/ricosjp/truck/issues/17) "Boolean" (`CONTRIBUTOR` `ytanimura`, the
-maintainer, posting three progress updates over roughly a year — "unstable so that the unit tests
-fail 30% of the time" during development, later "reasonably stable, although not yet at the
-enterprise level"); [#65](https://github.com/ricosjp/truck/issues/65) "Boolean operations
+[#17](https://github.com/ricosjp/truck/issues/17) "Boolean", opened by `NONE`-association
+`rustythirsty` and **still open**. `CONTRIBUTOR` `ytanimura`, the maintainer, is a commenter on the
+thread, not its author, posting three progress updates in five and a half weeks (2021-08-25,
+2021-08-30, 2021-10-02) — "unstable so that the unit tests fail 30% of the time" during
+development, then five days later a progress update describing the intersection-curve and
+loop-wire implementation, then "reasonably stable, although not yet at the enterprise level" —
+followed by two further `NONE`-association
+comments in 2024 asking about status, unanswered by a maintainer;
+[#65](https://github.com/ricosjp/truck/issues/65) "Boolean operations
 improvements" (`NONE`); [#68](https://github.com/ricosjp/truck/issues/68) "Boolean Operations take
 a long time" (`NONE`); [#6](https://github.com/ricosjp/truck/issues/6) "Make it possible to
-specify the meshing precision" (`CONTRIBUTOR` `ytanimura`, closed). Every role is `CONTRIBUTOR`
-(`ytanimura`, or one of two other one-off contributors) or `NONE`; no `OWNER` or `MEMBER` appears
-— the repo has no organization, and GitHub's `author_association` for a personal repo's own
-committer is `CONTRIBUTOR`, not `OWNER`.
+specify the meshing precision" (`CONTRIBUTOR` `ytanimura`, closed). Every role seen is `NONE`
+(issue authors, including #17's) or `CONTRIBUTOR` (`ytanimura`'s own comments and issues, or one of
+two other one-off contributors); no `OWNER` or `MEMBER` appears — the repo has no organization, and
+GitHub's `author_association` for a personal repo's own committer is `CONTRIBUTOR`, not `OWNER`.
 
 ### Maintainer and bus factor
 
 *Measured*, `gh api repos/ricosjp/truck/contributors`: `ytanimura` — 2,591 contributions; the next
-highest, `virtualritz` (an external fork maintainer, not a committer to this repository), 9. `gh
+highest, `virtualritz` (also the maintainer of the `monstertruck` fork cited above, §Booleans), 9
+contributions to this repository directly — the API counts commits to `ricosjp/truck` itself, not
+activity on the fork. `gh
 api repos/ricosjp/truck` reports 36 open issues and a push four days before this note was written
 (2026-09-07). The project is active and single-maintainer at a ratio (2,591:9) that makes it a bus
 factor of one by the same rule `problems.md` and the kernel spec apply elsewhere (question 8).
@@ -298,7 +317,8 @@ they agree within tolerance rather than the data model preventing disagreement b
 [`#L186-L190`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/storage/handle.rs#L186-L190)).
 This is safe only because `Store<T>` is **append-only**: `Blocks<T>` grows by pushing new
 16,384-element blocks and never deallocates one, and `reserve`/`insert` never overwrite or remove a
-slot ([`store.rs#L44-L55`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/storage/store.rs#L44-L55),
+slot ([`store.rs#L57-L89`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/storage/store.rs#L57-L89),
+the `reserve`/`insert` methods,
 [`blocks.rs#L17-L60`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/storage/blocks.rs#L17-L60)).
 The module doc-comment names the trade explicitly: "no limitations on performance… best possible
 convenience… `Handle`s can be owned, cloned, and dereference to the object they are referencing.
@@ -376,10 +396,21 @@ and `transformed_surface`
 out of reach (§Operations, below): a union of two cylinders in a cross shape needs a face that is
 not a plane or a cylinder, and the representation cannot express it.
 
-`Scalar` wraps `f64` through `decorum::R64`, restricted to finite, non-NaN values by construction
-so it can implement `Eq`/`Ord`/`Hash`
-([`scalar.rs#L14-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L14-L24)).
-This is a structurally different answer to Truck's NaN-propagation defect (§Truck, Booleans):
+`Scalar` is `#[repr(transparent)]` around a single `value: f64` field
+([`scalar.rs#L20-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L20-L24)),
+restricted to finite, non-NaN values by its constructor, `from_f64`, which panics on either
+condition
+([`#L53-L55`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L53-L55),
+the NaN check; the infinite check follows immediately after). `decorum::R64` is not the struct's
+storage type — it is used only inside the `Eq`/`Hash` impls, converting `self.value` to `R64` for
+the comparison or hash so the two stay consistent with each other
+([`#L192-L199`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L192-L199),
+the `Eq`/`PartialEq` impl;
+[`#L222-L228`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L222-L228),
+the `Hash` impl — both comments state this is deliberate, "to make sure that this matches the
+`Eq`/`PartialEq` implementation, as required by `Hash`"). `Ord` is implemented directly on the
+`f64` via `partial_cmp`, not through `R64`. This is a structurally different answer to Truck's
+NaN-propagation defect (§Truck, Booleans):
 where Truck's `NaN` silently flows through a `Matrix4` until an unrelated assertion misreports it,
 Fornjot's numeric type cannot represent a `NaN` at all once constructed — the failure mode moves
 from "silent wrong value" to "construction fails or panics earlier", which is closer to the kernel
@@ -400,7 +431,7 @@ translation-only, no revolve found in this tree. There is no `boolean`, `csg`, `
 issue tracker settles why, in the owner's own words, across two issues:
 
 - [Issue #42](https://github.com/hannobraun/fornjot/issues/42), "Implement union operation",
-  `OWNER` `hannobraun`, open from the project's early history to 2023-11-24, closed unresolved:
+  `OWNER` `hannobraun`, open 2022-01-19 to 2023-11-24 — one year and ten months — closed unresolved:
   "I've decided to add boolean operations to the feature wishlist… There are just too many moving
   parts (some of which I've implemented, many of which are still missing) to make this
   actionable." An earlier comment in the same thread, replying to a contributor's cross-shaped-
@@ -530,33 +561,39 @@ is real but scoped narrower than OCCT's, and Fornjot has no boolean at all.
    worth copying: naming a gap next to the type it constrains, visible to whoever extends
    validation next.
    Source: [`solid.rs#L9-L13`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/topology/objects/solid.rs#L9-L13).
-5. **A numeric type that cannot represent NaN once constructed** — Fornjot's `Scalar` wraps
-   `decorum::R64`, so a `NaN`-producing computation fails at construction rather than propagating
-   silently, as it does in Truck's `Matrix4` (§Truck, Booleans; Truck issue #128) — the exact
-   failure mode Truck's own tracker documents.
-   Source: [`scalar.rs#L14-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L14-L24).
+5. **A numeric type that cannot represent NaN once constructed** — Fornjot's `Scalar` wraps a plain
+   `f64`, but its `from_f64` constructor panics on a `NaN` or infinite input, so a `NaN`-producing
+   computation fails at construction rather than propagating silently, as it does in Truck's
+   `Matrix4` (§Truck, Booleans; Truck issue #128) — the exact failure mode Truck's own tracker
+   documents.
+   Source: [`scalar.rs#L20-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L20-L24) (struct);
+   [`#L53-L55`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L53-L55) (the NaN/infinite panic).
 
 ### Avoid
 
-- **A single global tolerance constant with no per-entity value, in both candidates.** Truck's
-  `TOLERANCE` (a `const`) and Fornjot's `ValidationConfig.tolerance` (a runtime value, but one per
-  process) both repeat the gap OCCT's per-entity tolerance closes and spec §5 commits to closing.
-  Neither can express "this edge came from a coarse import and needs a looser tolerance."
+- **A single global tolerance constant with no per-entity value, in both candidates** (`problems.md`
+  [P-02](problems.md)). Truck's `TOLERANCE` (a `const`) and Fornjot's `ValidationConfig.tolerance`
+  (a runtime value, but one per process) both repeat the gap OCCT's per-entity tolerance closes and
+  spec §5 commits to closing. Neither can express "this edge came from a coarse import and needs a
+  looser tolerance."
   Source: [`tolerance.rs#L6-L9`](https://github.com/ricosjp/truck/blob/8d03d8f7900d6aaff784d02092bf5126c1425749/truck-base/src/tolerance.rs#L6-L9);
   [`config.rs#L22-L38`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/validation/config.rs#L22-L38).
-- **A boolean that fails via `Option`/`.expect()` instead of a typed error with a message** —
-  Truck's `and`/`or` return `Option<Solid>` with no message and no offending handles, and
-  internally panic via `.expect()` on some coincident-geometry input (§Truck, Booleans) — exactly
-  what spec §12 exists to prevent. `monstertruck` demonstrates the fix is a mechanical
-  `Option → Result<T, E>` change, evidence this is an API choice, not an algorithmic necessity.
+- **A boolean that fails via `Option`/`.unwrap()` instead of a typed error with a message**
+  (`problems.md` [P-29](problems.md)) — Truck's `and`/`or` return `Option<Solid>` with no message
+  and no offending handles, and internally panic via `.unwrap()` on some coincident-geometry input
+  (§Truck, Booleans) — exactly what spec §12 exists to prevent. `monstertruck` demonstrates the fix
+  is a mechanical `Option → Result<T, E>` change, evidence this is an API choice, not an
+  algorithmic necessity.
 - **An error service whose failure surfaces on `Drop`, at an arbitrary later point, not at the
-  call that produced it** — Fornjot's `Validation::drop` panic (§Fornjot, Validation). Less severe
-  than Truck's `.expect()`, but still not a `Result` the operation returns — spec §12's model
-  exists so a caller learns of failure from the return value, not from a service object's scope.
-- **Unbounded accumulation traded for handle safety** — Fornjot's append-only `Store` buys "a
-  handle never dangles" at the cost of never reclaiming memory. Spec §6's generational handles
-  choose the other point on this trade — O(1) deletion, stable indices, dangling access detected
-  rather than dereferenced — and this candidate shows what the alternative costs.
+  call that produced it** (`problems.md` [P-29](problems.md), same row as the `Option`/`.unwrap()`
+  pair above) — Fornjot's `Validation::drop` panic (§Fornjot, Validation). Less severe than Truck's
+  `.unwrap()`, but still not a `Result` the operation returns — spec §12's model exists so a caller
+  learns of failure from the return value, not from a service object's scope.
+- **Unbounded accumulation traded for handle safety** (`problems.md` [P-04](problems.md)) —
+  Fornjot's append-only `Store` buys "a handle never dangles" at the cost of never reclaiming
+  memory. Spec §6's generational handles choose the other point on this trade — O(1) deletion,
+  stable indices, dangling access detected rather than dereferenced — and this candidate shows what
+  the alternative costs.
 
 ## Update to `problems.md`
 
@@ -567,7 +604,7 @@ is real but scoped narrower than OCCT's, and Fornjot has no boolean at all.
   second, independent illustration — a handle can never silently dangle *within one build* because
   nothing is freed, but a rebuild still produces new handles with new identity, so it does not
   solve cross-rebuild reference stability either.
-- **New row P-29**: Truck's `.expect()`-based boolean panics and Fornjot's `Drop`-triggered
+- **New row P-29**: Truck's `.unwrap()`-based boolean panics and Fornjot's `Drop`-triggered
   validation panic, added as two independent instances of "a library's error-handling API choice,
   not its algorithm, decides whether a bad input can crash the caller's process" — the conclusion
   P-01/P-09 already draw for OCCT/Blender/libigl, now shown to hold in a memory-safe language too.

@@ -15,12 +15,21 @@ row this note supplies); kernel spec §5; `problems.md` P-02
 **Last updated:** 2026-09-11
 
 > This is a **documentation-only note**: no source code was obtained (neither kernel publishes its
-> source), no spike was run, and nothing here is measured. Every figure is **claimed** — read from
-> the vendor's own public documentation pages, with the URL and the date each page was read (all
-> 2026-09-11, this note's date). Where a page requires a login, that is stated and the note cites
-> the nearest public page instead. No competing geotechnical or structural calculation software is
-> named anywhere in this note, per the repository's naming rule; Parasolid and ACIS are B-rep CAD
-> kernels, the subject this repository's exception explicitly permits.
+> source), no spike was run, and nothing here is measured. Every figure is **claimed** — but the
+> pages it is claimed from are **not the vendors' own sites**. Siemens (Parasolid) and Spatial/
+> Dassault Systèmes (ACIS) both gate their current documentation behind a customer login; every
+> figure in this note is read instead from third-party mirrors that host older public copies of
+> that documentation — q-solid.com (Parasolid v35; ACIS, explicitly labelled "R17" in its own URL
+> path and carrying the footer "© 1989-2007 Spatial Corp., a Dassault Systèmes company") and
+> www-isl.ece.arizona.edu (ACIS, an older, undated-by-release-number snapshot — its pages carry an
+> internal page timestamp of "Spatial Technology Wed Nov 20 11:14:14 MST 2002", the company's name
+> before the "Spatial Corp." branding q-solid's R17 pages use, and no release number is stated on
+> the page itself). The ACIS row below therefore draws on **two mirrors of two different ACIS
+> releases**, not one; each citation in the table and prose states which. URL and access date are
+> given for every mirror page read (all 2026-09-11, this note's date). No competing geotechnical or
+> structural calculation software is named anywhere in this note, per the repository's naming rule;
+> Parasolid and ACIS are B-rep CAD kernels, the subject this repository's exception explicitly
+> permits.
 
 ---
 
@@ -32,24 +41,27 @@ ceiling on how large a model can be relative to that distance — not a philosop
 numbers and a ratio. Parasolid's defaults are 1.0e-8 units linear and 1.0e-11 rad angular, inside a
 1000×1000×1000-unit box (recommended as 1 km at 1 model-unit = 1 m) — a ratio of roughly **10¹¹**
 between model extent and linear precision. ACIS's `SPAresabs` defaults to 1e-6 (application-defined
-units) with `SPAresnor` = 1e-10, from which the documentation itself derives the largest
-representable quantity as `SPAresabs / SPAresnor` = 1e4 units — a ratio of **10¹⁰**. Both then layer
-a second mechanism, tolerant modelling, on top of the fixed precision: a per-edge and per-vertex
-tolerance value, attached only to imported or otherwise imprecise geometry, that both vendors
-describe in near-identical language — Parasolid as edges-as-tubes and vertices-as-spheres,
-ACIS as a `TEDGE`/`TVERTEX` pair of subclasses carrying an explicit tolerance field. This is the
-same design OCCT ships as its *only* tolerance model, not an add-on (`occt.md` §Tolerance model).
-ADR-0006's 1e-6 m default sits exactly at ACIS's `SPAresabs` default, two orders of magnitude
-looser than Parasolid's 1e-8-unit linear precision, and one order looser than OCCT's
-`Precision::Confusion()` (1e-7 m) — the loosest of the four, but by no more than two decades, not
-an outlier by orders of magnitude.
+units) with `SPAresnor` = 1e-10; the vendor states the model space directly in prose while deriving
+a third constant from it — "our model space is 10⁴ and the smallest geometric feature that can be
+modeled is 10⁻⁶" (`SPAresmch`, §ACIS below) — which is also algebraically forced by the stated
+`SPAresnor = SPAresabs/largest` definition: `SPAresabs / SPAresnor` = 1e4 units — a ratio of
+**10¹⁰**. Both then layer a second mechanism, tolerant modelling, on top of the fixed precision: a
+per-edge and per-vertex tolerance value, attached only to imported or otherwise imprecise geometry,
+that both vendors describe in near-identical language — Parasolid as edges-as-tubes and
+vertices-as-spheres, ACIS as a `TEDGE`/`TCOEDGE` pair of subclasses derived from `EDGE`/`COEDGE`
+carrying an explicit tolerance field (tolerant vertices are named only in the same page's prose,
+not as a third derived class). This is the same design OCCT ships as its *only* tolerance model,
+not an add-on (`occt.md` §Tolerance model). ADR-0006's 1e-6 m default ties ACIS's `SPAresabs`
+default exactly, two orders of magnitude looser than Parasolid's 1e-8-unit linear precision, and
+one order looser than OCCT's `Precision::Confusion()` (1e-7 m) — it ties the loosest of the four,
+but by no more than two decades, not an outlier by orders of magnitude.
 
 ## The numbers, sourced
 
 | Kernel | Linear precision default | Angular precision default | Tolerant-modelling mechanism | Model-size limit | Source · date |
 |---|---|---|---|---|---|
 | **Parasolid** | 1.0e-8 units ("session precision") | 1.0e-11 rad ("session angle precision") | Local precision set per edge/vertex ("Tolerant Modelling"); edges as tubes, vertices as spheres; the SP-curve geometry attached to the edge replaces the exact 3-space curve | 1000×1000×1000-unit size box, centred at origin; recommended unit = 1 m → ≈1 km max extent | [Session And Local Precision, Parasolid v35 docs](http://www.q-solid.com/Parasolid_Docs_V35/chapters/fd_chap.017.html), accessed 2026-09-11 |
-| **ACIS** | 1.0e-6 (`SPAresabs`, application-defined units — "typically... inches or millimeters") | none stated as a separate angular constant — see §ACIS below for how ACIS folds angle into the same resolution family | `TEDGE`/`TCOEDGE` classes derived from `EDGE`/`COEDGE`, storing an explicit tolerance; loops need not close within `SPAresabs` | Largest representable quantity = `SPAresabs / SPAresnor` = 1e-6 / 1e-10 = **1e4** units | [Tolerance Variables, ACIS user guide](http://www.q-solid.com/ACIS_Docs_R17/online/SPAacisuserTechArticles/SPAacisuser_totol.htm); [SPAresabs](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0002.HTM); [Tolerant Edges](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/KERN/KERN/06TMOD/0002.HTM), accessed 2026-09-11 |
+| **ACIS** | 1.0e-6 (`SPAresabs`, application-defined units — "[o]ne could think of the numbers as being inches, or millimeters, or any other unit") | none stated as a separate angular constant — see §ACIS below for how ACIS folds angle into the same resolution family | `TEDGE`/`TCOEDGE` classes derived from `EDGE`/`COEDGE`, storing an explicit tolerance; loops need not close within `SPAresabs` | Largest representable quantity = `SPAresabs / SPAresnor` = 1e-6 / 1e-10 = **1e4** units, also stated directly in prose ("our model space is 10⁴", §ACIS below) | [Tolerance Variables, ACIS user guide (R17 mirror, q-solid.com)](http://www.q-solid.com/ACIS_Docs_R17/online/SPAacisuserTechArticles/SPAacisuser_totol.htm); [Units and Sharing Model Data (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0006.HTM); [SPAresabs (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0002.HTM); [Tolerant Edges (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/KERN/KERN/06TMOD/0002.HTM), accessed 2026-09-11 |
 | **OCCT** (for comparison — already in this directory, not re-derived here) | `Precision::Confusion()` = 1e-7 m | `Precision::Angular()` = 1e-12 rad | Per-entity tolerance on `TopoDS` vertex/edge/face; grows, monotone by convention, never a required floor other than the constants | None found in the source read for `occt.md` — no size-box constant located | [`occt.md`](occt.md) §Tolerance model |
 | **Our kernel spec (ADR-0006)** | 1e-6 m | 1e-9 rad | Explicit per-entity tolerance, grows but never shrinks (spec §5) | No fixed box — f64 local coordinates in tile frames; the precision-set spike tested 500 km at 1e-6 m (ratio ≈5e11) | [ADR-0006](../../architecture/decisions/0006-f64-local-coordinates-in-tile-frames.md); [kernel spec §5](../../superpowers/specs/2026-09-09-geometry-kernel-design.md) |
 
@@ -98,8 +110,17 @@ OCCT's own documentation names for fuzzy tolerance (`occt.md` §Known problems).
 ## ACIS — the resolution family and tolerant edges
 
 *Claimed*, read from the ACIS Kernel documentation's "Tolerance Variables" article and the
-"SPAresabs"/"Tolerant Edges" reference pages (links above). ACIS names five related constants,
-all quoted directly:
+"SPAresabs"/"Tolerant Edges" reference pages (links above, R17 mirror and older-release mirror
+respectively — see the preamble for which page is which). ACIS names five related constants, all
+quoted directly.
+
+Units first, since the table above calls `SPAresabs` "application-defined units": ACIS documents
+itself as historically unitless — "ACIS was designed around the concept that all parts are modeled
+in a single *unitless* number space (object space). One could think of the numbers as being
+inches, or millimeters, or any other unit" — while separately choosing millimetres as the default
+*save-file* unit for interchange between applications ([Units and Sharing Model Data, ACIS Kernel
+documentation](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0006.HTM),
+accessed 2026-09-11, older-release mirror).
 
 - **`SPAresabs`** — "resolution absolute… the smallest meaningful quantity representable in
   ACIS… the distance below which ACIS considers two points to be coincident… also represents the
@@ -109,10 +130,13 @@ all quoted directly:
   representable in ACIS (`SPAresabs`) to the largest… The default value is 10⁻¹⁰." The
   documentation states the relationship in text — "From the definition `SPAresnor` =
   `SPAresabs`/largest, the largest quantity representable in ACIS is:" — followed by a formula
-  rendered as an inline image this note could not read. *Inferred*, algebraically forced by that
-  stated definition, not read from the image: `SPAresabs / SPAresnor` = 1e-6 / 1e-10 = **1e4**,
-  the model-size limit in the table above — stated by the vendor as a formula rather than a fixed
-  box the way Parasolid states its size box.
+  rendered as an inline image this note could not read. Algebraically forced by that stated
+  definition: `SPAresabs / SPAresnor` = 1e-6 / 1e-10 = **1e4**, the model-size limit in the table
+  above — stated by the vendor as a formula rather than a fixed box the way Parasolid states its
+  size box. This figure is not only this note's own arithmetic: the `SPAresmch` derivation quoted
+  below independently states the same 1e4 in readable prose on the same page ("our model space is
+  10⁴"), so the model-size limit is a **claimed** figure, read directly, not solely an inference
+  from the unreadable image.
 - **`SPAresfit`** — "resolution fit… used as a guide to the fitting algorithms for the fit
   tolerance of an approximate curve or surface. The default value is 10⁻³" — three orders of
   magnitude looser than `SPAresabs`, consistent with a fitted approximation needing far less
@@ -146,7 +170,7 @@ valid model, at the cost of a comparison that is no longer against zero but agai
 value. All three describe the mechanism with the same two properties:
 
 1. **It is opt-in per entity, not a global relaxation.** Parasolid's local precision is set on
-   specific edges/vertices via `PK_EDGE_set_precision_2`; ACIS's `TEDGE`/`TVERTEX` are distinct
+   specific edges/vertices via `PK_EDGE_set_precision_2`; ACIS's `TEDGE`/`TCOEDGE` are distinct
    subclasses an entity becomes only when it needs the mechanism; OCCT's tolerance field exists on
    every entity but is only *raised above the floor* where an operation actually needed it
    (`occt.md` §Per-entity tolerance, "growth happens only where an interference actually had to be
@@ -181,7 +205,7 @@ modelling with local tolerances"** (Proceedings of the Third ACM Symposium on So
 Applications, 1995, DOI [10.1145/218013.218067](https://doi.org/10.1145/218013.218067)) is the
 paper most frequently cited as the origin of exactly this idea — a tolerance value attached to
 each B-rep entity rather than one global epsilon — which both OCCT and, independently, ACIS's
-`TEDGE`/`TVERTEX` design and Parasolid's local-precision mechanism converge on in production
+`TEDGE`/`TCOEDGE` design and Parasolid's local-precision mechanism converge on in production
 kernels roughly contemporaneously. An earlier paper, Shuming Fang and Beat Brüderlin's
 **"Robustness in geometric modeling — tolerance-based methods"** (in *Computational Geometry:
 Methods, Algorithms and Applications*, Springer LNCS 553, 1991, DOI
@@ -192,19 +216,21 @@ publisher paywall from this environment (`dl.acm.org` returned a Cloudflare chal
 automated fetch; the Springer chapter was not attempted for the same reason) — so both citations
 are to the paper's existence, title and DOI only, not to a verified quotation from the text.
 
-## Comparison with ADR-0006, and what the kernel spec should take from it
+## Verdict
 
-*Inferred* — this section draws conclusions the sources above do not state themselves.
+**Comparison with ADR-0006, and what the kernel spec should take from it.** *Inferred* — this
+section draws conclusions the sources above do not state themselves.
 
-**ADR-0006's 1e-6 m linear default is the loosest of the four, but not by an order that stands
-out:** it matches ACIS's `SPAresabs` default (1e-6) to the digit, though ACIS's units are
-application-defined rather than fixed at metres; it is two orders of magnitude looser than
-Parasolid's 1e-8-unit session precision; and one order looser than OCCT's 1e-7 m
-`Precision::Confusion()`. By the standard "what do working kernels ship" test the README's
-weighting matrix implicitly asks, this is a defensible default within the documented range, not an
-outlier by orders of magnitude — but it is worth ADR-0006 stating plainly that its default is the
-loosest of the three prior-art numbers gathered here, not the tightest or the median, since a
-reader skimming only the headline number could otherwise assume the opposite.
+**ADR-0006's 1e-6 m linear default ties the loosest of the four, but not by an order that stands
+out:** it matches ACIS's `SPAresabs` default (1e-6) to the digit — the two tie exactly, neither
+looser than the other — though ACIS's units are application-defined rather than fixed at metres;
+ADR-0006 is two orders of magnitude looser than Parasolid's 1e-8-unit session precision, and one
+order looser than OCCT's 1e-7 m `Precision::Confusion()`. By the standard "what do working kernels
+ship" test the README's weighting matrix implicitly asks, this is a defensible default within the
+documented range, not an outlier by orders of magnitude — but it is worth ADR-0006 stating plainly
+that its default ties the loosest of the three prior-art numbers gathered here (with ACIS), not
+the tightest or the median, since a reader skimming only the headline number could otherwise
+assume the opposite.
 
 **ADR-0006's angular default (1e-9 rad) is looser than either commercial kernel's**, by two orders
 against Parasolid (1e-11 rad) and by three against OCCT (1e-12 rad, `Precision::Angular()`). No
@@ -248,11 +274,12 @@ either commercial kernel's documentation exposes.
 
 ## Sources
 
-- [Session And Local Precision, Parasolid v35 user documentation](http://www.q-solid.com/Parasolid_Docs_V35/chapters/fd_chap.017.html), accessed 2026-09-11
-- [Tolerance Variables, ACIS user guide (R17)](http://www.q-solid.com/ACIS_Docs_R17/online/SPAacisuserTechArticles/SPAacisuser_totol.htm), accessed 2026-09-11
-- [SPAresabs, ACIS Kernel reference](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0002.HTM), accessed 2026-09-11
-- [SPAresabs scaling, ACIS Kernel reference](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0008.HTM), accessed 2026-09-11
-- [Tolerant Edges, ACIS Kernel Tolerant Modeling chapter](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/KERN/KERN/06TMOD/0002.HTM), accessed 2026-09-11
+- [Session And Local Precision, Parasolid v35 user documentation, third-party mirror](http://www.q-solid.com/Parasolid_Docs_V35/chapters/fd_chap.017.html), accessed 2026-09-11
+- [Tolerance Variables, ACIS user guide (R17, q-solid.com mirror)](http://www.q-solid.com/ACIS_Docs_R17/online/SPAacisuserTechArticles/SPAacisuser_totol.htm), accessed 2026-09-11
+- [Units and Sharing Model Data, ACIS Kernel documentation (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0006.HTM), accessed 2026-09-11
+- [SPAresabs, ACIS Kernel reference (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0002.HTM), accessed 2026-09-11
+- [SPAresabs scaling, ACIS Kernel reference (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/ACIS/FCG/08TOL/0008.HTM), accessed 2026-09-11
+- [Tolerant Edges, ACIS Kernel Tolerant Modeling chapter (older release, arizona.edu mirror)](http://www-isl.ece.arizona.edu/ACIS-docs/HTM/DATA/KERN/KERN/06TMOD/0002.HTM), accessed 2026-09-11
 - Jackson, D.J., "Boundary representation modelling with local tolerances," Proc. 3rd ACM Symposium
   on Solid Modeling and Applications, 1995. DOI: [10.1145/218013.218067](https://doi.org/10.1145/218013.218067) — title and DOI only, full text not read (paywalled)
 - Fang, S., Brüderlin, B., "Robustness in geometric modeling — tolerance-based methods," in
