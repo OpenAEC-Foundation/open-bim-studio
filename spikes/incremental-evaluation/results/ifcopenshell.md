@@ -16,7 +16,7 @@ Every number below appears in one of those files.
 | `ifcopenshell` (Python) | `0.8.4.post1` |
 | `ifcopenshell` (native) | `ifcopenshell_wrapper.version()` reports `0.8.0` |
 | `psutil` | 7.2.2 |
-| Repeats | 5 per timed operation, median reported |
+| Repeats | 5 per timed **whole-model** operation and per edit test, median reported. The per-element pass is **one sample per element** — see §Per-element evaluation |
 
 ### Which OCCT the wheel bundles, and how we know
 
@@ -100,8 +100,14 @@ Three things in that table are worth stating plainly:
    32 logical processors). Element counts are identical at both thread counts.
 2. **`hybrid-cgal-simple-opencascade` produces the same 107 / 3,654 elements as
    `opencascade`, 1.6× and 13.1× faster.** On the larger model that is 9.013 s → 0.687 s for
-   the same element count. This is the default in Bonsai but not the default of the Python
-   API, and it is the single largest performance lever measured here.
+   the same element count. It is **not** the default of the Python API (*measured* — the
+   `geometry_library` argument defaults to `opencascade`), and it is the single largest
+   performance lever measured here. That Bonsai uses it is *claimed*, not verified here:
+   `Andrej730` (`authorAssociation: CONTRIBUTOR`) states on
+   [IfcOpenShell#6142](https://github.com/IfcOpenShell/IfcOpenShell/issues/6142) that the
+   default Python settings differ from Bonsai's in two ways, one of them "using 'opencascade'
+   geometry library while Bonsai is using 'hybrid-cgal-simple-opencascade'". No Bonsai source
+   was read for this spike.
 3. **`cgal-simple` is faster still (0.651 s) but produces fewer elements** — 103 vs 107, and
    3,646 vs 3,654 — and the elements it does produce are not all the same geometry. See
    [`compare.md`](compare.md): it returns an *empty* result for walls with openings. The
@@ -134,6 +140,14 @@ the completed measurements with it.
 `geom.create_shape(settings, element)` is the only public way IfcOpenShell offers to produce the
 geometry of **one** element, so it is the cost of re-evaluating one element after a change. It
 was timed separately for **every** element the iterator produced.
+
+**Sampling: once per element, not five times.** The five-repeat rule stated at the top of this
+file applies to the whole-model and edit-test operations. This pass times each element **once**
+(`per_element_create_shape` walks `produced_ids` and times one `create_shape` call per id), so
+the median below is a median over 107 or 3,654 elements, and **p90 / p95 / p99 / max are single
+measurements of single elements**. What corroborates the tail is the slowest-element edit test
+further down, which re-times the worst element five times, and the sum-versus-whole-model
+cross-check immediately after the table.
 
 This is a *pessimistic* proxy, and the source says why: `helper_fn_create_shape` constructs a
 fresh `Converter` — and therefore a fresh kernel and a fresh mapping — on every call
@@ -284,8 +298,12 @@ no invalidation path
 ([`mapping.cpp#L693-L721`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/mapping/mapping.cpp#L693-L721)).
 The iterator has a second, persistent cache keyed on GlobalId plus representation id
 ([`Iterator.h#L161-L194`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/Iterator.h#L161-L194)),
-also with no invalidation. Neither is exercised by `create_shape`, and `cache-shapes` was off
-for every measurement here.
+with no *automatic* invalidation — its HDF5 serializer does expose a manual
+`remove(GlobalId)`, which Bonsai calls
+([IfcOpenShell#1785](https://github.com/IfcOpenShell/IfcOpenShell/issues/1785), `Moult`,
+`authorAssociation: CONTRIBUTOR`), so the caller can evict an entry it has itself decided is
+stale. Neither cache is exercised by `create_shape`, and `cache-shapes` was off for every
+measurement here.
 
 ## Element tables
 

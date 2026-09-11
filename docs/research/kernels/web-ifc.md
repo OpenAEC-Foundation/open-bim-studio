@@ -65,9 +65,9 @@ Read: `src/cpp/web-ifc/parsing/` (`IfcLoader.cpp/.h`, `IfcTokenStream.cpp/.h`, `
 | **GPU path** | This is what it is built for: interleaved `[x,y,z,nx,ny,nz]` float32, handed over as a pointer into `HEAPF32` and read as a `Float32Array` — a buffer you upload without touching | **measured** ([`web-ifc-api.ts#L1305-L1307`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/ts/web-ifc-api.ts#L1305-L1307)) |
 | **IFC coverage** | Both benchmark schemas read correctly (IFC4 and IFC2X3, verified by `GetModelSchema`). Coverage breadth not otherwise measured | **measured**, partial |
 | **Performance** | `OpenModel` 16.5 ms / 328.7 ms; `LoadAllGeometry` 85.3 ms / **296.6 ms**. Roughly **30×** faster than IfcOpenShell's OCCT path on the larger model, and ~2.3× faster than IfcOpenShell's own hybrid kernel | **measured** | [results](../../../spikes/incremental-evaluation/results/webifc.md) |
-| **Embeddability** | WASM. Embeddable anywhere a WASM runtime is, including in-process from DynLex — but the model must fit the WASM heap, and the default `MEMORY_LIMIT` is 2 GB | **measured** (setting) + **inferred** |
+| **Embeddability** | WASM. Embeddable anywhere a WASM runtime is, including in-process from DynLex — but the model must fit the WASM heap. Two different numbers, not to be conflated: the loader's `MEMORY_LIMIT` **setting** defaults to 2 GB and budgets the *token tape's* chunks; the ceiling a maintainer names for the model itself is **4 GB, the WASM address space** (#538) | **measured** (the setting) + **claimed** (the 4 GB ceiling) |
 | **2D derivation** | `GetAllCrossSections2D` / `GetAllCrossSections3D` exist on the API; not examined | **unknown** |
-| **Maturity** | Active; issues answered by `beachtom` (**COLLABORATOR**), `QuimMoya` (**CONTRIBUTOR**), `agviegas` (**COLLABORATOR**), `HoyosJuan` (**MEMBER**). The REAL write path has been fixed at least four separate times (#214, #454, #470, #695) | **claimed** |
+| **Maturity** | Active; issues answered by `beachtom` (**COLLABORATOR**), `QuimMoya` (**CONTRIBUTOR**), `agviegas` (**COLLABORATOR**), `HoyosJuan` (**MEMBER**). The REAL write path has been fixed at least four separate times: [#214](https://github.com/ThatOpen/engine_web-ifc/issues/214) (integers emitted as `0`, exponents as `e`), [#454](https://github.com/ThatOpen/engine_web-ifc/issues/454) (scientific notation read back as `0`, "now fixed" twice, three months apart), [#470](https://github.com/ThatOpen/engine_web-ifc/issues/470) (re-export corrupts geometry, "This is now fixed") and [#695](https://github.com/ThatOpen/engine_web-ifc/issues/695) (a trailing `.` after a positive exponent, "Should now be fixed" the next day) | **claimed** |
 | **AI familiarity** | Not scored. One column, never a tiebreaker (R-09) | **unknown** |
 
 ## The tape parser — the best thing in here
@@ -76,8 +76,8 @@ Read: `src/cpp/web-ifc/parsing/` (`IfcLoader.cpp/.h`, `IfcTokenStream.cpp/.h`, `
 addresses attributes by offset into it: `GetIntArgument(tapeOffset)`,
 `GetDoubleArgument(tapeOffset)`, `GetRefArgument(tapeOffset)`, `GetTokenType(tapeOffset)`
 ([`IfcLoader.h`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/cpp/web-ifc/parsing/IfcLoader.h)).
-The token type is a one-byte enum — `STRING, LABEL, ENUM, REAL, REF, EMPTY, SET_BEGIN, SET_END,
-LINE_END, INTEGER`
+The token type is a one-byte enum with eleven members — `UNKNOWN = 0, STRING, LABEL, ENUM, REAL,
+REF, EMPTY, SET_BEGIN, SET_END, LINE_END, INTEGER`
 ([`IfcTokenStream.h#L18-L30`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/cpp/web-ifc/parsing/IfcTokenStream.h#L18-L30)).
 
 The tape is **chunked and evictable**. `IfcTokenStream(chunkSize, maxChunks)` holds a vector of
@@ -188,23 +188,29 @@ numeric `value` keys with `_internalValue`/`_representationValue` getters — `b
 (**COLLABORATOR**) explains it as "mainly loss of precision across the WASM/JS boundary". The
 WASM/JS numeric boundary is, as of 2025, still an active design constraint.
 
-On [#504](https://github.com/ThatOpen/engine_web-ifc/issues/504) (CLOSED 2024-01-28,
-`COORDINATE_TO_ORIGIN` on a very wide model) `beachtom` (**COLLABORATOR**) calls it "quite tricky
-because the model is so wide it is giving a double precision error" — a **double** precision
-error, before float32 ever happens. So there are two precision problems here, not one, and only
-the float32 one is measured in this note.
+On [#504](https://github.com/ThatOpen/engine_web-ifc/issues/504) (`COORDINATE_TO_ORIGIN` on a very
+wide model) `beachtom` (**COLLABORATOR**) calls it "quite tricky because the model is so wide it
+is giving a double precision error" — a **double** precision error, before float32 ever happens.
+He closed the issue nine days later with "This is now fixed!", so this is a diagnosis of a
+mechanism, **not** a standing defect in 0.0.77: what it establishes is that the maintainers
+locate a class of precision loss above float32, not that wide models are broken today. So there
+are two precision problems in this library's history, and only the float32 one is measured — and
+only the float32 one is present in the shipped version by construction.
 
 ## Incremental evaluation
 
 ### The cache
 
 `IfcGeometryProcessor` holds `_expressIDToGeometry`, an `unordered_map<uint32_t, IfcGeometry>`
-keyed on the **geometry** express id, not the product
-([`IfcGeometryProcessor.cpp#L59-L62`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/cpp/web-ifc/geometry/IfcGeometryProcessor.cpp#L59-L62)).
+keyed on the **geometry** express id, not the product — declared at
+[`IfcGeometryProcessor.h#L73`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/cpp/web-ifc/geometry/IfcGeometryProcessor.h#L73)
+and read through
+[`IfcGeometryProcessor.cpp#L59-L62`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/cpp/web-ifc/geometry/IfcGeometryProcessor.cpp#L59-L62)
+(`GetGeometry` returns `_expressIDToGeometry[expressID]`).
 That is why the per-element distribution is so skewed: 0.016 ms median on the large model, because
 most calls are map lookups for a representation an earlier element already built; and why the sum
-of all per-element calls (244.1 ms) matches `LoadAllGeometry` (296.6 ms) — the same total work,
-distributed very unevenly.
+of all per-element calls (244.1 ms) is within **18%** of `LoadAllGeometry` (296.6 ms) — the same
+total work, distributed very unevenly.
 
 ### The invalidation call does not work
 
@@ -258,9 +264,17 @@ A user hit the same gap from the other side. On
 needed per-element `GetFlatMesh` in a loop but found memory grew without bound, because
 `StreamAllMeshes` clears the processor internally and `GetFlatMesh` does not; his workaround was
 to call `StreamMeshes` with a one-element array purely to trigger the clear, which he described as
-an abuse of the interface. `beachtom` (**COLLABORATOR**) conceded a TS hook to force a clear of
-the geometry loader cache was probably needed, then pointed at a call under a name that does not
-exist in the codebase. The gap has been known for over a year.
+an abuse of the interface. `beachtom` (**COLLABORATOR**) conceded "I think you are right we
+probably need to add a TS hook to force a clear of the geometry loader cache manually", then
+pointed at "a ClearCache commad" — a name that does not exist in the codebase.
+
+**The thread was closed satisfied, and it is worth saying why**: the reporter (`avlsoraj`,
+**NONE**) closed it himself with "Calling delete() on each geometry helps, thanks for pointing it
+out. I had completely missed that method." His problem was per-mesh memory, and `Delete()` on
+each returned geometry solved it. So this issue is **not** an open report of the invalidation
+gap — no TS clear hook was added, and nobody in the thread was asking for one. It is cited here
+only for what a COLLABORATOR conceded in passing about the cache's missing manual clear, which
+is a weaker claim than "the gap has been known for over a year" and replaces it.
 
 ### The raw write path corrupts REALs
 
@@ -275,11 +289,16 @@ A separate probe, three cases each on its own freshly opened model:
 
 **An unmodified raw round trip destroys every REAL on the line.** No issue on the tracker reports
 this (searched: `WriteRawLineData nan`, `nan`, `NaN`, `IFCREAL nan`, `writes nan`), which is
-consistent with almost nobody using web-ifc as an editable in-memory model. The adjacent known
-behaviour is PR [#458](https://github.com/ThatOpen/engine_web-ifc/pull/458) (MERGED 2023-08-01, by
-`simquat`), which states that null numeric values are converted to `NaN` on read — so a
-read-modify-write of an object containing a `$` emits a NaN-derived value. *(measured; new row
-**P-26** in [`problems.md`](problems.md))*
+consistent with almost nobody using web-ifc as an editable in-memory model.
+
+The measurement therefore stands on its own. The nearest thing on the tracker is a PR that went
+the *other* way and was merged 54 releases before the version measured here:
+[#458](https://github.com/ThatOpen/engine_web-ifc/pull/458), "Preserve null values
+when parsing number, boolean and logical" (by `simquat`, MERGED 2023-08-01), whose problem
+statement — "null values are not preserved. Numbers … are converted to NaN" — describes the
+behaviour it *removed*. It is cited here as a fix, not as the cause: whatever produces the `nan`
+in 0.0.77's raw write path, this PR is not evidence of it. *(measured; new row **P-26** in
+[`problems.md`](problems.md))*
 
 ## Known problems
 
@@ -294,12 +313,27 @@ OWNER by the API.
 | [#1057](https://github.com/ThatOpen/engine_web-ifc/issues/1057) — incorrect geometry with `IfcOpeningElement` | CLOSED 2024-10-20 | Wall geometry becomes wrong when a void relation is present; deleting the relation fixes it | `QuimMoya` (**CONTRIBUTOR**) acknowledged a cause was found but did not name it. A commenter reports the same source model exports correctly in IFC2x3 but not IFC4, and that a floor failed until a vertex **3 mm** from the boundary was hand-edited — near-coincidence sensitivity in the boolean |
 | [#1774](https://github.com/ThatOpen/engine_web-ifc/issues/1774) — memory access out of bounds | OPEN, 2026-01-08 | Conversion crashes with a deeply self-recursive WASM stack trace | `beachtom` (**COLLABORATOR**): "There is something recursive in the geometry in this model that the library doesn't like… it is a known issue". `QuimMoya` (**CONTRIBUTOR**) localises it to a recursive `IFCBOOLEANRESULT` and explains it is unfixed because a fix "requires a huge artifact that mixes different logics". **There is no way to skip a failing element and continue** |
 | [#1999](https://github.com/ThatOpen/engine_web-ifc/issues/1999) — `GetFlatMesh` crashes on large MEP models | OPEN, 2026-05-19, **zero comments**, version **0.0.77** | On ~400 MB models `GetFlatMesh` intermittently aborts with `memory access out of bounds`. After the abort, subsequent calls and even `CloseModel` throw — the WASM instance is unrecoverable | No maintainer reply. The version is the one measured here |
-| [#538](https://github.com/ThatOpen/engine_web-ifc/issues/538) — abnormal exit on a very large model | OPEN, 2023-12-25 | Writing 150,000 × 50 `IfcPolyLoop` aborts; 100,000 succeeds | `beachtom` (**COLLABORATOR**): "it seems like you are overfilling the WASM memory so we need to write the data out when that happens". The in-memory model must fit the WASM heap; there is no spill-to-disk for the model |
-| [#504](https://github.com/ThatOpen/engine_web-ifc/issues/504) — `COORDINATE_TO_ORIGIN` on a wide model | CLOSED 2024-01-28 | Large coordinates cause visible precision problems, and translating to the origin bakes them in | `beachtom` (**COLLABORATOR**): "this is quite tricky because the model is so wide it is giving a double precision error" |
+| [#538](https://github.com/ThatOpen/engine_web-ifc/issues/538) — abnormal exit on a very large model | OPEN, 2023-12-25, but **the reported symptom was addressed in-thread** | Writing 150,000 × 50 `IfcPolyLoop` aborts; 100,000 succeeds | `beachtom` (**COLLABORATOR**) first: "it seems like you are overfilling the WASM memory so we need to write the data out when that happens", then, a week later, "So this should now be fixed. I also added a method to write files out using a callback" — **a streaming write path was added**, followed by two further memory leaks found and fixed in the same thread. The ceiling that remained is named explicitly, and it is **not** the 2 GB `MEMORY_LIMIT` setting: "you are now hitting I think a hard limit of 4GB which is what WASM can hold in memory", and it applies to *created* lines — "if you are loading a model - you cannot add more than 4GB of IFC lines to it". The issue stays open on a later duplicate-line bug, not on the original abort |
+| [#504](https://github.com/ThatOpen/engine_web-ifc/issues/504) — `COORDINATE_TO_ORIGIN` on a wide model | CLOSED 2024-01-28 — **"This is now fixed!"** (`beachtom`, **COLLABORATOR**) | Large coordinates cause visible precision problems, and translating to the origin bakes them in | `beachtom` (**COLLABORATOR**), while diagnosing: "this is quite tricky because the model is so wide it is giving a double precision error". **The diagnosis is what this note cites; the defect itself was fixed at the time and is not a standing limit of 0.0.77.** No fix mechanism is given in the thread, and none was verified here |
 | [#292](https://github.com/ThatOpen/engine_web-ifc/issues/292) — numeric instability of real values | CLOSED 2023-02-20 | `0.16` reads back as `0.16000000000000003` | `beachtom` (**COLLABORATOR**): the imprecision is introduced in the transfer from C++ to JavaScript, "but oddly enough not in the opposite direction". Fixed by keeping values as strings in C++. Note the false-fix cycle: closed once as already fixed, demonstrated otherwise, reopened |
-| [#214](https://github.com/ThatOpen/engine_web-ifc/issues/214) — written REALs are invalid EXPRESS | CLOSED 2023-02-16 | Integers emitted as `0` instead of `0.`, exponents as `e` not `E` | Recurring: the REAL write path has been fixed at least four separate times (#214, #454, #470, #695). Relevant because a modeller's round trip lives on that path |
+| [#214](https://github.com/ThatOpen/engine_web-ifc/issues/214) — written REALs are invalid EXPRESS | CLOSED 2023-02-16 | Integers emitted as `0` instead of `0.`, exponents as `e` not `E` | Recurring: the REAL write path has been fixed at least four separate times ([#214](https://github.com/ThatOpen/engine_web-ifc/issues/214), [#454](https://github.com/ThatOpen/engine_web-ifc/issues/454), [#470](https://github.com/ThatOpen/engine_web-ifc/issues/470), [#695](https://github.com/ThatOpen/engine_web-ifc/issues/695)), each closed by a maintainer as fixed and each followed by another case of the same class. Relevant because a modeller's round trip lives on that path |
 | [#65](https://github.com/ThatOpen/engine_web-ifc/issues/65) — boolean elements render differently after a version bump | OPEN since 2021-07-23 | Doors and windows stop appearing. `beachtom` (**COLLABORATOR**) compares against another open IFC viewer in-thread | The oldest open geometry issue. Illustrates how these bugs are established at all: by comparison with another implementation, which is what P-10 formalises |
-| [#1380](https://github.com/ThatOpen/engine_web-ifc/issues/1380) — `GetFlatMesh` vs `StreamMeshes` memory | CLOSED 2025-04-16 | Per-element `GetFlatMesh` in a loop grows memory without bound | §Incremental evaluation. `beachtom` (**COLLABORATOR**) conceded a manual clear hook was needed and named a call that does not exist |
+| [#1380](https://github.com/ThatOpen/engine_web-ifc/issues/1380) — `GetFlatMesh` vs `StreamMeshes` memory | CLOSED 2025-04-16 — **resolved by the reporter's own fix**, `Delete()` on each returned geometry | Per-element `GetFlatMesh` in a loop grows memory without bound | §Incremental evaluation. `beachtom` (**COLLABORATOR**) conceded in passing that "we probably need to add a TS hook to force a clear of the geometry loader cache manually" and named "a ClearCache commad", which does not exist. **Not a standing defect** — the reporter's memory problem was solved; the passing concession is all this row carries |
+
+Two more boolean reports were read and are **not** given rows, because neither adds a mechanism
+the table does not already carry — they are recorded here so the Sources list has a body
+reference. [#398](https://github.com/ThatOpen/engine_web-ifc/issues/398) (CLOSED 2023-05-30,
+reporter `andi-bu`, **NONE**) is wall openings disappearing in 0.0.39–0.0.41; `QuimMoya`
+(**CONTRIBUTOR**) wrote "with the help of @beachtom we solved the issue" and `beachtom`
+(**COLLABORATOR**) closed it with "Fix is merged" — a *fixed* instance of #927's class, useful
+only as evidence that this class recurs across versions.
+[#2062](https://github.com/ThatOpen/engine_web-ifc/issues/2062) (OPEN, 2026-07-07, reporter
+`ShaMan123`, **NONE**) is the current one: boolean output that disagrees with Manifold's on the
+same file, which the reporter used to produce the expected result. `agviegas` (**COLLABORATOR**)
+re-attached the model; `thbeu` (**CONTRIBUTOR**) reports the same file renders empty in a
+third-party viewer, so the input itself is disputed and nothing in the thread is settled. It is
+the same evidentiary shape as #65: a defect established by comparison with another
+implementation, which is what P-10 formalises.
 
 ## The twelve questions
 
@@ -310,14 +344,18 @@ OWNER by the API.
    the *attribute* round trip is, and the raw path turns every REAL on a line into `nan`
    (§The raw write path). The REAL writer has been repaired four times. *measured + claimed.*
 3. **Driven in-process from DynLex?** Yes — WASM, no subprocess, no file. The constraint is the
-   heap: the whole model must fit, default limit 2 GB, with no spill (#538). *inferred +
+   heap: the whole model must fit inside the WASM address space, which `beachtom`
+   (**COLLABORATOR**) names as a hard 4 GB in #538. A callback-based *write-out* path was added
+   in that thread, so output can stream; the in-memory model still cannot. *inferred +
    claimed.*
 4. **Threading model?** Single-threaded. *inferred.*
 5. **What breaks first at scale?** WASM memory, with an unrecoverable failure mode: after an
    out-of-bounds abort even `CloseModel` throws (#1999, on 0.0.77). *claimed.*
-6. **Numeric precision?** `double` internally, **float32 out**, with two acknowledged loss points
-   — the C++/JS boundary (#292, #1464) and genuine double-precision limits on wide models (#504).
-   *measured + claimed.*
+6. **Numeric precision?** `double` internally, **float32 out**. Two further loss points are
+   acknowledged by maintainers, and both were repaired rather than being standing limits: the
+   C++/JS boundary (#292, #1464 — the fix is `_internalValue` strings) and a double-precision
+   error on a very wide model (#504, closed "This is now fixed!"). Only the float32 conversion is
+   both measured here and unavoidable by design. *measured + claimed.*
 7. **Operate on a subset of the model?** Reading, yes — `GetFlatMesh` and `StreamMeshes` take
    express ids. The tape's chunked eviction is the strongest subset-of-the-model design seen in
    this research, but it pages the *parse*, not the *evaluation*. *measured + source.*
@@ -373,8 +411,9 @@ written engines is 0.36%. Full analysis in
 - **Tolerance constants duplicated across three headers with conflicting values**, with the source
   itself asking for it to be rationalised.
 - **An unmodified raw line round trip destroys every REAL on the line.**
-- **Hard WASM heap ceiling**, no spill, no way to skip a failing element, and an unrecoverable
-  state after an out-of-bounds abort (#538, #1774, #1999).
+- **Hard WASM heap ceiling** — 4 GB, named by a maintainer (#538) — with no spill for the model
+  itself (the *write* path did gain a streaming callback in that thread), no way to skip a
+  failing element, and an unrecoverable state after an out-of-bounds abort (#1774, #1999).
 - **Single-threaded**, on a machine with 32 logical processors.
 
 ## Risks
@@ -427,7 +466,7 @@ for ADR-0004 is to cite it as a *borrow from* rather than a *build on*.
 | **The same tolerance name means 1e-4 in one namespace and 1e-6 in another**, and five once-distinct magnitudes were collapsed into one value — the header itself says it "needs to be rationalised and eliminated!" | Tolerances as free constants in headers rather than values carried by the operation | One tolerance authority; a tolerance is a value an operation carries, not a constant a translation unit happens to include (spec §5). **New row P-24** |
 | **An unmodified raw read/write round trip turns every REAL on the line into `nan`** | Two parallel attribute APIs, one of which is not exercised by anything the maintainers run | One attribute path. A round trip that changes nothing must produce a byte-identical result, and that is a test, not an aspiration. **New row P-26**, measured |
 | **A failing element takes the whole conversion down, with no skip-and-continue** (#1774, #1999), and after an abort even `CloseModel` throws | Failure is an abort of the process, not a value | A failure is a typed result for *that element*; the conversion continues and reports which elements failed (spec §12). **P-01** |
-| **The in-memory model must fit the WASM heap; there is no spill** (#538) — while the *parser's* own tape does page to chunks | The paging design was applied to the token tape and not to the geometry or the write buffer | The paging budget applies to every large store, not only the one where it was first needed (spec §8). **P-13** |
+| **The in-memory model must fit the WASM heap — 4 GB, no spill** (#538) — while the *parser's* own tape does page to chunks, and while the *write* path did eventually get a streaming callback in the same thread | The paging design was applied to the token tape, then to the write path when a user hit it, and never to the model or the geometry | The paging budget applies to every large store, not only the ones where it was first needed (spec §8). **P-13.** The retrofit order in #538 is itself the lesson: each store got paged only after someone hit its ceiling |
 
 ## Sources
 

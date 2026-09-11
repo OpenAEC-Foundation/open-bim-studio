@@ -49,9 +49,12 @@ Releases do not happen through GitHub Releases. Tags are CI-generated per build 
 newest `Xbim.Essentials` NuGet package is **6.1.605** (published 2026-07-15). The newest
 `Xbim.Geometry` package is **6.3.891-netcore** (2026-04-01); the newest **non-prerelease** is
 **5.1.820**. The 6.x geometry line has shipped only as a `-netcore` prerelease off the
-`feature/netcore` branch for years, while `master` still carries 5.1.x (*inferred* from the branch
-each 6.x tag sits on; independently stated by the reporter of
-[XbimGeometry#578](https://github.com/xBimTeam/XbimGeometry/issues/578), *claimed*).
+`feature/netcore` branch for years, while `master` still carries 5.1.x — **our own inference**,
+from the branch each 6.x tag sits on and from the NuGet publication dates. The reporter of
+[XbimGeometry#578](https://github.com/xBimTeam/XbimGeometry/issues/578) does not say this; what
+he supplies is a version table naming three 6.3.x `-netcore` packages (production, NuGet.org and
+the develop MyGet feed) against `5.1.820` for the V5 comparison, which is consistent with the
+inference but is not a statement of it.
 
 ## What was read, and at which commit
 
@@ -72,10 +75,10 @@ Read: `Xbim.Geometry.Engine/Xbim.Geometry.Engine.vcxproj`, `Xbim.Geometry.Engine
 
 | Criterion | Finding | Evidence type | Source / method |
 |---|---|---|---|
-| **License** | Both repositories ship **CDDL-1.0**, byte-identical except two extra lines in the geometry one. No dual-licence or commercial-option clause in either file. `XbimGeometry` additionally ships `Licences/` containing the **OPEN CASCADE Public Licence** (v6.5, 2011, "LGPL-like with certain differences") *and* `Xbim.Geometry.Engine/OCC/LICENSE_LGPL_21.txt` + `OCCT_LGPL_EXCEPTION.txt`. The two READMEs assert the OCCT terms permit closed-source commercial use; the licence files themselves contain no such analysis | **claimed** (files read in full) | [`XbimEssentials/LICENCE.md`](https://github.com/xBimTeam/XbimEssentials/blob/e3c877712aeff39813219b9dd13383c266d07055/LICENCE.md), [`XbimGeometry/LICENCE.md`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/LICENCE.md), [`Licences/`](https://github.com/xBimTeam/XbimGeometry/tree/be4a6b95eec0b73140cbfd4a51300152c9e33781/Licences) |
+| **License** | Both repositories ship the **CDDL** — the files carry **no version number**; the heading is "Common Development and Distribution License (CDDL)" and the wording is 1.0's. Byte-identical between the two repositories except two extra lines in the geometry one. No dual-licence or commercial-option clause in either file. `XbimGeometry` additionally ships `Licences/` containing the **OPEN CASCADE Public Licence** (v6.5, 2011, "LGPL-like with certain differences") *and* `Xbim.Geometry.Engine/OCC/LICENSE_LGPL_21.txt` + `OCCT_LGPL_EXCEPTION.txt`. The two READMEs assert the OCCT terms permit closed-source commercial use; the licence files themselves contain no such analysis | **claimed** (files read in full) | [`XbimEssentials/LICENCE.md`](https://github.com/xBimTeam/XbimEssentials/blob/e3c877712aeff39813219b9dd13383c266d07055/LICENCE.md), [`XbimGeometry/LICENCE.md`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/LICENCE.md), [`Licences/`](https://github.com/xBimTeam/XbimGeometry/tree/be4a6b95eec0b73140cbfd4a51300152c9e33781/Licences) |
 | **Representations held natively** | B-rep (OCCT `TopoDS_Shape`) plus a triangulated mesh from `Xbim.Tessellator`. No point cloud, no implicit. V6 is BREP-first: it converts to BREP and tessellates with OCCT's tessellator, which is why BREP generation was made opt-in | **claimed** | `andyward` (**MEMBER**) on [XbimGeometry#473](https://github.com/xBimTeam/XbimGeometry/issues/473) |
 | **Boolean robustness** | OCCT's booleans, so OCCT's failure modes — inherited, not independent. `Factories/BooleanFactory` is the wrapper | **inferred** from the dependency; see [`occt.md`](occt.md) for the kernel's own record |
-| **Tolerance and precision model** | Doubles throughout (managed + OCCT). Tolerance comes from `ModelFactor.Precision`, whose **default differs between `MemoryModel` and `EsentModel`** — the same file processed with different storage back-ends can succeed or fail | **claimed** | `andyward` (**MEMBER**) on [XbimGeometry#570](https://github.com/xBimTeam/XbimGeometry/issues/570) |
+| **Tolerance and precision model** | Doubles throughout (managed + OCCT). Tolerance comes from `ModelFactor.Precision`. A maintainer's **hedged** hypothesis, offered as the likely cause of a cross-machine failure, is that the default differs between `MemoryModel` and `EsentModel`: "My guess is this will come down to ModelFactor **Precision** … I have a recollection that MemoryModel and EsentModel handle the default precisions differently" (`andyward`, **MEMBER**). He gives a second candidate in the same comment — degenerate shapes making OpenCASCADE "exit uncleanly" — and asks for version details. **Uncertain and unconfirmed in-thread**, so this note treats the differing default as *claimed, and claimed tentatively*, not as an established fact | **claimed** (hedged by the speaker) | `andyward` (**MEMBER**) on [XbimGeometry#570](https://github.com/xBimTeam/XbimGeometry/issues/570), 2026-01-12 |
 | **Incremental evaluation** | **None.** One whole-model entry point, `Xbim3DModelContext.CreateContext`, and the store contract clears itself on `BeginInit()` | **claimed** (documented) + **inferred** (searched, §Incremental evaluation) | [`Xbim3DModelContext.cs`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/Xbim.ModelGeometry.Scene/Xbim3DModelContext.cs), [`IGeometryStore.cs`](https://github.com/xBimTeam/XbimEssentials/blob/e3c877712aeff39813219b9dd13383c266d07055/Xbim.Common/Geometry/IGeometryStore.cs) |
 | **Threading model** | Boolean union was multithreaded in response to a performance issue; the whole-model context is the parallel unit. Not characterised further without a build | **claimed**, partial | `SteveLockley` (**MEMBER**) on [XbimGeometry#147](https://github.com/xBimTeam/XbimGeometry/issues/147) |
 | **GPU path** | None in-library. Output is `wexBIM`, a tessellated stream format for the xBIM viewers; `martin1cerny` (**MEMBER**) states it "is only documented by the code" | **claimed** | [XbimGeometry#575](https://github.com/xBimTeam/XbimGeometry/issues/575) |
@@ -136,9 +139,17 @@ The user-facing confirmation is [XbimGeometry#575](https://github.com/xBimTeam/X
 (CLOSED 2026-06-19): the reporter `szlq` (**NONE**) opens with "xBIM (.NET) doesn't work well on
 Linux"; `martin1cerny` (**MEMBER**) does not dispute it and redirects to a contributor's personal
 fork. `Ibrahim5aad` — **CONTRIBUTOR**, not a team member — offers a `native-engine` branch as "a
-native port I'm working on". The reporter then reopened a correctness gap four days later: walls
-with doors and windows are missing under the native port but render correctly under official xBIM.
-The Linux path is one contributor's unreleased fork with known opening/boolean regressions.
+native port I'm working on".
+
+**Read the whole thread, because the ending is in two parts.** The reporter closed it satisfied:
+"I tried the native-engine as you recommended, followed the install instructions in the readme,
+and it worked perfectly." Four days later he posted again on the closed thread — it was never
+reopened — with: "I found that some
+walls with doors and windows are missing. The issue occurs when using native-engine, but not when
+using the official xbim-geometry." `Ibrahim5aad` replied "I will take a look into it and let you
+know", and there it rests. So the Linux path is one contributor's unreleased fork that converts
+successfully and drops openings — the *port works*, the *geometry does not agree with official
+xBIM*, and neither statement alone is the thread's finding.
 
 `XbimEssentials` alone is cross-platform. The caveat is `Xbim.IO.Esent`, which multi-targets the
 same frameworks but wraps ManagedEsent, a Windows-only storage engine at runtime — off Windows you
@@ -166,9 +177,12 @@ preparing for an update (*claimed*,
 `Commit` — additive into an emptied store, with no update-one and no delete-one (*inferred*).
 Changing one wall therefore means reprocessing the model.
 
-What does exist is **stateless per-item construction**, usable as a building block but not wired to
-the store: `IXShapeFactory.Build(IIfcGeometricRepresentationItem)` plus `Cut`, `Union`, `Transform`,
-`Moved`, and `IXbimGeometryEngine.Create(IIfcGeometricRepresentationItem, …)`. An incremental layer
+What does exist is **per-item construction separate from the store**, usable as a building block
+but not wired to it: `IXShapeFactory.Build(IIfcGeometricRepresentationItem)` plus `Cut`, `Union`,
+`Transform`, `Moved`, and `IXbimGeometryEngine.Create(IIfcGeometricRepresentationItem, …)`. The
+interface is declared `public interface IXShapeFactory : IXModelScoped`, so it is **scoped to a
+model** — not stateless, and not free of model state; what it is free of is the *geometry store*.
+An incremental layer
 could be built on those, but the dependency tracking, the opening/feature resolution and the store
 diffing would all be new code (*inferred*).
 
@@ -178,8 +192,8 @@ Every hit is OCCT's `BRepMesh_IncrementalMesh` (an unrelated meshing class) or `
 internal sweep-line `Dirty` flag.
 
 One further datapoint that bears on *any* plan to build on this API: `andyward` (**MEMBER**) states
-the team "don't directly use the Scene/Xbim3DModelContext code - we drive the GeometryEngine and
-Tessellator directly" ([#473](https://github.com/xBimTeam/XbimGeometry/issues/473)). The public
+the team "don't directly use the Scene/Xbim3DModelContext code - we drive the GeoemetryEngine [sic]
+and Tessellator directly" ([#473](https://github.com/xBimTeam/XbimGeometry/issues/473)). The public
 whole-model entry point is not the maintainers' own hot path.
 
 ## Known problems
@@ -191,20 +205,35 @@ Seven issues, with each speaker's login and their verbatim `authorAssociation`. 
 | Issue | State / dates | What goes wrong | Root cause, and who says so |
 |---|---|---|---|
 | [#578](https://github.com/xBimTeam/XbimGeometry/issues/578) — short parameter-trimmed conics treated as full circles | OPEN, created 2026-09-07 | A ~351 mm profile segment becomes a ~320 m halo in a hospital export. Reproduces on 6.3.873, 6.3.891 and **6.3.897 — the exact commit pinned above** — and does not take the faulty branch in V5 | A dimensional-analysis error: the code "compares an angular parameter difference, in radians, with the IFC model precision" — reporter `tskarman` (**NONE**). `andyward` (**MEMBER**) replies "I'd be happy to take a PR with a covering test". Open and unfixed. **A V6-only regression relative to V5** |
-| [#254](https://github.com/xBimTeam/XbimGeometry/issues/254) — incorrect geometry, missing booleans | OPEN since 2020-03-14, 33 comments | A file renders correctly in xBIM 4.0 and in a third-party checker but loses boolean operations in 5.1 | `SteveLockley` (**MEMBER**) first diagnoses "it is just a problem inside the OCC multi boolean code", then finds the booleans were fine and the artefact came from tessellation instead. `CBenghi` (**MEMBER**) concedes "there is no single approach that works in every scenario". See §On agreeing with other implementations |
+| [#254](https://github.com/xBimTeam/XbimGeometry/issues/254) — incorrect geometry, missing booleans | OPEN since 2020-03-14, 33 comments | A file renders correctly in xBIM 4.0 and in a third-party checker but loses boolean operations in 5.1 | Two separate things, in the order they happened. **2020-03-27**, on tolerance strategy: `CBenghi` (**MEMBER**) — "Over the years we have changed strategy a few times … we have found that there is no single approach that works in every scenario, which makes the balancing decision hard." **2020-03-29 to 03-31**, on this file: `SteveLockley` (**MEMBER**) first diagnoses "it is just a problem inside the OCC multi boolean code", then the next morning finds "the booleans are doing just fine" and the artefact is "a skin over one side of the model that only shows in the triangulation", finally isolating it to "the opencascade incremental meshing algorithm" and fixing it by upgrading to OCC 7.4. The tolerance-strategy quote **precedes** the boolean diagnosis by two days and is not a comment on it. See §On agreeing with other implementations |
 | [#473](https://github.com/xBimTeam/XbimGeometry/issues/473) — V6 much slower than V5 | CLOSED 2024-04-26 | "it's taking 20-30 secs to process a single moderately complex representation item" — `andyward` (**MEMBER**) | V6 converts to BREP and uses "OCC's Tessellator - which seems to be orders of magnitude slower" (`andyward`, **MEMBER**). Fixed by making BREPs opt-in. BREP-first existed for accurate quantity take-off versus mesh-derived quantities |
 | [#147](https://github.com/xBimTeam/XbimGeometry/issues/147) — very slow `IfcBooleanResult` cutting | CLOSED 2018-12-14 | Hundreds of chained booleans: "2-3+ minutes per operation" — `andyward` (**MEMBER**), ten minutes total | `SteveLockley` (**MEMBER**) optimised and multithreaded boolean union to 45 s, and notes such unions are "rarely found so we haven't had good test cases to work with" |
-| [#570](https://github.com/xBimTeam/XbimGeometry/issues/570) — `CreateContext` fails inconsistently across machines | OPEN, created 2026-01-10 | Identical input, identical version, different machines: `General Error Creating IfcExtrudedAreaSolid` on sub-millimetre profiles. Some models then hang over a day without crashing | `andyward` (**MEMBER**) attributes it to `ModelFactor.Precision` differing between `MemoryModel` and `EsentModel` defaults. The reporter (`A-Shawqi`, **NONE**) adds a live API trap: "the Xbim3DModelContext constructor default engineVersion is still v5" |
+| [#570](https://github.com/xBimTeam/XbimGeometry/issues/570) — `CreateContext` fails inconsistently across machines | OPEN, created 2026-01-10 | Identical input, identical version, different machines: `General Error Creating IfcExtrudedAreaSolid` on sub-millimetre profiles. Some models then hang over a day without crashing | **A maintainer's hedge, not a diagnosis.** `andyward` (**MEMBER**): "My guess is this will come down to ModelFactor **Precision**… I have a recollection that MemoryModel and EsentModel handle the default precisions differently, and this being a large model may trigger the use of Esent." He offers degenerate shapes and an unclean OpenCASCADE exit as a second candidate in the same comment, and nobody confirms either. The reporter (`A-Shawqi`, **NONE**) adds a live API trap that *is* confirmed by his own test: "the Xbim3DModelContext constructor default engineVersion is still v5", and setting v6 explicitly fixed some models on all machines |
 | [#511](https://github.com/xBimTeam/XbimGeometry/issues/511) — are there performance metrics? | CLOSED 2024-12-07 | There are none published | `andyward` (**MEMBER**): "too many variables to given an answer other than 'It depends'". He proposes counting `IfcShapeRepresentation`s weighted by representation type, because `IfcBooleanResult` dominates cost, not file size |
-| [#575](https://github.com/xBimTeam/XbimGeometry/issues/575) — IFC to wexBIM on Linux | CLOSED 2026-06-19 | No supported Linux path; the offered one is a contributor's fork with missing door and window openings | `martin1cerny` (**MEMBER**) redirects to `Ibrahim5aad` (**CONTRIBUTOR**), whose `native-engine` branch the reporter finds incomplete |
+| [#575](https://github.com/xBimTeam/XbimGeometry/issues/575) — IFC to wexBIM on Linux | CLOSED 2026-06-19 **by the reporter, satisfied** — a correctness complaint follows on the closed thread four days later (the issue was not reopened) | No supported Linux path; the offered one is a contributor's fork that installs and converts ("it worked perfectly", `szlq`, **NONE**) but drops door and window openings on a Revit export | `martin1cerny` (**MEMBER**) redirects to `Ibrahim5aad` (**CONTRIBUTOR**), whose `native-engine` branch the reporter first reports working and then finds incomplete; the contributor undertakes to look into it, and the thread ends there |
 
 ### On agreeing with other implementations
 
 [#254](https://github.com/xBimTeam/XbimGeometry/issues/254) contains a design statement that bears
 directly on P-10 and on how we read our own disagreement numbers. `bekraft` (**CONTRIBUTOR**, not a
-team member) argues the principle: "the main goal is not to show geometry like platform X does" —
-schema fidelity over visual agreement with other viewers. `CBenghi` (**MEMBER**) acknowledges the
-compatibility tension in the same thread without endorsing a rule.
+team member) argues the principle on 2020-03-28: "the main goal is not to show geometry like
+platform X does" — schema fidelity over visual agreement with other viewers.
+
+A MEMBER does put the other side, and it is `SteveLockley`, the day of that same comment: "I
+always try to be true to precision and the schema when doing any coding on this area, but I do
+recognize Guenter's point about compatibility, for which I think he means 'all tools should give
+the same or similar results', well visually at least." That is the compatibility tension, stated
+by a team member, and it is stated as a recognised pull rather than as a rule.
+
+`CBenghi` (**MEMBER**) says nothing about compatibility in this thread. His two comments are
+about tolerance strategy — "Over the years we have changed strategy a few times … we have found
+that there is no single approach that works in every scenario" (2020-03-27) — and, later, about
+an `occ740` branch he had prepared. His quote is used below for what it says: that the tolerance
+strategy has no settled answer.
+
+In the same exchange `bekraft` proposes the shape P-24 later takes: "It's better to have a
+separate tolerance setting per topology class with decreasing precision by value with increasing
+dimension." That is a contributor's proposal, not the team's position, and it was not adopted.
 
 If that is xBIM's position, then "the implementations disagree" is partly a statement about
 *objectives*, not only about bugs, and a benchmark whose criterion is "agrees with the other
@@ -227,8 +256,9 @@ data depends on this; it changes how the numbers are read.
 5. **What breaks first at scale?** Unknown — and there are no published metrics
    ([#511](https://github.com/xBimTeam/XbimGeometry/issues/511)). The failure modes on the tracker
    are time (#147, #473, #570's day-long hangs), not memory. *claimed.*
-6. **Numeric precision?** Doubles. Tolerance from `ModelFactor.Precision`, whose default depends on
-   the storage back-end (#570). *claimed.*
+6. **Numeric precision?** Doubles. Tolerance from `ModelFactor.Precision`; a maintainer's
+   *hedged* hypothesis is that its default depends on the storage back-end (#570, "My guess…",
+   "I have a recollection…", unconfirmed). *claimed, tentatively.*
 7. **Operate on a subset of the model?** The read side can (`ShapeInstancesOf(IIfcProduct)`); the
    *build* side cannot, because `BeginInit()` clears the store. *claimed + inferred.*
 8. **Who maintains it?** xBimTeam; MEMBER responses through September 2026. The bus factor question
@@ -266,9 +296,9 @@ time" gap; it is a different toolchain.
   DI-registered factory, so two engine generations coexist and a caller can pick. Compare
   IfcOpenShell's `geometry_library` parameter, which does the same thing for kernels rather than
   engine versions.
-- **A stateless per-item shape factory** (`IXShapeFactory.Build/Cut/Union/Transform/Moved`) that is
-  separate from the whole-model context. The separation is the right shape even though the store
-  above it does not use it that way.
+- **A per-item shape factory** (`IXShapeFactory.Build/Cut/Union/Transform/Moved`), model-scoped
+  (`: IXModelScoped`) but separate from the whole-model context and from the geometry store. The
+  separation is the right shape even though the store above it does not use it that way.
 - **Honest maintainers on the record** about what is untested (#147's "rarely found so we haven't
   had good test cases"), what is unmeasured (#511) and what they themselves do not use (#473).
 
@@ -280,8 +310,9 @@ time" gap; it is a different toolchain.
 - The stable geometry release is 5.1.820 on OCCT 7.6.3; the 6.x line that carries the current
   architecture is a prerelease with an open tolerance regression at its newest commit (#578).
 - No published performance data at all (#511), so nothing here can be compared with our numbers.
-- Licence needs a legal read rather than a README read: CDDL-1.0 in the licence files, an OCC
-  Public Licence 6.5 shipped alongside an LGPL-2.1-with-exception claim in the Essentials README.
+- Licence needs a legal read rather than a README read: the CDDL (unversioned in the files) in
+  the licence files, an OCC Public Licence 6.5 shipped alongside an LGPL-2.1-with-exception
+  claim in the Essentials README.
   The two repositories describe the same dependency differently.
 
 ## Risks
@@ -317,8 +348,8 @@ Neither depends on a measurement, which is fortunate, because none was possible.
 | What | Why | Where |
 |---|---|---|
 | **A versioned geometry-engine selector as a first-class option** (`XGeometryEngineVersion.V5/V6`, DI-registered, defaulted, documented as "the default version of the native Geometry Engine to use") | Two engine generations coexist in one product, and a caller can pin one per model. We will need exactly this when our own kernel's algorithms change under existing files. Note the trap #570 records: the *constructor* default lagged the documented default, and users hit the old engine without knowing | [`Enums/XGeometryEngineVersion.cs`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/Xbim.Geometry.Abstractions/Enums/XGeometryEngineVersion.cs), [`Configuration/GeometryEngineOptions.cs`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/Xbim.Geometry.Engine.Interop/Configuration/GeometryEngineOptions.cs) |
-| **The stateless shape factory, separated from the model-level context** — `Build`, `Cut`, `Union`, `Transform`, `Moved` on a representation item, with no store and no model state | This is the right decomposition, and xBIM demonstrates it while *not* exploiting it: the layer above throws the separation away by clearing the store. Our evaluation layer should sit on a factory like this and keep the per-element identity the factory already has | [`IXShapeFactory.cs`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/Xbim.Geometry.Abstractions/Factories/IXShapeFactory.cs) |
-| **`andyward`'s cost model for IFC geometry** (**MEMBER**, #511): the independent variable is the count of `IfcShapeRepresentation`s **weighted by representation type**, because `IfcBooleanResult` dominates — not file size, not element count | Our own benchmark set is described by element count and file size. This says both are the wrong axis. Our per-element distribution supports him: on IFC_Schependomlaan the median element costs 2.2 ms and the slowest 556 ms, and the expensive ones are a *type*, not a size | [XbimGeometry#511](https://github.com/xBimTeam/XbimGeometry/issues/511); our numbers in [`ifcopenshell.md`](ifcopenshell.md) §Per-element evaluation |
+| **The shape factory, separated from the model-level context** — `Build`, `Cut`, `Union`, `Transform`, `Moved` on a representation item, with **no store**; it is model-scoped (`IXShapeFactory : IXModelScoped`), so the separation is from the *geometry store*, not from the model | This is the right decomposition, and xBIM demonstrates it while *not* exploiting it: the layer above throws the separation away by clearing the store. Our evaluation layer should sit on a factory like this and keep the per-element identity the factory already has | [`IXShapeFactory.cs`](https://github.com/xBimTeam/XbimGeometry/blob/be4a6b95eec0b73140cbfd4a51300152c9e33781/Xbim.Geometry.Abstractions/Factories/IXShapeFactory.cs) |
+| **`andyward`'s cost model for IFC geometry** (**MEMBER**, #511): the independent variable is the count of `IfcShapeRepresentation`s **weighted by representation type**, because `IfcBooleanResult` dominates — not file size, not element count | Our own benchmark set is described by element count and file size. This says both are the wrong axis. Our per-element distribution supports him: on IFC_Schependomlaan the median element costs **2.06 ms** and the slowest **553.97 ms**, and the expensive ones are a *type* (three `IfcWindow`), not a size | [XbimGeometry#511](https://github.com/xBimTeam/XbimGeometry/issues/511); our numbers in [`ifcopenshell.md`](ifcopenshell.md) §Incremental evaluation and in [`results/ifcopenshell.md`](../../../spikes/incremental-evaluation/results/ifcopenshell.md) §Per-element evaluation |
 
 ### Avoid — each mapped to a design choice, each with a P-row
 
@@ -330,7 +361,7 @@ problems, and are in §Weaknesses instead.
 | Failure | Design choice it traces to | Our design's answer |
 |---|---|---|
 | **One changed element forces the whole model's geometry to be rebuilt.** `CreateContext` is the only build entry point and `BeginInit()` clears the store | The geometry store is modelled as a build *artefact* regenerated wholesale, not as state with identity per element | Geometry is addressed per handle and the evaluation graph decides what is stale (spec §3). **P-06** |
-| **A tolerance derived from a storage back-end's default, so the same file succeeds on one machine and fails on another** (#570) | Precision is a property of the *model container*, inherited implicitly, rather than of the geometry or the operation | Tolerances are explicit and per-entity, never inherited from a storage choice (spec §5). **P-05**, and see the new row P-24 |
+| **The same file succeeds on one machine and fails on another** (#570) — which a maintainer *guesses*, without confirming it, comes from `ModelFactor.Precision` defaulting differently per storage back-end | Precision is a property of the *model container*, inherited implicitly, rather than of the geometry or the operation — so a machine-dependent failure is diagnosable only by guesswork | Tolerances are explicit and per-entity, never inherited from a storage choice, and a result records the tolerance it was computed with so this class of question is answerable from the result rather than from recollection (spec §5). **P-05**, and see the new row P-24 |
 | **An angular quantity compared against a length tolerance** (#578): radians tested against the model's length precision, turning a 351 mm arc into a 320 m circle | One scalar `precision` used for every comparison regardless of the quantity's dimension | Tolerances carry the dimension of the quantity they bound; an angular comparison cannot be fed a length (spec §5). **P-05**, new row P-24 |
 
 ## Sources

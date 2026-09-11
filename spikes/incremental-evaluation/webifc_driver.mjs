@@ -26,9 +26,16 @@
  * it afterwards, so no model or geometry object is reused across repeats. The element table
  * is built in a separate, untimed pass.
  *
- * Usage:  node webifc_driver.mjs --model NAME [--repeats N]
+ * Usage:  node webifc_driver.mjs --model NAME [--repeats N] [--collect-only]
  * Writes: results/webifc_<model>.json
  *         results/webifc_<model>_elements.csv
+ *
+ * --collect-only runs nothing but the untimed element-table pass (8) and rewrites the CSV,
+ * leaving the JSON untouched. It exists so the element table can be regenerated without
+ * re-measuring -- every timing in results/webifc_<model>.json would otherwise change, and
+ * those numbers are quoted across the research notes. Nothing in the element table depends
+ * on a timing, and nothing in the JSON depends on the CSV except the row counts, which this
+ * pass does not change.
  */
 
 import * as WebIFC from "web-ifc";
@@ -74,6 +81,7 @@ const R01_FAIL_MS = 100.0;
 
 const args = process.argv.slice(2);
 const repeats = Number(argOf("--repeats") ?? 5);
+const collectOnly = args.includes("--collect-only");
 const modelName = argOf("--model");
 if (!modelName || !MODELS[modelName]) {
   console.error(`--model is required, one of: ${Object.keys(MODELS).join(", ")}`);
@@ -163,8 +171,14 @@ function meshStats(verts, indices, m) {
            bbox: [xmin, ymin, zmin, xmax, ymax, zmax] };
 }
 
+/* The vertex count is the sum over the placed geometries of a mesh, where each geometry's count
+ * is its interleaved [x,y,z,nx,ny,nz] float array length divided by six. web-ifc does NOT weld
+ * across the geometries of one flat mesh, so this counts a shared corner once per geometry --
+ * the number is "vertices as delivered", not "distinct positions", and is therefore not
+ * comparable with IfcOpenShell's welded vertex count element for element. */
 function flatMeshStats(api, id, mesh) {
   let tris = 0;
+  let verts = 0;
   let vol = 0;
   let bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
   for (let gi = 0; gi < mesh.geometries.size(); gi++) {
@@ -174,12 +188,14 @@ function flatMeshStats(api, id, mesh) {
     const ix = api.GetIndexArray(geom.GetIndexData(), geom.GetIndexDataSize());
     const st = meshStats(v, ix, placed.flatTransformation);
     tris += st.triangles;
+    verts += st.vertices;
     vol += st.volume;
     bb = [Math.min(bb[0], st.bbox[0]), Math.min(bb[1], st.bbox[1]), Math.min(bb[2], st.bbox[2]),
           Math.max(bb[3], st.bbox[3]), Math.max(bb[4], st.bbox[4]), Math.max(bb[5], st.bbox[5])];
     geom.delete();
   }
-  return { triangles: tris, volume: vol, bbox: bb.map((x) => (Number.isFinite(x) ? x : 0)) };
+  return { triangles: tris, vertices: verts, volume: vol,
+           bbox: bb.map((x) => (Number.isFinite(x) ? x : 0)) };
 }
 
 async function newApi() {
@@ -326,7 +342,7 @@ async function collectElements(file, name, out) {
       ifc_class: api.GetNameFromTypeCode(api.GetLineType(id, mesh.expressID)),
       express_id: mesh.expressID,
       triangles: st.triangles,
-      vertices: 0,
+      vertices: st.vertices,
       volume: st.volume,
       bbox: st.bbox,
     });
@@ -609,6 +625,15 @@ async function resetCacheProbe(file, wallID, pointID, scale, otherID) {
 
 async function main() {
   fs.mkdirSync(RESULTS, { recursive: true });
+
+  if (collectOnly) {
+    const only = {};
+    await collectElements(MODELS[modelName], modelName, only);
+    console.log(`collect-only: rewrote results/webifc_${modelName}_elements.csv ` +
+                `(${only.element_table_rows} rows); JSON left untouched`);
+    return;
+  }
+
   const probe = await newApi();
   const file = MODELS[modelName];
   const out = {

@@ -15,7 +15,7 @@ appears in one of those files.
 | Node | v24.11.1 |
 | web-ifc | npm `0.0.77`; `IfcAPI.GetVersion()` also reports `0.0.77` |
 | Source read at | tag `0.77`, commit `f26c4beef0a668ebdb180d2b95a94097a1e21cef` (that tag's `package.json` declares version `0.0.77`) |
-| Repeats | 5 per timed operation, median reported |
+| Repeats | 5 per timed **whole-model** operation and per edit-test case, median reported. The per-element pass is **one sample per element** — the JSON records its method as "one fresh model, `GetFlatMesh()` timed once per element, in express-id order" |
 
 Loader settings passed to `OpenModel`, which are web-ifc's own defaults restated verbatim
 from `CreateSettings()` in [`src/ts/web-ifc-api.ts#L442-L459`](https://github.com/ThatOpen/engine_web-ifc/blob/f26c4beef0a668ebdb180d2b95a94097a1e21cef/src/ts/web-ifc-api.ts#L442-L459):
@@ -73,9 +73,11 @@ element" ([`web-ifc-api.ts#L1397-L1405`](https://github.com/ThatOpen/engine_web-
 | AC20-FZK-Haus | 103 | 0.013 ms | 1.09 ms | 1.83 ms | 30.60 ms | 31.18 ms | 82.3 ms | 101 / 103 |
 | IFC_Schependomlaan | 3,643 | 0.016 ms | 0.072 ms | 0.233 ms | 0.425 ms | 16.76 ms | 244.1 ms | 3,639 / 3,643 |
 
-**Cross-check:** the sum of the per-element times (82.3 ms, 244.1 ms) is close to the
-`LoadAllGeometry` median for the same model (85.3 ms, 296.6 ms). The per-element path does
-the same total work as the batch path; it is not a cheaper route to the same result.
+**Cross-check:** the sum of the per-element times (82.3 ms, 244.1 ms) lands **within 4%** of the
+`LoadAllGeometry` median on the small model (85.3 ms) and **within 18%** on the large one
+(296.6 ms). The per-element path does approximately the same total work as the batch path; it is
+not a cheaper route to the same result. The 18% is not accounted for here — the batch call also
+builds and returns a 3,643-entry mesh vector, which the per-element loop does not.
 
 The distribution is extremely skewed because web-ifc caches geometry **per geometry express
 id, not per product**: the first element using a representation pays for it and every later
@@ -164,8 +166,19 @@ fixed test value, not a unit conversion.)
 ## Element tables
 
 `webifc_<model>_elements.csv`: one row per mesh returned by `LoadAllGeometry`, with GUID,
-IfcClass, express id, triangle count, signed volume and bounding box. Built in a separate,
-untimed pass.
+IfcClass, express id, triangle count, vertex count, signed volume and bounding box. Built in a
+separate, untimed pass.
+
+**The `vertices` column, and what it is not.** It is the sum over the flat mesh's placed
+geometries of that geometry's interleaved `[x,y,z,nx,ny,nz]` array length divided by six — i.e.
+**vertices as web-ifc delivers them**, counted once per geometry, with no welding across the
+geometries of one element. It is therefore *not* comparable element-for-element with the
+IfcOpenShell tables, which are produced with `weld-vertices` on. Nothing in
+[`compare.md`](compare.md) uses this column; it is recorded because it is free and because the
+triangle-to-vertex ratio is a cheap smell test for a degenerate mesh. The column was rewritten
+by `node webifc_driver.mjs --model NAME --collect-only`, which runs the untimed element-table
+pass alone and leaves the JSON's timings untouched; every other column is byte-identical to the
+run that produced the JSON beside it.
 
 | Model | Rows | Rows with zero triangles |
 |---|---|---|

@@ -13,10 +13,16 @@ particular, can it re-evaluate one changed element cheaply enough for an interac
 **Author:** research programme, phase 2
 **Last updated:** 2026-09-11
 
-> Geometry here runs on **OCCT 7.8.1**, so every OCCT boolean and tolerance finding in
-> [`occt.md`](occt.md) applies underneath this note and is not repeated. What is new here is the
-> *IFC* layer above it — the schema mapping, the iterator, the caching, and the three
-> alternative kernels the same wheel also ships.
+> Geometry here runs on **OCCT 7.8.1**, while [`occt.md`](occt.md) is read and measured at tag
+> `V8_0_1` — **OCCT 8.0.1**. The inheritance is therefore *inferred across a version gap*, not
+> measured on the version this note runs. What carries across the gap is **structural**: the
+> tolerant-B-rep model, where a boolean's tolerance comes from and how it grows, the
+> non-manifold-result refusal, the shape of the fuzziness ladder. What does **not** carry is any
+> *number*: every timing, every measured tolerance value and any statement about whether a
+> specific boolean case succeeds belongs to the version it was measured on — #6142 below is a
+> live example, where a failure reproduced on the bundled OCCT and no longer reproduces on OCC
+> 7.9.2. What is new here is the *IFC* layer above the kernel — the schema mapping, the
+> iterator, the caching, and the three alternative kernels the same wheel also ships.
 
 ---
 
@@ -26,9 +32,10 @@ IfcOpenShell can produce one element's geometry on its own, and on the real benc
 the median element costs **2.06 ms** against **8.0 s** for a full re-iteration — so
 re-evaluation does not require reprocessing the model, and R-01's *fail* clause is not met at
 the median. But 5.7% of elements exceed 16 ms and the worst exceeds 550 ms, and there is **no
-dependency tracking at all**: the caching that exists is keyed on instance identity with no
-invalidation path, which a maintainer describes as written on the assumption that the model is
-static. The surprise of this note is not the timing but the shipping surface — the Python wheel
+dependency tracking at all**: the caching that exists is keyed on instance identity, with a
+manual erase at best and nothing that derives staleness from an edit — which a maintainer
+describes as written on the assumption that the model is static. The surprise of this note is
+not the timing but the shipping surface — the Python wheel
 contains **four** selectable geometry libraries, and `hybrid-cgal-simple-opencascade` produces
 *the same 3,654 elements* as OCCT **13× faster** (0.687 s vs 9.013 s) while being neither the
 Python default nor documented as the fast path.
@@ -97,8 +104,8 @@ running the same kernel version.
 | **License** | LGPL-3.0-or-later. Usable as a library from a differently-licensed product if dynamically linked; *borrowing code* into our kernel would make that code LGPL | **measured** (wheel `METADATA`) | installed `ifcopenshell-0.8.4.post1.dist-info/METADATA` |
 | **Representations held natively** | OCCT B-rep, CGAL polyhedra (two flavours), and triangulated output. `iterator-output` selects TRIANGULATED / NATIVE / SERIALIZED. No point cloud, no implicit | **measured** (the four `GEOMETRY_LIBRARY` values are returned by the installed wheel) + **claimed** | `typing.get_args(ifcopenshell.geom.GEOMETRY_LIBRARY)` |
 | **Boolean robustness** | OCCT's, plus an IFC-specific retry ladder ("Used fuzziness" appears 139× in one run's log) and a refusal to accept non-manifold boolean results. Failure is frequently **silent**: 49 `[Error] Failed to convert:` logged on a model where zero exceptions were raised | **measured** (log summaries) + **claimed** (tracker, see §Known problems) | [results](../../../spikes/incremental-evaluation/results/ifcopenshell.md) §What the log says |
-| **Tolerance and precision model** | One global `precision` (default 1e-05), clamped at **1e-7 m**: `Precision lower than 0.0000001 meter not enforced` was logged **3,654 times** on IFC_Schependomlaan — once per element. Precision is read from the file's `IfcGeometricRepresentationContext` | **measured** (log) + **claimed** (#6127) | [results](../../../spikes/incremental-evaluation/results/ifcopenshell.md) |
-| **Incremental evaluation** | Single-element evaluation exists (`create_shape`) and is cheap at the median; **dependency tracking does not exist**, and the two caches that do exist have no invalidation path | **measured** + **claimed** (#4386) | §Incremental evaluation |
+| **Tolerance and precision model** | One global `precision` (default 1e-05), clamped at **1e-7 m**: `Precision lower than 0.0000001 meter not enforced` was logged **3,654 times** on IFC_Schependomlaan — once per element. Precision is read from the file's `IfcGeometricRepresentationContext` (#6127) | **measured** (our log gives the clamp message and its count) + **claimed** (the derivation, #6142) | [results](../../../spikes/incremental-evaluation/results/ifcopenshell.md); the 1e-7-by-default-versus-1e-5-with-a-subcontext table is `BIMvoice`'s in [#6142](https://github.com/IfcOpenShell/IfcOpenShell/issues/6142), **not** #6127, whose numbers are 0.01 and a mm→m conversion |
+| **Incremental evaluation** | Single-element evaluation exists (`create_shape`) and is cheap at the median; **dependency tracking does not exist**. Of the two caches, one has no erase at all and the other has only a manual `remove(GlobalId)` the caller must decide to call — neither derives staleness from a change | **measured** + **claimed** (#4386, #1785) | §Incremental evaluation |
 | **Threading model** | `Iterator` holds a `kernel_pool` of one `Converter` per thread; `num_threads` is explicit. Measured **3.1×** and **2.4×** on 32 logical processors. Contradicts P-08 for this implementation | **measured** | [results](../../../spikes/incremental-evaluation/results/ifcopenshell.md) |
 | **GPU path** | None in-library; triangulated output with vertices, faces, normals and material ids, which the caller uploads | **inferred** from the `iterator-output` options |
 | **IFC coverage** | Parsing: IFC2x3 TC1, IFC4 Add2 TC1, IFC4x1, IFC4x2, IFC4x3 Add2. **Geometry: IFC2x3 TC1 and IFC4 Add2 TC1 only** | **claimed** | wheel `METADATA` |
@@ -146,7 +153,7 @@ bool has_openings = ops && ops->size();
 for (auto& k : kernels_) {
 #ifdef IFOPSH_WITH_CGAL
 	if (has_openings && !k->supports_boolean_operations()) {
-		// @todo [four comment lines elided]
+		// [six comment lines elided, three of them @todo markers]
 		continue;
 	}
 #endif
@@ -161,13 +168,15 @@ for (auto& k : kernels_) {
 return false;
 ```
 
-(verbatim apart from the four `@todo` comment lines marked as elided, and the leading
-indentation, which is five tabs in the original)
+(verbatim apart from the six comment lines marked as elided — lines 90-95, carrying three
+`@todo` markers between them — and the leading indentation, which is five tabs in the original)
 
-([`hybrid_kernel.h#L83-L107`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/hybrid_kernel.h#L83-L107))
+([`hybrid_kernel.h#L85-L107`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/hybrid_kernel.h#L85-L107);
+the enclosing `convert` signature is on L83-L84)
 
 The measured consequence of *not* having that guard is in
 [`compare.md`](../../../spikes/incremental-evaluation/results/compare.md): run `cgal-simple`
+
 alone and a wall with an opening comes back with **zero triangles and zero volume**, silently.
 Four `IfcWallStandardCase` on AC20-FZK-Haus and eight rows on IFC_Schependomlaan disappear that
 way, and 17 of the 20 volume disagreements between the two kernels are over 0.5 relative.
@@ -221,9 +230,9 @@ web-ifc's warm shift is 0.0 — and equally there is nothing carried between two
 the same element. The measured per-element cost is an **upper bound** on what IfcOpenShell's own
 machinery could achieve; per-call setup is charged every time.
 
-### What does not exist: invalidation
+### What does not exist: *automatic* invalidation
 
-Two caches exist. Neither can be invalidated.
+Two caches exist. Neither notices that an instance changed; one of them can be erased by hand.
 
 1. **The mapping cache**, keyed on `inst->identity()`, looked up and inserted under a mutex, with
    no erase and no dirty flag anywhere in the file
@@ -234,7 +243,13 @@ Two caches exist. Neither can be invalidated.
    id, read-then-write against an HDF5 store
    ([`Iterator.h#L161-L194`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/Iterator.h#L161-L194)).
    It is a *re-run* cache, not a change-driven one: a hit is decided by identity, never by whether
-   the instance changed. `cache-shapes` was off for every measurement here.
+   the instance changed. Its serializer **does** expose a manual `remove(GlobalId)`, which Bonsai
+   calls (see #1785 below) — so a caller who has worked out for itself what changed can evict the
+   entry. `cache-shapes` was off for every measurement here.
+
+The distinction matters for P-06 and is easy to blur: **what is missing is the derivation, not
+the erase.** Nothing in the library maps "this attribute was written" to "these cache entries are
+now wrong"; that is exactly the work `aothms` enumerates below and declines.
 
 The maintainer has stated the design assumption directly. On
 [#4386](https://github.com/IfcOpenShell/IfcOpenShell/issues/4386) (OPEN, created 2024-03-03;
@@ -254,8 +269,16 @@ Two further datapoints:
 - [#1785](https://github.com/IfcOpenShell/IfcOpenShell/issues/1785) (CLOSED 2023-02-13; opened by
   `aothms`, **MEMBER**) is the HDF5 shape cache, announced to "reuse the interpreted geometry for
   building elements with minimal effort", measured there at 4.9 s → 0.57 s on a second pass. It
-  is keyed per GlobalId plus representation id and nothing in the thread detects that an element
-  changed — whole-file re-run caching, confirming the reading above.
+  is keyed per GlobalId plus representation id. **There is no *automatic* change detection —
+  but an explicit erase does exist**, and the thread shows it in use: `Moult`
+  (**CONTRIBUTOR**) calls `IfcStore.get_cache().remove(element.GlobalId)` from Bonsai
+  (comment of 2021-11-11) and again as `self.cache.remove(...)` in the 2023-01-05 repro that
+  opens the last round of the thread; `aothms` (**MEMBER**) then root-causes the hang it
+  produced — "shared representations are implemented in the hdf5 serialization a **soft
+  links**. Deleting the first window … caused the link for the 2nd window to dangle". So the
+  cache has a manual, caller-driven invalidation keyed on GlobalId, and nothing that notices
+  an instance changed. That is still the reading above — the caller must know what is stale —
+  and the erase path is the one that broke first.
 - [#5696](https://github.com/IfcOpenShell/IfcOpenShell/issues/5696) (OPEN; opened by `theoryshaw`,
   **MEMBER**) reports, in a measurement by `BIMvoice` (**CONTRIBUTOR**, not a maintainer), that
   iterator `initialize()` "costs ~0.19s even when the iterator includes a single element" — a
@@ -275,12 +298,12 @@ are his and are not confirmed in-thread by a MEMBER — they are labelled accord
 |---|---|---|---|
 | [#4386](https://github.com/IfcOpenShell/IfcOpenShell/issues/4386) — bug in geometry mapping cache | OPEN, 2024-03-03 | Mutate a placement in memory, re-map, get the stale cached matrix back | `aothms` (**MEMBER**): "the caching is written with the idea that the underlying model is static". Invalidation would need per-entry constituent sets including inverse attributes. **Unimplemented** |
 | [#992](https://github.com/IfcOpenShell/IfcOpenShell/issues/992) — opening subtractions fail | OPEN, 2020-09-08, reporter `johanrd` (**CONTRIBUTOR**) | A wall with 10 openings renders **completely solid**; log shows "Boolean operation yields non-manifold result" then "No longer attempting boolean operation with higher fuzziness" for all 10 | `aothms` (**MEMBER**): operands share an edge so the result is non-manifold, and non-manifold results are rejected because they usually indicate an error — "I have not found a way yet to distinguish valid non-manifold results from invalid ones". The polyhedral workaround fails on cylinders because in OCCT a cylindrical edge is three edges, so overlap detection never fires |
-| [#7815](https://github.com/IfcOpenShell/IfcOpenShell/issues/7815) — void not voiding at certain positions | OPEN, 2026-03-18, reporter `theoryshaw` (**MEMBER**) | Moving an opening a fraction of an inch flips voiding on and off | Analysis by `BIMvoice` (**CONTRIBUTOR**, *not* a maintainer, not MEMBER-confirmed in-thread): "the opencascade kernel returns the roof uncut (volume unchanged) while reporting IsDone" — the no-op passes every validity check so the higher-fuzziness retry never fires, and the same operands through the CGAL kernel cut correctly. **Silent** boolean failure |
-| [#487](https://github.com/IfcOpenShell/IfcOpenShell/issues/487) — opening subtraction failed, curved wall | OPEN, 2018-10-16 | Curved walls: loose faces, self-intersections, openings not subtracted | `aothms` (**MEMBER**) attributes it to missing edge parametrisations after sewing, required by the boolean; improved in one commit "but that wall on the right remains problematic" |
-| [#6127](https://github.com/IfcOpenShell/IfcOpenShell/issues/6127) — unit conversion misses `Precision` | CLOSED 2026-07-27 | Thin fins vanish from converted output while rendering elsewhere | `aothms` (**MEMBER**): "The width of these fins is below the precision marked in the file". The schema trap: `IfcGeometricRepresentationContext.Precision` is an `IfcReal`, not an `IfcLengthMeasure`, so a millimetre→metre conversion silently left the tolerance 1000× too large |
-| [#6142](https://github.com/IfcOpenShell/IfcOpenShell/issues/6142) — geometry differs between the Python API and Bonsai | OPEN, 2025-02-11 | Same file, same version: a slab produces no geometry through `ifcopenshell.geom` but renders in Bonsai and elsewhere | `Andrej730` (**CONTRIBUTOR**) narrowed it to the `context-ids` setting plus the kernel choice. `BIMvoice` (**CONTRIBUTOR**, not MEMBER-confirmed) argues the real mechanism is that `context-ids` changes the derived **boolean precision** — 1e-7 m by default versus 1e-5 m when the subcontext id is passed, 100× coarser |
+| [#7815](https://github.com/IfcOpenShell/IfcOpenShell/issues/7815) — void not voiding at certain positions | OPEN, 2026-03-18, reporter `theoryshaw` (**MEMBER**) | Moving an opening a fraction of an inch flips voiding on and off | Analysis by `BIMvoice` (**CONTRIBUTOR**, *not* a maintainer, not MEMBER-confirmed in-thread): "the opencascade kernel returns the roof uncut (volume unchanged) while reporting IsDone" — the no-op passes every validity check so the higher-fuzziness retry never fires, and the same operands through the CGAL kernel cut correctly. **Silent** boolean failure. **Status caveat:** the same contributor states on 2026-07-18 that it is "Fixed by detecting when a cut's volume is unchanged despite operands that provably overlap, and recovering via the CGAL fallback from #8722", naming PR #8725 and a dependency on #8722. That is a **fix claimed in-thread by a CONTRIBUTOR, on an issue still OPEN, with no MEMBER confirmation and no merge verified here** — the *mechanism* is what this note uses, and the mechanism is not disputed |
+| [#487](https://github.com/IfcOpenShell/IfcOpenShell/issues/487) — opening subtraction failed, curved wall | OPEN, 2018-10-16 | Curved walls: loose faces, self-intersections, openings not subtracted | `aothms` (**MEMBER**) names the symptom and explicitly **does not find the cause**: "somehow there were some missing edge parametrizations after sewing (required for boolean op). I couldn't really spot the cause for that". Improved in one commit "but that wall on the right remains problematic". **Later status:** `BIMvoice` (**CONTRIBUTOR**) re-tested on 0.8.5 (2026-07-05) — all four walls now produce geometry, but "the log still reports `Opening subtraction failed for 3 openings` out of the 9 in the file". Smaller in scope than in 2018, still open |
+| [#6127](https://github.com/IfcOpenShell/IfcOpenShell/issues/6127) — unit conversion misses `Precision` | CLOSED 2026-07-27 | Thin fins vanish from converted output while rendering elsewhere | `aothms` (**MEMBER**): "The width of these fins is below the precision marked in the file" — the file declares `0.01`, and he adds "0.01 is reasonable for mm units, but not meters". The schema trap, in his words two comments later: "indeed Precision is marked as an IfcReal, not a length measure", so a millimetre→metre conversion silently left the tolerance 1000× too large. **The numbers in this thread are 0.01 and a unit factor; the 1e-7 clamp is #6142's, not this issue's.** `BIMvoice` (**CONTRIBUTOR**) later reported it fixed in PR #8282, closed it, then reopened it — "on reflection I shouldn't close someone else's report myself" — leaving confirmation to the reporter. The issue is CLOSED as of 2026-07-27; the thread does not show by whom |
+| [#6142](https://github.com/IfcOpenShell/IfcOpenShell/issues/6142) — geometry differs between the Python API and Bonsai | OPEN, 2025-02-11 | Same file, same version: a slab produces no geometry through `ifcopenshell.geom` but renders in Bonsai and elsewhere | `Andrej730` (**CONTRIBUTOR**) narrowed it to the `context-ids` setting plus the kernel choice. `BIMvoice` (**CONTRIBUTOR**, not MEMBER-confirmed) argues the real mechanism is that `context-ids` changes the derived **boolean precision** — "1e-7 m (context #12 Precision 1e-5 × mm-unit → clamped to 1e-7)" by default against "1e-5 m" when the subcontext id is passed, 100× coarser — and traces the difference to `mapping.cpp:950` testing the parent context's id instead of the subcontext's. **This is the source of the 1e-7 figure used elsewhere in this note.** The same comment reports the failure **no longer reproducing** on OCC 7.9.2: "the `IfcBooleanResult` DIFFERENCE (`#333`) succeeds at both 1e-7 and 1e-5 … The empty result appears specific to the older OCCT in the reporter's bundled wheel". So the *missing geometry* is version-bound; the *precision-derivation mechanism* is not |
 | [#7063](https://github.com/IfcOpenShell/IfcOpenShell/issues/7063) — 0.8.3 much slower than 0.7.1 | OPEN, 2025-08-27 | ~2 min → ~30 min when calling `as_compound()` for `TopoDS_Shape` | `aothms` (**MEMBER**): "Overall performance should have slightly improved, but in particular because of the hybrid kernel" — and the hybrid kernel is exactly what you cannot use if you need a `TopoDS_Shape` back. He later points at the wire-intersection check and `no-wire-intersection-check` |
-| [#6905](https://github.com/IfcOpenShell/IfcOpenShell/issues/6905) — high memory multi-threaded | CLOSED 2025-07-22 | >60 GB peak at `num_threads=32` vs ~25 GB single-threaded on a ~1 GB file | `aothms` (**MEMBER**): "I guess we never expected the triangulated geometry to take up so much RAM." Closed by the reporter, not fixed; a rocksdb-backed streaming conversion was in progress |
+| [#6905](https://github.com/IfcOpenShell/IfcOpenShell/issues/6905) — high memory multi-threaded | CLOSED 2025-07-22 | >60 GB peak at `num_threads=32` against ~25 GB single-threaded on what the reporter calls "One particularly problematic file" — **the thread gives no size for it**. The only file-size figure in the body is "~800GB+", which `aothms` (**MEMBER**) queries — "I assume you mean MB" — and the reporter corrects: "Oh yes, most definitely I meant MB" | `aothms` (**MEMBER**): "I guess we never expected the triangulated geometry to take up so much RAM." **Closed by the reporter** (`JR-Morgan`, **NONE**), not fixed — "I no longer think it's describing a specific problem, more so, memory is just a bit higher than I'd like"; a rocksdb-backed streaming conversion was in progress |
 | [#2025](https://github.com/IfcOpenShell/IfcOpenShell/issues/2025) — large datasets | OPEN, 2022-02-05 | A 2 GB SPF file exhausts 16 GB on `ifcopenshell.open()` | `aothms` (**MEMBER**): "A factor 5 memory vs file size is not atypical for SPF-parsers", and doing better "requires a complete rewrite of the parser to store attribute values with static types based on the schema instead of runtime type variants" |
 | [#8431](https://github.com/IfcOpenShell/IfcOpenShell/issues/8431) — automatic regeneration of voided elements | OPEN, 2026-07-09, reporter `Vanuan` (**CONTRIBUTOR**) | Application-level: the void/filling relation needs a manual "Regen" instead of being a live dependency | The reporter proposes comparing "the cached matrix and profile hash against current values". No MEMBER comment on the thread. Listed because it is the same missing mechanism one layer up |
 
@@ -292,7 +315,9 @@ not only of a reporter's file:
 - **The precision floor is hit on every element.** `Precision lower than 0.0000001 meter not
   enforced` appears **3,654 times** on IFC_Schependomlaan — exactly once per element. The file
   asks for a finer tolerance than the library will honour, universally, and the only signal is a
-  warning. That is #6127's and #6142's subject matter, on our benchmark, at default settings.
+  warning. **#6142** is where the 1e-7 figure is derived and explained; **#6127** is the adjacent
+  defect — how a `Precision` arrives in the wrong unit in the first place. Both, on our
+  benchmark, at default settings.
 - **Errors are logged and swallowed.** AC20-FZK-Haus logged **49** `[Error] Failed to convert:`
   while `create_shape` raised **zero** exceptions and the iterator's
   `had_error_processing_elements()` returned False on every run. A caller who checks the return
@@ -306,7 +331,7 @@ not only of a reporter's file:
 schema exactly where R-15 says the problem is
 ([`add_georeferencing.py`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcopenshell-python/ifcopenshell/api/georeference/add_georeferencing.py)):
 
-- **IFC2X3** (lines 47-64): two property sets, `ePSet_ProjectedCRS` and `ePSet_MapConversion`,
+- **IFC2X3** (lines 47-65): two property sets, `ePSet_ProjectedCRS` and `ePSet_MapConversion`,
   added to the **`IfcProject`**, with `Eastings`, `Northings` and `OrthogonalHeight` created as
   `IfcLengthMeasure`.
 - **IFC4 and later** (lines 66-99): an `IfcProjectedCRS` plus one of `IfcMapConversion`,
@@ -425,8 +450,8 @@ suggests the representation, not the kernel, is the problem.
 
 | What | Why | Where |
 |---|---|---|
-| **The per-element kernel-fallback loop with a capability predicate.** Ask whether the element needs booleans, skip kernels that cannot do them, try the rest in order, first success wins | Measured: same 3,654 elements, **13.1× faster** than OCCT alone. It is also the correct answer to "exact or fast?" — per element, not per product | [`hybrid_kernel.h#L83-L107`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/hybrid_kernel.h#L83-L107) |
-| **The iterator model**: explicit `num_threads`, a `kernel_pool` of one converter per thread, `include`/`exclude` filters on the element set, and a pull interface (`initialize` / `get` / `next`) rather than a callback | Measured 3.1× and 2.4×. The per-thread converter is why: no shared mutable kernel state, so the parallelism needs no lock on the hot path. **Refutes P-08 for this implementation** | [`Iterator.h#L120-L245`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/Iterator.h#L120-L245) |
+| **The per-element kernel-fallback loop with a capability predicate.** Ask whether the element needs booleans, skip kernels that cannot do them, try the rest in order, first success wins | Measured: same 3,654 elements, **13.1× faster** than OCCT alone. It is also the correct answer to "exact or fast?" — per element, not per product | [`hybrid_kernel.h#L85-L107`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/hybrid_kernel.h#L85-L107) |
+| **The iterator model**: explicit `num_threads`, a `kernel_pool` of one converter per thread, `include`/`exclude` filters on the element set, and a pull interface (`initialize` / `get` / `next`) rather than a callback | Measured 3.1× and 2.4×. The per-thread converter is why: no shared mutable kernel state, so the parallelism needs no lock on the hot path. **Refutes P-08 for this implementation** | Declarations (`num_threads_`, `kernel_pool`, the single-threaded `converter_`, the constructor) in [`Iterator.h#L120-L245`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/Iterator.h#L120-L245); the **one-converter-per-thread construction itself** is [`Iterator.cpp#L189-L198`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/Iterator.cpp#L189-L198), where `process_concurrently` reserves `conc_threads` and pushes one cloned `Converter` per thread |
 | **The representation-mapping tables**: one translation unit per IFC entity type, bound by a generated dispatch include (`bind_convert_impl.i`) | ~200 files, each a self-contained statement of how one entity becomes geometry. Our `ifc/` layer wants exactly this shape, and this is the reference for what belongs in each | [`src/ifcgeom/mapping/`](https://github.com/IfcOpenShell/IfcOpenShell/tree/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcgeom/mapping) |
 | **The georeference API's schema-degrading contract**: one call, IFC4 entities or the IFC2x3 property-set convention chosen by the library | R-15 is a decision about export targets; this is the API shape that makes the decision survivable. Note the discrepancy on `IfcProject` vs `IfcSite` recorded in §Georeferencing | [`add_georeferencing.py`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcopenshell-python/ifcopenshell/api/georeference/add_georeferencing.py) |
 | **`aothms`'s statement of what invalidation requires** (#4386): per-entry constituent sets, propagated dirty marks, and traversal of **inverse** attributes so that changing one point invalidates the parent polyline | This is the specification of the thing our kernel spec §3 claims to build, written by someone who decided it was too expensive to retrofit. Retrofitting is the expensive case; we are not retrofitting | [#4386](https://github.com/IfcOpenShell/IfcOpenShell/issues/4386) |
@@ -437,11 +462,11 @@ suggests the representation, not the kernel, is the problem.
 |---|---|---|
 | **Cached geometry goes stale after an in-memory edit** (#4386), and the whole-model pass is the only reliable way to be correct | The cache is keyed on instance *identity*, which cannot express "this instance changed"; the model is assumed static | Cache keys are content-derived and every entry records its constituents, so a change invalidates exactly its dependents (spec §3). **P-06** |
 | **A conversion error is logged and the call returns success.** 49 logged errors, 0 exceptions, `had_error_processing_elements()` False on every run | Logging is the error channel; the return value carries no failure information | A result is a value that can *be* a typed failure, and a partial success says which parts failed (spec §12). **P-01**, measured |
-| **A boolean reports success and removes nothing** (#7815, `BIMvoice` **CONTRIBUTOR**, not MEMBER-confirmed) | "Did the operation run?" is checked instead of "did the operation do what it claimed?" | Operands that provably overlap and a result whose volume is unchanged is an error condition, not a result (spec §12). **P-01** |
+| **A boolean reports success and removes nothing** (#7815, `BIMvoice` **CONTRIBUTOR**, not MEMBER-confirmed; a fix is *claimed in-thread* by the same contributor as PR #8725, on an issue still OPEN — see §Known problems) | "Did the operation run?" is checked instead of "did the operation do what it claimed?" | Operands that provably overlap and a result whose volume is unchanged is an error condition, not a result (spec §12). **P-01.** Note that the claimed fix is itself the design point: what it adds is precisely this post-condition check, which did not exist before |
 | **One global tolerance, floored at 1e-7 m, warned about once per element** | Tolerance is a property of the model container, read from `IfcGeometricRepresentationContext`, then clamped globally | Tolerances are per-entity and explicit, and a request the kernel will not honour is a refusal, not a warning in a log nobody reads (spec §5). **P-05**, measured |
 | **`Precision` survives a unit conversion unscaled** because the schema types it as `IfcReal` (#6127) | A tolerance carried as a bare number, so nothing knows it is a length | Tolerances carry the dimension of what they bound (spec §5). **P-05**, and the new row **P-24**, which [`xbim.md`](xbim.md) reaches from the other direction (#578's radians-vs-length) |
 | **A kernel without booleans returns an empty solid for a wall with an opening, silently** — measured, 4 and 8 rows | Capability is discovered by failure, and "no geometry" is a valid return value | A kernel declares its capabilities and a request it cannot serve is refused by name, never answered with an empty result (spec §12). **P-01** |
-| **`cgal` corrupts the heap non-deterministically**, and two kernels cannot share a process | Kernel-global state that is neither reentrant nor isolated | Kernels are values with no global state; an unstable backend is quarantined per call, not per process (spec §6). **New row P-25** |
+| **`cgal` corrupts the heap non-deterministically**, and two kernels cannot share a process | Kernel-global state that is neither reentrant nor isolated | Spec §6 gives the half we have: no per-entity heap objects, no hidden copies, generational handles, operations that take handles and write into caller-provided arenas — i.e. no global state to begin with. **The other half is a gap, stated as one:** the spec says nothing about *selectable geometry backends*, about isolating an unstable one, or about a process boundary the caller can ask for. That is an open question against §6 and §12, not an answered one. **New row P-25** |
 
 ## Sources
 

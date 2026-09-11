@@ -63,6 +63,18 @@ node   webifc_driver.mjs     --model IFC_Schependomlaan  --repeats 5
 python compare.py
 ```
 
+The web-ifc driver also takes `--collect-only`, which runs nothing but the untimed element-table
+pass and rewrites `results/webifc_<model>_elements.csv`, leaving `results/webifc_<model>.json`
+and every timing in it untouched:
+
+```bash
+node   webifc_driver.mjs     --model AC20-FZK-Haus       --collect-only
+node   webifc_driver.mjs     --model IFC_Schependomlaan  --collect-only
+```
+
+Use it only for the element table. Any change to a *timed* path means re-running the driver in
+full, and then every number quoted from that JSON has to be re-checked.
+
 Each driver takes one model per run on purpose — see the memory note above. The IfcOpenShell
 driver re-invokes itself as a child process for each geometry library, because constructing
 iterators for more than one geometry library inside a single process crashes that process

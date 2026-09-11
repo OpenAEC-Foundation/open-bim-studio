@@ -37,9 +37,21 @@ again in the verdict.
 
 ## Method
 
-Five repeats of every timed operation, median reported; each repeat opens a fresh model, so no
-object is reused across repeats. Each model runs in its own process. The element-table pass that
-computes volumes is separate and untimed. Full method, and how to reproduce it, in
+**Repeats apply to the whole-model and edit-test operations, not to the per-element pass.** Five
+repeats, median reported, for every *whole-model* timed operation (parse, iteration,
+`OpenModel`, `LoadAllGeometry`, `StreamAllMeshes`) and for each edit test; each repeat opens a
+fresh model, so no object is reused across repeats. Each model runs in its own process. The
+element-table pass that computes volumes is separate and untimed.
+
+**The per-element distribution is one sample per element.** `per_element_create_shape` (and
+web-ifc's `perElement`, whose JSON says so in as many words — "`GetFlatMesh()` timed once per
+element") walks the element list once and times each element once, on a model where nothing has
+been evaluated. So the median is a median over 107 or 3,654 *elements*, not over repeats, and
+**p95 and max are single measurements of single elements**. Two things corroborate them rather
+than a repeat count: the slowest-element edit test, which re-times the worst element **five**
+times (530.54 ms median over 552.2, 531.6, 530.5, 516.6, 525.3 — within +4%/−3%), and the sum of
+the per-element times against the single-threaded whole-model pass (below). Full method, and how
+to reproduce it, in
 [`README.md`](README.md); the numbers are in
 [`results/ifcopenshell.md`](results/ifcopenshell.md), [`results/webifc.md`](results/webifc.md)
 and the JSON files beside them.
@@ -70,10 +82,19 @@ is run twice per model: on the first suitable wall, and on the element with the 
 Cross-check: the per-element totals (3.216 s, 21.030 s) match the single-threaded whole-model
 iteration medians (3.229 s, 21.688 s). The single-element path costs what the batch path costs.
 
+Each element was timed **once** (§Method); the cross-check above is what corroborates the totals.
+
 This number is **pessimistic by construction**: `helper_fn_create_shape` builds a fresh
 `Converter` — a fresh kernel and a fresh mapping — on every call
 ([`IfcGeomWrapper.i#L885-L889`](https://github.com/IfcOpenShell/IfcOpenShell/blob/158fe92644cfe2bc37be513d9838c95d9f2233cf/src/ifcwrap/IfcGeomWrapper.i#L885-L889)).
 A real incremental implementation would hold that setup across edits.
+
+**Pin caveat, because this is a source citation.** `158fe92…` is tag `bonsai-0.8.4`. There is
+**no `v0.8.4` tag** on IfcOpenShell — its own release tags stop at `v0.7.1`, and the 0.8 line is
+tagged only through the Bonsai add-on — so this is the nearest published tree to the measured
+wheel's version string, and **the wheel is not provably built from it**. The same caveat applies
+to every IfcOpenShell source link in this file and in
+[`../../docs/research/kernels/ifcopenshell.md`](../../docs/research/kernels/ifcopenshell.md).
 
 ### IfcOpenShell — the edit test
 
@@ -97,8 +118,12 @@ therefore no reuse either.
 
 These look extraordinary and must not be read as re-evaluation costs. web-ifc caches geometry per
 **geometry express id**, so once one element using a representation has been built, every other
-element sharing it is a map lookup. The per-element totals (82.3 ms and 244.1 ms) again match
-`LoadAllGeometry` (85.3 ms and 296.6 ms): the same total work, distributed very unevenly.
+element sharing it is a map lookup. Each element is timed once here too — the driver's own JSON
+records the method as "`GetFlatMesh()` timed once per element, in express-id order". The
+per-element totals (82.3 ms and 244.1 ms) come out **within 4% and within 18%** of
+`LoadAllGeometry` (85.3 ms and 296.6 ms): the same total work, distributed very unevenly. The
+18% gap is not accounted for here — `LoadAllGeometry` returns 3,643 meshes and builds a result
+vector the per-element path does not.
 
 ### web-ifc — the edit test
 
@@ -158,7 +183,13 @@ below: no larger model is needed to establish that the mechanism does not exist.
   iteration for a typical wall.
 - But **5.7%** of elements on the real building (209 of 3,654) exceed 16 ms, and the worst
   exceeds **550 ms** — over five times the *fail* threshold of 100 ms. Six elements exceed 100 ms
-  on IFC_Schependomlaan; seven of 107 do on AC20-FZK-Haus.
+  on IFC_Schependomlaan; seven of 107 do on AC20-FZK-Haus. **The tail figures are single
+  measurements per element** (§Method): each element was timed once. What supports them is the
+  five-repeat re-timing of the *slowest* element on each model — medians 530.54 ms and
+  623.59 ms, with the five runs spanning +4%/−3% and +10%/−14% of the median — and the fact
+  that the per-element times sum to the
+  single-threaded whole-model pass. A per-element p95 is therefore a statement about the shape of
+  the distribution, not a stabilised number for any one element.
 - A modeller must be interactive when the user drags *the window*, not only when they drag the
   median wall. On this evidence IfcOpenShell would miss a 16 ms frame budget on roughly one
   element in twenty, and miss it by a factor of thirty on the worst.
