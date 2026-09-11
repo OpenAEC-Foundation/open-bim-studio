@@ -90,6 +90,10 @@ Grouped by the representation they are strongest in. A candidate may appear in t
       IfcOpenShell; the richest source of documented boolean and tolerance problems
 - [ ] **FreeCAD** as a case study on OCCT — the topological naming problem in production (R-13)
 - [ ] **Truck** and **Fornjot** — small B-rep kernels in Rust; useful for design clarity
+- [ ] **cadkernel**, the geometry under **Open CAD Studio** — a third Rust B-rep kernel, MPL-2.0
+      and separable from its GPL application; f64 with a local-frame invariant, a typed boolean
+      refusal, and provenance that writes untouched source records back unchanged
+      ([`opencadstudio.md`](opencadstudio.md))
 - [ ] **Parasolid-class commercial kernels** — documentation-only reference for what "engineering
       accuracy" is taken to mean in industry; not a candidate to build on
 
