@@ -10,7 +10,7 @@ does CGAL's own boolean actually do?
 
 **Status:** draft
 **Author:** research programme, phase 2
-**Last updated:** 2026-09-10
+**Last updated:** 2026-09-11
 
 > **Scope, stated before anything else.** What is measured here is **CGAL 6.0.1's
 > `Polygon_mesh_processing` corefinement boolean through the official SWIG bindings, on
@@ -101,7 +101,7 @@ against the `cgal` 6.0.1 wheel on an Intel Core i9-14900HX with 32 GB of RAM.
 |---|---|---|---|
 | **License** | **Split per package, and the split runs straight through what we would want.** The kernel, the filtering and the number types are LGPL — every one of the 92 headers under `Kernel_23/include/`, the 39 under `Filtered_kernel/include/` and the 92 under `Number_types/include/` carries `SPDX-License-Identifier: LGPL-3.0-or-later OR LicenseRef-Commercial`. The **boolean, the mesh type and `Nef_3` are GPL**: all 58 headers under `Nef_3/include/`, 22 of 23 under `Polyhedron/include/` (`Polyhedron_3.h` included) and 88 of 89 under `Polygon_mesh_processing/include/` carry `GPL-3.0-or-later OR LicenseRef-Commercial`. Borrowing the *predicate* design as code is legally possible; borrowing the *boolean* — or even the mesh class it operates on — as code is not, for a product we do not intend to ship under GPL. | source | SPDX lines, §Licence |
 | **Representations held natively** | **Several, but not as one kernel.** Separate packages hold a halfedge B-rep (`Polyhedron_3`, `Surface_mesh`), a Nef point set (`Nef_polyhedron_3`), point sets (`Point_set_3`), and 3D triangulations/meshes (`Mesh_3`). There is no single object that holds more than one, and conversions are package-level free functions, not a conversion module. It is a *library of representations*, not a multi-representation kernel. | source + inferred | binding module list; package layout at the tag |
-| **Boolean robustness** | Measured on the torture set, **Epick input only** (Epeck/Nef unmeasured — see the scope box): **8 of 10 cases valid and numerically correct on both settings**, worst identity residual **3.55e-15** on f64 input (0 on f32-rounded input) — the tightest of any candidate measured. The two failures are **refusals**: `near_degenerate_triangle` (the T-junction operand violates two documented preconditions) and, more interestingly, `shared_edge`'s **union only**, where the intersection of the same pair succeeds. Algorithm class: exact predicates throughout, plus exact *constructions internally, discarded on output* (§The hybrid). | measured + source | [`results/cgal.md`](../../../spikes/boolean-torture/results/cgal.md); `intersection_nodes.h`, `Face_graph_output_builder.h` |
+| **Boolean robustness** | Measured on the torture set, **Epick input only** (Epeck/Nef unmeasured — see the scope box): **8 of 10 cases valid and numerically correct on both settings**, worst identity residual **7.11e-15** on f64 input (0 on f32-rounded input) — the tightest of any candidate measured. The two failures are **refusals**: `near_degenerate_triangle` (the T-junction operand violates two documented preconditions) and, more interestingly, `shared_edge`'s **union only**, where the intersection of the same pair succeeds. Algorithm class: exact predicates throughout, plus exact *constructions internally, discarded on output* (§The hybrid). | measured + source | [`results/cgal.md`](../../../spikes/boolean-torture/results/cgal.md); `intersection_nodes.h`, `Face_graph_output_builder.h` |
 | **Tolerance and precision model** | **There is no tolerance.** Epick stores `double` and has no per-entity or global epsilon anywhere — the driver's storage table has no tolerance column because there is nothing to put in it, which is the exact opposite of OCCT's tolerant B-rep and of Manifold's box-derived epsilon. Metric questions are answered by exact comparison of stored doubles; combinatorial questions by exact predicates. The cost of that purity is that a near-coincidence is *not* a coincidence, and nothing merges it. | measured + source | [`precision results`](../../../spikes/precision-set/results/cgal.md); `Epick` header |
 | **Incremental evaluation** | **None at kernel level.** The boolean is a free function over two meshes; there is no dependency graph, no operation history, no handle that survives a recompute. Worse for our purposes: corefinement **modifies both operands in place** (measured: the wall's A goes 8v/12f → 224v/444f), so "re-run with one operand changed" means rebuilding both. | measured + inferred | [`results/cgal.md`](../../../spikes/boolean-torture/results/cgal.md) Probe F |
 | **Threading model** | **Unmeasured.** CGAL has TBB-based parallelism in some packages behind a `CGAL::Parallel_tag` concurrency tag; the corefinement API measured here takes no such tag, so there is no parallel mode to switch on from this binding. This note did not measure thread usage or a speedup, and claims neither. | inferred | corefinement API at the tag; binding surface |
@@ -628,7 +628,7 @@ neighbour `does_self_intersect` disagreed with each other until PR 9506.
   `reference.signed_volume` sums in emission order, the **last two or three digits** of any volume
   in these files move between runs, and so does a residual that is already at the 1e-15 level.
   A re-run that reports 12.600000000000003 where the committed file says 12.6, or 0 where it says
-  3.55e-15, has reproduced the measurement. Nothing above the 1e-12 level moves.
+  7.11e-15, has reproduced the measurement. Nothing above the 1e-12 level moves.
 - **Two settings, and why there are only two:** CGAL exposes no tolerance parameter, so there is
   no equivalent of Manifold's tolerance sweep. The axis that exists is the ingest precision —
   `Epick, f64 input` (verbatim) and `Epick, f32-rounded input` (each coordinate through the
@@ -638,15 +638,20 @@ neighbour `does_self_intersect` disagreed with each other until PR 9506.
 
 | Setting | Valid (closed manifold) | Numerically correct | Worst identity residual |
 |---|---|---|---|
-| Epick, f64 input | 8 / 10 | 8 / 10 | 3.55e-15 |
+| Epick, f64 input | 8 / 10 | 8 / 10 | 7.11e-15 |
 | Epick, f32-rounded input | 8 / 10 | 8 / 10 | 0 |
+
+*(Figures re-synced to the 2026-09-11 run recorded in
+[`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md) — the
+`wall_with_openings` f64 identity residual moved between runs, inside the file's own documented
+non-determinism, from 3.55e-15 to 7.11e-15; see that file's §Run-to-run reproduction.)*
 
 R-16's pass line is *every* case valid with the identity within 1e-9 relative. **CGAL does not
 pass, and both failures are refusals rather than wrong answers** — one at a documented
 precondition (`near_degenerate_triangle`, the T-junction operand: not closed, self-intersecting),
 one because the requested operation's result is not representable in a halfedge mesh
 (`shared_edge`'s union). On the eight it accepts it is numerically correct on both settings, and
-the worst identity residual on f64 input, **3.55e-15**, is the tightest of the four candidates
+the worst identity residual on f64 input, **7.11e-15**, is the tightest of the four candidates
 measured. Compared like for like — the worst residual each candidate produced over the cases *it*
 accepted — Blender's Manifold solver is 1.42e-14, the standalone Manifold library 3.55e-14, OCCT
 3.33e-08 (driven by its `sliver` intersection returning 0 where 1e-07 m³ was expected; 1.42e-14
@@ -667,7 +672,7 @@ Three details worth carrying:
   near-coincident input elsewhere (#5264).
 * **The f32-rounded setting changes nothing about *which* cases pass.** Same 8/10, same
   refusals; only the volumes move (Δ∪ = 1.79e-08 on the wall). Its worst identity residual reads
-  0 rather than 3.55e-15, which is not an improvement — both are below the noise floor the
+  0 rather than 7.11e-15, which is not an improvement — both are below the noise floor the
   reproducibility caveat above describes. Exact predicates keep the *combinatorics* right on
   rounded coordinates; they cannot keep the *geometry* right.
 
@@ -705,8 +710,10 @@ put through this probe, so it is not counted on either side.
 ## Strengths
 
 - **The tightest arithmetic of any candidate on the cases it accepts.** Worst identity residual
-  3.55e-15 on f64 input — four times tighter than the next best (Blender's Manifold solver at
-  1.42e-14) — and correct to the 1e-6 criterion on both settings.
+  7.11e-15 on f64 input (2026-09-11 run;
+  [`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md)) — roughly
+  two times tighter than the next best (Blender's Manifold solver at 1.42e-14) — and correct to
+  the 1e-6 criterion on both settings.
 - **Exact predicates that demonstrably decide what doubles cannot** — 2164 of 4096 plain-double
   answers wrong, 0 of 4096 for the filtered predicate, against an exact-rational oracle.
 - **A refusal that is per-operation and carries a reason.** Four independent bits, one per boolean

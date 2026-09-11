@@ -66,9 +66,12 @@ candidate rather than assumed.
 2. **`reference.signed_volume` itself loses volume at 500 km, before any library is involved.** It
    sums `x0*(y1*z2 − z1*y2)` over raw coordinates; at 5e5 m each term is about 1e17 against a sum
    of about 12.6. Measured by shifting the *origin* result's own vertices and re-integrating: the
-   wall union loses **7.91e-05 m³** on Manifold's 200v/396f triangulation
-   ([`results/manifold.md`](results/manifold.md), last probe) and **1.55e-04 m³** on CGAL's
-   320v/636f triangulation of the same solid ([`results/cgal.md`](results/cgal.md), last probe) —
+   wall union loses **7.91e-05 m³** on Manifold's 200v/396f triangulation (face count from
+   [`../boolean-torture/results/manifold.md`](../boolean-torture/results/manifold.md) Probe E,
+   volume loss from [`results/manifold.md`](results/manifold.md), last probe) and **1.55e-04 m³**
+   on CGAL's 320v/636f triangulation of the same solid (face count from
+   [`../boolean-torture/results/cgal.md`](../boolean-torture/results/cgal.md) Probe E, volume loss
+   from [`results/cgal.md`](results/cgal.md), last probe) —
    a different sum, not a different conclusion, and a quantity that moves between runs because
    CGAL's vertex emission order does. Every far volume in the tables below is therefore integrated
    **after** back-translation. Neither library's own integrator is a way out for free: Manifold's
@@ -76,6 +79,24 @@ candidate rather than assumed.
    12.5999999999; CGAL's `PMP::volume()` is an uncompensated sum of tetrahedra about the world
    origin and returns **12.6002807617**, worse than the naive raw sum. OCCT's `BRepGProp` was not
    put through this probe and is counted on neither side.
+3. **`wall_with_openings` is the case this file's whole R-17 finding rests on, and the four
+   candidates were not handed the same input object for it.** `overlap_half` and `coplanar_faces`
+   are unit cubes, identically constructed for every candidate, and return 0 m deviation on every
+   candidate and setting, f32 included (§What this does not settle) — they discriminate nothing.
+   `wall_with_openings` is the only case that separates the f64 and f32 populations below, and its
+   operand B is **four different constructions**, exactly as
+   [`../boolean-torture/FINDINGS.md`](../boolean-torture/FINDINGS.md) caveat 1 establishes: OCCT
+   builds it as a compound of twelve solids
+   ([`../../docs/research/kernels/occt.md`](../../docs/research/kernels/occt.md) §Measurements,
+   construction bullet), Blender as one mesh object with twelve disconnected shells
+   ([`../boolean-torture/results/blender.md`](../boolean-torture/results/blender.md) §Construction
+   of the operands), Manifold as one `Manifold` with `decompose() == 12`
+   ([`../boolean-torture/results/manifold.md`](../boolean-torture/results/manifold.md) Probe A),
+   and CGAL as one `Polyhedron_3` with `PMP::connected_components` reporting 12
+   ([`../boolean-torture/results/cgal.md`](../boolean-torture/results/cgal.md) Probe A). The four
+   `wall_with_openings` rows below are therefore the same benchmark *case*, not the same input
+   *object* — the R-16 finding's caveat applies here with the same force, because it is the same
+   operand construction.
 
 ## Results
 
@@ -193,7 +214,8 @@ which is the maximum of its table above.
 
 | Candidate | Path / setting | Float width of vertex storage | Worst deviation over the set | Worst relative ΔV |
 |---|---|---|---|---|
-| OCCT 8.0.1 | default and fuzzy=1e-5, B-rep | f64 | **3.61e-10 m** | 1.39e-10 |
+| OCCT 8.0.1 | default, B-rep | f64 | **2.65e-10 m** | 1.39e-10 |
+| OCCT 8.0.1 | fuzzy=1e-5, B-rep | f64 | **3.61e-10 m** | 1.39e-10 |
 | CGAL 6.0.1 | Epick, f64 input | f64 | **1.28585e-10 m** | 3.88e-11 |
 | Manifold 3.5.3 | `Mesh64` | f64 | **3.29273e-11 m** | 3.88e-11 |
 | Manifold 3.5.3 | `Mesh` | f32 on ingest, f64 internally | **0.0185826 m** | 0.0417 |
@@ -226,8 +248,8 @@ ADR-0006 needs."** Applied literally:
 
 | Candidate × setting | Verdict | Margin against the line |
 |---|---|---|
-| OCCT, default (f64) | **PASS** | 3.61e-10 m against a 1e-6 m pass line — inside it by 2 770 times |
-| OCCT, fuzzy=1e-5 (f64) | **PASS** | same worst case; fuzzy changed the deviation from 2.65e-10 to 3.61e-10 m and nothing else |
+| OCCT, default (f64) | **PASS** | 2.65e-10 m against a 1e-6 m pass line — inside it by 3 770 times |
+| OCCT, fuzzy=1e-5 (f64) | **PASS** | 3.61e-10 m — inside it by 2 770 times; fuzzy changed the worst deviation from 2.65e-10 to 3.61e-10 m and nothing else |
 | CGAL, Epick f64 input | **PASS** | 1.28585e-10 m — inside by 7 800 times |
 | Manifold, `Mesh64` (f64) | **PASS** | 3.29273e-11 m — inside by 30 000 times |
 | Manifold, `Mesh` (f32) | **FAIL** | 0.0185826 m against a 1e-4 m fail line — outside it by 186 times |
@@ -251,7 +273,7 @@ geometry rather than inside it. Each driver measured that arrangement rather tha
 
 | Candidate | How the offset was carried | Result |
 |---|---|---|
-| Blender | the object's `location`, vertex data at the origin | **0 m** deviation against the origin run on every case and every solver, Exact, Fast and Manifold alike — including the twelve-opening wall, where carrying the offset in the vertices had cost 0.0348 m ([`results/blender.md`](results/blender.md), last probe) |
+| Blender | the object's `location`, vertex data at the origin | **0 m** deviation against the origin run on every case and every solver, Exact, Fast and Manifold alike, **with one exception**: `overlap_half`, Fast (float), **common** still deviates **0.5 m** ([`results/blender.md`](results/blender.md) §The local-frame mitigation). That row is not a counter-example to the mitigation — the Fast solver's `overlap_half` result is already invalid and wrong in both frames before the mitigation is applied (main table above: near V=1 against an expected 1.5, far equally wrong), so the local frame changes an already-wrong answer's error term, not its validity; R-17's verdict for Blender Fast was already **FAIL** on this case regardless. Every case the mitigation actually rescues, including the twelve-opening wall, where carrying the offset in the vertices had cost 0.0348 m, reaches 0 m ([`results/blender.md`](results/blender.md), last probe) |
 | Manifold | `Manifold.translate()` before the boolean, result translated back | **0 m** on `overlap_half` and `coplanar_faces` at both precisions; 3.29e-11 m / 2.60e-11 m on the wall at f64; **0 m** on the wall at f32. But the tolerance is re-derived from the moved bounding box: 1e-11 → 5e-07 at f64, and 1.192e-06 unchanged at f32 |
 | CGAL | the driver applies it in `double` to the exported vertices, as a tile frame would on the way out | the mirror comparison agrees with the main table to 1.2e-11 m, confirming the back-translation is not itself doing the work |
 
@@ -259,6 +281,31 @@ geometry rather than inside it. Each driver measured that arrangement rather tha
 between a 0.0348 m error and none. What it does not do is remove the tolerance coupling Manifold's
 column shows — a local frame fixes the *coordinates*, and a tolerance derived from a global
 bounding box still tracks the global position.
+
+## Run-to-run changes against the committed files
+
+*Measured.* All four drivers were re-run for this assembly and every regenerated file was diffed
+against the committed, per-candidate-reviewed version — the same re-run
+[`../boolean-torture/FINDINGS.md`](../boolean-torture/FINDINGS.md) §Run-to-run reproduction
+describes for the boolean-torture files. **No verdict in this file moves**: every cell that changed
+is either a non-reference probe column the R-17 verdicts do not read, or a case the mitigation
+table already marks as invalid regardless of the number. In full:
+
+| File | Cell | Committed (2026-09-10 basis) | Regenerated (2026-09-11) | Explanation, from the file itself |
+|---|---|---|---|---|
+| `results/cgal.md` | Last probe, `wall_with_openings` union, "Near, coords shifted" | 12.5997471293 | 12.5998451544 | Pure floating-point cancellation in `reference.signed_volume`'s raw sum at 5e5 m (caveat 2 above); no boolean and no library are involved in this column at all |
+| `results/cgal.md` | Last probe, `wall_with_openings` union, "Far, raw" | 12.5995943646 | 12.5999895013 | Same cause: this column is CGAL's vertex emission order feeding the same cancellation-prone sum, and the emission order is the driver's own documented non-determinism ([`../boolean-torture/results/cgal.md`](../boolean-torture/results/cgal.md) Probe E) |
+| `results/cgal.md` | Last probe, `wall_with_openings` intersection, "Near, coords shifted" | 5.40016343781 | 5.4002605346 | Same cancellation artefact on the intersection solid |
+| `results/cgal.md` | Last probe, `wall_with_openings` intersection, "Far, raw" | 5.40009218897 | 5.40003036136 | Same cause, emission-order dependent |
+| `results/cgal.md` | Last probe, `wall_with_openings` union, "Far, `PMP::volume()`" | 12.6002807614 | 12.6002807617 | `PMP::volume()` is an uncompensated tetrahedron sum about the world origin (caveat 2) — the same emission-order noise, one level further from the raw coordinates |
+| `results/cgal.md` | Last probe, `coplanar_faces` union, "Far, `PMP::volume()`" | 1.99999999999 | 2 | Same integrator, same noise floor, on a solid whose true volume is exactly 2 |
+| `results/blender.md` | Local-frame mitigation table, `overlap_half` / Fast (float) / **union** | 0.5 m | 0 m | The Fast solver's documented run-to-run non-determinism (P-16; [`../boolean-torture/FINDINGS.md`](../boolean-torture/FINDINGS.md) §Failures, `overlap_half` ∪ row) — the result is invalid in both frames either way, so this cell moving does not change which cases the mitigation table's readers may trust |
+
+None of these seven cells is a number the R-17 verdicts above are computed from: the last-probe
+table exists to characterise `reference.signed_volume`'s own error, not to report a candidate's
+deviation, and the local-frame mitigation table's `overlap_half`/Fast/union row was already invalid
+before this run and stays invalid after it. **No pass/fail verdict and no deviation figure in the
+main results tables or the summary above moved.**
 
 ## What this does not settle
 

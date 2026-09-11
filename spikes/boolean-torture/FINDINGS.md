@@ -257,6 +257,19 @@ R-16 says, verbatim: **"Pass (per candidate): every case produces a valid closed
 volume identity holds within 1e-9 relative."** and **"Fail: any invalid result, or a volume error
 above 1e-6 relative."** Applied literally, per candidate × setting:
 
+**Which reading of "a volume error" the verdicts below use, stated explicitly.** The fail clause
+is ambiguous between two quantities: (a) the **identity residual**
+`|V(A) + V(B) − (V(A∪B) + V(A∩B))|` relative to `V(A) + V(B)` — the quantity R-16's own spike
+sentence names, `V(A∪B) + V(A∩B) = V(A) + V(B)` — and (b) **deviation from the analytic
+expectation** — how far a returned volume sits from the value the case was built to produce. The
+table below, and every verdict in this file, uses reading (a), because it is the quantity the
+spike sentence defines and the only one every candidate reports without extra construction. The
+rejected reading is (b). Under (b), OCCT's `sliver` intersection returns **0** where 1e-07 m³ was
+expected — a 100% deviation, five hundred thousand times the 1e-6 fail line — which would make
+OCCT **FAIL** at every setting instead of the "neither pass nor fail" verdict reading (a) gives it
+below. Reading (a) is used throughout because it is what R-16 actually measures; reading (b) is
+named here so the choice is traceable rather than silent.
+
 | Candidate × setting | Verdict | Why, against the words of the criterion |
 |---|---|---|
 | OCCT — default, fuzzy=1e-5, fuzzy=1e-3 | **Neither pass nor fail** | All ten cases are valid per `BRepCheck_Analyzer` at every setting, so the fail clause "any invalid result" does not fire. But `sliver`'s identity residual is 3.33e-08 against `V(A)+V(B)` ≈ 1, i.e. **3.33e-08 relative** — above the 1e-9 pass line and below the 1e-6 fail line. The criterion as written leaves this state unnamed, and it is reported as unnamed rather than rounded into either verdict. |
@@ -299,9 +312,15 @@ rather than `resolved`.
 
 ### Failures, traced causes, and the `problems.md` row each supports
 
-Every entry is an invalid result or a volume error above 1e-6 relative, recorded with the input,
-the version and the traced cause, as R-16's fail clause requires. Rows are in
-[`../../docs/research/kernels/problems.md`](../../docs/research/kernels/problems.md).
+Every entry is an invalid result or a volume error above 1e-6 relative **under the expectation
+reading (b) named above** — deviation from the analytic value the case was built to produce —
+recorded with the input, the version and the traced cause, as R-16's fail clause requires. This
+table therefore reads "1e-6 relative" differently from the verdict table above it, and one row
+needs that stated plainly: **OCCT's `sliver` row is not a criterion failure under the identity
+reading (a) the verdict table uses — its residual is 3.33e-08, below the 1e-6 fail line — and is
+listed here only because it is a wrong result under the expectation reading (b): the intersection
+returns 0 against an expected 1e-07 m³.** Every other row below is a failure under both readings.
+Rows are in [`../../docs/research/kernels/problems.md`](../../docs/research/kernels/problems.md).
 
 | Candidate × setting | Case | What happened | Traced cause | Supports |
 |---|---|---|---|---|
@@ -315,14 +334,25 @@ the version and the traced cause, as R-16's fail clause requires. Rows are in
 | CGAL 6.0.1, both settings | `shared_edge` ∪ | `corefine_and_compute_union` returns `False` with 0 facets | The requested result has a non-manifold edge — four facets along x=1, y=1 — which a `Polyhedron_3` halfedge structure cannot hold. The *intersection* of the same pair succeeds ([`results/cgal.md`](results/cgal.md) Probe D) | **P-01**, again as a representation limit |
 | CGAL 6.0.1, both settings | `near_degenerate_triangle` | Both booleans return `False` with 0 facets; operand B is **not closed** and **self-intersects** (3 border halfedges); `PMP::stitch_borders` does not repair it | Two documented corefinement preconditions violated. A third documented precondition, `does_bound_a_volume`, is **absent from the binding** and could not be checked at all | **P-09** |
 | CGAL 6.0.1, f64 input | run-to-run | **Non-deterministic emission order**: 10 identical runs of the `wall_with_openings` difference give 5 distinct volume signatures but **1 distinct geometry** ([`results/cgal.md`](results/cgal.md) Probe E) | The vertex *order* varies between runs; `reference.signed_volume` sums in emission order, so the last digits move. The solid does not | **P-16**, in its weaker form — the output is stable, its serialisation is not |
-| OCCT 8.0.1, all three settings | `sliver` | The intersection returns **0** where 1e-07 m³ was expected, and the result is reported valid | The operand never existed at the specified thickness: sewing at `Precision::Confusion()` = 1e-7 produced a solid of 3.33e-08 m³ whose own tolerance exceeds its thickness. `BRepPrimAPI_MakeBox` refuses any extent at or below 1e-7 outright with `Standard_DomainError` ([`results/occt.md`](results/occt.md) Probe D) | **P-24** (a tolerance acting as a floor on representable size), **P-02** |
-| OCCT 8.0.1, fuzzy=1e-5 | chained fuse, Probe A | Eight boxes fused one at a time across 5e-6 m gaps accumulate **2.67e-05 m³** of excess volume, monotonically | Fuzzy tolerance bridges each gap and the volume integral counts the bridge as solid; the growth is inherited downstream — Probe B shows one fuse raising the *input* shapes' tolerance to 5.001e-04 | **P-02** (tolerance growth), **P-24** |
+| OCCT 8.0.1, all three settings | `sliver` *(not a criterion failure under the identity reading (a) — a wrong result under the expectation reading (b); see §Verdict against R-16)* | The intersection returns **0** where 1e-07 m³ was expected, and the result is reported valid | The operand never existed at the specified thickness: sewing at `Precision::Confusion()` = 1e-7 produced a solid of 3.33e-08 m³ whose own tolerance exceeds its thickness. `BRepPrimAPI_MakeBox` refuses any extent at or below 1e-7 outright with `Standard_DomainError` ([`results/occt.md`](results/occt.md) Probe D) | **P-24** (a tolerance acting as a floor on representable size), **P-02** |
+| OCCT 8.0.1, fuzzy=1e-5 | chained fuse, Probe A *(not a torture-set case — see note below)* | Eight boxes fused one at a time across 5e-6 m gaps accumulate **2.67e-05 m³** of excess volume, monotonically | Fuzzy tolerance bridges each gap and the volume integral counts the bridge as solid; the growth is inherited downstream — Probe B shows one fuse raising the *input* shapes' tolerance to 5.001e-04 | **P-02** (tolerance growth), **P-24** |
+
+**The chained-fuse row above is not one of the ten `boolean_torture_set.py` cases.** It is OCCT's
+own Probe A ([`results/occt.md`](results/occt.md) Probe A) — eight boxes fused one at a time — run
+to show tolerance growth over a *chain* of booleans, which R-16's spike sentence does not cover
+(single operations only; see §What this does not settle). It is kept in this table because it
+supports a `problems.md` row exactly as the torture-set rows do, and is marked here so it is not
+mistaken for an eleventh torture case.
 
 ## Run-to-run reproduction: what moved between 2026-09-10 and 2026-09-11
 
 *Measured.* All eight drivers were re-run for this assembly and every regenerated file was diffed
-against the committed, per-candidate-reviewed version. **No validity verdict, no pass/fail verdict
-and no volume above the 1e-12 level moved.** What did move, in full:
+against the committed, per-candidate-reviewed version, **scoped in this section to the
+boolean-torture result files** — the precision-set files' own run-to-run changes are a separate
+set of cells in a different spike and are documented in
+[`../precision-set/FINDINGS.md`](../precision-set/FINDINGS.md) §Run-to-run changes against the
+committed files, not here. **Within the boolean-torture files, no validity verdict, no pass/fail
+verdict and no volume above the 1e-12 level moved.** What did move, in full:
 
 | File | Cell | 2026-09-10 | 2026-09-11 | Explanation, from the file itself |
 |---|---|---|---|---|
@@ -331,15 +361,25 @@ and no volume above the 1e-12 level moved.** What did move, in full:
 | `results/blender.md` | `overlap_half` Fast ∪ edge counts | 24 / 24 | 26 / 26 | The Fast solver's measured non-determinism on this exact case (Probe E); the result is invalid either way |
 | `results/blender.md` | Probe A, Fast, threshold 0 | 19 edges, `validate()` corrected | 15 edges, no correction | The same non-determinism; invalid either way |
 | `results/blender.md` | Probe E signatures | 2 | 3 | That probe's own subject: this *is* the measurement, not noise in it |
-| `results/cgal.md` | `sliver` f64 ∩ volume | 9.99999999612e-08 | 9.99999999566e-08 | One of the three values the **committed** file's own Probe E already lists for this case |
-| `results/cgal.md` | `wall_with_openings` f64 identity | 3.55e-15 | 7.11e-15 | Emission-order summation; both are about 3e-16 relative |
+| `results/cgal.md` | `sliver` f64 ∩ volume (main table) | 9.99999999612e-08 | 9.99999999566e-08 | One of the three values the **committed** file's own Probe E already lists for this case |
+| `results/cgal.md` | `sliver` f64 ∩ volume, **Probe B** (a different cell from the row above) | 9.99999999612e-08 | 9.9999999952e-08 | A **third** distinct value, matching the committed file's own Probe E figure `9.999999995199034e-08` (its x7-majority value) rather than the one Probe B previously matched |
+| `results/cgal.md` | Probe E, `wall_with_openings` union, signature order | `320v/636f/V=12.600000000000003 x7; 320v/636f/V=12.6 x3` | `320v/636f/V=12.6 x3; 320v/636f/V=12.600000000000003 x7` | Same two values, same two counts (x7, x3), listed in a different order — not a count change |
+| `results/cgal.md` | Probe E, `sliver` intersection, signature counts | `9.99999999612422e-08 x3; 9.999999995661628e-08 x4; 9.999999995199034e-08 x3` | `9.99999999612422e-08 x2; 9.999999995199034e-08 x7; 9.999999995661628e-08 x1` | The three emission-order values are unchanged; the run-to-run split across them moved (3/4/3 → 2/7/1). Distinct *geometries* still 1 |
 | `results/cgal.md` | Probe E, difference signatures | 4 | 5 | Distinct *geometries* still 1 |
 
 [`cgal.md`](../../docs/research/kernels/cgal.md) §Measurements anticipated exactly this and calls
 it a finding rather than a nuisance: a re-run that reports 12.600000000000003 where the committed
-file says 12.6, or 0 where it says 3.55e-15, has reproduced the measurement, and nothing above the
-1e-12 level moves. Nothing did. Timings moved by roughly minus 15% to plus 25% across the board,
-the largest being Blender's Exact solver on the twelve-opening wall (15.95 to 17.80 ms union).
+file says 12.6, or 0 where it says 7.11e-15 (that note's own figure, re-synced below), has
+reproduced the measurement, and nothing above the 1e-12 level moves. Nothing did. Timings moved by
+roughly minus 15% to plus 25% across the board, the largest being Blender's Exact solver on the
+twelve-opening wall (15.95 to 17.80 ms union).
+
+**`cgal.md` itself has been re-synced to this run.** Its §Measurements and §Strengths quoted the
+2026-09-10 figure of 3.55e-15 for the `wall_with_openings` f64 identity residual; this file's own
+`results/cgal.md` row above now reads 7.11e-15, and `cgal.md` has been updated to match, with the
+"tightest of the four candidates" and "N times tighter than the next best" comparisons
+recalculated against the new figure (still the tightest; now roughly two times tighter than
+Blender's embedded Manifold solver at 1.42e-14, not four).
 
 ## What this does not settle
 
