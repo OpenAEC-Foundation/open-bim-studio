@@ -149,8 +149,10 @@ kernel builds on has no succession plan yet.
 There is one vertex type and it is not negotiable from DynLex code. `DynlexGraphicsVertex` is
 `float position[3]; float texture_coordinates[2]; float color[4]` — 36 bytes interleaved
 ([`graphicsRuntimeInternal.h#L17-L21`](https://github.com/OpenAEC-Foundation/dynlex/blob/7cacbc97f0cc2fdbe72bdbd310129bbc2da228cd/src/runtime/graphicsRuntimeInternal.h#L17-L21)),
-and the pipeline's own vertex-input binding states the stride as exactly that struct's size —
-`.stride = sizeof(DynlexGraphicsVertex)` — the line that proves the 36 bytes rather than assumes it
+and the pipeline's own vertex-input binding chooses the stride based on whether it is using the
+built-in vertex layout or a user-provided one — `.stride = builtin ? sizeof(DynlexGraphicsVertex) : sizeof(float) * 4,`
+— which means `sizeof(DynlexGraphicsVertex)` (36 bytes) for the built-in pipeline and `sizeof(float) * 4` (16 bytes)
+for custom shaders (fullscreen quad and custom vertex attribute paths)
 ([`graphicsRuntimePipeline.c#L53`](https://github.com/OpenAEC-Foundation/dynlex/blob/7cacbc97f0cc2fdbe72bdbd310129bbc2da228cd/src/runtime/graphicsRuntimePipeline.c#L53)).
 Each frame owns a 32 MiB `HOST_VISIBLE | HOST_COHERENT` buffer created with
 `VK_BUFFER_USAGE_VERTEX_BUFFER_BIT` **only**, permanently mapped at startup
