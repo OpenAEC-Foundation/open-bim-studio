@@ -48,16 +48,16 @@ Everything below is cited at these revisions. Links are pinned; none point at `m
 
 | Source | Revision read | How verified |
 |---|---|---|
-| **Open CAD Studio** | [`798379fbe0eb60025e4f4827441359aed812f5ff`](https://github.com/HakanSeven12/OpenCADStudio/tree/798379fbe0eb60025e4f4827441359aed812f5ff) — `main`, 2026-09-11 19:13 +0300, "Update dependencies after cadcodec PR 44" | *measured*, `gh api repos/HakanSeven12/OpenCADStudio/commits/main --jq .sha`, then fetched into the local clone and read with `git show <sha>:<path>` |
-| **cadkernel** | [`953d546b68aef4b6692566a1a9b077fc5bd9fb4f`](https://github.com/HakanSeven12/cadkernel/tree/953d546b68aef4b6692566a1a9b077fc5bd9fb4f) — the revision OCS pins, and also `main` at read time (`git rev-list --count 953d546b..origin/main` → `0`) | *measured*, cloned and checked out at that revision |
-| **cadcodec** (package `acadrust` 0.5.5) | [`70ac6da7cf149cea6398a3d8829dd5e48b485b96`](https://github.com/HakanSeven12/cadcodec/tree/70ac6da7cf149cea6398a3d8829dd5e48b485b96) — the revision OCS pins | *measured*, `gh api repos/HakanSeven12/cadcodec/commits/70ac…` resolves; `Cargo.toml` read at that ref |
+| **Open CAD Studio** | [`798379fbe0eb60025e4f4827441359aed812f5ff`](https://github.com/HakanSeven12/OpenCADStudio/tree/798379fbe0eb60025e4f4827441359aed812f5ff) — `main`, 2026-09-11 19:13 +0300, "Update dependencies after cadcodec PR 44" | *source*, `gh api repos/HakanSeven12/OpenCADStudio/commits/main --jq .sha`, then fetched into the local clone and read with `git show <sha>:<path>` |
+| **cadkernel** | [`953d546b68aef4b6692566a1a9b077fc5bd9fb4f`](https://github.com/HakanSeven12/cadkernel/tree/953d546b68aef4b6692566a1a9b077fc5bd9fb4f) — the revision OCS pins, and also `main` at read time (`git rev-list --count 953d546b..origin/main` → `0`) | *source*, cloned and checked out at that revision |
+| **cadcodec** (package `acadrust` 0.5.5) | [`70ac6da7cf149cea6398a3d8829dd5e48b485b96`](https://github.com/HakanSeven12/cadcodec/tree/70ac6da7cf149cea6398a3d8829dd5e48b485b96) — the revision OCS pins | *source*, `gh api repos/HakanSeven12/cadcodec/commits/70ac…` resolves; `Cargo.toml` read at that ref |
 
 **About the local clone.** The clone at `C:\Users\rickd\Documents\GitHub\OpenCADStudio` had
 `HEAD` = `1490fe4ea91dd83498bc7c280e124a07f194c37f` (`git describe --tags` → `v0.8.2-11-g1490fe4e`,
 authored 2026-07-15), with one local modification, to `.gitignore` only (`git status --short` →
 ` M .gitignore`), so its tracked sources equal that commit. That commit **is** upstream
 (`git branch -r --contains HEAD` lists `origin/main`), but it is **1806 commits behind**
-`origin/main` (*measured*, `git rev-list --count HEAD..origin/main` after fetching). It predates
+`origin/main` (*source count*, `git rev-list --count HEAD..origin/main` after fetching). It predates
 releases `v0.9.0`–`v2026.36` and describes a **different kernel**: at `1490fe4e` OCS's solids were
 built on the third-party `truck` crates with a boolean tolerance constant of `0.05`
 (`src/scene/model/solid_model.rs` at that commit, lines 142–158). None of that survives at `main`.
@@ -72,10 +72,10 @@ design is mentioned only where the contrast is the finding.
 Open CAD Studio is a DWG/DXF-native 2D and 3D CAD application written in Rust on `iced`
 (git revision `23604ff2`) over `wgpu` 29.0.4, with a desktop build and a Trunk/WASM browser build.
 The repository was created **2026-03-22** and has 1,557 stars, 158 forks and 815 issues of
-which 144 are open (*measured*, `gh api repos/HakanSeven12/OpenCADStudio`;
+which 144 are open (*source count*, `gh api repos/HakanSeven12/OpenCADStudio`;
 `gh issue list --state all --limit 1000`).
 Its source is 527 `.rs` files with 941 `#[test]` functions plus 17 integration-test files
-(*measured*, `git ls-tree -r --name-only 798379fb -- src | grep -c '\.rs$'`;
+(*source count*, `git ls-tree -r --name-only 798379fb -- src | grep -c '\.rs$'`;
 `git grep -c '#\[test\]' 798379fb -- src` summed).
 
 The geometry question is not about that repository. It is about the two crates it depends on:
@@ -87,12 +87,24 @@ OpenCADStudio  (GPL-3.0-only, application)
   └── acadrust / cadcodec  MPL-2.0   DXF + DWG read/write
 ```
 
-*measured*, [`Cargo.toml#L33-L35`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/Cargo.toml#L33-L35),
-which pins both by git revision, not from crates.io. Licences *measured* from each repository's
+*source*, [`Cargo.toml#L33-L35`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/Cargo.toml#L33-L35),
+which pins both by git revision, not from crates.io. Licences *source* from each repository's
 `Cargo.toml` `license` field and the GitHub licence API:
 OCS [`LICENSE`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/LICENSE)
 is GPLv3 and its README states `GPL-3.0 license`
 ([`README.md#L39`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/README.md#L39));
+the root `Cargo.toml` carries no `license` field, but its workspace member
+[`crates/ocs_plugin_api/Cargo.toml#L6`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/crates/ocs_plugin_api/Cargo.toml#L6)
+does: `license = "GPL-3.0-only"` — the one direct SPDX field in the tree for the application's own
+licence, and it settles **-only** against the README's ambiguous "GPL-3.0 license" wording.
+*Source*, `git grep -n "GPL-3.0-or-later\|or-later" 798379fb` over `*.toml` → no match in any
+`Cargo.toml`; over the whole tree → **one** match, and it is not a licence grant:
+[`packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml#L5`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml#L5)
+declares `<project_license>GPL-3.0-or-later</project_license>` in Flatpak/AppStream packaging
+metadata, contradicting the `LICENSE` file, the README and `ocs_plugin_api`'s own SPDX field. This
+does not change the conclusion — `LICENSE` and the Cargo.toml SPDX field are the authoritative
+sources, both say **-only** — but it is the same failure mode `problems.md` P-14 already records for
+xBIM: one project describing its own licence two ways in two files.
 cadkernel's [`Cargo.toml#L5`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/Cargo.toml#L5)
 is `license = "MPL-2.0"`; cadcodec's is `license = "MPL-2.0"` at `Cargo.toml#L7`.
 
@@ -100,11 +112,11 @@ is `license = "MPL-2.0"`; cadcodec's is `license = "MPL-2.0"` at `Cargo.toml#L7`
 
 ## 1. `cadkernel`: what the geometry actually is
 
-*measured*, `find . -name '*.rs' -not -path './.git/*'` over the repository → **102 files, 57,643
+*source count*, `find . -name '*.rs' -not -path './.git/*'` over the repository → **102 files, 57,643
 lines**, of which `src/` is 83 files and 50,956 lines (`brep` 29,063 / `geom2d` 13,132 / `space`
 5,615 / `acis` 2,976, the remainder `lib.rs` and `tessellation.rs`) and the
 `cadkernel-constraints` workspace member under `crates/` is 19 files and 6,687 lines. **672
-`#[test]` functions in 60 of the 83 `src/` files**; **zero occurrences of `unsafe`** (*measured*,
+`#[test]` functions in 60 of the 83 `src/` files**; **zero occurrences of `unsafe`** (*source count*,
 `grep -rn unsafe --include=*.rs src | wc -l` → 0).
 
 ### Layering, and why 2D is underneath
@@ -122,14 +134,14 @@ dependency-free ([`Cargo.toml#L14-L34`](https://github.com/HakanSeven12/cadkerne
 
 ### One representation, not four
 
-*measured*, reading the two type enums and grepping for the others:
+*source*, reading the two type enums and grepping for the others:
 
 | Representation | Present? | Evidence |
 |---|---|---|
-| B-rep | Yes — `Surface::{Plane, Cylinder, Cone, Sphere, Torus, Nurbs}` ([`brep/geometry.rs#L31-L47`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/geometry.rs#L31-L47)); `Curve::{Line, Circle, Arc, Ellipse, Polyline, Nurbs, Ray, XLine}` ([`geom2d/curve.rs#L170-L187`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/curve.rs#L170-L187)) | *measured* |
-| Mesh | **Output only.** `brep::mesh` produces `Mesh`/`BodyMesh` for display; there is no half-edge mesh and no mesh-domain operation ([`brep/mesh.rs`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/mesh.rs), `pub fn tessellate` at L909) | *measured* |
-| Point cloud | **None** | *measured*, `grep -rln 'point_cloud\|PointCloud' --include=*.rs src` → no matches |
-| Implicit / SDF | **None** | *measured*, `grep -rln 'signed_distance\|sdf\|Sdf\|implicit' --include=*.rs src` → no matches |
+| B-rep | Yes — `Surface::{Plane, Cylinder, Cone, Sphere, Torus, Nurbs}` ([`brep/geometry.rs#L31-L47`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/geometry.rs#L31-L47)); `Curve::{Line, Circle, Arc, Ellipse, Polyline, Nurbs, Ray, XLine}` ([`geom2d/curve.rs#L170-L187`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/curve.rs#L170-L187)) | *source* |
+| Mesh | **Output only.** `brep::mesh` produces `Mesh`/`BodyMesh` for display; there is no half-edge mesh and no mesh-domain operation ([`brep/mesh.rs`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/mesh.rs), `pub fn tessellate` at L909) | *source* |
+| Point cloud | **None** | *source*, `grep -rln 'point_cloud\|PointCloud' --include=*.rs src` → no matches |
+| Implicit / SDF | **None** | *source*, `grep -rln 'signed_distance\|sdf\|Sdf\|implicit' --include=*.rs src` → no matches |
 
 Against kernel spec §4's four first-class representations, cadkernel covers one, with the second as
 a one-way export. Mesh → B-rep exists in one narrow form: `faceted_solid(vertices, faces) -> Option<Body>`
@@ -164,7 +176,7 @@ read, and after an edit.
 
 ### Precision: f64 everywhere, and a local frame lifted at every entry point
 
-**There is no f32 in the kernel.** *measured*: `grep -rn f32 --include=*.rs src` returns **five**
+**There is no f32 in the kernel.** *source count*: `grep -rn f32 --include=*.rs src` returns **five**
 matches and all five are inside comments explaining why f32 is not used
 (e.g. [`geom2d/tessellate.rs#L9-L14`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/tessellate.rs#L9-L14)).
 
@@ -197,7 +209,12 @@ where `extent` is the largest axis span of the operands' vertices (floored at 1.
 `coordinate_scale` is the largest absolute coordinate (floored at 1.0)
 ([`brep/bounds.rs#L163-L183`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/bounds.rs#L163-L183)).
 Every blend, chamfer, boolean-internal step and the ACIS history rebuild calls it
-(*measured*, `grep -rn operation_tolerance --include=*.rs src` → 12 call sites).
+(*source count*, `grep -rn operation_tolerance --include=*.rs src` → 28 lines; minus the definition
+([`bounds.rs#L164`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/bounds.rs#L164)),
+its re-export ([`mod.rs#L62`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/mod.rs#L62))
+and two `use`-only lines ([`blend.rs#L3`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/blend.rs#L3),
+[`slice.rs#L8`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/slice.rs#L8))
+→ **24 call sites in 12 files**).
 
 So the tolerance has a **size term and a distance-from-origin term**. That is the first tolerance
 model in this research programme that responds to *where* the geometry is, and it is directly
@@ -206,7 +223,7 @@ comparable to the precision set. See §Measurements for the arithmetic.
 Alongside it, the crate carries a scatter of module-local constants: `1e-9` (angle, proximity,
 coplanarity, and the `TOL` in six `#[cfg(test)]` modules), `1e-10` (centreline, determinant),
 `1e-14` (discriminant), and in the offset path `1e-5` (position) and `1e-4` (join)
-(*measured*, `grep -rn 'const .*TOL\|const EPS' --include=*.rs src`). There is **no per-entity
+(*source*, `grep -rn 'const .*TOL\|const EPS' --include=*.rs src`). There is **no per-entity
 tolerance** — no tolerance field on a vertex, edge or face — so kernel spec §4's "a tolerance per
 vertex, edge and face" and §5's "an operation may grow but never shrink" have no counterpart here.
 This is the same gap [`truck-fornjot.md`](truck-fornjot.md) records for both Rust kernels and is
@@ -238,7 +255,7 @@ Contrast with the other Rust B-rep kernel in this directory: `truck-shapeops` pa
 and shared-edge input ([`truck-fornjot.md`](truck-fornjot.md) §Truck, Booleans;
 [`problems.md`](problems.md) P-29). cadkernel returns `Err(Snag::Coincident)` for the same input
 class. **Zero `extern "C"`, zero `#[no_mangle]`, zero `#[repr(C)]`, zero `crate-type` override**
-across cadkernel (*measured*, one `grep` over `src`, `Cargo.toml` and `crates/`, no matches) — a
+across cadkernel (*source count*, one `grep` over `src`, `Cargo.toml` and `crates/`, no matches) — a
 pure rlib, like Truck and Fornjot.
 
 **Exact predicates: absent, and known to be absent.** The README's own forward-looking dependency
@@ -250,7 +267,7 @@ Classification today is tolerance comparison, which is exactly the root cause
 
 ### Threading and scale
 
-**Single-threaded by design.** *measured*: `grep -rn 'rayon\|thread\|par_iter\|Mutex\|Arc<'` over
+**Single-threaded by design.** *source count*: `grep -rn 'rayon\|thread\|par_iter\|Mutex\|Arc<'` over
 `src` returns **one** match, and it is the word "thread" in a sentence about threading a `Frame`
 through recursion ([`geom2d/frame.rs#L32`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/frame.rs#L32)).
 `Body` is `Clone`, so parallelism is the caller's to arrange.
@@ -294,11 +311,12 @@ lines of grip and property definitions over `SolidHistoryBox`/`Cone`/`Cylinder`/
 ([`solid_history.rs#L1-L11`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/scene/model/solid_history.rs#L1-L11)).
 Editing a box's length re-runs its history node; it is **re-evaluation of one element from stored
 parameters**, not incremental evaluation of a dependency graph — there is no dependency graph in
-cadkernel (*measured*, no evaluation-graph or dirty-propagation type exists in `src`).
+cadkernel (*source*, no evaluation-graph or dirty-propagation type exists in `src`).
 
 **The cost of this design, which is the note's sharpest warning.** OCS's document is a DWG, its
 solids are ACIS records, and the kernel's topology is a cache lifted on demand
-(`Scene::restore_solid_models` is called before every solid command —
+(`Scene::restore_solid_models` is called before every solid command that goes through
+`selected_solid_handles` —
 [`model_ops.rs#L508-L525`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/app/model_ops.rs#L508-L525)).
 So a boolean that the kernel completes is **discarded** if the result cannot be lowered:
 
@@ -319,7 +337,7 @@ added by this note.
 
 ## 3. The GPU path
 
-OCS renders through `iced`'s advanced custom-pipeline API on `wgpu` **29.0.4** (*measured*,
+OCS renders through `iced`'s advanced custom-pipeline API on `wgpu` **29.0.4** (*source*,
 `git show 798379fb:Cargo.lock`), the same generation [`../renderers/gpu-paths.md`](../renderers/gpu-paths.md)
 read (`wgpu-v29.0.1`). That note's wgpu column already covers what wgpu itself offers and is not
 repeated here. What OCS adds is an **implementation of the two-float relative-to-eye scheme in
@@ -350,9 +368,9 @@ cited shader does not have to handle. This does not change `gpu-paths.md`'s conc
 OCCT/Filament fold is cheaper for our case because our tiles already exist); it removes the residual
 doubt that the two-float family is implementable on a modern explicit API.
 
-Depth is `TextureFormat::Depth32Float` on every pipeline (*measured*, `git grep Depth32Float`).
+Depth is `TextureFormat::Depth32Float` on every pipeline (*source*, `git grep Depth32Float`).
 
-**Picking is CPU, with no GPU readback anywhere** — *measured*, `git grep 'copy_texture_to_buffer\|map_async' 798379fb -- src`
+**Picking is CPU, with no GPU readback anywhere** — *source*, `git grep 'copy_texture_to_buffer\|map_async' 798379fb -- src`
 returns nothing. A click builds a world-space ray, rejects each mesh on its AABB, then scans that
 mesh's triangles linearly
 ([`pick/hit_test.rs#L840-L885`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/scene/pick/hit_test.rs#L840-L885)).
@@ -375,7 +393,7 @@ here, and OCS's issue tracker carries reports against them (§Documented failure
 STEP export is OCS's own and is **faceted**: `build_step(meshes: &[&MeshModel])` emits one
 `ADVANCED_FACE`/`PLANE` per triangle into a single `CLOSED_SHELL`/`MANIFOLD_SOLID_BREP`, from
 `MeshModel::verts`, which is the **high** `f32` half only — `verts_low` is never read by the
-exporter (*measured*, `grep -n verts_low src/io/step.rs` → no matches), and coordinates are printed
+exporter (*source*, `grep -n verts_low src/io/step.rs` → no matches), and coordinates are printed
 with `{:.6}`. The module says so itself: "Because building full B-Rep topology from a triangle soup
 is complex, we use a simplified encoding". Read at
 [`src/io/step.rs`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/io/step.rs)
@@ -387,7 +405,7 @@ the application, and it is unrelated to cadkernel's exact ACIS path.
 
 ## 5. Documented failure modes, and what each traces back to
 
-**How the tracker was counted.** *measured*: `gh issue list -R HakanSeven12/OpenCADStudio --state all
+**How the tracker was counted.** *source count*: `gh issue list -R HakanSeven12/OpenCADStudio --state all
 --limit 1000` → **815 issues** (144 open). Of those, **45 have a title matching**
 `\b(solid|boolean|union|subtract|intersect|extrude|revolve|loft|sweep|fillet|chamfer|brep|b-rep|acis|nurbs|3d|mesh|tessellat|precision|tolerance|slice|presspull|volume)\b`
 (case-insensitive) — **12 open, 33 closed**. The regex is the rule; a title-only match under-counts
@@ -427,7 +445,7 @@ different for each part.
 | **IFC coverage** | None in either crate. cadkernel's README names `acadifc` as a **sibling consumer** that would reach into `brep` and `geom2d` the same way an editor does, and forbids the reverse edge | measured (source) | cadkernel `README.md#L28-L56` |
 | **Performance** | **Not measured** — see §Measurements. The one structural fact established from source: the imprint's face pairing is O(n·m) with an AABB reject and no spatial index | not measured / measured (source) | §Measurements; `brep/imprint.rs#L212-L227` |
 | **Embeddability** | Pure Rust rlib. **Zero `extern "C"`, zero `#[no_mangle]`, zero `#[repr(C)]`** in cadkernel; OCS's only exported C ABI is the DWG thumbnailer and the plugin `ocs_plugin_register` — nothing geometric. An in-process DynLex↔Rust boundary would be entirely ours to write | measured | `grep` over cadkernel `src`+`Cargo.toml`+`crates`; `git grep 'pub extern "C" fn' 798379fb -- src crates` |
-| **2D derivation** | `brep::mesh::silhouette` / `transform_silhouette` produce view-dependent silhouettes; `tessellate_wireframe` produces `BodyWireframe`. Hidden-line and section are the application's (`solid_section`, `solid_flatshot` in OCS) | measured (source) | `brep/mesh.rs#L341-L444`, `#L959`; OCS `model_ops.rs` |
+| **2D derivation** | `brep::mesh::silhouette` / `transform_silhouette` produce view-dependent silhouettes; `tessellate_wireframe` produces `BodyWireframe`. Hidden-line and section are the application's (`solid_section`, `solid_flatshot` in OCS) | measured (source) | `brep/mesh.rs#L444-L470`, `#L614-L626`, `#L959`; OCS `model_ops.rs` |
 | **Maturity** | cadkernel: first commit **2026-08-08**, 336 commits, **34 days old**, two contributors (`HakanSeven12` 202, `ramox81` 134), **no tags, no crates.io release** — consumed by git rev. OCS: created 2026-03-22, 1,557★, 815 issues, latest release `v2026.36` (2026-09-06), 27 contributors with `HakanSeven12` 2,456 to `ramox81` 362 and 25 below that | measured | `git rev-list --count`, `git log --reverse`, `git tag`, `gh api .../contributors`, `gh release list` |
 | **AI familiarity** | Effectively zero public corpus: cadkernel is five weeks old with 5 stars; OCS is six months old. Both are far outside any training set that predates them. One column, never a tiebreaker (R-09) | inferred | Repository creation dates and star counts above |
 
@@ -454,9 +472,9 @@ different for each part.
    worse than none, because the `results/` convention in [`../../../spikes/boolean-torture/`](../../../spikes/boolean-torture/)
    implies that a file there was produced by a run.
 
-Consequently **every behavioural claim in this note is labelled *measured (source)* — read from the
-code at a pinned commit — or *claimed*, never *measured* in the sense the sibling notes use for a
-driver result.** `spikes/boolean-torture/FINDINGS.md` and `spikes/precision-set/FINDINGS.md` are
+Consequently **every behavioural claim in this note is labelled *source* or *source count* — read
+from the code at a pinned commit — or *claimed*, never *measured* in the sense the sibling notes use
+for a driver result.** `spikes/boolean-torture/FINDINGS.md` and `spikes/precision-set/FINDINGS.md` are
 unchanged by this note.
 
 ### The one thing that could be established without running anything
@@ -519,36 +537,49 @@ This belongs in [`../../risks.md`](../../risks.md) R-16's candidate list; it is 
 1. **Re-evaluate one changed element without reprocessing the model?** At the application level yes,
    from stored ACIS history parameters — change a box's length, `acis::rebuild_body` rebuilds that
    body. In the kernel, no: there is no dependency graph, and `combine` takes bodies by value and
-   clones them. *measured (source)*.
+   clones them. *source*.
 2. **IFC round trip?** Not applicable — no IFC in either crate. The **ACIS** round trip is
    unusually good and is the transferable idea: clean nodes lower back as their original bytes, and
-   `Loss` itemises every record the kernel could not take. *measured (source)*.
+   `Loss` itemises every record the kernel could not take. *source*.
 3. **Driven in-process from DynLex, without a subprocess or a file?** Only by writing the boundary
-   ourselves. Zero C ABI exists anywhere in cadkernel. Same answer as Truck and Fornjot. *measured*.
+   ourselves. Zero C ABI exists anywhere in cadkernel. Same answer as Truck and Fornjot. *source count*.
 4. **Threading model, and what is single-threaded by design?** All of it. One threading-related token
-   in the 50,956 lines of `src/`, and it is in a comment. *measured*.
+   in the 50,956 lines of `src/`, and it is in a comment. *source count*.
 5. **What breaks first at scale?** Evaluation time in the imprint: O(|faces A| × |faces B|) pair
    testing with only an AABB reject and no spatial index, and face bounds obtained by sampling
    curves. Second, mesh picking, which is linear in the triangles of every mesh whose box the ray
-   hits. *measured (source)*; neither has been timed.
+   hits. *source*; neither has been timed.
 6. **Internal numeric precision, configurable?** f64, not configurable, and there is no f32 path to
-   fall into. Tolerance is a per-call `f64` argument, with a derived default. *measured*.
+   fall into. Tolerance is a per-call `f64` argument, with a derived default. *source*.
 7. **Operate on a subset — one tile, one region? (R-14)** No tiling; the unit of work is a `Body`.
    But the per-operation local frame means an operation on a distant body is already conditioned as
-   if it were at the origin, which is most of what R-14 wants from a kernel. *measured (source)*.
+   if it were at the origin, which is most of what R-14 wants from a kernel. *source*.
 8. **Who maintains it, and what if they stop?** One person with a second substantial contributor:
    cadkernel 202:134, OCS 2,456:362. Both repositories are 2026 creations; cadkernel is five weeks
    old and has never been released. If the author stops, an MPL-2.0 fork is legally trivial and
-   technically expensive — 57,643 lines with no external users to share the burden. *measured*.
+   technically expensive — 57,643 lines with no external users to share the burden. *source count*.
+   **Bus factor**, by [`gpu-paths.md`](../renderers/gpu-paths.md)'s rule (§Maturity and AI
+   familiarity there): the smallest number of a repository's top contributors, from the GitHub
+   `contributors` API's first page (10 entries, bot accounts excluded), whose summed contributions
+   reach half the page's total. cadkernel: `HakanSeven12` (202) alone already exceeds half of
+   202 + 134 = 336 (168) — **bus factor 1**. OCS: the note's own two named contributors
+   (`HakanSeven12` 2,456, `ramox81` 362) are not enough on their own to apply the rule, since the
+   remaining eight of the top ten are only described in aggregate ("25 below that"); the full
+   first page, read the same way as `gpu-paths.md`'s table (*source*, `gh api
+   repos/HakanSeven12/OpenCADStudio/contributors`, read 2026-09-11, dated like that table's own
+   numbers): `HakanSeven12` 2,458, `ramox81` 362, `KarimJerbi` 105, `gianlucafiore` 86, `schoeller`
+   75, `mechpanos` 67, `felixriestra` 25, `KevinGriffin-new` 21, `UserDevtec` 20,
+   `NgoQuocViet2001` 17 — page total 3,236, half 1,618, and `HakanSeven12` alone (2,458) clears it —
+   **bus factor 1**. Both kernels this note evaluates have the same bus factor as DynLex itself.
 9. **Documented failure modes, with issue links, and the design choice each traces back to?**
    §Documented failure modes. The tracker is a young user-report stream, not a triaged root-cause
    history; the strongest causal chain in it is #561 → commit `29b15535` → P-05's re-derivation
-   sub-cause. *measured (source and tracker)*.
+   sub-cause. *source and tracker*.
 10. **Which representations natively, and how does it convert?** One — B-rep — plus a one-way
-    tessellation to mesh and one narrow mesh → B-rep entry (`faceted_solid`). §1. *measured (source)*.
+    tessellation to mesh and one narrow mesh → B-rep entry (`faceted_solid`). §1. *source*.
 11. **How does geometry reach the GPU and come back?** Out: f64 → (high f32, low f32) pairs
     differenced against the camera in WGSL, instanced, `Depth32Float`. Back: **it does not** —
-    there is no readback of any kind; picking is CPU. §3. *measured*.
+    there is no readback of any kind; picking is CPU. §3. *source*.
 12. **What would we take, and what would we avoid?** §Verdict.
 
 ---
@@ -715,7 +746,7 @@ with a second project having paid for it. Neither is a reason to depend on `app/
 | Re-deriving a shared point independently on each side of a boundary | OCS #561, fixed by using the stored topology vertex | P-05 |
 | Promising curved-surface booleans the kernel cannot do | cadkernel refuses NURBS×NURBS by design and says so; the request arrives anyway (#1129) | P-12 |
 | Assuming an application's licence is its libraries' | OCS is GPL-3.0; its kernel and codec are MPL-2.0 in separate repositories | P-14 |
-| A typed error discarded at the application boundary | Two of the seven boolean call sites in `model_ops.rs` use `solid_model::boolean`, which drops the `Snag`; the other five match on all three variants and name the cause | P-30, second half |
+| A typed error discarded at the application boundary | Two of six boolean call sites in `model_ops.rs` (`#L1229`, `#L1900`) use `solid_model::boolean`, which drops the `Snag`; the other four (`#L162`, `#L229`, `#L232`, `#L315`) propagate it via `boolean_result(...)?` to sites that match on all three variants and name the cause (`#L1055`, `#L1289`, `#L1542`, `#L1731`) | P-30, second half |
 | Filling a format's exact-geometry entity types with tessellated f32 data | OCS's STEP writer emits one `ADVANCED_FACE` per triangle into a `MANIFOLD_SOLID_BREP`, from the renderer's high-half `f32` buffer ([`io/step.rs`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/io/step.rs)) — the fork that matters for `ifc/` is `IfcAdvancedBrep` vs `IfcFacetedBrep` | **P-31** (new) |
 
 ---
@@ -734,7 +765,7 @@ Rust, which is a different decision from the one this directory is researching. 
 supplies to that page is the counter-evidence to its own premise: the attractive part of the
 "standalone Rust core" option is not the host at all, it is `cadkernel` and `cadcodec` — two MPL-2.0
 libraries that can be linked from a standalone application in *any* language with a C ABI we write.
-The host question and the kernel question, as that page says in its first line, are independent, and
+The host question and the kernel question, as that page says in its third line, are independent, and
 OCS is the cleanest illustration of it this research has found.
 
 ---
