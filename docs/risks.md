@@ -210,6 +210,24 @@ It constrains the entire stack. Deciding late is expensive.
 - **Action:** explicit decision, recorded as an ADR, before phase 3 spikes are designed.
 - **Status:** open
 
+### R-20 · The DynLex GPU path is argued from source reading, not measured
+[`research/renderers/gpu-paths.md`](research/renderers/gpu-paths.md) recommends a buffer layout —
+persistent device-local vertex/index buffers, a per-tile instance buffer carrying the camera-relative
+affine, and a CPU-side f64 subtraction at tile granularity — built entirely from reading five mature
+engines' source and from arithmetic on the DynLex runtime's own constants. Nothing in it was run: the
+DynLex compiler is not built in the working copy used for that research, so no DynLex program could be
+executed. The runtime as it ships today cannot draw the scene the kernel targets at all — its 32 MiB
+per-frame transient arena holds at most 25,890 boxes, against a 10⁵-box target.
+
+- **Spike:** `spikes/dynlex-gpu-path/` — build the DynLex compiler, add index and instance buffers to
+  the graphics runtime, and draw 10⁵ instanced boxes at a tile offset of 500 km from the coordinate
+  origin. Measure frame time, bytes uploaded per frame, and the coordinate error against an f64
+  reference computation.
+- **Pass:** 60 fps sustained and coordinate error under 1e-3 m.
+- **Fail:** below 30 fps, or coordinate error above 1e-2 m.
+- **Status:** open — named in `renderers/gpu-paths.md` §Risks as the measured counterpart that note's
+  own arithmetic does not substitute for.
+
 ---
 
 ## Medium
