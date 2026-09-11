@@ -101,10 +101,14 @@ licence, and it settles **-only** against the README's ambiguous "GPL-3.0 licens
 `Cargo.toml`; over the whole tree → **one** match, and it is not a licence grant:
 [`packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml#L5`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml#L5)
 declares `<project_license>GPL-3.0-or-later</project_license>` in Flatpak/AppStream packaging
-metadata, contradicting the `LICENSE` file, the README and `ocs_plugin_api`'s own SPDX field. This
-does not change the conclusion — `LICENSE` and the Cargo.toml SPDX field are the authoritative
-sources, both say **-only** — but it is the same failure mode `problems.md` P-14 already records for
-xBIM: one project describing its own licence two ways in two files.
+metadata, contradicting the `LICENSE` file, the README and `ocs_plugin_api`'s own SPDX field. The
+`LICENSE` file, an unfilled GPLv3 template containing boilerplate text "or (at your option) any
+later version", does not itself choose between -only and -or-later; only the
+[`crates/ocs_plugin_api/Cargo.toml#L6`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/crates/ocs_plugin_api/Cargo.toml#L6)
+SPDX field asserts `GPL-3.0-only`, while the metainfo.xml asserts -or-later. The effective licence
+is **GPL-3.0** (the -only/-or-later choice is inconsistent across the tree; see `problems.md`
+P-14), the same failure mode already recorded for xBIM: one project describing its own licence
+two ways in two files.
 cadkernel's [`Cargo.toml#L5`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/Cargo.toml#L5)
 is `license = "MPL-2.0"`; cadcodec's is `license = "MPL-2.0"` at `Cargo.toml#L7`.
 
