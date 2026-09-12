@@ -1,10 +1,30 @@
 # Geometry kernel — design
 
 **Date:** 2026-09-09
-**Status:** working hypothesis — reviewed 2026-09-09, **not accepted**. Every fundamental choice
-below is to be substantiated by the research programme in
-`../plans/2026-09-09-kernel-research-programme.md` before ADR-0004, 0005 and 0006 are accepted
-(see §15). Until then ADR-0003 remains in force and no kernel code is written.
+**Status:** working hypothesis — reviewed 2026-09-09, **still not accepted after the research
+programme closed on 2026-09-12**. Every fundamental choice below was to be substantiated by the
+research programme in `../plans/2026-09-09-kernel-research-programme.md` before ADR-0004, 0005 and
+0006 are accepted (see §15). The programme has now run, and it decided two of the three:
+
+- **ADR-0005 (four equal representations) — accepted.** §4's representation model and its
+  per-representation boolean dispatch are decided, with the exact-arrangement claim restated (see
+  §4 below).
+- **ADR-0006 (f64 local coordinates, exact predicates, explicit tolerance) — accepted.** §5's
+  numerics are decided.
+- **ADR-0004 (build our own kernel, in DynLex) — amended and still `proposed`**, because R-18
+  failed (20k lines compile in 72.19 s against a 30 s budget, with a worsening exponent), R-19
+  passes only with an explicit `-O` flag, the compiler cannot emit a GPU compute entry point at all,
+  and one candidate — `cadkernel` — is a live conditional option for the B-rep arm rather than a
+  disqualified one.
+
+**Therefore ADR-0003 remains in force and no kernel code is written.** The §9 M0 repository restart
+and the repository layout in §13 are blocked until ADR-0004 is accepted; the three conditions that
+would accept it are in that ADR under "What must be true before this ADR is accepted".
+
+**Amended 2026-09-12** in §1, §4, §5, §6, §8, §9, §10, §12 and §13 per
+[`../../research/kernels/synthesis.md`](../../research/kernels/synthesis.md) §4, which lists every
+amendment, what contradicted the original wording, and which amendments were recorded but **not**
+applied.
 **Scope:** the geometry kernel sub-project of the open-bim-studio restart. The UI library and the
 IFC library are separate sub-projects and get their own specs; this document fixes only what
 they need to know about the kernel.
@@ -17,6 +37,11 @@ The repository so far was a research repository built around ADR-0003 ("build on
 kernel"). That decision is reversed: the maintainer has decided to build a new geometry kernel,
 written in DynLex, together with a UI library and an IFC library in the same language. The
 research phase is over; this repository becomes a build repository.
+
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** The paragraph
+> above is the hypothesis this document records, not a decision in force. ADR-0003 is **not**
+> reversed: ADR-0004 is still `proposed`, and the research phase closed by keeping it that way. Read
+> §1 as "what this design assumes", and the Status block at the top for what is actually decided.
 
 The product goal in `docs/vision/vision.md` stands: a BIM modeller with the semantics of a
 professional authoring tool and the immediacy of a real-time 3D application. The structural
@@ -91,11 +116,42 @@ its own parameters and its own failure modes:
 - B-rep × B-rep → B-rep boolean. Planar faces first (BIM geometry is mostly planar); curved
   faces in M8.
 - mesh × mesh → exact mesh boolean: exact arrangement of the two triangle sets using exact
-  predicates, then classification. This is the approach Blender adopted for its exact boolean
-  and is the only known approach that is robust on arbitrary input.
+  predicates, then classification. This is the approach Blender adopted for its exact boolean, and
+  it is the approach the design evidence points to — **not a measured winner**.
 - implicit × implicit → a new implicit node; free.
 - Mixed representations: the caller passes a conversion policy (which side converts, with which
   parameters). The kernel never picks one silently.
+
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** The mesh
+> boolean bullet used to say the exact arrangement "is the only known approach that is robust on
+> arbitrary input". R-16 does not support that. The fifteen candidate × setting combinations split
+> **11 FAIL / 3 neither-pass-nor-fail / 1 PASS** — the three that are neither are OCCT's three
+> settings, valid on every case but with `sliver`'s residual between the pass and the fail line;
+> **both** exact-arrangement implementations measured fail (Blender's Exact solver loses an
+> operand on `touching_vertex`; CGAL's Epick corefinement refuses two cases); the single nominal
+> pass uses neither exact predicates nor exact constructions; and the torture set is built from
+> bit-identical coordinates, which is the input class a symbolic tie-break wins — so the set
+> **cannot distinguish exactness from a tie-break at all**
+> ([`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md) §What this
+> does not settle; `problems.md` P-03). The design stands; the claim about it does not. What settles
+> it is R-16 run against our own kernel at M5, on a set extended with coordinates that are not
+> bit-identical — `problems.md` N-01's mitigation.
+>
+> Also recorded and **not applied here**: cadkernel's per-node provenance
+> (`Clean(SourceRef)` / `Dirty(SourceRef)` / `Synthesized`, with clean records reused byte-for-byte
+> on lowering) belongs in this section and in the `ifc/` spec. It is an addition to the data model
+> rather than a correction, and it waits for the spec revision that follows ADR-0004's acceptance
+> ([`../../research/kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Borrow
+> from 2).
+>
+> **Open question against the point-cloud row**, named rather than decided: the table says
+> "position (f64, local frame)", and the research found a cheaper *storage* encoding that is
+> position-independent by construction — `int32 × scale + f64 offset`, 12 bytes, ±2 147 km at 1 mm,
+> which LAS and Potree both ship. Its cost is that the scale is chosen once per file, so a project
+> mixing a 1 mm terrestrial scan with a 5 cm airborne survey either wastes range or loses the fine
+> one. **Whether the scale is per tile, per cloud or per chunk is not decided**, here or in
+> ADR-0006; it belongs with the `pointcloud` module at M6
+> ([`../../research/kernels/pointclouds.md`](../../research/kernels/pointclouds.md) §Risks).
 
 ## 5. Numerics and precision
 
@@ -129,6 +185,54 @@ what keeps booleans from producing invalid shells.
 the camera's tile in f64 on the CPU, then truncated to f32 for upload. GPU double precision is
 never required.
 
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4 — three
+> corrections to §5, none of which changes a decision.**
+>
+> **1. The camera-relative conversion is per *tile*, not per vertex.** Read literally, the paragraph
+> above implies re-uploading every visible vertex buffer whenever the camera crosses a tile
+> boundary. Neither implementation that ships does that
+> ([`../../research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The correction
+> this note makes to spec §5). What the `gpu` module does instead:
+>
+> - vertex positions are stored and uploaded **in their own tile frame, f32, once**, into static
+>   `DEVICE_LOCAL` buffers that are never repacked — a tile a few hundred metres across gives an f32
+>   ULP of ≤ 6.1e-5 m;
+> - the f64 subtraction is `own_tile_origin − camera_tile_origin`, a `dvec3` computed on the CPU
+>   **once per visible tile per frame** and folded into the object's instance transform before
+>   truncation to f32;
+> - `ui/` must therefore expose a per-draw or per-instance f32 affine transform, not a collapsed MVP
+>   push constant, or step two has nowhere to put its result. That is `ui/` work and it is the
+>   second clause of M2's exit criterion (§9).
+>
+> This keeps the guarantee above — GPU double precision is never required — and removes the
+> repacking it implied. The arrangement is what OCCT and Filament both ship, and cadkernel confirms
+> it works with instancing on a modern explicit API
+> ([`../../research/kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §3). **It is
+> not measured**: R-20 is the spike that would measure it, and it is open.
+>
+> **2. The tolerance defaults are disclosed against industry practice.** 1e-6 m **ties the loosest**
+> of the compared defaults — exactly ACIS's `SPAresabs`, two orders looser than Parasolid's
+> 1e-8-unit session precision, one order looser than OCCT's 1e-7 m `Precision::Confusion()` — and
+> 1e-9 rad is **looser than either commercial kernel's** angular tolerance, by two orders against
+> Parasolid and three against OCCT
+> ([`../../research/kernels/commercial-brep-reference.md`](../../research/kernels/commercial-brep-reference.md)
+> §Verdict). The numbers stand as *defaults*: every operation may override them and every B-rep
+> entity carries its own. The alternative to measure against them at M1 is cadkernel's
+> scale-and-position-derived formula, `extent·1e-8 + ε·coordinate_scale·64`, which is a default
+> rather than a replacement for the per-entity tolerance.
+>
+> **3. A frame is a contract, and a contract nothing enforces decays.** The local frame here is
+> translation-only and the tile origins sit on a coarse grid, so the transform is exact by
+> construction. cadkernel documents the same invariant — lift into a local frame at every entry
+> point, anchored at the midpoint of the bounding box — and the spike found `Frame` constructed at
+> **no call site** in its B-rep path, so its far-field arithmetic is unmitigated f64
+> ([`../../research/kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Precision).
+> Our entry points assert the frame invariant rather than document it. Note also what a local frame
+> does **not** fix: a tolerance derived from a bounding box still tracks the model's global position
+> — measured on two independent kernels
+> ([`spikes/precision-set/FINDINGS.md`](../../../spikes/precision-set/FINDINGS.md) §The local-frame
+> mitigation, §The tolerance follows the model out to 500 km).
+
 ## 6. Performance strategy
 
 Targets are in §10. The means:
@@ -146,6 +250,17 @@ Targets are in §10. The means:
 4. **GPU compute.** DynLex compiles to SPIR-V. Embarrassingly parallel work with large inputs
    (tessellation of instanced solids, normal generation, frustum and occlusion culling, point
    cloud LOD selection) is written as DynLex compute kernels in `gpu/` and dispatched by `ui/`.
+
+   > **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** The
+   > compiler **cannot emit a compute entry point today**: the shader stage is a two-member enum,
+   > the CLI accepts only `vertex` or `fragment`, and the runtime has zero `vkCmdDispatch`, zero
+   > compute pipelines and zero storage buffers (`problems.md` **P-28**;
+   > [`../../research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The gap list).
+   > That is a language extension, and §8's table did not list it; it does now. **Until the
+   > extension exists, every item above runs on CPU threads (§8's first row) and §10's targets are
+   > checked against that, not against a GPU that cannot be dispatched to.** If the extension proves
+   > too large to build, this item is rewritten rather than left standing — it is the second of
+   > ADR-0004's three acceptance conditions.
 5. **No per-entity heap objects, no hidden copies.** Operations take handles and write into
    caller-provided or kernel-owned arenas.
 
@@ -190,16 +305,43 @@ DynLex is the maintainer's own language (`../dynlex`, pinned commit in
 dynlex repository following its `AGENTS.md`, with its own tests, made when the milestone that
 needs it starts.
 
+**Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4:** the threading
+row moves from M7 to **M6**, and four rows are added — the compute stage, two missing language
+facilities, and the build flag. Every added row cites the evidence that found it.
+
 | Extension | Needed by | Notes |
 |---|---|---|
-| Threads, a thread pool, atomics, a `parallel for` section intrinsic | M7 | `src/runtime` has no threading today |
-| Aligned and memory-mapped allocation | M6 | point clouds exceed RAM; chunks are mapped from the kernel binary format |
-| Verified SIMD codegen for f64 aggregates on CPU | M1 | `@intrinsic("vector", count, kind)` already builds typed LLVM vectors; measure, extend only if lacking |
+| Threads, a thread pool, atomics, a `parallel for` section intrinsic | **M6** *(was M7, amended 2026-09-12)* | `src/runtime` has no threading today. **Moved forward because the point-cloud octree build needs it at M6, not M7**: an in-core single-threaded build over 10⁸ points measured **324.4 s on one core of thirty-two**, against §10's 10 s target (`problems.md` **P-13**, **P-17**; [`../../research/kernels/pointclouds.md`](../../research/kernels/pointclouds.md) §Measurements). §6 item 3 already lists "octree build" among the `parallel for` targets; M7 remains the milestone that *measures* threading, not the one that introduces it |
+| Aligned and memory-mapped allocation | M6 | point clouds exceed RAM; chunks are mapped from the kernel binary format. An index over mapped chunks must **address** them and never copy them — an index that duplicates the coordinates cancels this row (`problems.md` P-13, second root-cause term) |
+| Verified SIMD codegen for f64 aggregates on CPU | M1 | `@intrinsic("vector", count, kind)` already builds typed LLVM vectors; measure, extend only if lacking. **Nothing in R-19 measured SIMD or parallel code**, so this row is unevidenced in both directions |
+| **A SPIR-V `GLCompute` entry point** — with workgroup builtins, storage buffers, barriers and a memory model | **M7** *(added 2026-09-12)* | §6 item 4 and §7 `gpu/` assume compute kernels compiled from DynLex, and the compiler cannot emit one: `enum class ShaderStage { Fragment, Vertex }`, and the CLI accepts only `vertex` or `fragment` (`problems.md` **P-28**; [`../../research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The gap list). **This is not a CLI flag.** Until it exists that work runs on CPU threads |
+| **Unsigned integers, or a logical right shift** | **M1** *(added 2026-09-12)* | `shift right` lowers to LLVM `ashr` and there is no unsigned integer type — confirmed at runtime, `(0 - 8) as a 64 bit integer >> 1` prints `-4`. Hash functions, bit-packed handles and PRNGs all want one; R-19's workload masked the sign-extended bits off by hand ([`../../../spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) §Language facilities that were missing) |
+| **Scientific-notation float literals** | **M1** *(added 2026-09-12)* | `1.0e-16`, `1.1102230246251565e-16` and `1e-16` are all rejected; a 53-digit plain decimal is accepted and parses exactly. A numerics module full of error bounds needs the notation (same source) |
+| **An explicit `-O` flag in the kernel's build** — not a language extension, a build requirement | **M0** *(added 2026-09-12)* | The compiler's default emitted-code optimisation level is `-O0`, verified in-repo by comparing a no-flag build against an explicit `-O0` build after neutralising the linker's embedded timestamp. Unflagged, R-19's workloads run 9.09× / 6.78× / 21.14× slower than C++ and would fail the criterion; with `-O2` they are 1.12× / 1.23× / 1.01×. `scripts/build.sh` passes the flag, and any measurement that omits it is a false failure |
 
 The kernel will be the largest DynLex program written. Compiler defects found along the way are
 minimised, root-caused and fixed in dynlex per its procedure — never worked around in the
 kernel. The kernel keeps the dynlex conventions: `.dl` files, `local` for private definitions,
 result values with an error message instead of exceptions, tests with `expected.txt`.
+
+> **Amended 2026-09-12 — an open blocker, named here because it gates M1.** R-18 measured the
+> compiler on synthetic programs in this kernel's style and **failed**: 5 005 lines in 5.26 s,
+> 20 059 lines in **72.19 s** against a 30 s pass line, and 50 011 lines in **1 146.72 s** — with the
+> implied exponent worsening from 1.89 (5k→20k) to **3.03** (20k→50k). Memory is not the problem
+> (2.8 GB peak at 50k on a 32 GB machine, near-linear) and neither is correctness (zero diagnostics
+> at every size; every binary printed exactly the value an independent computation produced). §7's
+> module layout plainly implies a program well past 50k lines.
+>
+> In the fail criterion's own words this is "a blocker to fix in dynlex before M1". Per the
+> paragraph above it is fixed in dynlex — a minimal reproducer and a root cause, not a workaround
+> here — and re-measured against the clean commit `metadata/DYNLEX_COMMIT` will pin, because the
+> binary measured was built from a **dirty** tree whose six modified files are all in type
+> inference, the phase the spike loads hardest. The cheapest useful follow-up the findings name:
+> separate whether the cost scales with pattern count, call-site count or lines, and whether it is
+> per-file or whole-program — the second question decides whether separate compilation rescues the
+> developer loop even if whole-program compilation stays slow.
+> ([`../../../spikes/dynlex-scale/FINDINGS.md`](../../../spikes/dynlex-scale/FINDINGS.md); this is
+> the first of ADR-0004's three acceptance conditions.)
 
 ## 9. Milestones
 
@@ -210,7 +352,7 @@ measured. Order is fixed; later milestones may not start before earlier ones pas
 |---|---|---|
 | **0** | Repository restart: move all research to `docs/archive/`; ADR-0004 (own kernel in DynLex, supersedes 0003), ADR-0005 (multi-representation), ADR-0006 (f64 local coordinates in tile frames); rewrite README, CLAUDE.md, CONTRIBUTING; `kernel/` skeleton; `scripts/build.sh` and `scripts/test.sh` that locate the pinned dynlex compiler | `scripts/test.sh` passes on an empty kernel |
 | **1** | `core`: vectors, matrices, quaternions, transforms, frames, tolerance model, exact predicates, handles, bbox, BVH | predicate fuzz test agrees with an exact-rational reference on 10⁶ random and degenerate inputs |
-| **2** | `mesh`, `gpu`, `io`: half-edge mesh, primitives, extrude, normals, triangulation, OBJ/PLY, buffer packing; a test program shows a kernel-built mesh through the existing DynLex graphics library | rotating extruded polygon on screen, driven only by kernel buffers |
+| **2** | `mesh`, `gpu`, `io`: half-edge mesh, primitives, extrude, normals, triangulation, OBJ/PLY, buffer packing; a test program shows a kernel-built mesh through the existing DynLex graphics library | rotating extruded polygon on screen, driven only by kernel buffers; **and** *(added 2026-09-12)* the same kernel mesh drawn through a **`u32` index buffer and an instance-rate buffer** out of persistent `DEVICE_LOCAL` storage, not the per-frame transient arena |
 | **3** | `curves`, `surfaces`: analytic and NURBS evaluation, intersections; `ops`: planar section of a mesh → 2D curves | section of a reference mesh matches golden curves within tolerance |
 | **4** | `brep`: topology, primitives, extrude/revolve/sweep, validity, tessellation, planar section | a B-rep building block tessellates and sections; Euler characteristic checks pass |
 | **5** | `csg`: exact mesh boolean; B-rep boolean on planar faces; `implicit`: SDF tree, dual contouring | volume conservation `V(A∪B) + V(A∩B) = V(A) + V(B)` within 1e-9 relative on a randomised suite; no invalid shells |
@@ -218,18 +360,45 @@ measured. Order is fixed; later milestones may not start before earlier ones pas
 | **7** | Performance: dynlex threading, parallel tessellation and booleans, GPU compute kernels, benchmark suite | §10 targets met and recorded |
 | **8** | `ops`: offset, fillet/chamfer, loft, shell, healing; `convert`: mesh → B-rep; B-rep boolean on curved faces | fillet on a B-rep corner; round trip B-rep → mesh → B-rep on planar solids is identity |
 
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4 — M2's second
+> clause, and why it is worth a milestone.** The original criterion is reachable *today* through the
+> DynLex graphics runtime's transient arena, which is exactly the trap: that arena is the only path
+> to the GPU, it is reset every frame, it is 32 MiB, and at 36 bytes a vertex it holds **25 890
+> twelve-triangle boxes** — so a 10⁵-box scene is a hard error, not a slow frame (`problems.md`
+> **P-27**; [`../../research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The
+> DynLex graphics runtime in detail). Without the second clause the gap surfaces at M7, after five
+> milestones have been built on top of it. The runtime today has no index buffers, no
+> instance-rate attributes, no caller-supplied vertex layout and no persistent device-local
+> geometry buffer; all four are `ui/` work, and [R-20](../../risks.md) is the spike that measures
+> the result.
+>
+> **M5's exit criterion carries the other unfinished business.** Volume conservation on a randomised
+> suite is necessary and not sufficient: the boolean torture set that R-16 uses is built from
+> bit-identical coordinates, and on that input class a symbolic tie-break is indistinguishable from
+> an exact predicate. M5's run of R-16 against our own kernel must extend the set with coordinates
+> that are not bit-identical, or it cannot tell which of the two it has built (`problems.md`
+> **N-01**, **P-03**).
+
 ## 10. Performance targets (M7, 8 CPU cores, desktop GPU)
 
-| Measurement | Target |
-|---|---|
-| Tessellate 10⁵ extruded solids (≈10 faces each) | < 1 s |
-| Exact boolean of two 10⁴-triangle meshes | < 50 ms |
-| Ray pick in a scene of 10⁶ elements through the BVH | < 5 ms |
-| Build octree over 10⁸ points | < 10 s |
-| Planar section through 10⁵ solids | < 200 ms |
+**Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4:** a *measured
+reference* column is added, because §15 requires the targets to be "relative to something" and this
+table had nothing to be relative to. **No target is lowered.** The references are what mature
+kernels actually measured on this machine, in this programme's spikes; three of the five rows have
+no reference at all, and saying so is the point.
+
+| Measurement | Target | Measured reference (candidate, this programme's spikes) |
+|---|---|---|
+| Tessellate 10⁵ extruded solids (≈10 faces each) | < 1 s | **OCCT: 4.2–4.7 s for 10⁴ planar boxes** (120 000 triangles, 35–40 µs/triangle), ~250 ms to construct them. One tenth the solids at four to five times the target, on a kernel with 26 years of tuning. Parallel meshing made it **slower** here (+8% average over four paired deflections) because the per-item work is too small ([`spikes/tessellation/results/occt.md`](../../../spikes/tessellation/results/occt.md)) — *measured* |
+| Exact boolean of two 10⁴-triangle meshes | < 50 ms | **No candidate was measured at this size.** The largest torture case is a wall with twelve openings: Manifold `Mesh64` **0.997 ms**, CGAL Epick **8.18 ms**, Blender Exact **17.80 ms**, OCCT **58.52 ms**, cadkernel **refused** (its constructor will not build the twelve-shell operand). Three harnesses, so these are orders of magnitude, not a benchmark ([`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md)) — *measured, at the wrong size* |
+| Ray pick in a scene of 10⁶ elements through the BVH | < 5 ms | **No reference.** No candidate was measured on picking. R-19's BVH *build* over 10⁶ boxes ran in 422 ms in DynLex against 344 ms in C++ `-O2`, which says something about the language and nothing about the query — *unknown* |
+| Build octree over 10⁸ points | < 10 s | **Open3D: 324.4 s**, single-threaded on one core of thirty-two, peaking at 13.13 GB, with the index costing 102.910 bytes/point — **4.3× the 24.011 bytes/point of the data it indexes**. All 300 verified nearest-neighbour answers matched a brute-force scan, so that is the cost of a *working* index. This is the number that moved threading from M7 to M6 (§8) ([`spikes/pointcloud-scale/results/open3d.md`](../../../spikes/pointcloud-scale/results/open3d.md)) — *measured* |
+| Planar section through 10⁵ solids | < 200 ms | **No reference.** No candidate was measured on sectioning; OCCT has `BRepAlgoAPI_Section` and `HLRBRep` and neither was run — *unknown* |
 
 A miss is reported, not hidden; targets are revised only by editing this table with the
-measured number beside the target.
+measured number beside the target. **The reference column is not a target and is never a licence to
+lower one** — it records what the field costs today, so that a miss can be read as "worse than a
+mature kernel" or "better", rather than as a bare number.
 
 ## 11. Testing
 
@@ -254,7 +423,47 @@ an explicit operation the caller invokes.
 Internal invariant violations (a handle generation mismatch, a half-edge without a twin after
 an operation) abort with a message — these are kernel bugs and must surface immediately.
 
+**Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** Two additions
+and one open question.
+
+**An error names the class of input that defeated the operation.** "Boolean failed" is unactionable:
+the caller cannot recover a cause the kernel discarded, and neither can the user. Every refusal
+carries a named variant — no closed-form intersection, coincident faces, an unrepresentable result,
+a violated precondition — alongside the offending handles. cadkernel ships exactly this shape
+(`Snag::{NoClosedForm, Coincident, CutRefused}`) and the research found it the sharper half of the
+lesson the rest of §12 already states
+([`../../research/kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Borrow from
+1). The negative example is in the same note: a construction failure returned as a bare `None`
+carries no machine-readable cause, and the reason has to be read out of the constructor's source.
+The positive one is CGAL, which refuses the *operation* that cannot be represented and only that
+one, recording the reason per operation.
+
+**A long operation is cancellable and reports progress.** Operations that can run unboundedly — the
+mesh arrangement, the B-rep boolean, dual contouring, the octree build — take a context object
+carrying a cancel flag, poll it at phase boundaries and once per parallel chunk, and return a
+**typed cancelled result** rather than throwing or running on. This closes half of `problems.md`
+**P-15**, which three OCCT tickets describe from the other side: >10 GB consumed by a *single*
+boolean, and 619 s of CPU against a 30 s deadline that could not fire because nothing inside
+`IntTools_FaceFace::Perform` polls for a break. The design is borrowable and so is the code:
+Manifold ships `ExecutionContext` with `Cancel()`, `Cancelled()` and `Progress()` under Apache-2.0,
+polled between phases and once per parallel chunk, returning an empty result carrying
+`Error::Cancelled` ([`../../research/kernels/manifold.md`](../../research/kernels/manifold.md)
+§Measurements).
+
+**Still open: a memory and time budget.** Cancellation lets a caller stop an operation it is
+watching; it does not bound one that nobody is watching. The other half of P-15 — a declared ceiling
+on intermediate memory or elapsed time, enforced from inside the operation — is **not** designed
+here, and the research found no candidate that has one either. It is an open question against §6 and
+this section, recorded rather than papered over.
+
 ## 13. Repository after M0
+
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** This section
+> describes the repository **after ADR-0004 is accepted**, which it is not. In particular "0003
+> marked superseded by 0004" is a plan, not a state: ADR-0003 is `accepted` and **not** superseded,
+> ADR-0005 and ADR-0006 are accepted, and ADR-0004 is `proposed` with three named conditions. M0
+> does not start, and nothing under `docs/` moves to `docs/archive/`, until those conditions are
+> met.
 
 ```
 README.md, CLAUDE.md, CONTRIBUTING.md   rewritten for a build repository
@@ -282,6 +491,13 @@ IFC, rendering, materials, undo (a concern of `app/` built on kernel handles), m
 Each fundamental choice in this document maps to a research question. The choice is accepted,
 amended or withdrawn on the evidence; the evidence lives in `docs/research/kernels/` and
 `spikes/`, and the ADR's evidence table cites it by section.
+
+**Amended 2026-09-12:** the programme has run. Every row below is answered, and the answers are
+assembled in [`../../research/kernels/synthesis.md`](../../research/kernels/synthesis.md) — §1 for
+the completed matrix, §2 for the per-candidate verdicts, §3 for what this spec takes from each
+candidate, §4 for the rows where the evidence contradicted this document, and §5 for what is still
+unmeasured. The Status block at the top of this file records which ADRs that accepted and which it
+did not.
 
 | Choice (section) | Research question | Where answered | Decision record |
 |---|---|---|---|
