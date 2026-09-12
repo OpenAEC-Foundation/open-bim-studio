@@ -175,7 +175,8 @@ kernel developer.
 - **Findings:** [`spikes/dynlex-scale/FINDINGS.md`](../spikes/dynlex-scale/FINDINGS.md)
 - **Status:** failed — **20k lines take 72.19 s** against a 30 s budget, and **50k lines take
   1146.72 s (19 minutes)**, 9.6× the fail threshold. Compile time is superlinear and worsening:
-  the implied exponent is 1.89 from 5k→20k and **3.03** from 20k→50k. Memory is *not* the
+  the implied exponent is 1.89 from 5k→20k and **3.03** from 20k→50k (the 50k figure is a single,
+  19-minute run, not repeated — see the caveat in the findings). Memory is *not* the
   problem — 2.8 GB peak at 50k on a 32 GB machine, scaling roughly linearly — and neither is
   correctness: zero diagnostics at every size, and every binary printed exactly the value an
   independent Python computation produced. A blocker to fix in dynlex before M1, per this
@@ -195,12 +196,17 @@ The performance targets assume native-speed code.
 - **Findings:** [`spikes/dynlex-performance/FINDINGS.md`](../spikes/dynlex-performance/FINDINGS.md)
 - **Status:** resolved — **passes.** All three workloads ran in both languages with
   **bit-identical output**, from a shared xorshift64\* generator whose input checksum is compared
-  too: triangle/triangle 1.12×, BVH build 1.21×, orient3d 1.01× (a tie within noise). Worst case
-  1.21×, nothing near the 3× line. **Conditional on an explicit `-O` flag:** the compiler's
-  default emitted-code optimisation level is `-O0`, not optimised, and unflagged it would fail on
-  all three (8.71×, 6.49×, 21.62×) — the kernel's build must pass `-O2` or better. Not settled:
-  no parallel, SIMD, boolean-pipeline or pointer-chasing workload was measured, and the compiler
-  pin is dirty (see the caveat in the findings).
+  too: triangle/triangle 1.12×, BVH build 1.23×, orient3d 1.01× (a tie within noise, but a *mixed*
+  PRNG+determinant figure — orient3d's clock starts before generation, and a PRNG-only diagnostic
+  measured separately puts most of that 1.01× in the random draws, not the determinant; the
+  *derived*, noise-sensitive determinant-only ratio stayed in the 1.0–1.2× range across repeated
+  measurements — see the findings' finding I1). Worst case 1.23×, nothing near the 3× line.
+  **Conditional on an explicit `-O` flag:** the compiler's default emitted-code optimisation level
+  is `-O0`, not optimised — checked in-repo, not just asserted, by comparing a no-flag build
+  against an explicit `-O0` build after neutralising the linker's embedded build timestamp — and
+  unflagged it would fail on all three (9.09×, 6.78×, 21.14×) — the kernel's build must pass `-O2`
+  or better. Not settled: no parallel, SIMD, boolean-pipeline or pointer-chasing workload was
+  measured, and the compiler pin is dirty (see the caveat in the findings).
 
 ---
 

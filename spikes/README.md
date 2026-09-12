@@ -42,6 +42,13 @@ From the critical risks in [`../docs/risks.md`](../docs/risks.md):
 | `geometry-seam/` | Does converting between fast-mesh and exact geometry lose what 2D and IFC export need? | R-02 |
 | `blender-ceiling/` | Is Blender's scale limit architectural, or Bonsai's implementation? | R-03 |
 | `renderer-scale/` | What does 100k selectable elements at interactive frame rates actually cost? | R-04 |
+| `boolean-torture/` | Does a candidate kernel's boolean survive coplanar faces, shared edges, containment and other torture cases with a valid closed result each time? | R-16 |
+| `precision-set/` | Does identical geometry give the same answer at the origin and at 500 km from it? | R-17 |
+| `dynlex-scale/` | Does DynLex compile a kernel-sized program (5k/20k/50k lines) fast enough? | R-18 |
+| `dynlex-performance/` | Does DynLex run kernel-shaped code at native speed against C++ -O2? | R-19 |
+| `pointcloud-scale/` | At what point count does an in-core point cloud library stop fitting on the reference machine, and what fails first — storage or the index? | P-13 |
+| `tessellation/` | What does it cost a candidate kernel to turn 10k elements into triangles, and how much does the quality parameter change that cost? | P-11 |
+| `topological-naming/` | Does a FreeCAD PartDesign reference to a named face survive an earlier parameter change, with the 1.0 element map resolving it? | R-13 |
 
 R-03 is worth running early despite Blender not being the current hypothesis: it is cheap, and
 its result either eliminates a whole branch of the host decision or reopens it.

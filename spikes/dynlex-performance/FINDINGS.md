@@ -17,8 +17,11 @@ The pass/fail criteria were written before any workload ran and are quoted verba
 > - **Fail:** over 3× on any — a codegen issue to root-cause in dynlex before M1.
 
 Every number below is copied from a named row of
-[`results/dynlex-performance.md`](results/dynlex-performance.md), produced in one session on one
-machine on 2026-09-11.
+[`results/dynlex-performance.md`](results/dynlex-performance.md). The original three workloads were
+measured on 2026-09-11; the results file was regenerated on 2026-09-12 (fix round 1, findings I1,
+M2, M4) to add the `prng_only` diagnostic, the timestamp-neutralised default-build check, and the
+joint orient3d/prng_only interleaving the derived ratio in finding I1 depends on. All numbers below
+are from that regeneration, on the same machine.
 
 ## Hardware, OS and versions
 
@@ -67,22 +70,41 @@ are unrealistic is a limitation recorded under *What this does not settle*.
 
 ## Method
 
-Three workloads, each written twice — once in DynLex, once in C++ — over a shared prelude
-(`common.dl` / `common.hpp`) written line-for-line against itself.
+Three workloads decide R-19's pass/fail criterion, each written twice — once in DynLex, once in
+C++ — over a shared prelude (`common.dl` / `common.hpp`) written line-for-line against itself. A
+fourth, diagnostic-only workload (`prng_only`) was added afterwards for finding I1; it carries no
+pass/fail weight of its own and is described separately below.
+
+**Timed region, disclosed for all three (finding I1).** Each workload's `started .. finished`
+window is stated explicitly here, because for two of the three it is *not* the arithmetic alone —
+the same table is in `results/dynlex-performance.md` under *Timed region, per workload*:
 
 1. **Triangle/triangle**, 10⁶ pairs of random triangles in the unit cube. The test is
    **Möller–Trumbore ray/triangle (1997) applied edge-wise** — the six edges of the two triangles
    taken as segments against the opposite triangle, with the ray parameter constrained to [0, 1].
    It is *not* the full Möller 1997 tri-tri overlap test and it does not detect coplanar overlap.
-   Both languages run exactly this test. Output: the count of intersecting pairs.
+   Both languages run exactly this test. Output: the count of intersecting pairs. **Timed region:
+   generation (six random points per pair) together with the edge-wise test — not the test alone.**
 2. **BVH build**, 10⁶ random AABBs (uniform centres in the unit cube, half-extents up to 0.01).
    Top-down, median split on the longest axis of the node's own bounding box, leaf size 4. The
    median is found by a Hoare-partition quickselect whose pivot is the centroid of the middle
    element of the range — deterministic, so the tree is identical in both languages. Output: node
-   count and the root box's six bounds. Timed region: the build only; generation is outside it.
+   count and the root box's six bounds. **Timed region: the build only; generation is outside it —
+   the one workload of the three where the disclosure was already made.**
 3. **orient3d**, 10⁷ random point quadruples. The plain 4×4 determinant in Shewchuk's
    translated-to-`d` form, non-adaptive, no error bound and no exact fallback. Output: the count
-   of positive determinants.
+   of positive determinants. **Timed region: generation (four random points per quadruple)
+   together with the determinant — not the determinant alone.** Roughly half of the reported time
+   is generation, not arithmetic — see *PRNG-only baseline* under Results.
+
+**PRNG-only baseline (`prng_only.dl` / `prng_only.cpp`), added for finding I1.** Draws the
+identical 4 sample points (12 doubles) per iteration as orient3d, 10⁷ times, and does nothing
+else in its timed region — no arithmetic on the draws beyond the generator itself. Its only
+purpose is to be subtracted from orient3d's time to estimate the determinant-only share; it has no
+pass/fail criterion of its own. Measured the same way as the other three (five runs, median), and
+— because the subtraction only means something if both sides are free of independent drift —
+interleaved in the *same* round-robin as orient3d's three binaries rather than in a separate
+measurement pass. See *Results* below for the derived figure and whether it was resolvable.
 
 **Same inputs, verified not assumed.** Both preludes implement the same xorshift64\* (Marsaglia
 xorshift64, Vigna's 2685821657736338717 multiplier), seeded with the same constant, drawing
@@ -91,8 +113,9 @@ every random number it drew and the final generator state. The harness compares 
 between the languages, so an accidental agreement on the answer with different inputs cannot pass
 as a match.
 
-**Timing.** Each program times its own region with libc `clock()`, the same function through the
-same UCRT in both languages. `CLOCKS_PER_SEC` is 1000 on this toolchain — not assumed but
+**Timing.** Each program times its own region with libc `clock()`. Both languages call libc
+`clock()`, and the external wall-time cross-check confirms they measure the same thing.
+`CLOCKS_PER_SEC` is 1000 on this toolchain — not assumed but
 measured, by `clock_calibration.dl`: a fixed-result loop timed by `clock()` and by an external
 stopwatch at once. The *Clock calibration* table's ten rows read between 793.4 and 1006.8 ticks
 per second, and the readings converge on 1000 from below as the runs settle (1005.0 and 1006.8 for
@@ -122,13 +145,16 @@ reported.
 
 ## Results
 
-From *Workload timings* in [`results/dynlex-performance.md`](results/dynlex-performance.md):
+From *Workload timings* in [`results/dynlex-performance.md`](results/dynlex-performance.md). The
+first three rows decide R-19; the fourth (`prng_only`) is the diagnostic added for finding I1 and
+carries no pass/fail weight of its own:
 
 | Workload | DynLex `-O2` | C++ `-O2` | ratio | DynLex unflagged (`-O0`) | ratio | outputs equal? |
 |---|---:|---:|---:|---:|---:|---|
-| Triangle/triangle, 10⁶ pairs | 100 ms | 89 ms | **1.12×** | 775 ms | 8.71× | yes |
-| BVH build, 10⁶ boxes | 452 ms | 374 ms | **1.21×** | 2429 ms | 6.49× | yes |
-| orient3d f64, 10⁷ quadruples | 163 ms | 162 ms | **1.01×** | 3502 ms | 21.62× | yes |
+| Triangle/triangle, 10⁶ pairs | 87 ms | 78 ms | **1.12×** | 709 ms | 9.09× | yes |
+| BVH build, 10⁶ boxes | 422 ms | 344 ms | **1.23×** | 2331 ms | 6.78× | yes |
+| orient3d f64, 10⁷ quadruples | 155 ms | 153 ms | **1.01×** | 3235 ms | 21.14× | yes |
+| PRNG-only baseline, 1.2×10⁸ doubles (diagnostic, finding I1) | 146 ms | 145 ms | 1.01× | 2957 ms | 20.39× | yes |
 
 **Every output is bit-identical between the two languages**, at both DynLex optimisation levels:
 279981 intersecting pairs; 524287 BVH nodes with a root box of
@@ -137,38 +163,76 @@ From *Workload timings* in [`results/dynlex-performance.md`](results/dynlex-perf
 The input checksums and final generator states match too — see *Output equality* in the results
 file.
 
-**On the orient3d tie.** The five runs were DynLex 172, 160, 165, 163, 159 ms against C++ 163,
-165, 162, 161, 159 ms. The distributions overlap almost completely; read the 1.01× as a tie. With
-a 1 ms clock and a run-to-run spread of several per cent, differences of that size are noise.
+**On the orient3d tie, and what finding I1 says about it.** The five runs were DynLex 155, 153,
+160, 155, 149 ms against C++ 151, 154, 151, 153, 155 ms — the distributions overlap almost
+completely, and 1.01× reads as a tie. But orient3d's timed region is generation **and** the
+determinant, not the determinant alone (see *Timed region, disclosed for all three* above), so
+**this 1.01× is a mixed PRNG+determinant figure**, not evidence about the determinant in
+isolation. `prng_only` isolates the generation share: 146 ms (DynLex) / 145 ms (C++) — almost the
+whole of orient3d's 155/153 ms. Subtracting, measured in the same interleaved round so machine-load
+drift cancels rather than leaking into the subtraction (see *Derived* in the results file):
+
+| | DynLex `-O2` | C++ `-O2` |
+|---|---:|---:|
+| orient3d (generation + determinant) | 155 ms | 153 ms |
+| prng_only (generation only) | 146 ms | 145 ms |
+| **derived: determinant only** | 9 ms | 8 ms |
+
+**Derived determinant-only ratio: 1.12×** (9/8) — *derived*, not a direct measurement, and it does
+not exceed the 1.5× line. It rests on a 9 ms and an 8 ms figure at a 1 ms clock, so it carries much
+more relative noise than the whole-workload figures above; five repeated regenerations of this
+subtraction during this fix round gave 11/9 (1.22×), −17/25 (unusable — negative on one side), 12/−2
+(unusable), 17/0 (unusable), 6/6 (1.00×) and finally 9/8 (1.12×, the one committed here). Three of
+those six could not be resolved to a ratio at all, because `orient3d − prng_only` came out zero or
+negative on one side — a physical impossibility, since orient3d strictly does more work than
+prng_only per iteration, and therefore read as the determinant's absolute cost (roughly 5–15 ms
+out of a ~150 ms total) sitting at or below this measurement's noise floor rather than as evidence
+the determinant costs nothing. **In every regeneration that did resolve, the derived ratio stayed
+under 1.5×** (1.00×, 1.12×, 1.22×), so nothing here contradicts the pass verdict below — but the
+number should be read as "small and consistent with parity," not as a precise 1.12×.
 
 **On run-to-run variance generally.** This machine's absolute times move by tens of per cent with
-background load — the same `clock_calibration.dl` loop was timed at 0.23 s and at 0.39 s in the
-one session (see *Clock calibration* in the results file). That is why the three binaries of each
-workload are run **round-robin, one each per round** rather than five-of-one-then-five-of-the-next:
-drift then falls on both languages equally instead of being attributed to whichever ran first.
-The ratios are consequently much more stable than the absolute milliseconds. *Observed, not
-recorded:* the harness was regenerated four times during this session as it was being written, at
-absolute times varying by about 30 %, and no ratio left the range 1.0–1.3 in any of them. Only
-the last of those four is the results file; the other three are not evidence you can check, and
-are mentioned only because the stability of the ratio against unstable absolute times is the
-reason to trust the verdict.
+background load — the same `clock_calibration.dl` loop's `-O2` runs were timed between 0.21 s and
+0.27 s in the committed results file (see *Clock calibration* there). That is why the three
+binaries of each workload (six for orient3d/prng_only together, see above) are run **round-robin,
+one each per round** rather than five-of-one-then-five-of-the-next: drift then falls on both
+languages equally instead of being attributed to whichever ran first. The whole-workload ratios
+are consequently much more stable than the absolute milliseconds, even though the derived
+determinant-only subtraction above is not. *Observed, not recorded:* the harness was regenerated
+several times during this spike and again during this fix round as it was being written, at
+absolute times varying by about 30%, and no whole-workload ratio left the range 1.0–1.3 in any of
+them. Only the final regeneration is the committed results file; the others are not evidence you
+can check, and are mentioned only because the stability of the whole-workload ratios against
+unstable absolute times — contrasted with the instability of the small derived subtraction above —
+is itself part of the finding.
 
 ## Verdict
 
 **Pass**, against the criterion quoted verbatim above — *"DynLex within 1.5× of C++ on every
-workload"* — but only when DynLex is given `-O2` explicitly. 1.12×, 1.21× and 1.01×; the worst is
-1.21×. Nothing is near the *"over 3× on any"* fail line.
+workload"* — but only when DynLex is given `-O2` explicitly, and evaluated on the criterion's own
+literal terms (whole-workload timings, not the derived determinant-only subtraction). 1.12×, 1.23×
+and 1.01×; the worst is 1.23×. Nothing is near the *"over 3× on any"* fail line. **The orient3d
+1.01× is a mixed PRNG+determinant figure** (finding I1) — most of that workload's time is
+generation, not the determinant — and the *derived*, noise-sensitive determinant-only ratio is
+~1.0–1.2× across the regenerations that resolved it, which does not exceed 1.5× and does not change
+this verdict.
 
-**With no optimisation flag DynLex would fail the criterion on all three workloads** (8.71×,
-6.49×, 21.62×), well past the fail line. This is not a codegen defect; it is the documented
+**With no optimisation flag DynLex would fail the criterion on all three workloads** (9.09×,
+6.78×, 21.14×), well past the fail line. This is not a codegen defect; it is the documented
 meaning of `-O0`. It matters only because the phrase "the default optimised build" is wrong about
 this compiler, and any future measurement that omits the flag will produce a false failure.
-**The kernel's build must pass an explicit `-O` flag.**
+**The kernel's build must pass an explicit `-O` flag.** This is now checkable in-repo, not only
+asserted: see *Default build check* in the results file, where a no-flag build of `orient3d.dl` is
+compiled, run, and compared against the explicit `-O0` build. The raw md5s differ — `lld` embeds a
+PE COFF build timestamp that differs by a couple of seconds between the two compiles, duplicated at
+one further offset in the image — but after zeroing every span that matches that timestamp, the two
+binaries are md5-identical, which is stronger evidence of "no flag emits `-O0`" than the timing
+argument above ever was.
 
 ## What this means for ADR-0004
 
 This fills the evidence row *"DynLex runs kernel-shaped code within 1.5× of C++ -O2"* with
-**measured** evidence: 1.21× worst case across three workloads, with bit-identical results. On
+**measured** evidence: 1.23× worst case across three workloads, with bit-identical results. On
 this evidence the language is not the obstacle to the §10 performance targets.
 
 ## Language facilities that were missing
