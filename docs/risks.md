@@ -132,16 +132,20 @@ candidates we might build on or borrow from, and later our own kernel.
 - **Fail:** any invalid result, or a volume error above 1e-6 relative; each failure recorded
   with the input, the version and the traced cause in `problems.md`.
 - **Findings:** [`spikes/boolean-torture/FINDINGS.md`](../spikes/boolean-torture/FINDINGS.md) —
-  twelve candidate×setting combinations measured in one session; every failure traced to a
-  `problems.md` row.
-- **Status:** in progress — measured for four candidates. **Nine of the twelve candidate×setting
+  twelve candidate×setting combinations measured in one session, plus three added afterwards for
+  `cadkernel`; every failure traced to a `problems.md` row.
+- **Status:** in progress — measured for five candidates. **Twelve of the fifteen candidate×setting
   combinations fail outright**; OCCT is valid on all thirty case×setting combinations but its
   `sliver` identity residual (3.33e-08 relative) sits between the pass and fail lines, which the
   criterion as written does not name; and the single pass, Blender's embedded Manifold solver,
   rests on a refusal the criterion cannot see — it returns operand A unchanged on
-  `near_degenerate_triangle`, which happens to be the right answer for that case. Not resolved:
-  our own kernel is not measured, the set is planar and single-operation, and the four candidates
-  were handed materially different constructions of two of the ten cases.
+  `near_degenerate_triangle`, which happens to be the right answer for that case. The fifth
+  candidate, `cadkernel` at `953d546b`, fails at all three settings for a different reason from
+  every other: it **refuses** rather than answers wrongly — 7/10 valid and correct at the derived
+  tolerance and at 1e-9, 6/10 at 1e-6, with an identity residual of exactly 0 on every case that
+  ran, the only such row in the file. Not resolved: our own kernel is not measured, the set is
+  planar and single-operation, and the five candidates were handed materially different
+  constructions of two of the ten cases — `cadkernel` refuses both of those two outright.
 
 ### R-17 · Precision far from the origin
 The tile-frame design assumes f64 local coordinates are necessary and sufficient.
@@ -152,14 +156,17 @@ The tile-frame design assumes f64 local coordinates are necessary and sufficient
 - **Fail:** deviation above 1e-4 m — which for a float32 path is the expected outcome and the
   evidence ADR-0006 needs.
 - **Findings:** [`spikes/precision-set/FINDINGS.md`](../spikes/precision-set/FINDINGS.md) — nine
-  candidate×path combinations measured in one session, with the local-frame mitigation measured
-  on each candidate rather than assumed.
-- **Status:** in progress — measured for four candidates, and the two populations are cleanly
+  candidate×path combinations measured in one session, plus two added afterwards for `cadkernel`,
+  with the local-frame mitigation measured on each candidate rather than assumed.
+- **Status:** in progress — measured for five candidates, and the two populations are cleanly
   separated: **every f64 path passes** (OCCT 3.61e-10 m, CGAL Epick 1.29e-10 m, Manifold `Mesh64`
   3.29e-11 m, all one to three ULP of a 5e5 m coordinate) and **every float32 path fails**
   (Manifold `Mesh` 0.0186 m, CGAL f32-rounded 0.0348 m, Blender Exact 0.0348 m, Blender Manifold
   0.0435 m, Blender Fast 0.5 m), with three orders of magnitude of clear air between them and no
-  candidate in between. That is the evidence ADR-0006 needs. Not resolved: the spike sentence
+  candidate in between. That is the evidence ADR-0006 needs. `cadkernel`'s two f64 rows pass at
+  **0 m** but **add no evidence**: they are measured on the two cases whose coordinates make the
+  500 km offset exact in f64, on which every other f64 candidate also measured 0 m, and the one
+  discriminating case is the one its constructor refuses. Not resolved: the spike sentence
   names "each candidate's boolean **and tessellation**" and **no driver tessellates at 500 km**;
   the set is three planar cases of which only `wall_with_openings` discriminates; one distance in
   one direction; and our own kernel is not measured.
