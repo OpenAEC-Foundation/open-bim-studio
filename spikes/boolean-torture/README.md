@@ -20,8 +20,9 @@ occt_driver.py        the OCCT driver
 blender_driver.py     the Blender driver (runs inside Blender's own Python)
 manifold_driver.py    the standalone Manifold driver
 cgal_driver.py        the CGAL driver (Epick corefinement)
+ocs_driver/           the cadkernel driver, a Rust crate; it also runs the precision set
 results/<candidate>.md raw results, one file per candidate, written by that candidate's driver
-results/run-<date>.log stdout of one session in which all four drivers ran
+results/run-<date>.log stdout of one session in which all four Python drivers ran
 FINDINGS.md           assembled across candidates once they have all run
 ```
 
@@ -127,6 +128,45 @@ them in place (Probe F).
 | F | How much does corefinement change its own operands? |
 | G | Which kernel is actually bound — Epick or Epeck? |
 | H | Do the exact predicates decide cases plain doubles get wrong? |
+
+## Running the cadkernel driver
+
+`cadkernel` is the MPL-2.0 Rust B-rep kernel Open CAD Studio's solid modelling runs on; see
+[`../../docs/research/kernels/opencadstudio.md`](../../docs/research/kernels/opencadstudio.md). It
+has no Python bindings, so this driver is a Rust crate. From the repository root:
+
+```bash
+python spikes/boolean-torture/ocs_driver/dump_cases.py       # writes cases.json, needed once
+cd spikes/boolean-torture/ocs_driver
+cargo run --release -- torture                               # writes ../results/opencadstudio.md
+cargo run --release -- precision                             # writes ../../precision-set/results/opencadstudio.md
+```
+
+`cases.json` is **generated, not committed** — a committed copy would be a second, driftable copy of
+[`../../reference/`](../../reference/). `dump_cases.py` imports `boolean_torture_set.py` and
+`precision_set.py` verbatim and writes their cases out as JSON, so the Rust side re-types no case
+and re-derives no expectation; it is dependency-free and reproduces byte-for-byte. The crate pins
+cadkernel by **commit**, not by version — it is unpublished — and `Cargo.lock` is committed beside
+it.
+
+The environment rows of the results files come from these variables, which the driver reads and does
+not invent: `OCS_DATE`, `OCS_CPU`, `OCS_RAM`, `OCS_OS`, `OCS_CARGO`, `OCS_RUSTC`. Anything unset is
+printed as `unrecorded`.
+
+Construction is part of the measurement here too: `brep::make::faceted_solid` takes the reference
+triangle soup as-is, and **its refusal is an `Option::None`, not a typed error** — the `Snag` type
+exists only on the boolean. Three settings run: the tolerance `brep::operation_tolerance` derives
+from the operands (the value OCS itself passes), and explicit 1e-9 and 1e-6. Both operands are
+rebuilt inside every repeat, because `brep::combine` takes them by value and imprints them on the
+way through.
+
+| Probe | Question |
+|---|---|
+| A | What does `faceted_solid` do with a twelve-shell cutting tool, whole and split? |
+| B | What does it do with the T-junction operand? |
+| C | At which boolean tolerance does the 1e-7 m slab stop surviving, and how does it stop? |
+| D | What does `operation_tolerance` actually derive on this set, against the smallest feature? |
+| E | Is the output identical across repeated runs of identical input? |
 
 ## Rules
 

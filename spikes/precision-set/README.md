@@ -21,9 +21,13 @@ blender_driver.py      the Blender driver (runs inside Blender's own Python)
 manifold_driver.py     the standalone Manifold driver (Mesh64 and Mesh, i.e. f64 and f32 ingest)
 cgal_driver.py         the CGAL driver (Epick, f64 and f32-rounded ingest)
 results/<candidate>.md raw results, one file per candidate
-results/run-<date>.log stdout of one session in which all four drivers ran
+results/run-<date>.log stdout of one session in which all four Python drivers ran
 FINDINGS.md            assembled across candidates once they have all run
 ```
+
+The cadkernel driver lives with the boolean-torture spike — one Rust crate,
+[`../boolean-torture/ocs_driver/`](../boolean-torture/ocs_driver/), with a `precision` mode — so
+that the construction path is identical between the two spikes, as it is for the OCCT drivers.
 
 ## Running the OCCT driver
 
@@ -83,6 +87,26 @@ about 1e-4 m³ to cancellation on the twelve-opening wall with no library involv
 Reporting the raw figure would have charged that loss to the candidate. The CGAL driver adds a
 mirror probe — moving the origin result *out* to the far frame instead of bringing the far result
 home — so that the back-translation itself is shown not to be doing the work.
+
+## Running the cadkernel driver
+
+From the repository root, after generating `cases.json` once (see
+[`../boolean-torture/README.md`](../boolean-torture/README.md) §Running the cadkernel driver):
+
+```bash
+cd spikes/boolean-torture/ocs_driver && cargo run --release -- precision
+```
+
+It writes [`results/opencadstudio.md`](results/opencadstudio.md). Two settings run — the tolerance
+`brep::operation_tolerance` derives and an explicit 1e-9 — and the far volume is computed on
+**back-translated** vertices, as for every driver above.
+
+One section of that file has to be read before its table: cadkernel's crate documentation states a
+coordinate policy — every entry point lifting its input into a local frame before doing any
+arithmetic — and the driver **measures whether that policy is wired**, because if it were, a 500 km
+offset would be invisible to the kernel and the table would be measuring the lift instead of the
+f64 path. It also carries the tile-frame mitigation probe as a caller-side round trip through
+`brep::place::transform`, since this candidate does not carry the frame for the caller.
 
 ## Rules
 

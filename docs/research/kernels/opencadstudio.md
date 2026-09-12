@@ -12,7 +12,7 @@ tolerance model), ADR-0006 (precision and the GPU path); kernel spec §3, §4, �
 
 **Status:** draft
 **Author:** research programme, phase 2
-**Last updated:** 2026-09-11
+**Last updated:** 2026-09-12
 
 ---
 
@@ -28,17 +28,23 @@ geometry and the file format are separable from the application and carry a lice
 licensed product can link.
 
 `cadkernel` is a single-representation B-rep kernel, f64 throughout, with generational typed
-handles, a translation-only local frame lifted at every entry point, a scale-derived operation
-tolerance, an imprint-then-classify boolean that returns a typed refusal rather than an approximate
-solid, and a provenance model that writes untouched source records back byte-for-byte. Several of
-those are things our kernel spec proposes and one — provenance — is better than anything the spec
-has. It is also **34 days old** at the pinned commit, single-representation where the spec wants
-four, has no exact predicates, no spatial index and no threading, and is consumed by git revision
-rather than a release.
+handles, a translation-only local frame **documented** as lifted at every entry point, a
+scale-derived operation tolerance, an imprint-then-classify boolean that returns a typed refusal
+rather than an approximate solid, and a provenance model that writes untouched source records back
+byte-for-byte. Several of those are things our kernel spec proposes and one — provenance — is better
+than anything the spec has. It is also **34 days old** at the pinned commit, single-representation
+where the spec wants four, has no exact predicates, no spatial index and no threading, and is
+consumed by git revision rather than a release. The local frame is the one documented invariant the
+spike found **unwired** — constructed at no call site in `src/brep/` — so the far-field arithmetic
+is unmitigated f64; see the correction in §Precision.
 
-**No benchmark was run.** The wiring is feasible and the entry points exist; every `cargo`
-invocation in this session was refused by the environment's command policy. §Measurements says
-exactly what was and was not established, and names the experiment.
+**The benchmark was run**, at commit `953d546b…`, on the two reference sets every other candidate
+was measured on. **R-16 fails at all three tolerance settings — 7/10 valid and correct at the
+derived tolerance and at 1e-9, 6/10 at 1e-6 — and every failure is a refusal rather than a wrong
+answer**, with an identity residual of exactly 0 on every case that ran, which no other candidate in
+that file achieves. R-17 passes at 0 m, but on the two cases whose coordinates make 0 m arithmetic
+rather than evidence. §Measurements gives the rows; §Verdict (a) says what they change, which is
+that the *build on* verdict stays **conditional shortlist** and does not become *recommend*.
 
 ---
 
@@ -178,7 +184,7 @@ function at [`#L309-L315`](https://github.com/HakanSeven12/cadkernel/blob/953d54
 Its doc comment names when to run it: after a lift, so a malformed file is reported where it was
 read, and after an edit.
 
-### Precision: f64 everywhere, and a local frame lifted at every entry point
+### Precision: f64 everywhere, and a local frame documented but unwired
 
 **There is no f32 in the kernel.** *source count*: `grep -rn f32 --include=*.rs src` returns **five**
 matches and all five are inside comments explaining why f32 is not used
@@ -187,9 +193,24 @@ matches and all five are inside comments explaining why f32 is not used
 The coordinate policy is stated as an invariant, not a convenience
 ([`geom2d/frame.rs#L1-L33`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/frame.rs#L1-L33)):
 every public operation builds a `Frame`, calls `lift` on each point before any arithmetic, and
-`lower` on every point it returns; intermediate values never leave local space. The frame is
-**translation-only** — "Rotation and scale are deliberately absent: they buy no conditioning and
-would force every caller to reason about orientation"
+`lower` on every point it returns; intermediate values never leave local space.
+
+> **Correction, 2026-09-12 — the policy is stated but not wired.** *Measured* by the spike in
+> §Measurements: `Frame::around`, `Frame::at` and `Frame::identity` are constructed **nowhere
+> outside `src/geom2d/frame.rs`**, and inside that file only in its own unit tests. There is no
+> call site anywhere in `src/brep/`. The B-rep entry points this note cares about —
+> `make::faceted_solid`, `bounds::operation_tolerance`, `imprint::imprint`, `boolean::combine`,
+> `brep::mesh` — do their arithmetic on the world coordinates they are handed, which the precision
+> spike confirms by measuring the derived tolerance moving with the offset. The `space::planar`
+> `lift`/`lower` pair that *is* used throughout is a different operation: the 3D↔2D map onto a
+> face's plane, not a translation for conditioning. **The paragraph above therefore describes a
+> contract the crate documents and does not yet keep**, and §Borrow from item 6 borrows the rule,
+> not an implementation. See
+> [`../../../spikes/precision-set/FINDINGS.md`](../../../spikes/precision-set/FINDINGS.md)
+> §Added after assembly — cadkernel (2026-09-12), §The coordinate policy, measured.
+
+The frame is **translation-only** — "Rotation and scale are deliberately absent: they buy no
+conditioning and would force every caller to reason about orientation"
 ([`#L35-L43`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/frame.rs#L35-L43)) —
 and `Frame::around` anchors at the **midpoint of the input's bounding box**, with the reason given:
 the midpoint bounds every lifted coordinate by half the extent, where an arbitrary member leaves the
@@ -198,8 +219,13 @@ far side as large as the whole span ([`#L57-L64`](https://github.com/HakanSeven1
 This differs from kernel spec §5 in a way worth naming. The spec puts geometry in a **tile** — a
 frame that is project-wide and chosen on a coarse grid. cadkernel's frame is **per operation**,
 derived from that operation's own operands. The spec's tiles are needed anyway for spatial
-partitioning and streaming; cadkernel's per-operation lift is the belt to that braces, and it is
-free, because the bounding box is computed regardless.
+partitioning and streaming; a per-operation lift would be the belt to those braces, and it would be
+free, because the bounding box is computed regardless. **As designed, not as shipped** — per the
+correction above, the B-rep path does not build one, so at 500 km the boolean runs on world
+coordinates and the tile frame is the only thing standing between the geometry and the offset. The
+spike measured what that costs on the cases that reach the boolean: nothing, but only because their
+coordinates make the offset exact ([`../../../spikes/precision-set/FINDINGS.md`](../../../spikes/precision-set/FINDINGS.md)
+§Added after assembly — cadkernel (2026-09-12)).
 
 ### Tolerance: derived from the operands, not a constant
 
@@ -441,13 +467,13 @@ different for each part.
 |---|---|---|---|
 | **License** | Application **GPL-3.0-only**; `cadkernel`, `cadkernel-constraints` and `cadcodec` **MPL-2.0**. MPL-2.0 is file-level copyleft: linking from a differently licensed program is permitted and modifications to MPL-licensed files must be published (*claimed*, a reading of the licence text, not legal advice) | measured | `LICENSE` + `README.md#L39` (OCS); `Cargo.toml#L5` (cadkernel); `Cargo.toml#L7` (cadcodec); GitHub licence API on all three |
 | **Representations held natively** | **One** — B-rep with five analytic surfaces plus NURBS. Mesh is export-only; no point cloud; no implicit. Mesh → B-rep exists only as `faceted_solid` | measured (source) | §1, the representation table |
-| **Boolean robustness** | Imprint-then-classify, analytic surfaces only, **typed refusal** (`NoClosedForm`/`Coincident`/`CutRefused`) instead of an approximate result. **No exact predicates** — classification is tolerance comparison; `robust` is listed as intended, not present | measured (source) | `brep/boolean.rs`, `brep/imprint.rs#L29-L40`, cadkernel `README.md#L115-L124` |
-| **Tolerance and precision model** | **f64 throughout, zero f32.** Operation tolerance derived as `extent·1e-8 + ε·coordinate_scale·64`. Translation-only local frame lifted at every entry point. **No per-entity tolerance.** Scattered module constants from 1e-14 to 1e-4 | measured (source) | `brep/bounds.rs#L163-L183`; `geom2d/frame.rs`; `grep` for `f32` → 5 comment-only matches |
+| **Boolean robustness** | Imprint-then-classify, analytic surfaces only, **typed refusal** (`NoClosedForm`/`Coincident`/`CutRefused`) instead of an approximate result. **No exact predicates** — classification is tolerance comparison; `robust` is listed as intended, not present. **Now measured on the torture set: 7/10 valid, 7/10 correct, identity residual exactly 0 on every case that ran, fully deterministic, and every failure a refusal rather than a wrong answer** — three cases do not produce a result at all (`shared_edge` ∪, and two whose operands `faceted_solid` will not build) | measured (source) + measured (driver) | `brep/boolean.rs`, `brep/imprint.rs#L29-L40`, cadkernel `README.md#L115-L124`; [`../../../spikes/boolean-torture/results/opencadstudio.md`](../../../spikes/boolean-torture/results/opencadstudio.md) §Boolean results, §Summary |
+| **Tolerance and precision model** | **f64 throughout, zero f32.** Operation tolerance derived as `extent·1e-8 + ε·coordinate_scale·64` — *measured* at 1.50000213163e-8 / 2.00000284217e-8 on the precision set's two runnable cases, and ×1.474 / ×1.355 larger at 500 km, matching the derivation below to every digit. A translation-only local frame is **documented as an invariant but constructed at no call site in `src/brep/`** (see the correction in §Precision), so the far-field arithmetic is unmitigated f64. **No per-entity tolerance.** Scattered module constants from 1e-14 to 1e-4 | measured (source) + measured (driver) | `brep/bounds.rs#L163-L183`; `geom2d/frame.rs`; `grep` for `f32` → 5 comment-only matches; [`../../../spikes/precision-set/results/opencadstudio.md`](../../../spikes/precision-set/results/opencadstudio.md) §`operation_tolerance` near vs far, §Does the 500 km offset reach the boolean? |
 | **Incremental evaluation** | Not in the kernel — no dependency graph, no dirty propagation. At the application level, a solid is re-evaluated from its stored ACIS history record when a grip or property changes (`acis::rebuild_history`). Whole-body rebuild, not incremental | measured (source) | `acis/mod.rs#L11-L12`; OCS `solid_history.rs`; absence verified by grep over cadkernel `src` |
 | **Threading model** | **Single-threaded by design** — one match for any of `rayon`/`thread`/`par_iter`/`Mutex`/`Arc<` anywhere under `src/`, and it is a comment. `Body: Clone`, so parallelism is the caller's | measured | `grep -rn 'rayon\|thread\|par_iter\|Mutex\|Arc<' --include=*.rs src` → 1 |
 | **GPU path** | wgpu 29.0.4 through `iced`. f64 → (high f32, low f32) split on the CPU, differenced against the camera in WGSL; per-instance `translation_low` so the scheme survives instancing. `Depth32Float`. **Picking is CPU**: per-mesh AABB then a linear triangle scan; zero GPU readback | measured (source) | §3; `mesh.wgsl#L101-L167`; `pick/hit_test.rs#L840-L885`; `git grep copy_texture_to_buffer` → none |
 | **IFC coverage** | None in either crate. cadkernel's README names `acadifc` as a **sibling consumer** that would reach into `brep` and `geom2d` the same way an editor does, and forbids the reverse edge | measured (source) | cadkernel `README.md#L28-L56` |
-| **Performance** | **Not measured** — see §Measurements. The one structural fact established from source: the imprint's face pairing is O(n·m) with an AABB reject and no spatial index | not measured / measured (source) | §Measurements; `brep/imprint.rs#L212-L227` |
+| **Performance** | **Measured on the torture set, one machine, one session:** 0.740 – 50.748 ms per boolean at the derived tolerance, the slowest of the five candidates in that file on the mid-size cases despite being the only one with no binding layer — `overlap_half` ∪ at 32.256 ms against OCCT's 4.62, Blender-Exact's 3.21, CGAL Epick's 0.380 and Manifold `Mesh64`'s 0.293. Read as an order of magnitude: the driver's own noise floor on identical work in the same session is ×2.68, which the gap survives. The structural fact from source that predicts the shape: the imprint's face pairing is O(n·m) with an AABB reject and no spatial index, and scaling past ten small cases is still unmeasured | measured (driver) + measured (source) | [`../../../spikes/boolean-torture/results/opencadstudio.md`](../../../spikes/boolean-torture/results/opencadstudio.md) §Summary, §How much of that ms column is the machine; `brep/imprint.rs#L212-L227` |
 | **Embeddability** | Pure Rust rlib. **Zero `extern "C"`, zero `#[no_mangle]`, zero `#[repr(C)]`** in cadkernel; OCS's only exported C ABI is the DWG thumbnailer and the plugin `ocs_plugin_register` — nothing geometric. An in-process DynLex↔Rust boundary would be entirely ours to write | measured | `grep` over cadkernel `src`+`Cargo.toml`+`crates`; `git grep 'pub extern "C" fn' 798379fb -- src crates` |
 | **2D derivation** | `brep::mesh::silhouette` / `transform_silhouette` produce view-dependent silhouettes; `tessellate_wireframe` produces `BodyWireframe`. Hidden-line and section are the application's (`solid_section`, `solid_flatshot` in OCS) | measured (source) | `brep/mesh.rs#L444-L470`, `#L614-L626`, `#L959`; OCS `model_ops.rs` |
 | **Maturity** | cadkernel: first commit **2026-08-08**, 336 commits, **34 days old**, two contributors (`HakanSeven12` 202, `ramox81` 134), **no tags, no crates.io release** — consumed by git rev. OCS: created 2026-03-22, 1,557★, 815 issues, latest release `v2026.36` (2026-09-06), 27 contributors with `HakanSeven12` 2,456 to `ramox81` 362 and 25 below that | measured | `git rev-list --count`, `git log --reverse`, `git tag`, `gh api .../contributors`, `gh release list` |
@@ -457,29 +483,84 @@ different for each part.
 
 ## Measurements
 
-**No benchmark driver was run, and no number in this note comes from running OCS or cadkernel.**
+**The spike this section pre-registered has been run.** A Rust driver,
+[`../../../spikes/boolean-torture/ocs_driver/src/main.rs`](../../../spikes/boolean-torture/ocs_driver/src/main.rs),
+depends on cadkernel at the pinned commit
+[`953d546b68aef4b6692566a1a9b077fc5bd9fb4f`](https://github.com/HakanSeven12/cadkernel/tree/953d546b68aef4b6692566a1a9b077fc5bd9fb4f)
+with `default-features = false`, `features = ["brep"]`, built `--release` with
+`cargo 1.94.0 (85eff7c80 2026-01-15)` / `rustc 1.94.0 (4a4ef493e 2026-03-02)` on an
+Intel Core i9-14900HX (32 logical processors) / 32 GB / Windows 11 Pro `10.0.26200`, run
+**2026-09-12**. It writes two results files:
 
-**Why not, precisely.** Two reasons, and only the first is about the software:
+- **R-16** — [`../../../spikes/boolean-torture/results/opencadstudio.md`](../../../spikes/boolean-torture/results/opencadstudio.md),
+  assembled into [`../../../spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md)
+  §Added after assembly — cadkernel (2026-09-12).
+- **R-17** — [`../../../spikes/precision-set/results/opencadstudio.md`](../../../spikes/precision-set/results/opencadstudio.md),
+  assembled into [`../../../spikes/precision-set/FINDINGS.md`](../../../spikes/precision-set/FINDINGS.md)
+  §Added after assembly — cadkernel (2026-09-12).
 
-1. **The subject would partly be someone else's.** cadkernel exposes exactly what a driver needs —
-   `brep::make::faceted_solid(vertices, faces)` to build the torture set's triangle operands,
-   `brep::combine(a, b, how, tolerance)` for the operation, `Body::validate() -> Vec<Flaw>` and
-   `brep::analytic_mass_properties` beside our own signed volume. Wiring a spike against it by git
-   revision is a normal afternoon's work, and it **would** be a measurement of cadkernel. It would
-   not be a measurement of "OCS's geometry", because OCS's own contribution to the boolean is a dozen
-   lines of enum mapping and a call to `brep::operation_tolerance`
-   ([`solid_model.rs#L385-L404`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/scene/model/solid_model.rs#L385-L404)).
-2. **The environment refused every build command.** `cargo build --release` on a probe crate was
-   denied by this session's command policy, in both available shells, before any code was compiled.
-   That is a fact about this session, not about OCS, and it is recorded here rather than dressed up
-   as a design reason. No partially-wired driver has been committed: a driver that never ran is
-   worse than none, because the `results/` convention in [`../../../spikes/boolean-torture/`](../../../spikes/boolean-torture/)
-   implies that a file there was produced by a run.
+**What the measurement is, and is not, of.** It is a measurement of **cadkernel**, not of "OCS's
+geometry". OCS's own contribution to the boolean is a dozen lines of enum mapping and a call to
+`brep::operation_tolerance`
+([`solid_model.rs#L385-L404`](https://github.com/HakanSeven12/OpenCADStudio/blob/798379fbe0eb60025e4f4827441359aed812f5ff/src/scene/model/solid_model.rs#L385-L404)),
+so the driver calls the same kernel entry points OCS calls and passes the same derived tolerance.
+Nothing in §2, §3 or §4 of this note — the ACIS bridge, the GPU path, the exporters — was run.
 
-Consequently **every behavioural claim in this note is labelled *source* or *source count* — read
-from the code at a pinned commit — or *claimed*, never *measured* in the sense the sibling notes use
-for a driver result.** `spikes/boolean-torture/FINDINGS.md` and `spikes/precision-set/FINDINGS.md` are
-unchanged by this note.
+**The labelling rule this note follows is unchanged.** Every claim is still marked *source*,
+*source count*, *claimed* or *inferred*; what the spike adds is a fourth label, **measured
+(driver)**, and it is used only where a row of one of the two results files backs the number.
+Claims in this note that were never in the spike's scope keep the label they had.
+
+### What the driver does, so the rows below can be read
+
+*Method, stated once.* Operands are built with `brep::make::faceted_solid(&vertices, &faces)` from
+the reference triangle soup verbatim — **its refusal is an `Option::None`, not a typed error**,
+because `Snag` exists only on the boolean. The operation is `brep::combine(a, b, how, tolerance)` at
+three settings: the tolerance `brep::operation_tolerance(&[&a, &b])` derives from the operands (the
+value OCS itself passes, recorded per case), and two explicit values, 1e-9 and 1e-6. **Both operands
+are rebuilt inside every repeat**, because `combine` takes them by value and imprints them on the
+way through; five repeats, median. Validity is *two* checks, both reported: `Body::validate()`, the
+kernel's own topological audit, and the driver's own check on the tessellation — closed, every
+directed edge used once with a matching opposite, no loose vertices, no face below 1e-14 m² — which
+is the check the Manifold, CGAL and Blender drivers apply, so that "valid" means the same thing in
+every results file. Volume is the driver's own divergence-theorem sum over the tessellation
+(`brep::mesh::tessellate`, `max_angle` 0.2 rad, `linear` 1e-9 m, positions welded at 1e-12 m), with
+`Mesh::mass_properties()` recorded beside it and never instead of it.
+
+### Result — R-16, the boolean torture set
+
+*Measured (driver)*, [`../../../spikes/boolean-torture/results/opencadstudio.md`](../../../spikes/boolean-torture/results/opencadstudio.md)
+§Summary:
+
+| Setting | Valid /10 | Correct /10 | Worst identity residual | Time range (ms) |
+|---|---|---|---|---|
+| derived tolerance | 7 | 7 | **0** | 0.740 – 50.748 |
+| tol=1e-9 | 7 | 7 | **0** | 0.497 – 50.391 |
+| tol=1e-6 | 6 | 6 | **0** | 0.522 – 32.199 |
+
+**R-16 as written is failed at all three settings, and every failure is a refusal rather than a
+wrong answer** (§Boolean results): `shared_edge`'s union returns `Snag::CutRefused`;
+`near_degenerate_triangle` B and `wall_with_openings` B are never built, `faceted_solid` returning
+`None`; and at tol=1e-6 the `sliver` pair is refused as well. No case that ran returned a wrong
+volume — the identity residual is exactly 0 on every one of them, which no other candidate in that
+file achieves. Three further measurements from the same file: all twelve shells of the
+`wall_with_openings` cutting tool build individually at 0.75 m³ each, 9 m³ in total, and only the
+single soup is refused (Probe A); the 1e-7 m slab's intersection is correct at 1e-12, 1e-9 and 1e-8
+and **refused** at 1e-7, 1e-6 and 1e-5, the threshold sitting exactly at the feature's own thickness
+(Probe C); and ten identical runs of every case and operation produce **one** distinct
+(verts, tris, volume) signature each, refusals included (Probe E).
+
+### Result — R-17, the precision set
+
+*Measured (driver)*, [`../../../spikes/precision-set/results/opencadstudio.md`](../../../spikes/precision-set/results/opencadstudio.md)
+§Boolean results near vs far: **worst vertex deviation 0 m and worst relative ΔV 0** over the two
+cases that reach the boolean, at both settings, against R-17's 1e-6 m pass line. **That is a weaker
+result than it looks**, and the driver measures why (§Probe — what a 0 m deviation can and cannot
+show): those two cases are built from multiples of 0.5 m, for which `500000 ± v` is exact in f64,
+and every other f64 candidate also measured exactly 0 m on them. The case that discriminates,
+`wall_with_openings`, is the one `faceted_solid` refuses. The spike also establishes the fact the
+correction in §Precision records: the documented local-frame lift is **constructed at no call site
+in `src/brep/`**, so the 500 km offset reaches the boolean unmitigated.
 
 ### The one thing that could be established without running anything
 
@@ -516,23 +597,32 @@ for n in ('overlap_half', 'coplanar_faces', 'wall_with_openings'):
 bounded factor of 1.07–1.47 over a 500 km translation — a designed, visible degradation rather than
 a silent one, and one that stays four to five orders of magnitude below a millimetre. It shows
 nothing about whether the boolean *produces the same geometry* at both positions, which is what
-R-16's precision criterion actually asks and what only a driver can answer.
+R-17 actually asks and what only a driver can answer.
 
-### The experiment that would settle it
+**The driver has since confirmed the two runnable rows** and disagrees with neither digit printed:
+1.50000213163e-8 → 2.21054486739e-8 (×1.474) and 2.00000284217e-8 → 2.71054557793e-8 (×1.355)
+([`../../../spikes/precision-set/results/opencadstudio.md`](../../../spikes/precision-set/results/opencadstudio.md)
+§`operation_tolerance` near vs far). The `wall_with_openings` row stays *inferred*, because that
+case's operand is never built.
 
-Per [`_template.md`](../_template.md), naming it rather than writing "more research needed":
+### What the spike did not settle
 
-> **Spike `boolean-torture/ocs_driver` and `precision-set/ocs_driver`** — a Rust crate depending on
-> `cadkernel` at `953d546b…` with `features = ["brep"]`, building each benchmark operand through
-> `brep::make::faceted_solid`, running `brep::combine` for union and intersection with
-> `brep::operation_tolerance` (the value OCS passes) and, as a second setting, a fixed 1e-9,
-> rebuilding operands per repeat, validity from the driver's own closed/manifold/zero-area check
-> cross-checked against `Body::validate()`, volume from the driver's own signed-volume function
-> cross-checked against `analytic_mass_properties`, median of five. Same columns as the four sibling
-> result files. **Pass/fail:** unchanged, R-16 as written.
-> **Blocked on:** permission to run `cargo` in this environment. Nothing else.
+Naming the residue rather than writing "more research needed":
 
-This belongs in [`../../risks.md`](../../risks.md) R-16's candidate list; it is not added there by this note.
+- **Three of ten torture cases never reached the boolean, or never reached its union.** cadkernel's
+  boolean is measured on seven, and the two hardest constructions in the set are untested on it. A
+  seven-case score is not comparable with the ten-case scores in the same file.
+- **Whether `combine` can cut a wall with twelve openings is unmeasured**, and unmeasurable until
+  `Lump`/`Shell` carry a containment relation. The refusal is in the constructor, not in the
+  algorithm.
+- **Only planar, analytic geometry was exercised**, as for every candidate in that file. For this
+  one the limit is sharper: NURBS×NURBS is refused by design (`Snag::NoClosedForm`), so the
+  curved-surface half of a real model is a documented non-capability rather than an untested one.
+- **Scaling is uncharacterised.** Ten small cases cannot see the O(n·m) face pairing in
+  [`brep/imprint.rs#L212-L227`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/brep/imprint.rs#L212-L227),
+  only its constant.
+- **Nothing outside the B-rep boolean ran.** The ACIS bridge (§2), the GPU path (§3) and the
+  exporters (§4) are still *source* claims, and P-30 and P-31 rest on reading, not on running.
 
 ---
 
@@ -552,12 +642,19 @@ This belongs in [`../../risks.md`](../../risks.md) R-16's candidate list; it is 
 5. **What breaks first at scale?** Evaluation time in the imprint: O(|faces A| × |faces B|) pair
    testing with only an AABB reject and no spatial index, and face bounds obtained by sampling
    curves. Second, mesh picking, which is linear in the triangles of every mesh whose box the ray
-   hits. *source*; neither has been timed.
+   hits. *source*. The boolean has since been timed on ten small cases — 0.740 – 50.748 ms, the
+   slowest of five candidates (§Measurements) — which fixes the constant and says nothing about the
+   slope; picking has not been timed at all.
 6. **Internal numeric precision, configurable?** f64, not configurable, and there is no f32 path to
    fall into. Tolerance is a per-call `f64` argument, with a derived default. *source*.
 7. **Operate on a subset — one tile, one region? (R-14)** No tiling; the unit of work is a `Body`.
-   But the per-operation local frame means an operation on a distant body is already conditioned as
-   if it were at the origin, which is most of what R-14 wants from a kernel. *source*.
+   The per-operation local frame *would* mean an operation on a distant body is already conditioned
+   as if it were at the origin — but it is documented and not wired, so today it does not:
+   `Frame` is constructed at no call site in `src/brep/`, and the derived operation tolerance was
+   **measured** growing by ×1.474 over a 500 km translation, which is only possible if the offset
+   reaches the arithmetic (§Precision, the correction; §Measurements, R-17). Conditioning a distant
+   body is therefore the caller's job, which is what ADR-0006's tile frame does. *source* +
+   *measured (driver)*.
 8. **Who maintains it, and what if they stop?** One person with a second substantial contributor:
    cadkernel 202:134, OCS 2,456:362. Both repositories are 2026 creations; cadkernel is five weeks
    old and has never been released. If the author stops, an MPL-2.0 fork is legally trivial and
@@ -595,9 +692,14 @@ This belongs in [`../../risks.md`](../../risks.md) R-16's candidate list; it is 
   depending on the codec and not the reverse. Someone has already done the separation work that
   usually has to be argued for after the fact.
 - **A boolean that refuses is worth more than a boolean that mostly works**, and the three `Snag`
-  variants are the taxonomy of *why*, not a bare error.
+  variants are the taxonomy of *why*, not a bare error. **Now measured rather than assumed:** on the
+  torture set every one of cadkernel's failures is a refusal, no case that ran returned a wrong
+  volume, the identity residual is exactly 0 everywhere, ten-run determinism is perfect, and the
+  1e-7 m slab is kept at its specified volume until the tolerance exceeds its own thickness, at
+  which point it is refused rather than deleted (§Measurements).
 - **The local-frame invariant is stated as a contract with a stated failure mode**, not as a helper
-  someone might remember to call.
+  someone might remember to call — though the spike found that contract unwired in `src/brep/`, so
+  what is strong here is the statement, not its enforcement.
 - **Provenance solves a problem our spec has not addressed**: how an edit avoids rewriting — and
   silently degrading — everything the kernel does not model.
 - Typed generational handles with a written justification that matches ours.
@@ -615,8 +717,14 @@ This belongs in [`../../risks.md`](../../risks.md) R-16's candidate list; it is 
 - **No per-entity tolerance**, so tolerant-modelling growth cannot be expressed.
 - **No spatial index and no threading**, with an O(n·m) face pairing in the operation that matters
   most for BIM shapes.
-- **Nothing about it is measured** — by us, and, as far as the repositories show, by anyone: there is
-  no benchmark suite in either crate.
+- **Its boolean is now measured, and does not complete three of ten benchmark cases** —
+  `shared_edge`'s union is refused with `Snag::CutRefused`, and two cases' operands `faceted_solid`
+  will not build at all. It is also the slowest of the five candidates measured on that set — 7× to
+  110× on `overlap_half` ∪ (§Measurements). Beyond that spike nothing about it is measured, by
+  us or, as far as the repositories show, by anyone: there is no benchmark suite in either crate.
+- **The documented local-frame invariant is not implemented.** `Frame` is constructed at no call
+  site in `src/brep/` (the correction in §Precision), so a documented contract and the code disagree
+  — which is a maintenance signal as much as a precision one.
 - OCS's STEP export is a triangle soup at f32; it is not a route for exact geometry out.
 
 ## Risks
@@ -662,14 +770,40 @@ Concretely, what taking it would mean:
   old, and it is the same cost [`truck-fornjot.md`](truck-fornjot.md) priced for Truck. The
   difference is that here the API is small enough to wrap (`combine`, `imprint`, the `make`
   constructors, `tessellate`, `validate`, `lift`/`append`) and its error type is already `Result`.
-- **The condition.** The spike in §Measurements. If cadkernel passes R-16 on the torture set, it is a
-  serious *build on* candidate for the B-rep arm and this note should be revised to *recommend for
-  that arm*. If it refuses several benchmark cases, it remains an excellent *borrow from* and the
-  B-rep arm is ours — and we will have learned that from three typed refusals rather than from
-  debugging a leaking shell, which is itself worth the spike.
+- **The condition, and how the spike answered it.** The condition set here before any driver ran
+  was: *if cadkernel passes R-16 on the torture set it is a serious build-on candidate for the
+  B-rep arm; if it refuses several benchmark cases it remains an excellent borrow-from and the
+  B-rep arm is ours.* **It refused several cases.** §Measurements: 7/10 valid and correct at the
+  derived tolerance and at 1e-9, 6/10 at 1e-6; `shared_edge`'s union refused with
+  `Snag::CutRefused`; `near_degenerate_triangle` B and `wall_with_openings` B never built at all.
+  **The second branch is the one the numbers select, and the verdict therefore stays conditional
+  shortlist and does not become recommend.**
 
-ADR-0003 and ADR-0004 are both unaffected today: nothing here settles "build on an existing kernel"
-either way, because the measurement that would settle it has not been run.
+  The condition was written as a pass/fail gate, and the result does not fit that shape cleanly, so
+  the reason for the answer matters more than the answer. What the spike found is the *best* failure
+  profile in the torture file: identity residual exactly **0** on every case that ran, at every
+  setting — no other candidate manages that; the 1e-7 m slab kept at its specified volume where one
+  candidate degraded it at construction and another deleted it silently; both cubes of
+  `touching_vertex` surviving where a solver elsewhere lost one; ten-run determinism with a single
+  signature per case; and **every failure a typed or documented refusal rather than a wrong
+  answer**. Against that, three of ten cases produce nothing, and the multi-shell refusal is a
+  stated gap in `faceted_solid` — no containment relation on `Lump`/`Shell` — rather than a defect
+  in the boolean.
+- **What would move it to *recommend*.** Two things, both upstream and neither ours to write:
+  containment on lumps and shells, so a multi-shell cutting tool can be built; and a construction
+  path that accepts a T-junction or names why it will not. Re-running this spike at a later commit
+  is a day's work now that the driver exists, and the driver is committed beside the results.
+- **What the spike does not touch.** Performance is the one measured column that argues against:
+  0.740 – 50.748 ms per boolean at the derived tolerance. On `overlap_half` ∪ that is 32.256 ms
+  against the other four's 4.62, 3.21, 0.380 and 0.293 — **7× to 110× slower**, despite being the
+  only candidate with no binding layer — and the ten-case set cannot see how that scales. Precision adds nothing either way — R-17 passes at 0 m, but on
+  two cases whose coordinates make 0 m arithmetic rather than evidence (§Measurements).
+
+ADR-0003 and ADR-0004 are both unaffected. The spike measured whether cadkernel's boolean is good
+enough to build the B-rep arm on; it did not measure the question those ADRs turn on, which is
+whether to depend on an external kernel at all. What it does supply is a price for that decision:
+an FFI shim we write and maintain, over an API five weeks old, for a boolean that refuses three of
+ten benchmark cases and is the slowest measured.
 
 **(b) `ui/` — no on the code, yes on one design.**
 
@@ -735,7 +869,10 @@ with a second project having paid for it. Neither is a reason to depend on `app/
    ([`geom2d/frame.rs#L1-L33`](https://github.com/HakanSeven12/cadkernel/blob/953d546b68aef4b6692566a1a9b077fc5bd9fb4f/src/geom2d/frame.rs#L1-L33)),
    and specifically the **midpoint-of-bounding-box** anchor rule and the deliberate exclusion of
    rotation. An addition to spec §5, whose tiles are chosen for partitioning and not for
-   conditioning.
+   conditioning. **What is borrowed here is the rule, not an implementation:** the spike found
+   `Frame` constructed at no call site in `src/brep/` (§Precision, the correction), so cadkernel
+   states this contract and does not yet keep it. That is a second reason to write it down in the
+   spec — a contract nothing enforces is a contract that decays.
 7. **The shared-vertex rule at tessellation boundaries** — commit
    [`29b15535`](https://github.com/HakanSeven12/OpenCADStudio/commit/29b15535d737f5de995471c28bb4d84e88e93ec9):
    use the stored topology vertex at a tessellated curve's endpoints instead of re-evaluating the

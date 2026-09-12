@@ -405,3 +405,169 @@ Blender's embedded Manifold solver at 1.42e-14, not four).
   [`../tessellation/`](../tessellation/), and no other candidate has an equivalent measurement.
 - **Our own kernel has not been measured.** R-16 exists to be run against the kernel we build.
   This file is the baseline that comparison will use, and nothing more.
+
+---
+
+# Added after assembly — cadkernel (2026-09-12)
+
+**This section was written after the four-candidate assembly above was complete, and changes
+nothing in it.** No section above is renumbered, re-run or re-read. A fifth candidate ran on the
+**same machine** as the four above, one day later, against the same ten cases. Every number below
+is from the run dated 2026-09-12 in [`results/opencadstudio.md`](results/opencadstudio.md); an
+earlier run of the same driver on the same machine reproduced every validity, volume, identity and
+refusal cell of that file exactly, and differed only in the ms column.
+
+## What ran
+
+`cadkernel` — the MPL-2.0 Rust B-rep kernel that Open CAD Studio's solid modelling runs on, at
+commit `953d546b68aef4b6692566a1a9b077fc5bd9fb4f`, `default-features = false`,
+`features = ["brep"]`, built `--release` with `cargo 1.94.0` / `rustc 1.94.0` on the same Intel
+Core i9-14900HX / 32 GB / Windows 11 Pro `10.0.26200` machine as every candidate above. Driver:
+[`ocs_driver/src/main.rs`](ocs_driver/src/main.rs), raw results in
+[`results/opencadstudio.md`](results/opencadstudio.md). The candidate note is
+[`../../docs/research/kernels/opencadstudio.md`](../../docs/research/kernels/opencadstudio.md),
+whose §Measurements pre-registered exactly this spike.
+
+The ten cases are `reference/boolean_torture_set.py` verbatim, carried into Rust as JSON by
+[`ocs_driver/dump_cases.py`](ocs_driver/dump_cases.py) so that no case is re-typed. Three settings:
+the tolerance `brep::operation_tolerance(&[&a, &b])` derives from the operands (the value Open CAD
+Studio itself passes), and two explicit values, 1e-9 and 1e-6. Operands are rebuilt inside every
+repeat because `brep::combine` takes them by value and imprints them on the way through; median of
+five. Validity is the same closed / matched-halfedge / no-loose-vertex / no-face-below-1e-14 m²
+check the Manifold, CGAL and Blender drivers apply, run on the welded tessellation, **plus**
+`Body::validate()`, the kernel's own topological audit, which reported no flaw on any operand or
+any result. Volume is the driver's own `signed_volume` over the tessellation
+(`brep::mesh::tessellate`, `max_angle` 0.2 rad, `linear` 1e-9 m), with `Mesh::mass_properties()`
+recorded beside it and never instead of it.
+
+## Results — cadkernel `953d546b`, [`results/opencadstudio.md`](results/opencadstudio.md) §Boolean results
+
+The validity, volume and identity columns are **identical at all three settings** except where the
+Setting column says otherwise; the ms column is the **derived-tolerance** row, so every cell here is
+one row of the results file rather than an average across three.
+
+| Case | Setting | Valid? | V(union) | V(intersection) | Identity | ms (∪ / ∩) | Note |
+|---|---|---|---|---|---|---|---|
+| `disjoint` | all three | yes | 2 | 0 | 0 | 1.270 / 0.740 | ∩ empty, as expected |
+| `overlap_half` | all three | yes | 1.5 | 0.5 | 0 | 32.256 / 30.544 | - |
+| `coplanar_faces` | all three | yes | 2 | 0 | 0 | 10.874 / 10.469 | ∩ empty, as expected |
+| `shared_edge` | all three | **no** | - | 0 | - | 6.485 / 4.125 | ∪ **refused, `Snag::CutRefused`**; ∩ empty, as expected |
+| `touching_vertex` | all three | yes | 2 | 0 | 0 | 3.097 / 2.925 | both cubes survive |
+| `identical` | all three | yes | 1 | 1 | 0 | 15.984 / 16.796 | - |
+| `contained` | all three | yes | 1 | 0.125 | 0 | 1.348 / 0.831 | - |
+| `sliver` | derived, 1e-9 | yes | 1 | 9.99999999474e-08 | 0 | 50.716 / 50.748 | the slab survives at its specified volume |
+| `sliver` | tol=1e-6 | **no** | - | - | - | 27.522 / 25.720 | both **refused, `Snag::CutRefused`** |
+| `near_degenerate_triangle` | all three | **n/a** | - | - | - | - | operand B **not built**: `faceted_solid` returned `None` |
+| `wall_with_openings` | all three | **n/a** | - | - | - | - | operand B **not built**: `faceted_solid` returned `None` |
+
+**The ms column is an order of magnitude, not a benchmark.** The driver measures its own noise floor
+from the same table ([`results/opencadstudio.md`](results/opencadstudio.md) §How much of that ms
+column is the machine): on every case except `sliver` the three settings run the same geometry
+through the same path, and the spread between a case's three rows reaches **×2.68** in this session.
+Reading caveat 5 above applies to every cross-candidate timing in this file, and applies harder
+here.
+
+| Candidate | Setting | Valid /10 | Correct /10 | Worst identity residual | Time range (ms) |
+|---|---|---|---|---|---|
+| cadkernel `953d546b` | derived tolerance | 7 | 7 | **0** | 0.740 – 50.748 |
+| cadkernel `953d546b` | tol=1e-9 | 7 | 7 | **0** | 0.497 – 50.391 |
+| cadkernel `953d546b` | tol=1e-6 | 6 | 6 | **0** | 0.522 – 32.199 |
+
+## Verdict against R-16
+
+R-16 says, verbatim: **"Pass (per candidate): every case produces a valid closed result and the
+volume identity holds within 1e-9 relative."** and **"Fail: any invalid result, or a volume error
+above 1e-6 relative."**
+
+| Candidate × setting | Verdict | Why, against the words of the criterion |
+|---|---|---|
+| cadkernel — derived tolerance | **FAIL** | Not every case produces a valid closed result: `shared_edge`'s union is refused with `Snag::CutRefused`, and `near_degenerate_triangle` and `wall_with_openings` never reach the boolean because `faceted_solid` will not build operand B. Three of ten cases have no valid result, so the fail clause fires. |
+| cadkernel — tol=1e-9 | **FAIL** | The same three cases, the same causes. |
+| cadkernel — tol=1e-6 | **FAIL** | The same three, plus `sliver`: at a tolerance larger than the slab's own 1e-07 m thickness both booleans return `Snag::CutRefused`. |
+
+**The failures are of a different kind from every other candidate's, and the distinction is the
+point of running it.** Under the identity reading (a) fixed in §Verdict against R-16 above, the
+residual is **exactly 0 on every case that ran, at every setting** — the only candidate in this file
+with no non-zero residual anywhere, where the next tightest is CGAL's 7.11e-15 and the loosest
+OCCT's 3.33e-08. Under the expectation reading (b), **no case that ran returned a wrong volume**:
+the seven valid cases are correct to the digit, `touching_vertex` keeps both cubes where Blender's
+Exact solver silently lost one, and `sliver`'s intersection comes back at 9.99999999474e-08 m³ —
+the reference mesh's own signed volume to every digit, against OCCT's 0 and Manifold's silent
+deletion at tol=1e-6. Every one of cadkernel's failures is a **refusal**. None of them is a wrong
+answer.
+
+Two further measurements, from the same file:
+
+- **Determinism.** Ten identical runs of every case and both operations produced **one distinct
+  (verts, tris, volume) signature each**, refusals included
+  ([`results/opencadstudio.md`](results/opencadstudio.md) Probe E). Two candidates above carry
+  P-16 rows; this one does not.
+- **The tolerance sweep on the slab.** `sliver`'s intersection is correct at 1e-12, 1e-9 and 1e-8
+  and **refused** at 1e-7, 1e-6 and 1e-5 ([`results/opencadstudio.md`](results/opencadstudio.md)
+  Probe C). The threshold sits exactly at the feature's own thickness, and the far side of it is a
+  typed refusal rather than Manifold's silent deletion with status `NoError`.
+
+## Construction caveats — read these before the rows above are compared
+
+**This is a B-rep built from triangles, and three of this file's four comparability caveats land on
+`faceted_solid` for this candidate.** `brep::make::faceted_solid(&vertices, &faces)` takes the
+reference triangle soup as-is: it builds an undirected edge-use map, requires every edge to be used
+exactly twice, orients the faces by flood fill, and inserts one planar face per triangle. **Its
+refusal is an `Option::None`, not a typed error** — the `Snag` type exists only on the boolean — so
+a construction failure carries no machine-readable cause and the causes below are read out of the
+constructor's source, not out of its return value.
+
+1. **`wall_with_openings` operand B — the twelve-shell cutting tool — is refused outright.**
+   `faceted_solid` counts the connected components of the face graph and returns `None` unless
+   there is exactly one, with the reason in its own source: *"A disconnected or nested shell needs
+   explicit lump/cavity containment. Until that topology is represented, accept only one closed
+   shell so a cavity can never be silently converted into filled material."* Offered separately,
+   **all twelve shells build**, 0.75 m³ each, 9 m³ in total
+   ([`results/opencadstudio.md`](results/opencadstudio.md) Probe A). So this is a fifth distinct
+   treatment of the operand caveat 1 above already lists four of — and the only one that is a
+   refusal. `Body` has `Lump`, `Shell` and `LumpKey` types; what is missing is the containment
+   relation that would say which shell is a cavity of which lump.
+2. **`near_degenerate_triangle` operand B — the T-junction — is refused at construction.** The
+   reference set splits the cube's top face by inserting a vertex *on* the edge v5→v6. The
+   edge-use map then has an edge used once, the `entries.len() == 2` precondition fails, and the
+   constructor returns `None` ([`results/opencadstudio.md`](results/opencadstudio.md) Probe B).
+   This is the **same precondition Manifold enforces with `NotManifold`** and the same one CGAL's
+   corefinement documents; cadkernel is the third candidate to refuse this operand and the only one
+   to refuse it without naming why. Caveat 3 above applies unchanged.
+3. **`sliver` operand B is built at its specified thickness, and this is the only candidate of which
+   that is true.** Measured volume 9.99999999474e-08 m³ against a specified 9.99999999474e-08 —
+   exact, where OCCT's sewing produced 3.33e-08 and Blender's float32 storage produced
+   1.19209289551e-07. Caveat 2 above says the `sliver` row must not be compared as "the same
+   input"; for this candidate it *is* the specified input, which is a finding rather than an
+   exemption.
+4. **`shared_edge`'s union is refused, and the mathematically correct answer there is
+   non-manifold.** As already recorded above for Blender-Exact and CGAL, four faces meeting on one
+   line is not something a 2-manifold or a halfedge structure can hold. cadkernel refuses it with
+   `Snag::CutRefused` rather than emitting a shell it cannot represent. The *intersection* of the
+   same pair succeeds and is correctly empty.
+
+## What this does not settle
+
+Everything §What this does not settle above says applies unchanged, plus four things specific to
+this candidate:
+
+- **Three of the ten cases never reached the boolean or its union**, so cadkernel's boolean is
+  measured on seven cases and the two hardest constructions in the set are untested on it. A
+  seven-case score is not comparable with a ten-case score, and the summary rows above must not be
+  read as though it were.
+- **The multi-shell refusal is a stated gap in the constructor, not a property of the algorithm.**
+  The boolean was never asked whether it could cut a wall with twelve openings; the constructor
+  declined to build the tool. Whether `combine` handles a twelve-lump operand is unmeasured, and
+  unmeasurable until lumps carry containment.
+- **Only planar, analytic geometry was exercised**, as for every candidate above — and for this one
+  the limit is sharper: cadkernel refuses NURBS×NURBS by design (`Snag::NoClosedForm`), so the
+  curved-surface half of a real model is a documented non-capability rather than an untested one.
+- **Timings are a different harness again** — native Rust, no binding layer — and are the slowest
+  in this file on the mid-size cases despite that. `overlap_half` ∪ is **32.256 ms** here against
+  OCCT's 4.62 ([`results/occt.md`](results/occt.md) §Boolean results, `default`), Blender-Exact's
+  3.21 ([`results/blender.md`](results/blender.md)), Manifold `Mesh64`'s 0.293
+  ([`results/manifold.md`](results/manifold.md), f64 default tolerance) and CGAL Epick's 0.380
+  ([`results/cgal.md`](results/cgal.md), f64 input) — a gap far larger than the ×2.68 noise floor
+  measured above, so the ordering survives even if the figures do not. The candidate note's §1
+  records why from source: the imprint's face pairing is O(n·m) with an AABB reject and no spatial
+  index. That is a scaling property this ten-case set cannot characterise.

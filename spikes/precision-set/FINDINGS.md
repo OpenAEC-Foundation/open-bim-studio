@@ -327,3 +327,137 @@ main results tables or the summary above moved.**
   scheme would. ADR-0006's premise is supported, not proven exhaustively.
 - **Our own kernel has not been measured.** R-17 exists to be run against the kernel we build, and
   against the tile frame ADR-0006 specifies. This file is the baseline.
+
+---
+
+# Added after assembly — cadkernel (2026-09-12)
+
+**This section was written after the four-candidate assembly above was complete, and changes
+nothing in it.** No section above is renumbered, re-run or re-read. A fifth candidate ran on the
+**same machine** as the four above, one day later, against the same three cases and the same
+`OFFSET` of (500000.0, 500000.0, 0.0). Every number below is from the run dated 2026-09-12 in
+[`results/opencadstudio.md`](results/opencadstudio.md); an earlier run of the same driver on the
+same machine reproduced every deviation, volume, ΔV, derived tolerance and refusal cell of that
+file exactly, and differed only in the ms column, which this section does not use.
+
+## What ran
+
+`cadkernel` at commit `953d546b68aef4b6692566a1a9b077fc5bd9fb4f`, `default-features = false`,
+`features = ["brep"]`, `--release`, `cargo 1.94.0` / `rustc 1.94.0`, on the same Intel Core
+i9-14900HX / 32 GB / Windows 11 Pro `10.0.26200` machine. Driver:
+[`../boolean-torture/ocs_driver/src/main.rs`](../boolean-torture/ocs_driver/src/main.rs) in
+`precision` mode — the same driver and the same construction path as the boolean-torture run, as
+for the OCCT drivers above. Raw results: [`results/opencadstudio.md`](results/opencadstudio.md).
+
+Method as for every driver above: each case built twice, once at the origin and once with the
+offset applied to the **input coordinates**; the boolean run at both; the far result translated
+back by −offset before the comparison **and** before the volume integral; deviation the worst
+nearest-neighbour distance, taken as the worse of both matching directions. Operands rebuilt inside
+every repeat, median of five. Two settings: the tolerance `brep::operation_tolerance` derives, and
+an explicit 1e-9.
+
+## The coordinate policy, measured — the offset does reach the boolean
+
+**This has to be read before the table.** cadkernel's crate documentation states a coordinate
+policy: *"Every entry point lifts its input into a local frame before doing any math, and shifts
+results back to world coordinates on the way out."* `geom2d::Frame` implements exactly that, and
+[`../../docs/research/kernels/opencadstudio.md`](../../docs/research/kernels/opencadstudio.md)
+§Precision quotes it — including the **midpoint-of-bounding-box** anchor rule, which would bound
+every lifted coordinate by half the extent and make a 500 km offset invisible to the arithmetic.
+
+*Measured at the pinned commit:* `Frame::around`, `Frame::at` and `Frame::identity` are constructed
+**nowhere outside `src/geom2d/frame.rs`, and inside it only in its own unit tests**. There is no
+call site anywhere in `src/brep/`. The B-rep boolean path — `make::faceted_solid`,
+`bounds::operation_tolerance`, `imprint::imprint`, `boolean::combine`, `brep::mesh` — does its
+arithmetic on the world coordinates it is handed. The `space::planar` `lift`/`lower` pair that
+*is* used throughout is a different operation: the 3D↔2D map onto a face's plane, not a translation
+for conditioning.
+
+**So the lift is written, documented, and unwired, and every number below is the unmitigated f64
+answer.** The candidate note's §Precision has been corrected to say so.
+
+## Results — cadkernel `953d546b`, [`results/opencadstudio.md`](results/opencadstudio.md) §Boolean results near vs far
+
+| Case | Setting | Op | Valid near+far? | V near / far | ΔV (abs, rel) | Deviation |
+|---|---|---|---|---|---|---|
+| `overlap_half` | derived tol | union | yes | 1.5 / 1.5 | 0, 0 | **0 m** |
+| `overlap_half` | derived tol | intersection | yes | 0.5 / 0.5 | 0, 0 | **0 m** |
+| `overlap_half` | tol=1e-9 | union | yes | 1.5 / 1.5 | 0, 0 | **0 m** |
+| `overlap_half` | tol=1e-9 | intersection | yes | 0.5 / 0.5 | 0, 0 | **0 m** |
+| `coplanar_faces` | derived tol | union | yes | 2 / 2 | 0, 0 | **0 m** |
+| `coplanar_faces` | derived tol | intersection | yes (empty, as expected) | 0 / 0 | 0, n/a | n/a (0 verts) |
+| `coplanar_faces` | tol=1e-9 | union | yes | 2 / 2 | 0, 0 | **0 m** |
+| `coplanar_faces` | tol=1e-9 | intersection | yes (empty, as expected) | 0 / 0 | 0, n/a | n/a (0 verts) |
+| `wall_with_openings` | both | union and intersection | **n/a — operand B not built** | - | - | - |
+
+| Candidate | Path / setting | Float width of vertex storage | Worst deviation over the set | Worst relative ΔV |
+|---|---|---|---|---|
+| cadkernel `953d546b` | derived tolerance, B-rep | f64 | **0 m**, on two of three cases | 0 |
+| cadkernel `953d546b` | tol=1e-9, B-rep | f64 | **0 m**, on two of three cases | 0 |
+
+## Verdict against R-17
+
+R-17 says, verbatim: **"Pass: maximum deviation below 1e-6 m in f64 paths."** and **"Fail:
+deviation above 1e-4 m — which for a float32 path is the expected outcome and the evidence ADR-0006
+needs."**
+
+| Candidate × setting | Verdict | Margin against the line |
+|---|---|---|
+| cadkernel, derived tolerance (f64) | **PASS, on a reduced set** | 0 m against a 1e-6 m pass line, on the two cases that ran. `wall_with_openings` never reaches the boolean |
+| cadkernel, tol=1e-9 (f64) | **PASS, on a reduced set** | identical, same reduction |
+
+**Read the 0 m correctly: it is not a tighter result than the three f64 candidates above, it is a
+less informative one.** The driver measures why
+([`results/opencadstudio.md`](results/opencadstudio.md) §Probe — what a 0 m deviation can and
+cannot show): the two cases that reach the boolean are built from coordinates that are multiples of
+0.5 m, for which `500000 ± v` is **exact** in f64 — the worst
+`|((v + offset) − offset) − v|` over their 16 operand vertices each is **0**. Every f64 candidate
+above also measured exactly 0 m on those same two cases (§Results, the `overlap_half` and
+`coplanar_faces` rows for OCCT, Manifold `Mesh64` and CGAL Epick f64). **The case that separated
+the f64 candidates from each other is `wall_with_openings`, whose operand vertices have a
+2.32832e-11 m offset round-trip error before any kernel touches them — and it is the one case
+`faceted_solid` refuses.** So this row extends the f64 population by a fifth member without
+tightening its bound, and the two populations R-17 separates are unchanged.
+
+### The tolerance follows the model out to 500 km
+
+*Measured.* `operation_tolerance` is `extent · 1e-8 + f64::EPSILON · coordinate_scale · 64`, so its
+second term is a function of **where** the model sits:
+
+| Case | Derived tolerance at the origin | at 500 km | Ratio |
+|---|---|---|---|
+| `overlap_half` | 1.50000213163e-8 | 2.21054486739e-8 | ×1.474 |
+| `coplanar_faces` | 2.00000284217e-8 | 2.71054557793e-8 | ×1.355 |
+
+These are the values the candidate note's §Measurements *derived* from the formula before any
+driver ran — 1.500e-8 → 2.211e-8 and 2.000e-8 → 2.711e-8 — now **measured**, agreeing to every
+digit printed. The coupling is the same one Manifold's column in §The local-frame mitigation
+records for its own derived tolerance, and it has the same consequence: a caller-side local frame
+fixes the *coordinates* and leaves the tolerance tracking the global position, because the
+tolerance is derived after the coordinates are handed over.
+
+### The local-frame mitigation, measured
+
+cadkernel does not carry the frame for the caller, so the mitigation measured here is the caller's
+own: run the boolean at the origin, then move the result out to 5e5 m with `brep::place::transform`
+and back again — what a tile frame does on the way to and from the world.
+
+| Candidate | How the offset was carried | Result |
+|---|---|---|
+| cadkernel | `brep::place::transform` out by +offset and back by −offset, around a boolean run at the origin | **0 m** deviation against the origin run, and the result still valid, on every case and both operations that ran ([`results/opencadstudio.md`](results/opencadstudio.md) §Probe — the tile-frame mitigation) |
+
+The cancellation probe agrees with the other drivers': the same far solid integrated near, shifted,
+raw, back-translated and through `Mesh::mass_properties()` gives the same volume to every digit
+printed on both cases, so the back-translation in the main table is not doing the work.
+
+## What this does not settle
+
+- **One of the three cases did not run**, and it is the only one whose coordinates are not exactly
+  representable across the offset. Nothing here measures cadkernel against a far-field case that
+  could have produced a non-zero deviation.
+- **The mitigation probe is trivially exact for the same reason.** `Placement::at` adds and
+  subtracts the same f64; on coordinates for which that is exact, 0 m is arithmetic, not evidence
+  about the kernel.
+- **The lift is unwired today.** If a later revision wires `Frame` into the B-rep entry points, this
+  measurement expires: it would then be measuring the lift rather than the raw f64 path, and the
+  run would have to be repeated and labelled with the new commit.
