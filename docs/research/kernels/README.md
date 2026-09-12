@@ -94,8 +94,9 @@ Grouped by the representation they are strongest in. A candidate may appear in t
 **Every box below is ticked: each candidate has a note in this directory, and each note carries a
 verdict on all three axes.** [`synthesis.md`](synthesis.md) §1 is the completed matrix and §2 the
 three-axis verdict table, with each row linking the note's own `§Verdict`. A tick means *evaluated
-and decided*, never *recommended* — fourteen of the fifteen kernel-scale candidates are a **no** on
-the *build on* axis, and the fifteenth is a conditional shortlist for one arm.
+and decided*, never *recommended* — of the seventeen candidates carrying a kernel-role verdict,
+sixteen cannot supply the kernel and the seventeenth is a conditional shortlist for one arm.
+[`synthesis.md`](synthesis.md) §6.3 enumerates which candidate falls where and on whose words.
 
 ### A — B-rep kernels
 - [x] **OCCT** (Open CASCADE Technology) — tolerant B-rep, the kernel under FreeCAD and

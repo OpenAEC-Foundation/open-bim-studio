@@ -124,8 +124,10 @@ its own parameters and its own failure modes:
 
 > **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** The mesh
 > boolean bullet used to say the exact arrangement "is the only known approach that is robust on
-> arbitrary input". R-16 does not support that. Twelve of fifteen candidate × setting combinations
-> fail; **both** exact-arrangement implementations measured fail (Blender's Exact solver loses an
+> arbitrary input". R-16 does not support that. The fifteen candidate × setting combinations split
+> **11 FAIL / 3 neither-pass-nor-fail / 1 PASS** — the three that are neither are OCCT's three
+> settings, valid on every case but with `sliver`'s residual between the pass and the fail line;
+> **both** exact-arrangement implementations measured fail (Blender's Exact solver loses an
 > operand on `touching_vertex`; CGAL's Epick corefinement refuses two cases); the single nominal
 > pass uses neither exact predicates nor exact constructions; and the torture set is built from
 > bit-identical coordinates, which is the input class a symbolic tie-break wins — so the set

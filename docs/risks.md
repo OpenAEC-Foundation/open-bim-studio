@@ -26,8 +26,13 @@ this capability is often absent and rarely documented.
 - **Findings:** [`spikes/incremental-evaluation/FINDINGS.md`](../spikes/incremental-evaluation/FINDINGS.md)
   — IfcOpenShell and web-ifc measured on two reference models; xBIM read but not run (no .NET SDK
   on the machine).
-- **Status:** in progress — **confirmed as the critical risk by phase 1**, and now measured for the
-  two implementations that could be run, but **not at its own scale.** The prior-art synthesis found
+- **Status:** open — **confirmed as the critical risk by phase 1**, and now measured for the
+  two implementations that could be run, but **not at its own scale.** The FINDINGS say which status
+  the evidence supports and this entry follows it: "R-01 should stay **open**, because its own
+  criterion has not been tested at its own scale" — while no longer being open *for lack of evidence
+  about existing implementations*
+  ([`spikes/incremental-evaluation/FINDINGS.md`](../spikes/incremental-evaluation/FINDINGS.md)
+  §What the risk status should become). The prior-art synthesis found
   that continuous feedback during a gesture is the mechanism the entire interaction thesis rests
   on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
   than merely slipping.
@@ -208,10 +213,11 @@ candidates we might build on or borrow from, and later our own kernel.
 - **Findings:** [`spikes/boolean-torture/FINDINGS.md`](../spikes/boolean-torture/FINDINGS.md) —
   twelve candidate×setting combinations measured in one session, plus three added afterwards for
   `cadkernel`; every failure traced to a `problems.md` row.
-- **Status:** in progress — measured for five candidates. **Twelve of the fifteen candidate×setting
-  combinations fail outright**; OCCT is valid on all thirty case×setting combinations but its
+- **Status:** in progress — measured for five candidates. The fifteen candidate×setting combinations
+  split **11 FAIL / 3 neither-pass-nor-fail / 1 PASS**. The three that are neither are OCCT's three
+  settings: OCCT is valid on all thirty case×setting combinations but its
   `sliver` identity residual (3.33e-08 relative) sits between the pass and fail lines, which the
-  criterion as written does not name; and the single pass, Blender's embedded Manifold solver,
+  criterion as written does not name. The single pass is Blender's embedded Manifold solver, and it
   rests on a refusal the criterion cannot see — it returns operand A unchanged on
   `near_degenerate_triangle`, which happens to be the right answer for that case. The fifth
   candidate, `cadkernel` at `953d546b`, fails at all three settings for a different reason from
@@ -231,9 +237,11 @@ candidates we might build on or borrow from, and later our own kernel.
   the two mechanisms our own kernel implements. This is `problems.md` **N-01**'s mitigation and it
   is now named there and scheduled at spec §9 M5. Two further extensions the findings identify, both
   cheap once the driver exists: at least one curved-surface pair (**P-12**, where OCCT's own tracker
-  concentrates and this set has nothing), and at least one *chained* sequence, since OCCT's Probe A
-  already shows tolerance compounding monotonically over eight fuses and no other candidate was
-  measured that way at all.
+  concentrates and this set has nothing), and at least one *chained* sequence — OCCT's Probe A is
+  the only chained measurement in the programme, and what it shows is that over eight fuzzy fuses
+  the maximum entity tolerance rose **once** and then **plateaued**, while the *excess volume* grew
+  linearly to 2.67e-5 m³; no other candidate was measured that way at all, so whether tolerance
+  compounds anywhere is still unmeasured.
 
 ### R-17 · Precision far from the origin
 The tile-frame design assumes f64 local coordinates are necessary and sufficient.

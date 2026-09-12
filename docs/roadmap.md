@@ -74,8 +74,8 @@ Method: `research/kernels/README.md`. Order of work:
 `superpowers/plans/2026-09-09-kernel-research-programme.md`.
 
 **Closed 2026-09-12 — and the artefact is not the one this table originally named.** "A shortlist of
-two" assumed the answer would be a choice between kernels. It was not: **fourteen of the fifteen
-kernel-scale candidates are a `no` on the *build on* axis**, and the fifteenth — `cadkernel`, the
+two" assumed the answer would be a choice between kernels. It was not: **of the seventeen candidates
+carrying a kernel-role verdict, sixteen cannot supply the kernel**, and the seventeenth — `cadkernel`, the
 MPL-2.0 B-rep crate under Open CAD Studio — is a *conditional shortlist for one arm*, priced rather
 than chosen. What the phase produced instead is [`research/kernels/synthesis.md`](research/kernels/synthesis.md):
 the completed matrix over twenty-one candidates, a verdict per candidate on all three axes, the

@@ -36,10 +36,13 @@ table below is now filled, and it does not accept this ADR.** Two things changed
 paragraph above.
 
 **First, the "early finding" hardened into twenty-one evaluated candidates, and the claim it
-supported is too strong.** Fourteen of the fifteen kernel-scale candidates are a clear *no* on the
-*build on* axis, each for a recorded reason — a GPL licence or a GPL boolean, float32 storage or
-float32 at the API boundary, no invalidation mechanism, no embeddable surface, an archived project,
-or library rather than kernel scope. **The fifteenth is not a no.** `cadkernel`, the MPL-2.0 B-rep
+supported is too strong.** Of the twenty-one, four carry no kernel-role verdict at all — FreeCAD (an
+application, not scored), Parasolid / ACIS (a documentation-only reference), Potree (a converter and
+a viewer) and the DynLex graphics runtime (the given). **Of the seventeen that remain, sixteen cannot
+supply the kernel**: eleven are an unqualified *no* on the *build on* axis, three are a *no* for the
+kernel with a *yes* for a role that is not the kernel, and two carry a build-on question their own
+note leaves open and narrower than the kernel. The enumeration, with each verdict as its note words
+it, is the first row of the evidence table below. **The seventeenth is not a no.** `cadkernel`, the MPL-2.0 B-rep
 crate under Open CAD Studio, is a *conditional shortlist* for the B-rep arm
 ([`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Verdict (a)): f64
 throughout, generational typed handles, a typed refusal, and an identity residual of exactly 0 on
@@ -199,8 +202,8 @@ reason this ADR stays `proposed`.
 
 | Claim | Where shown | Evidence type |
 |---|---|---|
-| Fourteen of the fifteen kernel-scale candidates cannot be built on, each for a recorded reason — GPL licence or GPL boolean, float32 storage or float32 at the API boundary, no invalidation mechanism, no embeddable surface, an archived project, or library rather than kernel scope | [`kernels/synthesis.md`](../../research/kernels/synthesis.md) §2, the *Build on* column, which links each note's own §Verdict: [`occt.md`](../../research/kernels/occt.md), [`blender.md`](../../research/kernels/blender.md), [`manifold.md`](../../research/kernels/manifold.md), [`cgal.md`](../../research/kernels/cgal.md), [`libigl-openmesh.md`](../../research/kernels/libigl-openmesh.md), [`implicit.md`](../../research/kernels/implicit.md), [`pointclouds.md`](../../research/kernels/pointclouds.md), [`truck-fornjot.md`](../../research/kernels/truck-fornjot.md), [`ifcopenshell.md`](../../research/kernels/ifcopenshell.md), [`web-ifc.md`](../../research/kernels/web-ifc.md), [`xbim.md`](../../research/kernels/xbim.md) | **measured** where a spike decided it (Blender's float32, web-ifc's float32 and broken invalidation, IfcOpenShell's missing dependency tracking, PCL's float32), **source** for the absences (no `extern "C"`, no C ABI), **claimed** for the licences |
-| ✗ **The fifteenth candidate is not disqualified.** `cadkernel` is a *conditional shortlist* for the B-rep arm: MPL-2.0, f64 throughout, an identity residual of exactly 0 on every case that ran — held back by cost and maturity (3 of 10 cases produce nothing, 5–110× slower, single-threaded, one representation, no exact predicates, 34 days old, no C ABI), not by an assumption the product cannot accept | [`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Verdict (a); [`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md) §Added after assembly — cadkernel | **measured** — and it is why the row above says *fourteen*, not *every*. Options D and E exist for it |
+| **Sixteen of the seventeen candidates evaluated for the kernel role cannot supply the kernel**, enumerated rather than counted loosely. [`synthesis.md`](../../research/kernels/synthesis.md) §2 scores **twenty-one** candidates; four of those carry no kernel-role verdict — **FreeCAD** ("not scored — an application, never a candidate"), **Parasolid / ACIS** ("documentation-only reference, not a candidate"), **Potree** ("**Not applicable** — a converter and a viewer") and the **DynLex graphics runtime** ("**It is the given**"). The remaining seventeen: **eleven unqualified *no*** — **OCCT**, **Truck**, **Fornjot**, **Blender**, **libigl**, **OpenMesh**, **PCL**, **Open3D**, **libfive**, **web-ifc**, **xBIM** — for a GPL licence or a GPL boolean, float32 storage or float32 at the API boundary, no invalidation mechanism, no embeddable surface, an archived project, or library rather than kernel scope; **three *no* for the kernel with a *yes* for another role** — **Manifold** ("**No as a kernel; yes as a candidate boolean component**", and the note records it as **not taken**), **PDAL** ("**No as the module; genuinely yes as an ingest dependency**"), **IfcOpenShell** ("**Yes for parsing and representation mapping; qualified yes for geometry, and no as the evaluation layer**"); and **two whose build-on question the note leaves open rather than closed** — **CGAL**, no as the kernel and no as the boolean but "linking Epick as an LGPL library for its predicates … is a live option" against writing Shewchuk's predicates ourselves, and **OpenVDB**, no as a kernel but "could plausibly sit behind the kernel's `implicit` module … **Not answered here**". Neither open question is a candidate to supply the kernel; both are recorded so the count is not read as closing them | [`kernels/synthesis.md`](../../research/kernels/synthesis.md) §2, the *Build on* column, which links each note's own §Verdict; [`cgal.md`](../../research/kernels/cgal.md) §Build on and [`implicit.md`](../../research/kernels/implicit.md) §Build on for the two open questions: [`occt.md`](../../research/kernels/occt.md), [`blender.md`](../../research/kernels/blender.md), [`manifold.md`](../../research/kernels/manifold.md), [`cgal.md`](../../research/kernels/cgal.md), [`libigl-openmesh.md`](../../research/kernels/libigl-openmesh.md), [`implicit.md`](../../research/kernels/implicit.md), [`pointclouds.md`](../../research/kernels/pointclouds.md), [`truck-fornjot.md`](../../research/kernels/truck-fornjot.md), [`ifcopenshell.md`](../../research/kernels/ifcopenshell.md), [`web-ifc.md`](../../research/kernels/web-ifc.md), [`xbim.md`](../../research/kernels/xbim.md) | **measured** where a spike decided it (Blender's float32, web-ifc's float32 and broken invalidation, IfcOpenShell's missing dependency tracking, PCL's float32), **source** for the absences (no `extern "C"`, no C ABI), **claimed** for the licences |
+| ✗ **The seventeenth candidate is not disqualified.** `cadkernel` is a *conditional shortlist* for the B-rep arm: MPL-2.0, f64 throughout, an identity residual of exactly 0 on every case that ran — held back by cost and maturity (3 of 10 cases produce nothing, 5–110× slower, single-threaded, one representation, no exact predicates, 34 days old, no C ABI), not by an assumption the product cannot accept | [`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Verdict (a); [`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md) §Added after assembly — cadkernel | **measured** — and it is why the row above says *sixteen of seventeen*, not *every*. Options D and E exist for it |
 | ✗ **DynLex does not compile kernel-shaped code within the compile-time budget.** 20k lines take **72.19 s** against a 30 s pass line; 50k lines take **1146.72 s**; the implied exponent worsens from 1.89 (5k→20k) to **3.03** (20k→50k). Memory is not the problem (2.8 GB at 50k) and neither is correctness (zero diagnostics, every binary matched an independent computation) | [`spikes/dynlex-scale/FINDINGS.md`](../../../spikes/dynlex-scale/FINDINGS.md) (R-18) §Results, §Verdict, §What this means for ADR-0004 | **measured**, and **negative**. The findings' own words: "the ADR should not move to `Accepted` on this row until it is fixed and remeasured" |
 | DynLex runs kernel-shaped code within 1.5× of C++ `-O2` — 1.12× (triangle/triangle), 1.23× (BVH build), 1.01× (orient3d), with **bit-identical output** in both languages at both optimisation levels | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) (R-19) §Results, §Verdict | **measured** |
 | …**conditional on an explicit `-O` flag.** The compiler's default emitted-code level is `-O0`, verified in-repo by comparing a no-flag build against an explicit `-O0` build after neutralising the linker's embedded timestamp; unflagged the same workloads are 9.09× / 6.78× / 21.14× and would fail the criterion | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) §Method (Flags), §Verdict | **measured** |
@@ -250,14 +253,25 @@ does not start.
    [R-18](../../risks.md); the fix itself belongs on the dynlex tracker, where
    [issue #7](https://github.com/OpenAEC-Foundation/dynlex/issues/7) is the place these findings are
    to be carried — its contents were not read into this repository and are not evidence here.
-2. **The GPU compute gap is resolved one way or the other.** Either the `GLCompute` entry point,
-   workgroup builtins, storage buffers, barriers and a memory model are scoped as a dynlex extension
-   and placed in spec §8's table with the milestone that needs them — or spec §6 item 4 and §9 M7 are
-   rewritten to run that work on CPU threads and §10's targets are rechecked against that. The spec
-   now states the fallback; what it does not yet have is the decision. **P-28**.
-3. **The kernel's build passes an explicit `-O` flag**, and any future performance measurement that
-   omits it is treated as a false failure. Spec §8 now records this; the condition is that
-   `scripts/build.sh` actually does it at M0.
+2. **The GPU compute gap is decided one way or the other, outside this repository's own tables.**
+   Spec §8 already carries a `GLCompute` row against M7 and §6 item 4 already names the CPU-thread
+   fallback — both added in the same commit as this amendment — so *writing the row down* cannot be
+   the condition; it is already true, and a condition a document satisfies by describing itself is
+   not a condition. What is testable is a commitment on one side or the other: **either** a dynlex
+   change scoping the `GLCompute` entry point, workgroup builtins, storage buffers, barriers and a
+   memory model exists on the dynlex tracker with an accepted scope and a target, **or** spec §6
+   item 4 and §9 M7 are rewritten to run that work on CPU threads for good — not as a fallback —
+   with §10's targets rechecked against CPU figures and the revised numbers written into §10's
+   measured-reference column. Until one of those is done, the gap is recorded and undecided.
+   **P-28**.
+3. **The `-O` flag is demonstrated in a build that exists before M0, not asserted about a script M0
+   creates.** The original wording made this circular: it required `scripts/build.sh` to pass the
+   flag "at M0", while M0 itself does not start until this ADR is accepted. The testable form: R-19's
+   three workloads are re-run through the exact build command the kernel will use, and the measured
+   ratios land on the `-O2` figures (1.12× / 1.23× / 1.01×) rather than the unflagged ones
+   (9.09× / 6.78× / 21.14×) — which demonstrates the flag is reaching the compiler. Spec §8 records
+   the requirement; this condition is the check that it works. Any future performance measurement
+   that omits the flag is treated as a false failure.
 
 **A fourth thing that is not a condition but must be decided before M1:** whether the B-rep arm is
 written, ported (Option D) or linked (Option E). The research priced all three and the decision is
