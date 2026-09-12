@@ -8,9 +8,9 @@ Phases 2 and 3 overlap and are the natural point to divide work between contribu
 |---|---|---|---|
 | **0** | Skeleton, repository rules, vision, non-goals, glossary | A repository others can work in | **done** |
 | **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | **in progress** |
-| **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | Completed matrix, shortlist of two | **in progress** |
-| **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike | |
-| **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | |
+| **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | [`research/kernels/synthesis.md`](research/kernels/synthesis.md) — completed matrix, twenty-one candidates, three-axis verdicts | **done** (2026-09-12) |
+| **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike — R-01, R-16, R-17, R-18, R-19, plus the point-cloud, tessellation, object-count and topological-naming result sets | **done** (2026-09-12) |
+| **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | **in progress** — ADR-0005 and ADR-0006 accepted; **ADR-0004 amended and still `proposed`** with three named conditions, so ADR-0003 stays in force and the kernel spec stays a working hypothesis. The MVP slice is not yet specified |
 | **5** | Consolidate into the handover document | `BUILD-BRIEF.md` | |
 | **6** | Kernel build milestones M0–M8 | working kernel | blocked on phase 4 |
 
@@ -73,6 +73,16 @@ Revised 2026-09-09: the question now includes what each kernel teaches a kernel 
 Method: `research/kernels/README.md`. Order of work:
 `superpowers/plans/2026-09-09-kernel-research-programme.md`.
 
+**Closed 2026-09-12 — and the artefact is not the one this table originally named.** "A shortlist of
+two" assumed the answer would be a choice between kernels. It was not: **fourteen of the fifteen
+kernel-scale candidates are a `no` on the *build on* axis**, and the fifteenth — `cadkernel`, the
+MPL-2.0 B-rep crate under Open CAD Studio — is a *conditional shortlist for one arm*, priced rather
+than chosen. What the phase produced instead is [`research/kernels/synthesis.md`](research/kernels/synthesis.md):
+the completed matrix over twenty-one candidates, a verdict per candidate on all three axes, the
+*borrow from* harvest grouped by the kernel spec section each design lands in, and the list of spec
+claims the evidence contradicted. That is a more useful artefact than a shortlist, and saying so is
+not the same as pretending the original one was delivered.
+
 ## Phase 3 — spikes
 
 Documentation claims do not survive contact with measurement often enough to be trusted. Every
@@ -81,9 +91,27 @@ advance.
 
 No conclusions without measurements.
 
+**Closed 2026-09-12.** Five cross-candidate `FINDINGS.md` files were produced, each applying a
+pass/fail criterion quoted verbatim from [`risks.md`](risks.md): R-16 (boolean robustness, five
+candidates, fifteen candidate × setting combinations), R-17 (precision at 500 km, five candidates),
+R-01 (incremental evaluation, two IFC implementations), R-18 (DynLex compile scale — **failed**) and
+R-19 (DynLex runtime performance — passes, conditionally). Result sets without their own FINDINGS
+exist for the point-cloud scale, tessellation, object-count and topological-naming spikes. Four
+spikes named in `risks.md` were **not** run and stay open: R-02 (the geometry seam), R-04 (renderer
+scale), R-14 (cross-tile evaluation) and R-20 (the DynLex GPU path) — four spike directories that do
+not exist under [`../spikes/`](../spikes/).
+
 ## Phase 4 — freeze
 
 Architecture recorded, decisions accepted as ADRs, MVP slice specified.
+
+**In progress since 2026-09-12.** Two of the three kernel ADRs are accepted — ADR-0005 (four equal
+representations) and ADR-0006 (f64 local coordinates, exact predicates, explicit tolerance).
+**ADR-0004 (build our own kernel, in DynLex) is amended and still `proposed`**: R-18 failed, R-19
+passes only with an explicit `-O` flag, the DynLex compiler cannot emit a GPU compute entry point,
+and one candidate turned out to be a live option rather than a disqualified one. Its three
+acceptance conditions are written into the ADR. Until they are met **ADR-0003 remains in force**,
+the kernel design spec stays a working hypothesis, and phase 6's M0 does not start.
 
 **MVP scope direction** (to be confirmed, not assumed): a **thin vertical slice through the
 entire chain** — one wall type, one opening, one storey, one plan, one section, one parametric

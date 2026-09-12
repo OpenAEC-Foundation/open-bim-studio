@@ -23,11 +23,37 @@ this capability is often absent and rarely documented.
 - **Fail:** re-evaluation requires reprocessing the model, or exceeds 100 ms.
 - **If it fails:** we write our own evaluation layer over a geometry kernel, and the semantic
   kernel becomes I/O only. Significant scope increase.
-- **Status:** open — **confirmed as the critical risk by phase 1.** The prior-art synthesis found
+- **Findings:** [`spikes/incremental-evaluation/FINDINGS.md`](../spikes/incremental-evaluation/FINDINGS.md)
+  — IfcOpenShell and web-ifc measured on two reference models; xBIM read but not run (no .NET SDK
+  on the machine).
+- **Status:** in progress — **confirmed as the critical risk by phase 1**, and now measured for the
+  two implementations that could be run, but **not at its own scale.** The prior-art synthesis found
   that continuous feedback during a gesture is the mechanism the entire interaction thesis rests
   on, and it requires cheap incremental re-evaluation. If R-01 fails, the product changes rather
-  than merely slipping. Now also measured for IfcOpenShell and web-ifc as evidence for ADR-0004's
-  *build on* verdicts.
+  than merely slipping.
+
+  **web-ifc fails, size-independently.** The only working route from an edit to updated geometry is
+  to discard and re-open the model — 266.8 ms on a 3,822-element file. `ResetCache`, the one call
+  designed to avoid that, exists in the C++ source but is **not registered in the WASM bindings** and
+  throws in the shipped 0.0.77 build; it is model-wide in any case. The warm path returns **stale**
+  geometry at 0.03 ms, and the write demonstrably reached the model.
+
+  **IfcOpenShell passes at the median and fails in the tail.** Single-element re-evaluation is real
+  and genuinely does not reprocess the model — median **1.63 ms** and **2.06 ms**, 1,044× and 5,488×
+  cheaper than a full iteration for a typical wall — but **5.7%** of elements on the real building
+  exceed the 16 ms frame budget, p95 is **16.96 ms**, and the worst element takes **553.97 ms**, five
+  times the 100 ms *fail* threshold. A modeller must be interactive when the user drags *the window*,
+  not only the median wall. There is also no dependency tracking and no automatic invalidation: one
+  cache has no erase at all and the other only a manual `remove(GlobalId)` the caller must drive.
+
+  **What keeps this open is two specific measurements, not an open-ended worry:** (1) does a
+  per-element cost independent of model size survive at **100k elements** — the larger benchmark
+  model is 3,822 `IfcProduct`, **4%** of the criterion's size — and (2) what does the **dependency
+  fan-out** of a single wall move add, since this spike moved one placement and re-evaluated one
+  element. The synthetic scale models in `reference/` cover the first; benchmark case 3 in
+  `reference/README.md` ("a parametric change scenario") is still marked *to be written* and covers
+  the second. The consequence clause above is already indicated for both implementations, on
+  different grounds.
 
 ### R-14 · Parametric evaluation across unloaded tiles
 The tile-based spatial model (see [`domain/spatial-model.md`](domain/spatial-model.md)) collides
@@ -64,6 +90,18 @@ toward IFC2x3.
 - **Action:** explicit decision on export target, recorded as an ADR. Not a default.
 - **Also verify:** IFC permits only *projected*, cartesian CRS. Geographic (lat/lon) systems are
   out of scope by the standard, and reprojection happens outside the model.
+- **Correction to this entry's wording, recorded 2026-09-12, not resolved.** The paragraph above
+  says the IFC2x3 convention is carried "on `IfcSite`". The reference implementation writes it on the
+  **`IfcProject`**: `ifcopenshell.api.georeference.add_georeferencing` attaches `ePSet_ProjectedCRS`
+  and `ePSet_MapConversion` to the `IfcProject` for IFC2X3, and for IFC4 and later builds an
+  `IfcProjectedCRS` plus one of `IfcMapConversion` / `IfcMapConversionScaled` / `IfcRigidOperation`
+  with `SourceCRS` set to the `IfcGeometricRepresentationContext` whose `ContextType` is `"Model"`
+  ([`research/kernels/ifcopenshell.md`](research/kernels/ifcopenshell.md) §Georeferencing).
+  **Which placement real exporters actually use is a separate measurement and has not been made** —
+  the discrepancy is recorded here rather than resolved, because reading one implementation does not
+  establish what the ecosystem does. The useful design finding from the same source is the *shape*:
+  a **single API that degrades**, where the caller asks for georeferencing and the library decides
+  which convention the schema supports — the right shape for our own `ifc/` layer.
 - **Status:** open
 
 ### R-13 · The topological naming problem
@@ -88,7 +126,24 @@ architecture.
   free-modelling direction.
 - **Accept:** some breakage is inevitable. Plan for visible, repairable failure rather than silent
   corruption.
-- **Status:** open — raised by [`research/prior-art/onshape.md`](research/prior-art/onshape.md)
+- **Status:** open — raised by [`research/prior-art/onshape.md`](research/prior-art/onshape.md).
+  **Partly addressed 2026-09-12** by
+  [`research/kernels/freecad-topological-naming.md`](research/kernels/freecad-topological-naming.md),
+  which supplies the mechanism and dated first-party evidence this entry previously asserted from
+  general knowledge: FreeCAD's element map does not give a topological entity a persistent
+  *identity*, it gives it a persistent **name string**, reconstructed after every recompute by
+  walking which OCCT-reported "generated" or "modified" sub-shape each new sub-shape came from. That
+  survives the common case — measured directly on a dimension change — and fails when a face splits
+  into pieces distinguishable only by an arbitrary index, when the merge set changes, or when a
+  feature is inserted earlier in the history. FreeCAD's own 1.0 release notes call it "not completely
+  solved", and three of the five cited issues were filed *after* 1.0 shipped.
+
+  **The design consequence the note adds, which this entry did not have:** memory-safety handle
+  stability and recompute-identity are **different problems at different layers**, and the kernel
+  spec's generational handles (§6) do not touch the second one. The proposed mitigation above —
+  semantic references — is unchanged and is still the available answer; what is now evidenced is why
+  no purely geometric scheme substitutes for it. The risk stays **open** because the boundary the
+  Action names, where semantic references become insufficient, is still unlocated (see also R-07).
 
 ### R-02 · The Manifold ↔ OCCT seam may lose information
 The hybrid hypothesis assumes fast mesh booleans on the interactive path and exact geometry at
@@ -108,7 +163,26 @@ implementation decides whether Blender is a candidate at all.
   bypassing Bonsai. Measure viewport interactivity and selection.
 - **Pass (for Blender):** interactive at 100k objects → the ceiling is Bonsai's, Blender reopens.
 - **Fail:** viewport degrades regardless → architectural, Blender is out.
-- **Status:** open
+- **Findings:** [`spikes/blender-ceiling/results/blender.md`](../spikes/blender-ceiling/results/blender.md),
+  read into [`research/kernels/blender.md`](research/kernels/blender.md) §Object-count ceiling
+  (R-03, partial).
+- **Status:** in progress — **half answered, and it is the half the register was uncertain about:
+  the ceiling is Blender's, not Bonsai's.** Measured headless through `bpy` with no add-ons, one
+  moved object costs **16.3 ms at 10 000 objects** and **332.1 ms at 100 000** — about twenty frames
+  — while the first full evaluation of the 100k scene costs 11.5 s and the scene occupies 6.2 GB
+  (≈63–65 kB per object). The same 1.2 M triangles held as **one** object cost **0.018 ms** per
+  update, so what is being counted is Blender datablocks, not geometry volume — and no add-on can
+  avoid that, because one IFC element must be one datablock for the element to be selectable and
+  attributable at all.
+
+  **What is not answered is R-03 as written**, which is about *viewport* interactivity: this is a
+  headless measurement, so draw-call batching, the outliner and selection are unmeasured — all of
+  which can make the number worse and none of which can make it better. A headless driver cannot
+  close that gap; a viewport measurement would be a different spike. The figure above is therefore a
+  **lower bound** that already consumes a frame budget at 10k objects. Blender is out as a *build
+  on* candidate on three independent grounds anyway (licence, float32 storage, no embedding path),
+  so this risk's remaining half no longer blocks a decision — it is kept for P-07, where it is the
+  evidence that per-object overhead is the scale ceiling to design against.
 
 ### R-04 · Standalone renderer effort may be prohibitive
 "Too expensive to build" is the strongest argument for adopting a host. It cannot be weighed
@@ -149,6 +223,18 @@ candidates we might build on or borrow from, and later our own kernel.
   single-operation, and the five candidates were handed materially different constructions of two
   of the ten cases — `cadkernel` refuses both of those two outright.
 
+  **The set must be extended before it is run against our own kernel (added 2026-09-12).** All ten
+  cases are built from **bit-identical** coordinates, which is exactly the input class a symbolic
+  tie-break wins: the set cannot distinguish exact predicates from a bit-equality tie-break, and
+  `research/kernels/problems.md` P-03 states that no ADR may cite the 9/10 as evidence that it can.
+  Cases whose coordinates are *not* bit-identical must be added, or the M5 run cannot tell which of
+  the two mechanisms our own kernel implements. This is `problems.md` **N-01**'s mitigation and it
+  is now named there and scheduled at spec §9 M5. Two further extensions the findings identify, both
+  cheap once the driver exists: at least one curved-surface pair (**P-12**, where OCCT's own tracker
+  concentrates and this set has nothing), and at least one *chained* sequence, since OCCT's Probe A
+  already shows tolerance compounding monotonically over eight fuses and no other candidate was
+  measured that way at all.
+
 ### R-17 · Precision far from the origin
 The tile-frame design assumes f64 local coordinates are necessary and sufficient.
 
@@ -161,8 +247,9 @@ The tile-frame design assumes f64 local coordinates are necessary and sufficient
   candidate×path combinations measured in one session, plus two added afterwards for `cadkernel`,
   with the local-frame mitigation measured on each candidate rather than assumed.
 - **Status:** in progress — measured for five candidates, and the two populations are cleanly
-  separated: **every f64 path passes** (OCCT 3.61e-10 m, CGAL Epick 1.29e-10 m, Manifold `Mesh64`
-  3.29e-11 m, all one to three ULP of a 5e5 m coordinate) and **every float32 path fails**
+  separated: **every f64 path passes** (OCCT **2.65e-10 m at its default setting and 3.61e-10 m at
+  fuzzy=1e-5**, CGAL Epick 1.29e-10 m, Manifold `Mesh64` 3.29e-11 m, all one to three ULP of a 5e5 m
+  coordinate) and **every float32 path fails**
   (Manifold `Mesh` 0.0186 m, CGAL f32-rounded 0.0348 m, Blender Exact 0.0348 m, Blender Manifold
   0.0435 m, Blender Fast 0.5 m), with three orders of magnitude of clear air between them and no
   candidate in between. That is the evidence ADR-0006 needs. `cadkernel`'s two f64 rows pass at

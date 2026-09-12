@@ -10,6 +10,12 @@ force) to "build our own multi-representation kernel in DynLex"
 [ADR-0004](../../architecture/decisions/0004-build-our-own-kernel-in-dynlex.md)). **Neither is
 settled.** This directory produces the evidence that accepts one and supersedes the other.
 
+**Closed 2026-09-12.** The evidence is in, assembled in [`synthesis.md`](synthesis.md), and it
+decided two of the three ADRs: **ADR-0005 and ADR-0006 are accepted**; **ADR-0004 is amended and
+stays `proposed`**, with three named acceptance conditions; and **ADR-0003 therefore remains in
+force and is not superseded.** The method below is unchanged and is what produced that outcome —
+including the rule that kept ADR-0004 proposed.
+
 ---
 
 ## The rule
@@ -85,40 +91,46 @@ Cases 4 and 5 are the ones that separate "works on the demo" from "works on a bu
 
 Grouped by the representation they are strongest in. A candidate may appear in two groups.
 
+**Every box below is ticked: each candidate has a note in this directory, and each note carries a
+verdict on all three axes.** [`synthesis.md`](synthesis.md) §1 is the completed matrix and §2 the
+three-axis verdict table, with each row linking the note's own `§Verdict`. A tick means *evaluated
+and decided*, never *recommended* — fourteen of the fifteen kernel-scale candidates are a **no** on
+the *build on* axis, and the fifteenth is a conditional shortlist for one arm.
+
 ### A — B-rep kernels
-- [ ] **OCCT** (Open CASCADE Technology) — tolerant B-rep, the kernel under FreeCAD and
+- [x] **OCCT** (Open CASCADE Technology) — tolerant B-rep, the kernel under FreeCAD and
       IfcOpenShell; the richest source of documented boolean and tolerance problems
-- [ ] **FreeCAD** as a case study on OCCT — the topological naming problem in production (R-13)
-- [ ] **Truck** and **Fornjot** — small B-rep kernels in Rust; useful for design clarity
-- [ ] **cadkernel**, the geometry under **Open CAD Studio** — a third Rust B-rep kernel, MPL-2.0
+- [x] **FreeCAD** as a case study on OCCT — the topological naming problem in production (R-13)
+- [x] **Truck** and **Fornjot** — small B-rep kernels in Rust; useful for design clarity
+- [x] **cadkernel**, the geometry under **Open CAD Studio** — a third Rust B-rep kernel, MPL-2.0
       and separable from its GPL application; f64 with a local-frame invariant, a typed boolean
       refusal, and provenance that writes untouched source records back unchanged
       ([`opencadstudio.md`](opencadstudio.md))
-- [ ] **Parasolid-class commercial kernels** — documentation-only reference for what "engineering
+- [x] **Parasolid-class commercial kernels** — documentation-only reference for what "engineering
       accuracy" is taken to mean in industry; not a candidate to build on
 
 ### B — Mesh and boolean libraries
-- [ ] **Blender** — BMesh, the exact boolean (and the earlier Carve/BMesh booleans it replaced —
+- [x] **Blender** — BMesh, the exact boolean (and the earlier Carve/BMesh booleans it replaced —
       a root-cause case), geometry-nodes evaluation, the GPU module
-- [ ] **Manifold** — fast, robust mesh booleans on manifold input; its constraints are the point
-- [ ] **CGAL** — exact predicates and constructions, Nef polyhedra, polygon mesh processing;
+- [x] **Manifold** — fast, robust mesh booleans on manifold input; its constraints are the point
+- [x] **CGAL** — exact predicates and constructions, Nef polyhedra, polygon mesh processing;
       the reference for what exactness costs
-- [ ] **libigl** — mesh arrangements and booleans; the research lineage behind Blender's exact
+- [x] **libigl** — mesh arrangements and booleans; the research lineage behind Blender's exact
       boolean
-- [ ] **OpenMesh** — half-edge data structure design reference
+- [x] **OpenMesh** — half-edge data structure design reference
 
 ### C — Point cloud and implicit
-- [ ] **PCL**, **Open3D**, **PDAL** — point cloud storage, indexing, filtering, normal estimation
-- [ ] **Potree** — out-of-core octree LOD for 10⁸–10⁹ points; the paging design reference
-- [ ] **OpenVDB** — sparse volumes and signed distance fields; the implicit-representation reference
-- [ ] **libfive** — implicit modelling with dual contouring / manifold contouring
+- [x] **PCL**, **Open3D**, **PDAL** — point cloud storage, indexing, filtering, normal estimation
+- [x] **Potree** — out-of-core octree LOD for 10⁸–10⁹ points; the paging design reference
+- [x] **OpenVDB** — sparse volumes and signed distance fields; the implicit-representation reference
+- [x] **libfive** — implicit modelling with dual contouring / manifold contouring
 
 ### D — IFC and the GPU path
-- [ ] **IfcOpenShell** — IFC parsing and geometry through OCCT, and its CGAL-based kernel option
-- [ ] **web-ifc / That Open Engine** (That Open Company) — IFC parsing and geometry written for
+- [x] **IfcOpenShell** — IFC parsing and geometry through OCCT, and its CGAL-based kernel option
+- [x] **web-ifc / That Open Engine** (That Open Company) — IFC parsing and geometry written for
       the browser; a different set of trade-offs from IfcOpenShell
-- [ ] **xBIM** — a third IFC implementation for disagreement analysis
-- [ ] **GPU paths**: Blender's GPU module and Vulkan backend, OCCT's visualisation layer, wgpu /
+- [x] **xBIM** — a third IFC implementation for disagreement analysis
+- [x] **GPU paths**: Blender's GPU module and Vulkan backend, OCCT's visualisation layer, wgpu /
       bevy, Filament, That Open's three.js-based viewer, and the DynLex graphics runtime itself —
       evaluated in [`../renderers/`](../renderers/), summarised here for the kernel's buffer
       layout decisions
@@ -153,11 +165,21 @@ Grouped by the representation they are strongest in. A candidate may appear in t
 
 ## Output of this directory
 
-1. The completed matrix, one row per candidate, every cell labelled.
-2. [`problems.md`](problems.md) complete for every candidate.
-3. A verdict per candidate on all three axes.
-4. Evidence tables filled for ADR-0004, 0005 and 0006 — after which each is accepted, amended,
-   or withdrawn, and ADR-0003 is superseded or reaffirmed.
+**[`synthesis.md`](synthesis.md)** — written 2026-09-12, and the single place all four outputs below
+now live:
+
+1. The completed matrix, one row per candidate, every cell labelled — [`synthesis.md`](synthesis.md) §1.
+2. [`problems.md`](problems.md) complete for every candidate — P-01 … P-31 and N-01 … N-04, with no
+   row left a bare `hypothesis`.
+3. A verdict per candidate on all three axes — [`synthesis.md`](synthesis.md) §2, each row linking
+   the note's own `§Verdict`.
+4. Evidence tables filled for ADR-0004, 0005 and 0006 — [`synthesis.md`](synthesis.md) §6.
+   **ADR-0005 and ADR-0006 accepted; ADR-0004 amended and kept `proposed`; ADR-0003 reaffirmed, not
+   superseded.**
+
+[`synthesis.md`](synthesis.md) §3 additionally carries the *borrow from* harvest grouped by the spec
+section each design lands in, §4 the spec sections the evidence contradicted and the amendment made
+to each, and §5 what is still unmeasured.
 
 The order of work, the spikes, and their pass/fail criteria are in
 [`../../superpowers/plans/2026-09-09-kernel-research-programme.md`](../../superpowers/plans/2026-09-09-kernel-research-programme.md).

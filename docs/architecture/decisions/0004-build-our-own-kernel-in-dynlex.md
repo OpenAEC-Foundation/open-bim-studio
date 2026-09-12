@@ -2,6 +2,9 @@
 
 **Status:** proposed
 **Date:** 2026-09-09
+**Reviewed:** 2026-09-12 — amended on the evidence and **kept `proposed`**. The three conditions
+that would accept it are named in §Consequences, "What must be true before this ADR is accepted".
+The reasoning is in [`docs/research/kernels/synthesis.md`](../../research/kernels/synthesis.md) §6.3.
 
 ## Context
 
@@ -28,6 +31,34 @@ only if the research shows that no candidate can meet a requirement we are unwil
 This ADR stays `proposed` until the evidence table below is filled. Until then ADR-0003 remains
 in force and no kernel code is written (spec §0, header).
 
+**Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §6.3 — the evidence
+table below is now filled, and it does not accept this ADR.** Two things changed against the
+paragraph above.
+
+**First, the "early finding" hardened into twenty-one evaluated candidates, and the claim it
+supported is too strong.** Fourteen of the fifteen kernel-scale candidates are a clear *no* on the
+*build on* axis, each for a recorded reason — a GPL licence or a GPL boolean, float32 storage or
+float32 at the API boundary, no invalidation mechanism, no embeddable surface, an archived project,
+or library rather than kernel scope. **The fifteenth is not a no.** `cadkernel`, the MPL-2.0 B-rep
+crate under Open CAD Studio, is a *conditional shortlist* for the B-rep arm
+([`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Verdict (a)): f64
+throughout, generational typed handles, a typed refusal, and an identity residual of exactly 0 on
+every torture case that ran. What holds it back is cost and maturity — three of ten benchmark cases
+produce nothing, it is 5–110× slower than the other candidates, single-threaded, one
+representation, no exact predicates, 34 days old with no release, and its C ABI does not exist and
+would be ours to write — not an assumption the product cannot accept. The claim is therefore
+narrowed: *no candidate can supply the kernel; one candidate is a live, priced option for one of
+its four arms.*
+
+**Second, the DynLex half is contradicted by its own spike.** R-18 **failed**: 20k lines compile in
+72.19 s against a 30 s pass line and 50k in 1146.72 s, with the implied exponent worsening from 1.89
+to 3.03. R-19 passes at 1.12× / 1.23× / 1.01× **only with an explicit `-O` flag** — unflagged the
+same workloads are 9.09× / 6.78× / 21.14×. And the compiler cannot emit a compute entry point at
+all (`problems.md` P-28), which spec §6 item 4, §7 `gpu/` and §9 M7 assume it can.
+
+That is why this ADR is amended rather than accepted, and why the fallback ADR-0003 names is still
+the decision in force.
+
 ## Decision
 
 We build our own geometry kernel, written in DynLex.
@@ -50,6 +81,15 @@ together. Remains available as a fallback if the DynLex evidence in this ADR fai
 fallback is the reason the research programme keeps evaluating candidates in parallel with the
 spikes below, rather than stopping once this ADR is proposed.
 
+**Amended 2026-09-12.** "No candidate offers f64-precision paths, multi-representation breadth and a
+compatible licence together" survives; "every candidate forces a choice between the product's
+requirements and the kernel's assumptions" does not, for one candidate. `cadkernel` is MPL-2.0
+(links from a differently licensed product), f64 with zero f32 in the modelling path, and refuses
+rather than answers wrongly. It is single-representation, which is why it could only ever fill one
+of ADR-0005's four arms — and that possibility is now split out as Options D and E below, because a
+rejected option has to be recorded as the specific thing it is, not folded into "the status quo".
+This option, as written, remains the fallback in force while this ADR is `proposed`.
+
 ### Option B — write our own kernel in an established systems language
 Rust, C++ or similar. Removes the language-maturity risk entirely: SIMD codegen, threading, and
 memory-mapped I/O are solved problems in these ecosystems, and the kernel would not be blocked on
@@ -70,19 +110,106 @@ the paper-thin line between "differentiator" and "the classic way ambitious mode
 fail" that ADR-0003 warned about — the evidence table below exists to keep that line honest rather
 than assumed.
 
+**Amended 2026-09-12.** The costs this option names are no longer estimates. "DynLex has never
+compiled or run a program at this scale" is now measured in both directions: it **runs** kernel-shaped
+code at 1.12× / 1.23× / 1.01× of C++ `-O2` with bit-identical output, and it **compiles** 20k lines in
+72.19 s against a 30 s budget, with the cost scaling superlinearly and worsening. And the extension
+list in spec §8 was incomplete: a SPIR-V compute entry point is missing from it and is assumed by
+three other sections.
+
+### Option D — port `cadkernel` from Rust to DynLex as the content of the first kernel milestones
+
+**The maintainer's proposal, 2026-09-11.** Rather than writing the B-rep arm from a blank file, port
+the MPL-2.0 Rust crate `cadkernel` into DynLex module by module, extending DynLex where the port
+needs facilities the language lacks — so M1–M5 produce both a working B-rep arm and the compiler
+work the kernel needs anyway.
+
+**For.** The design is already close to the spec's, independently arrived at: generational typed
+handles in an arena (spec §6's mechanism), f64 throughout with zero f32 in the modelling path
+(ADR-0006), a translation-only local frame stated as a contract (spec §5), a scale-derived operation
+tolerance, a typed refusal that names the class of input that defeated the operation (spec §12), and
+provenance on every node that our spec does not have. It is small enough to read end to end — 336
+commits, two contributors — and its API is `Result`-shaped throughout. Porting is also the cheapest
+honest way to find DynLex's real gaps: a port has a reference implementation to diff against, so a
+codegen or type-inference defect shows up as a wrong number rather than as a design argument. And
+unlike Option E it leaves no FFI seam and no second toolchain.
+
+**Against, and these are the reasons it is not adopted here:**
+
+1. **Licence.** MPL-2.0 is *file-level* copyleft (`problems.md` **P-14**). A port is a derivative of
+   the ported files, so those files stay MPL-2.0 and every modification to them must be published —
+   in a kernel where those files are the B-rep arm, not a leaf. That is a real constraint on any
+   later licence choice for the whole, and it must be decided deliberately rather than discovered.
+2. **R-18 lands squarely on it.** A B-rep arm of this size is exactly the program R-18 measured:
+   20k lines compile in **72.19 s** today and the exponent worsens above it. The port *is* the
+   program the compile-scale result says cannot yet be built at an acceptable cost.
+3. **It inherits the two designs ADR-0006 decides against.** cadkernel classifies by tolerance
+   comparison and has **no exact predicates** (`robust` is listed as planned, not present), and it
+   has no per-entity tolerance. A line-by-line port would import exactly the mechanism ADR-0006
+   exists to replace, and then have to unpick it.
+4. **It is one representation.** ADR-0005 needs four; the port supplies one arm and none of the
+   mesh, point-cloud or implicit work.
+5. **The measured profile is the slowest in the torture file** — `overlap_half` ∪ at 32.256 ms
+   against 4.62 (OCCT), 3.21 (Blender Exact), 0.380 (CGAL) and 0.293 (Manifold) — and the note traces
+   it to source: the imprint's face pairing is O(n·m) with an AABB reject and **no spatial index**.
+   A port carries that scaling property across with the code.
+6. **It is 34 days old at the pinned commit, with no tags and no crates.io release**, so what would
+   be ported is a moving target with no stability contract.
+
+**What would change the answer.** If R-18 is fixed and cadkernel gains lump/shell containment and
+exact predicates upstream, a *selective* port — the topology arena, the provenance model, the typed
+refusal, the tolerance formula, read as a reference rather than transliterated — becomes the
+cheapest way to build the B-rep arm, and the licence question then applies only to the files actually
+derived. That is a different proposal from a wholesale port and should be written as one.
+
+### Option E — build on `cadkernel` behind a C-ABI shim
+
+Keep the Rust crate as a linked dependency and reach it from DynLex through a C ABI we write.
+
+**For.** MPL-2.0 permits linking from a differently licensed product with no obligation beyond the
+MPL files themselves. It is the only *build on* candidate this research produced for the B-rep arm;
+it is f64 throughout; its identity residual is exactly 0 on every case that ran; it kept the 1e-7 m
+slab at its specified volume where OCCT degraded it at construction and Manifold deleted it
+silently; and it is deterministic across ten runs where two other candidates are not. The API is
+small enough to wrap: `combine`, `imprint`, the `make` constructors, `tessellate`, `validate`,
+`lift`/`append`.
+
+**Against.** There is **no** C-callable surface to build on — zero `extern "C"`, zero `#[no_mangle]`,
+zero `#[repr(C)]`, no `cdylib` — so the shim and its maintenance are entirely ours, over an API five
+weeks old. It refuses three of ten benchmark cases, and two of those refusals are in the constructor
+rather than the boolean, so whether `combine` can cut a wall with twelve openings is
+**unmeasurable** until lumps carry containment. It is single-threaded by design, has no spatial
+index, no exact predicates and no per-entity tolerance. And it reintroduces precisely the FFI seam
+Option C exists to remove, plus a second toolchain in the build.
+
+**Both D and E are recorded as rejected-for-now rather than dismissed.** If the acceptance conditions
+below are not met — in particular if R-18 cannot be fixed — Option E is the cheapest path to a
+working B-rep arm and should be re-evaluated before Option B, because it is the only one whose
+licence, precision model and refusal discipline this research has already checked.
+
 ## Evidence
 
 > Every claim the decision rests on, with where it is shown. An ADR with an empty cell in this
 > table stays `proposed`. Evidence type is **measured** (a `spikes/*/FINDINGS.md`), **claimed**
 > (documentation or a third party, with URL) or **inferred** (reasoning shown in the note).
 
+**Amended 2026-09-12.** Every row is now filled, three rows are added, and two rows carry **negative**
+evidence. The first row's claim is narrowed to what the research supports; the rows marked ✗ are the
+reason this ADR stays `proposed`.
+
 | Claim | Where shown | Evidence type |
 |---|---|---|
-| No candidate can be built on without a disqualifying assumption | `kernels/occt.md` §Verdict, `kernels/ifcopenshell.md` §Verdict, `kernels/web-ifc.md` §Verdict, `kernels/manifold.md` §Verdict, `kernels/cgal.md` §Verdict | |
-| DynLex compiles kernel-shaped code within the compile-time budget | `spikes/dynlex-scale/FINDINGS.md` (R-18) | |
-| DynLex runs kernel-shaped code within 1.5× of C++ -O2 | `spikes/dynlex-performance/FINDINGS.md` (R-19) | |
-| DynLex can be extended for threading and memory mapping | `kernels/dynlex-readiness` section of `spikes/dynlex-scale/FINDINGS.md` | |
-| Per-object overhead is the cause of scale ceilings we must avoid | `kernels/problems.md` P-07, `spikes/blender-ceiling/FINDINGS.md` (R-03) | |
+| Fourteen of the fifteen kernel-scale candidates cannot be built on, each for a recorded reason — GPL licence or GPL boolean, float32 storage or float32 at the API boundary, no invalidation mechanism, no embeddable surface, an archived project, or library rather than kernel scope | [`kernels/synthesis.md`](../../research/kernels/synthesis.md) §2, the *Build on* column, which links each note's own §Verdict: [`occt.md`](../../research/kernels/occt.md), [`blender.md`](../../research/kernels/blender.md), [`manifold.md`](../../research/kernels/manifold.md), [`cgal.md`](../../research/kernels/cgal.md), [`libigl-openmesh.md`](../../research/kernels/libigl-openmesh.md), [`implicit.md`](../../research/kernels/implicit.md), [`pointclouds.md`](../../research/kernels/pointclouds.md), [`truck-fornjot.md`](../../research/kernels/truck-fornjot.md), [`ifcopenshell.md`](../../research/kernels/ifcopenshell.md), [`web-ifc.md`](../../research/kernels/web-ifc.md), [`xbim.md`](../../research/kernels/xbim.md) | **measured** where a spike decided it (Blender's float32, web-ifc's float32 and broken invalidation, IfcOpenShell's missing dependency tracking, PCL's float32), **source** for the absences (no `extern "C"`, no C ABI), **claimed** for the licences |
+| ✗ **The fifteenth candidate is not disqualified.** `cadkernel` is a *conditional shortlist* for the B-rep arm: MPL-2.0, f64 throughout, an identity residual of exactly 0 on every case that ran — held back by cost and maturity (3 of 10 cases produce nothing, 5–110× slower, single-threaded, one representation, no exact predicates, 34 days old, no C ABI), not by an assumption the product cannot accept | [`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §Verdict (a); [`spikes/boolean-torture/FINDINGS.md`](../../../spikes/boolean-torture/FINDINGS.md) §Added after assembly — cadkernel | **measured** — and it is why the row above says *fourteen*, not *every*. Options D and E exist for it |
+| ✗ **DynLex does not compile kernel-shaped code within the compile-time budget.** 20k lines take **72.19 s** against a 30 s pass line; 50k lines take **1146.72 s**; the implied exponent worsens from 1.89 (5k→20k) to **3.03** (20k→50k). Memory is not the problem (2.8 GB at 50k) and neither is correctness (zero diagnostics, every binary matched an independent computation) | [`spikes/dynlex-scale/FINDINGS.md`](../../../spikes/dynlex-scale/FINDINGS.md) (R-18) §Results, §Verdict, §What this means for ADR-0004 | **measured**, and **negative**. The findings' own words: "the ADR should not move to `Accepted` on this row until it is fixed and remeasured" |
+| DynLex runs kernel-shaped code within 1.5× of C++ `-O2` — 1.12× (triangle/triangle), 1.23× (BVH build), 1.01× (orient3d), with **bit-identical output** in both languages at both optimisation levels | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) (R-19) §Results, §Verdict | **measured** |
+| …**conditional on an explicit `-O` flag.** The compiler's default emitted-code level is `-O0`, verified in-repo by comparing a no-flag build against an explicit `-O0` build after neutralising the linker's embedded timestamp; unflagged the same workloads are 9.09× / 6.78× / 21.14× and would fail the criterion | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) §Method (Flags), §Verdict | **measured** |
+| ✗ **DynLex cannot compile a GPU compute kernel at all**, which spec §6 item 4, §7 `gpu/` and §9 M7 assume it can: the shader stage is a two-member enum, the CLI accepts only `vertex` or `fragment`, and the runtime has zero `vkCmdDispatch`, zero compute pipelines and zero storage buffers | [`kernels/problems.md`](../../research/kernels/problems.md) **P-28**; [`research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The gap list, §Risks | **source** (an absence, established by a stated grep rule over a pinned commit) |
+| The DynLex graphics runtime cannot draw the target scene either: a 32 MiB per-frame transient arena is the only path to the GPU, holding **25 890 twelve-triangle boxes**, so 10⁵ boxes fail rather than slow down | [`kernels/problems.md`](../../research/kernels/problems.md) **P-27**; [`research/renderers/gpu-paths.md`](../../research/renderers/gpu-paths.md) §The DynLex graphics runtime in detail | **source** + **inferred** (the arithmetic is shown; the failure was not observed) |
+| Two language facilities the kernel will need are missing — no unsigned integers or logical right shift (`shift right` lowers to `ashr`), and scientific-notation float literals are rejected. Neither blocked a workload; both were worked around identically in both languages | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) §Language facilities that were missing | **measured** (runtime behaviour) + **source** (the lowering) |
+| DynLex can be extended for threading and memory mapping — asserted, and **not** established by any spike. R-18 measured compile time and R-19 measured runtime; neither measured threading, SIMD or mapped allocation, and neither exists in the runtime today | [`spikes/dynlex-performance/FINDINGS.md`](../../../spikes/dynlex-performance/FINDINGS.md) §What this does not settle ("Nothing here is parallel or SIMD"); spec §8 | **unknown** — the original row pointed at a "`kernels/dynlex-readiness`" section that does not exist. Recorded as an open item rather than a filled cell |
+| Per-object overhead is the cause of scale ceilings we must avoid: one moved object costs **16.3 ms at 10k objects and 332.1 ms at 100k** in Blender, at ≈63–65 kB per object, while the same 1.2 M triangles as one object cost 0.018 ms — so the quantity being counted is datablocks, not geometry | [`kernels/problems.md`](../../research/kernels/problems.md) **P-07**; [`kernels/blender.md`](../../research/kernels/blender.md) §Object-count ceiling (R-03, partial); [`spikes/blender-ceiling/results/blender.md`](../../../spikes/blender-ceiling/results/blender.md) | **measured** (headless; the viewport half of R-03 is unmeasured and a headless driver cannot measure it) |
+| Generational handles in an arena are not a novel bet: a shipping B-rep kernel arrived at the same mechanism independently | [`kernels/opencadstudio.md`](../../research/kernels/opencadstudio.md) §1, Topology | **source** |
 
 ## Consequences
 
@@ -101,12 +228,50 @@ before earlier ones pass their exit criteria, DynLex compiler defects fixed in d
 worked around in the kernel (spec §8, §12), and the performance targets of spec §10 measured and
 recorded rather than assumed.
 
-**What we would have to change to reverse it:** fall back to Option A or Option B above. Reversal
+**What we would have to change to reverse it:** fall back to Option A, B, D or E above. Reversal
 after M0 discards the kernel skeleton but not the research — `docs/research/kernels/` and
 `problems.md` remain valid evidence for evaluating any replacement candidate.
+
+## What must be true before this ADR is accepted
+
+Added 2026-09-12. These are conditions, not aspirations: each names the measurement or the change
+that closes it, and the ADR stays `proposed` until all three are met. Until then **ADR-0003 remains
+in force**, the kernel spec stays a working hypothesis, and the M0 repository restart (spec §9, §13)
+does not start.
+
+1. **R-18 passes, on a clean compiler pin.** The compile-scale defect is root-caused and fixed in
+   dynlex per its own procedure — a minimal reproducer first, not a workaround in the kernel — and
+   the spike is re-run against the commit `metadata/DYNLEX_COMMIT` will pin, because the measured
+   binary was built from a **dirty** tree whose six modified files are all in type inference, the
+   phase this spike loads hardest. The cheap and most useful next step the findings name: separate
+   whether the cost scales with pattern count, call-site count or lines, and whether it is per-file
+   or whole-program — the second question decides whether separate compilation rescues the developer
+   loop even if whole-program compilation stays slow. Tracked here as
+   [R-18](../../risks.md); the fix itself belongs on the dynlex tracker, where
+   [issue #7](https://github.com/OpenAEC-Foundation/dynlex/issues/7) is the place these findings are
+   to be carried — its contents were not read into this repository and are not evidence here.
+2. **The GPU compute gap is resolved one way or the other.** Either the `GLCompute` entry point,
+   workgroup builtins, storage buffers, barriers and a memory model are scoped as a dynlex extension
+   and placed in spec §8's table with the milestone that needs them — or spec §6 item 4 and §9 M7 are
+   rewritten to run that work on CPU threads and §10's targets are rechecked against that. The spec
+   now states the fallback; what it does not yet have is the decision. **P-28**.
+3. **The kernel's build passes an explicit `-O` flag**, and any future performance measurement that
+   omits it is treated as a false failure. Spec §8 now records this; the condition is that
+   `scripts/build.sh` actually does it at M0.
+
+**A fourth thing that is not a condition but must be decided before M1:** whether the B-rep arm is
+written, ported (Option D) or linked (Option E). The research priced all three and the decision is
+not forced by this ADR — but taking Option D or E changes the licence position (MPL-2.0 file-level
+copyleft, **P-14**) and must be recorded as its own ADR rather than absorbed here.
 
 ## Sources
 
 - [DynLex design spec](../../superpowers/specs/2026-09-09-geometry-kernel-design.md)
 - [Kernel research method](../../research/kernels/README.md)
 - [Known problems in geometry kernels](../../research/kernels/problems.md)
+- [Kernel research synthesis](../../research/kernels/synthesis.md) — the assembled evidence, the
+  three-axis verdict per candidate, and the reasoning behind keeping this ADR `proposed`
+- [R-18 findings, DynLex compile scale](../../../spikes/dynlex-scale/FINDINGS.md)
+- [R-19 findings, DynLex runtime performance](../../../spikes/dynlex-performance/FINDINGS.md)
+- [R-01 findings, incremental evaluation](../../../spikes/incremental-evaluation/FINDINGS.md)
+- [GPU paths across six engines, and the DynLex runtime's gap list](../../research/renderers/gpu-paths.md)
