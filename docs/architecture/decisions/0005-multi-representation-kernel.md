@@ -98,6 +98,19 @@ confirm or refute before the ADR can leave `proposed`. Costs four representation
 (`problems.md` N-03) and a boolean implementation per representation instead of one, which is an
 explicit, accepted trade rather than an oversight.
 
+> **Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §4.** Two
+> sentences above are retracted, and the paragraph is kept as written so the retraction is
+> visible. **"is, per spec §4, the only known approach robust on arbitrary input"** overstates
+> what the research found and is withdrawn — spec §4 itself now records that it *used to say* it,
+> and the Decision section above gives the numbers: **11 FAIL / 3 neither-pass-nor-fail / 1 PASS**
+> across the fifteen candidate × setting combinations, with **both** exact-arrangement
+> implementations measured failing. The exact arrangement is what this option *chooses*, not a
+> measured winner. **"before the ADR can leave `proposed`"** is likewise stale: R-16 has run, and
+> this ADR is **accepted** (see the Status block) with its evidence row for that claim marked
+> *not shown* — what would settle it is R-16 re-run against our own kernel on a set whose
+> coordinates are not bit-identical (`problems.md` N-01). Nothing else in this option changes:
+> four equal representations with explicit conversion remains the decision.
+
 ## Evidence
 
 > Every claim the decision rests on, with where it is shown. An ADR with an empty cell in this

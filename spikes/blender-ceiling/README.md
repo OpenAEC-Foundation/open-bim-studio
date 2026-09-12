@@ -36,13 +36,15 @@ P-07 is about.
 
 ```
 blender_driver.py      the driver (runs inside Blender's own Python)
+FINDINGS.md            the numbers against R-03's criterion, and what they do not settle
 results/blender.md     raw results
 ```
 
-What the numbers mean, and what they do not settle, is in
+[`FINDINGS.md`](FINDINGS.md) applies R-03's criterion to the rows in `results/blender.md` and adds
+no measurement of its own. The candidate-facing reading — what the numbers mean for Blender as a
+host — is in
 [`../../docs/research/kernels/blender.md`](../../docs/research/kernels/blender.md) §Measurements
-and §Incremental evaluation — the depsgraph. This spike has no `FINDINGS.md` of its own because
-its result feeds one candidate note rather than a cross-candidate comparison.
+and §Incremental evaluation — the depsgraph.
 
 ## Running it
 

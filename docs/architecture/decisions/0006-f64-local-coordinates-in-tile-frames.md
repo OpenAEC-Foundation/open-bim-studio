@@ -7,6 +7,17 @@
 
 ## Context
 
+**Amended 2026-09-12 per [`synthesis.md`](../../research/kernels/synthesis.md) §6.4: this ADR is
+independent of ADR-0004's outcome.** The Context below — "Building our own kernel (ADR-0004)
+removes that constraint" — reads as though this decision followed from ADR-0004, and it does not.
+This decision does not say who writes the kernel; it constrains *which* kernel may be built on —
+in the synthesis' words, "ADR-0006 constrains *which* kernel may be built on — it rules out every
+float32 path measured". A candidate whose coordinates are float32 fails the
+precision requirement whether we write it, link it or buy it (`kernels/pointclouds.md`,
+`kernels/blender.md`, `kernels/web-ifc.md`), and every f64 candidate satisfies the storage half
+without our writing a line. ADR-0004 is therefore not a premise of this ADR, and this ADR does not
+contradict ADR-0003, which is still in force.
+
 `docs/domain/spatial-model.md`, written during phase 1, proposed f32 local coordinates within a
 tiled coordinate architecture: a 64-bit origin per tile in the project's projected CRS, with
 geometry stored relative to that origin in 32-bit floating point. That proposal targeted a kernel

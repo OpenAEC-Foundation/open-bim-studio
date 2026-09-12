@@ -400,8 +400,8 @@ not a plane or a cylinder, and the representation cannot express it.
 ([`scalar.rs#L20-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L20-L24)),
 restricted to finite, non-NaN values by its constructor, `from_f64`, which panics on either
 condition
-([`#L53-L55`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L53-L55),
-the NaN check; the infinite check follows immediately after). `decorum::R64` is not the struct's
+([`#L54-L59`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L54-L59),
+the NaN check and the infinite check, one after the other). `decorum::R64` is not the struct's
 storage type — it is used only inside the `Eq`/`Hash` impls, converting `self.value` to `R64` for
 the comparison or hash so the two stay consistent with each other
 ([`#L192-L199`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L192-L199),
@@ -567,7 +567,7 @@ is real but scoped narrower than OCCT's, and Fornjot has no boolean at all.
    `Matrix4` (§Truck, Booleans; Truck issue #128) — the exact failure mode Truck's own tracker
    documents.
    Source: [`scalar.rs#L20-L24`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L20-L24) (struct);
-   [`#L53-L55`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L53-L55) (the NaN/infinite panic).
+   [`#L54-L59`](https://github.com/hannobraun/fornjot/blob/7e856686b8105d21ce4673c10622f6ef206b89af/crates/fj/src/core/math/scalar.rs#L54-L59) (the NaN/infinite panic).
 
 ### Avoid
 

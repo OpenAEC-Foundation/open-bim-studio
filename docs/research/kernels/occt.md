@@ -419,14 +419,21 @@ model, and openings per wall there are far fewer, so treat it as an order-of-mag
 rather than a prediction. And 50 ms is three frames at 60 Hz: re-cutting one wall during a drag
 gesture is not free at OCCT's speed.
 
-Fuzzy settings changed no result on this set except by raising the result's tolerance: every
-volume, every identity residual and every validity verdict is identical across `default`,
-`fuzzy=1e-5` and `fuzzy=1e-3`, while the result's maximum entity tolerance rises to roughly
-fuzzy/2 wherever an interference had to be resolved. That is the important negative: **fuzzy did
-not fix anything here, it only made the answer vaguer.** The claim survives the operand rebuild —
-each setting now runs on freshly constructed operands rather than on operands a dozen booleans
-old, so the identical results are genuinely the setting's doing and not an artefact of the three
-settings sharing one progressively mutated pair.
+Fuzzy settings changed no result on this set except by raising the result's tolerance. Every
+volume and every validity verdict is identical across `default`, `fuzzy=1e-5` and `fuzzy=1e-3`,
+and the identity residuals differ at the 1e-16 level in exactly one case —
+`near_degenerate_triangle`, 2.22e-16 at `default` and 0 at both fuzzy settings; every other
+case's residual is bit-identical across the three settings. The maximum entity tolerance rises to
+roughly fuzzy/2 on **two** cases only, `sliver` (1.76e-07 → 5.1e-06 → 0.0005) and
+`wall_with_openings` (1.5e-07 → 5.1e-06 → 0.0005); seven cases stay at 1e-07 at all three
+settings, and `near_degenerate_triangle` rises once, to 1.02e-06, and then stops — it is the same
+value at `fuzzy=1e-3` as at `fuzzy=1e-5`. Rows:
+[`results/occt.md`](../../../spikes/boolean-torture/results/occt.md) §Results. That is the
+important negative: **fuzzy did not fix anything here, it only made the answer vaguer.** The claim
+survives the operand rebuild — each setting now runs on freshly constructed operands rather than
+on operands a dozen booleans old, so the near-identical results are genuinely the setting's doing
+and not an artefact of the three settings sharing one progressively mutated pair; the one 1e-16
+residual difference is below any threshold R-16 applies and is recorded rather than smoothed over.
 
 ### Precision set (R-17) — passes
 

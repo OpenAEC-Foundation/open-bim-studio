@@ -635,7 +635,7 @@ For every row in ADR-0004/0005/0006, the *Where shown* cell now points at an exi
 
 - [ ] **Step 3: Decide**
 
-For each ADR: `accepted`, or amended (edit Decision and Evidence, keep `proposed` for another round), or `withdrawn` with the reason. If ADR-0004 is accepted, ADR-0003's status becomes `superseded by [ADR-0004](0004-build-our-own-kernel-in-dynlex.md)`; if withdrawn, ADR-0003 is reaffirmed and the M0 plan is retired. Update the spec status and amend sections the synthesis marked.
+For each ADR: `accepted`, or amended (edit Decision and Evidence, keep `proposed` for another round), or `withdrawn` with the reason. If ADR-0004 is accepted, ADR-0003's status becomes `superseded by [ADR-0004](../../architecture/decisions/0004-build-our-own-kernel-in-dynlex.md)`; if withdrawn, ADR-0003 is reaffirmed and the M0 plan is retired. Update the spec status and amend sections the synthesis marked.
 
 - [ ] **Step 4: Verify traceability**
 

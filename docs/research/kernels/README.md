@@ -156,8 +156,12 @@ sixteen cannot supply the kernel and the seventeenth is a conditional shortlist 
 
 - Every note records the **version or commit hash** of the source it read, and links to files
   and line ranges at that commit, not at `main`.
-- Every claim is labelled **claimed / measured / inferred** and carries a URL, an issue number,
-  a paper, or a `spikes/<name>/FINDINGS.md`.
+- Every claim is labelled **claimed / measured / inferred / source / unknown** and carries a URL,
+  an issue number, a paper, or a `spikes/<name>/FINDINGS.md`. **source** means read directly in the
+  pinned source at the commit the note records — including an *absence* established by a stated
+  grep rule — as distinct from **claimed**, which is what documentation or a third party says.
+  **unknown** means the claim is not established by any note or spike and is recorded as an open
+  item rather than a filled cell.
 - Every note names the **decision it serves** (an ADR number or a spec section) in its header.
 - [`problems.md`](problems.md) is the cross-cutting index: problem → root cause → which
   candidates → evidence. It is updated by every note, not written once.
