@@ -487,9 +487,10 @@ above 1e-6 relative."**
 
 **The failures are of a different kind from every other candidate's, and the distinction is the
 point of running it.** Under the identity reading (a) fixed in §Verdict against R-16 above, the
-residual is **exactly 0 on every case that ran, at every setting** — the only candidate in this file
-with no non-zero residual anywhere, where the next tightest is CGAL's 7.11e-15 and the loosest
-OCCT's 3.33e-08. Under the expectation reading (b), **no case that ran returned a wrong volume**:
+residual is **exactly 0 on every case that ran, at every setting** — the only candidate whose
+residual is 0 at every setting; CGAL's f32-rounded row is also 0 on the cases it completed, and
+like Manifold's and CGAL's figures, cadkernel's excludes the cases it refused (three). Under the
+expectation reading (b), **no case that ran returned a wrong volume**:
 the seven valid cases are correct to the digit, `touching_vertex` keeps both cubes where Blender's
 Exact solver silently lost one, and `sliver`'s intersection comes back at 9.99999999474e-08 m³ —
 the reference mesh's own signed volume to every digit, against OCCT's 0 and Manifold's silent

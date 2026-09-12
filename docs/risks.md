@@ -143,9 +143,11 @@ candidates we might build on or borrow from, and later our own kernel.
   candidate, `cadkernel` at `953d546b`, fails at all three settings for a different reason from
   every other: it **refuses** rather than answers wrongly — 7/10 valid and correct at the derived
   tolerance and at 1e-9, 6/10 at 1e-6, with an identity residual of exactly 0 on every case that
-  ran, the only such row in the file. Not resolved: our own kernel is not measured, the set is
-  planar and single-operation, and the five candidates were handed materially different
-  constructions of two of the ten cases — `cadkernel` refuses both of those two outright.
+  ran, the only candidate whose residual is 0 at every setting; CGAL's f32-rounded row is also 0
+  on the cases it completed, and like Manifold's and CGAL's figures, cadkernel's excludes the
+  cases it refused (three). Not resolved: our own kernel is not measured, the set is planar and
+  single-operation, and the five candidates were handed materially different constructions of two
+  of the ten cases — `cadkernel` refuses both of those two outright.
 
 ### R-17 · Precision far from the origin
 The tile-frame design assumes f64 local coordinates are necessary and sufficient.

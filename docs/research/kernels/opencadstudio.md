@@ -719,9 +719,10 @@ Naming the residue rather than writing "more research needed":
   most for BIM shapes.
 - **Its boolean is now measured, and does not complete three of ten benchmark cases** —
   `shared_edge`'s union is refused with `Snag::CutRefused`, and two cases' operands `faceted_solid`
-  will not build at all. It is also the slowest of the five candidates measured on that set — 7× to
-  110× on `overlap_half` ∪ (§Measurements). Beyond that spike nothing about it is measured, by
-  us or, as far as the repositories show, by anyone: there is no benchmark suite in either crate.
+  will not build at all. It is also the slowest of the five candidates measured on that set — roughly
+  5–7× against OCCT (cross-session drift observed: 23.2–32.3 ms on `overlap_half` ∪) and 110×
+  against Manifold (§Measurements). Beyond that spike nothing about it is measured, by us or, as far
+  as the repositories show, by anyone: there is no benchmark suite in either crate.
 - **The documented local-frame invariant is not implemented.** `Frame` is constructed at no call
   site in `src/brep/` (the correction in §Precision), so a documented contract and the code disagree
   — which is a maintenance signal as much as a precision one.
@@ -795,7 +796,8 @@ Concretely, what taking it would mean:
   is a day's work now that the driver exists, and the driver is committed beside the results.
 - **What the spike does not touch.** Performance is the one measured column that argues against:
   0.740 – 50.748 ms per boolean at the derived tolerance. On `overlap_half` ∪ that is 32.256 ms
-  against the other four's 4.62, 3.21, 0.380 and 0.293 — **7× to 110× slower**, despite being the
+  against the other four's 4.62, 3.21, 0.380 and 0.293 — **roughly 5–7× against OCCT (cross-session
+  drift observed: 23.2–32.3 ms on overlap_half ∪) and 110× against Manifold**, despite being the
   only candidate with no binding layer — and the ten-case set cannot see how that scales. Precision adds nothing either way — R-17 passes at 0 m, but on
   two cases whose coordinates make 0 m arithmetic rather than evidence (§Measurements).
 

@@ -103,9 +103,10 @@ It writes [`results/opencadstudio.md`](results/opencadstudio.md). Two settings r
 
 One section of that file has to be read before its table: cadkernel's crate documentation states a
 coordinate policy — every entry point lifting its input into a local frame before doing any
-arithmetic — and the driver **measures whether that policy is wired**, because if it were, a 500 km
-offset would be invisible to the kernel and the table would be measuring the lift instead of the
-f64 path. It also carries the tile-frame mitigation probe as a caller-side round trip through
+arithmetic — and the driver **records a source reading** (grep rule and output shown in the
+results file), showing whether that policy is wired; if it were, a 500 km offset would be
+invisible to the kernel and the table would be measuring the lift instead of the f64 path.
+It also carries the tile-frame mitigation probe as a caller-side round trip through
 `brep::place::transform`, since this candidate does not carry the frame for the caller.
 
 ## Rules
