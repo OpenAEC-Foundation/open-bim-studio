@@ -15,8 +15,9 @@ beheerd. De standaardcheckout is
 python -B spikes/dynlex-dwg-viewer/verify.py
 ```
 
-De verificatie bouwt een kleine DWG met zes entiteittypen, leest deze terug,
-controleert de segmenten en tekent ze vanuit DynLex in een verborgen
+De verificatie bouwt een kleine DWG met lijnen, cirkels, bogen, ellipsen,
+polylijnen, 3D-vlakranden en een blokreferentie. Ze leest die terug,
+controleert de uitgeklapte segmenten en tekent ze vanuit DynLex in een verborgen
 GPU-venster bij O0 en O2. Het testbestand komt onder de `build/`-map van de
 DynLex-checkout. Na de test verwijdert het script alleen bronbestanden die het
 zelf in de checkout heeft geplaatst.
@@ -35,8 +36,9 @@ de DWG-reader bevat. Bediening: slepen om te verschuiven, Q/E om te zoomen,
 pijlen om te roteren, 1 voor bovenaanzicht, 2 voor 3D-aanzicht, 0 voor
 reset en Escape om af te sluiten.
 
-De eerste viewer toont model-space-lijnen, cirkels, bogen, 2D/3D-polylijnen en
-3D-vlakranden. Andere entiteittypen worden geteld als overgeslagen. Met name
-blokreferenties, tekst, maatvoering, arceringen, meshes en ACIS-solids zijn
-nog niet zichtbaar. Het is dus een bruikbare technische test, geen volledige
-DWG-renderer.
+De viewer toont model-space-lijnen, cirkels, bogen, ellipsen, 2D/3D-polylijnen,
+3D-vlakranden en geometrie uit blokreferenties, inclusief geneste blokken tot
+zestien niveaus. De teller bevat ook uitgeklapte blokentiteiten. Andere
+entiteittypen worden geteld als overgeslagen. Tekst, maatvoering, arceringen,
+meshes en ACIS-solids zijn nog niet zichtbaar. Dit blijft een technische
+viewerproef, geen volledige DWG-renderer.

@@ -1,7 +1,8 @@
-use acadrust::entities::{Face3D, Polyline3D};
+use acadrust::entities::{Face3D, Insert, Polyline3D};
 use acadrust::types::Matrix3;
 use acadrust::{
-    Arc, CadDocument, Circle, DwgReader, DwgWriter, EntityType, Line, LwPolyline, Vector2, Vector3,
+    Arc, BlockRecord, CadDocument, Circle, DwgReader, DwgWriter, Ellipse, EntityType, Line,
+    LwPolyline, TableEntry, Vector2, Vector3,
 };
 use std::f64::consts::{PI, TAU};
 use std::io::{self, Write};
@@ -104,6 +105,41 @@ impl Wireframe {
                     arc.point_at_angle_wcs(angle)
                 })
             }
+            EntityType::Ellipse(ellipse) => {
+                let major = ellipse.major_axis;
+                let radius = major.length();
+                let normal = ellipse.normal;
+                let normal_length = normal.length();
+                let ratio = ellipse.minor_axis_ratio;
+                let delta = ellipse.end_parameter - ellipse.start_parameter;
+                if !radius.is_finite()
+                    || radius <= 0.0
+                    || !normal_length.is_finite()
+                    || normal_length <= 0.0
+                    || !ratio.is_finite()
+                    || ratio <= 0.0
+                    || !delta.is_finite()
+                    || delta.abs() > TAU + 1e-8
+                {
+                    return Err("Invalid ellipse geometry".into());
+                }
+                let minor_direction = normal.cross(&major);
+                let minor_length = minor_direction.length();
+                if !minor_length.is_finite() || minor_length <= 0.0 {
+                    return Err("Invalid ellipse axes".into());
+                }
+                let minor = minor_direction * (radius * ratio / minor_length);
+                let sweep = if delta < 0.0 { delta + TAU } else { delta };
+                self.arc(ellipse.start_parameter, sweep, |angle| {
+                    let cosine = angle.cos();
+                    let sine = angle.sin();
+                    Vector3::new(
+                        ellipse.center.x + major.x * cosine + minor.x * sine,
+                        ellipse.center.y + major.y * cosine + minor.y * sine,
+                        ellipse.center.z + major.z * cosine + minor.z * sine,
+                    )
+                })
+            }
             EntityType::LwPolyline(line) => {
                 let basis = Matrix3::arbitrary_axis(line.normal);
                 let count = line.vertices.len();
@@ -177,6 +213,47 @@ impl Wireframe {
         }
     }
 
+    fn add_document_entity(
+        &mut self,
+        document: &CadDocument,
+        entity: &EntityType,
+        ancestry: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if let EntityType::Insert(insert) = entity {
+            if self.entities >= MAX_SEGMENTS {
+                return Err("Drawing exceeds entity limit".into());
+            }
+            self.entities += 1;
+            let Some(block) = document.block_records.get(&insert.block_name) else {
+                self.unsupported += 1;
+                return Ok(());
+            };
+            if ancestry.len() >= 16 || ancestry.contains(&insert.block_name) {
+                self.unsupported += 1;
+                return Ok(());
+            }
+            let expanded_count = block
+                .entity_handles
+                .len()
+                .saturating_mul(insert.column_count as usize)
+                .saturating_mul(insert.row_count as usize);
+            if expanded_count > MAX_SEGMENTS.saturating_sub(self.entities) {
+                return Err("Block reference exceeds entity limit".into());
+            }
+            ancestry.push(insert.block_name.clone());
+            for child in insert.explode_from_document(document) {
+                self.add_document_entity(document, &child, ancestry)?;
+            }
+            ancestry.pop();
+            Ok(())
+        } else {
+            if self.entities >= MAX_SEGMENTS {
+                return Err("Drawing exceeds entity limit".into());
+            }
+            self.add(entity)
+        }
+    }
+
     fn write(&self, mut output: impl Write) -> io::Result<()> {
         writeln!(
             output,
@@ -207,7 +284,7 @@ fn export(path: &Path) -> Result<(), String> {
     let drawing = reader.read().map_err(|error| error.to_string())?;
     let mut wireframe = Wireframe::default();
     for entity in drawing.model_space_entities() {
-        wireframe.add(entity)?;
+        wireframe.add_document_entity(&drawing, entity, &mut Vec::new())?;
     }
     wireframe
         .write(io::stdout().lock())
@@ -253,6 +330,39 @@ fn fixture(path: &Path) -> Result<(), String> {
             Vector3::new(0.0, -1.0, 1.0),
             Vector3::new(1.0, -1.0, 1.0),
             Vector3::new(0.0, -1.0, 2.0),
+        )))
+        .map_err(|error| error.to_string())?;
+    drawing
+        .add_entity(EntityType::Ellipse(Ellipse::from_center_axes(
+            Vector3::new(-2.0, 2.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            0.5,
+        )))
+        .map_err(|error| error.to_string())?;
+
+    let mut block = BlockRecord::new("DynedraSymbol");
+    let block_handle = drawing.allocate_handle();
+    block.set_handle(block_handle);
+    block.block_entity_handle = drawing.allocate_handle();
+    block.block_end_handle = drawing.allocate_handle();
+    drawing
+        .block_records
+        .add(block)
+        .map_err(|error| error.to_string())?;
+    let mut block_line = EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 2.0, 0.0, 0.0));
+    block_line.common_mut().owner_handle = block_handle;
+    drawing
+        .add_entity(block_line)
+        .map_err(|error| error.to_string())?;
+    let mut block_circle = EntityType::Circle(Circle::from_coords(1.0, 0.0, 0.0, 0.5));
+    block_circle.common_mut().owner_handle = block_handle;
+    drawing
+        .add_entity(block_circle)
+        .map_err(|error| error.to_string())?;
+    drawing
+        .add_entity(EntityType::Insert(Insert::new(
+            "DynedraSymbol",
+            Vector3::new(8.0, 0.0, 0.0),
         )))
         .map_err(|error| error.to_string())?;
     DwgWriter::write_to_file(path, &drawing).map_err(|error| error.to_string())
@@ -305,5 +415,21 @@ mod tests {
         assert_eq!(wireframe.segments.len(), 2);
         assert_eq!(wireframe.segments[0][0], 0.0);
         assert_eq!(wireframe.segments[1][0], 2.0);
+    }
+
+    #[test]
+    fn quarter_ellipse_has_expected_endpoints() {
+        let mut ellipse = Ellipse::from_center_axes(
+            Vector3::new(3.0, 4.0, 1.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            0.5,
+        );
+        ellipse.end_parameter = PI / 2.0;
+        let mut wireframe = Wireframe::default();
+        wireframe.add(&EntityType::Ellipse(ellipse)).unwrap();
+        assert_eq!(wireframe.segments.len(), 18);
+        assert!((wireframe.segments[0][0] - 5.0).abs() < 1e-12);
+        assert!((wireframe.segments.last().unwrap()[4] - 5.0).abs() < 1e-12);
+        assert!((wireframe.segments.last().unwrap()[5] - 1.0).abs() < 1e-12);
     }
 }

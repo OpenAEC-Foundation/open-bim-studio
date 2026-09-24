@@ -29,8 +29,10 @@ def main() -> int:
     check([cargo, "build", "--offline", "--manifest-path", str(bridge), "--target-dir", str(target)], "reader build", 300)
     check([str(reader), "fixture", str(fixture)], "sample DWG generation", 90)
     stream = check([str(reader), "export", str(fixture)], "DWG decoding", 90)
-    if not stream.startswith("DYNEDRA-DWG-1 6 115 0\n"):
+    if not stream.startswith("DYNEDRA-DWG-1 10 260 0\n"):
         raise RuntimeError(f"unexpected DWG wireframe: {stream[:100]!r}")
+    if "8.00000000000000000 0.00000000000000000 0.00000000000000000 10.00000000000000000 0.00000000000000000 0.00000000000000000\n" not in stream:
+        raise RuntimeError("exploded block line is missing or misplaced")
     for optimization in ("0", "2"):
         suffix = ".exe" if os.name == "nt" else ""
         probe = ROOT / "build" / f"dynedra-dwg-check-O{optimization}{suffix}"
@@ -38,7 +40,7 @@ def main() -> int:
         check([str(compiler), "tests/cadkernel/dwg_viewer/main.dl", f"-O{optimization}", "-o", str(probe)], f"DynLex test compile O{optimization}", 180)
         check([str(compiler), "examples/dynedra-dwg/main.dl", f"-O{optimization}", "-o", str(viewer)], f"DynLex viewer compile O{optimization}", 180)
         output = check([str(probe), str(fixture), str(reader)], f"DynLex hidden graphics O{optimization}", 90)
-        if "decoded, parsed and drew 115 segments" not in output:
+        if "decoded, parsed and drew 260 segments" not in output:
             raise RuntimeError(f"missing viewer success marker: {output!r}")
         print(f"O{optimization}: DWG reader, DynLex parser and drawable frame passed")
     print(f"Sample drawing: {fixture}")
