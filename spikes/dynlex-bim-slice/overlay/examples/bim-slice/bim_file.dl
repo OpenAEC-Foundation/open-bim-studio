@@ -1,0 +1,740 @@
+# SPDX-License-Identifier: MPL-2.0
+# The native file format of the BIM slice: the model as text, one record per
+# line, keeping every id, so that a saved and reopened model is the same model.
+# Numbers are written with 17 significant digits, which read back to the same
+# binary64 value. The first line is `BIM-SLICE 1`; the records follow in any
+# order:
+#
+#     next <next id>
+#     level <id> <elevation> <height> <name>
+#     walltype <id> <name>
+#     layer <thickness> <material>           a layer of the walltype above it
+#     wall <id> <type> <level> <start x> <start y> <finish x> <finish y> <height> [<bulge>]
+#     openingtype <id> <width> <height> <sill> <frame> <door: 0 or 1> <name>
+#     opening <id> <type> <host> <offset>
+#     dimension <id> <element> <feature> <element> <feature>
+#     slab <id> <level> <thickness> <corner count> <x> <y> ...
+#     grid <id> <start x> <start y> <finish x> <finish y> <low> <high> <name>
+#     sketch <id> <level> <kind: 0 line, 1 face, 2 text> <height> <point count> <x> <y> ... [<text>]
+#     component <id> <name>
+#     part <id> 0 <kind> <height> <point count> <x> <y> ... [<text>]    a sketch element of the component above it, in its coordinates
+#     instance <id> <component> <level> <origin x> <origin y> <angle>
+#     viewrule <view kind> <category> <visible: 0 or 1> <halftone: 0 or 1>
+#
+# View kinds and categories are those of `bim_view.dl`; view rules belong to
+# the editor's views, not to the model.
+#
+# Fields are separated by one space; a name or material is the rest of its
+# line, and a line break in one is written as a space. Records of one kind
+# appear in ascending id order. Reading refuses anything else, naming the
+# line or the element: an unknown record, a malformed number, a missing or
+# repeated `next`, an id used twice or not below `next`, a reference to a
+# missing element, or a value that the model's edits would refuse, such as a
+# slab outline that crosses itself.
+import examples/bim-slice/bim_index.dl
+import examples/bim-slice/bim_view.dl
+import lib/text.dl
+
+# ---------------------------------------------------------------- files
+
+class:
+    patterns:
+        [a|] bim text reading record
+    members:
+        valid as a boolean
+        text as a string
+
+# Writes `content` to the file at `path`; false when the file cannot be
+# written.
+function write bim text {a string:content} to file {a string:path}:
+    execute:
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of path, "wb")
+        if handle = (0 as a pointer to a byte):
+            return false
+        set written to @intrinsic("call", "libc", "fwrite", a word sized integer, the data of content, 1 as a word sized integer, (the length of content) as a word sized integer, handle)
+        set closed to @intrinsic("call", "libc", "fclose", integer, handle)
+        return (written = ((the length of content) as a word sized integer)) and (closed = 0)
+
+# The whole content of the file at `path`; invalid when it cannot be read.
+function the bim file content at {a string:path}:
+    execute:
+        set failure to @intrinsic("construct", a bim text reading record, false, the string form of "")
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of path, "rb")
+        if handle = (0 as a pointer to a byte):
+            return failure
+        set size to (-1) as a 64 bit integer
+        if (@intrinsic("call", "libc", "fseek", integer, handle, 0 as a 64 bit integer, 2)) = 0:
+            set size to @intrinsic("call", "libc", "ftell", a 64 bit integer, handle)
+        if (size < (0 as a 64 bit integer)) or (size > ((the maximum string buffer length) as a 64 bit integer)):
+            ignore @intrinsic("call", "libc", "fclose", integer, handle)
+            return failure
+        if (@intrinsic("call", "libc", "fseek", integer, handle, 0 as a 64 bit integer, 0)) != 0:
+            ignore @intrinsic("call", "libc", "fclose", integer, handle)
+            return failure
+        set stored to a new string buffer containing (size as an integer) bytes
+        set got to @intrinsic("call", "libc", "fread", a word sized integer, the data of stored, 1 as a word sized integer, size as a word sized integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", integer, handle)
+        if got != (size as a word sized integer):
+            return failure
+        return @intrinsic("construct", a bim text reading record, true, stored)
+
+# ---------------------------------------------------------------- writing
+
+# `value` with 17 significant digits, enough to read back the same binary64.
+function the bim exact text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.17g", value)
+        return the substring of buffer from 0 spanning written bytes
+
+local function the bim file name of {a string:label}:
+    execute:
+        return (label with "\n" replaced by " ") with "\r" replaced by " "
+
+local function the bim joined fields of {a pointer to a list:pieces}:
+    execute:
+        return pieces joined with " "
+
+# The file text of `modelValue`.
+function the bim file text of {bim model record:modelValue}:
+    execute:
+        set lines to an empty list of string
+        append (the string form of "BIM-SLICE 1") to lines
+        append ((the string form of "next ") + (the string form of modelValue's nextId)) to lines
+        set pieces to an empty list of string
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            clear pieces
+            append (the string form of "level") to pieces
+            append (the string form of levelValue's id) to pieces
+            append (the bim exact text of levelValue's elevation) to pieces
+            append (the bim exact text of levelValue's height) to pieces
+            append (the bim file name of levelValue's name) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            append (((the string form of "walltype ") + (the string form of wallType's id)) + ((the string form of " ") + (the bim file name of wallType's name))) to lines
+            loop layerCursor from 0 to the length of (wallType's layers's values):
+                set layerValue to the item at layerCursor in (wallType's layers's values)
+                append (((the string form of "layer ") + (the bim exact text of layerValue's thickness)) + ((the string form of " ") + (the bim file name of layerValue's material))) to lines
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            clear pieces
+            append (the string form of "wall") to pieces
+            append (the string form of wallValue's id) to pieces
+            append (the string form of wallValue's typeId) to pieces
+            append (the string form of wallValue's levelId) to pieces
+            append (the bim exact text of wallValue's start's x) to pieces
+            append (the bim exact text of wallValue's start's y) to pieces
+            append (the bim exact text of wallValue's finish's x) to pieces
+            append (the bim exact text of wallValue's finish's y) to pieces
+            append (the bim exact text of wallValue's height) to pieces
+            if wallValue's bulge != 0.0:
+                append (the bim exact text of wallValue's bulge) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            set openingType to the item at cursor in (modelValue's openingTypes's values)
+            clear pieces
+            append (the string form of "openingtype") to pieces
+            append (the string form of openingType's id) to pieces
+            append (the bim exact text of openingType's width) to pieces
+            append (the bim exact text of openingType's height) to pieces
+            append (the bim exact text of openingType's sill) to pieces
+            append (the bim exact text of openingType's frame) to pieces
+            if openingType's isDoor:
+                append (the string form of "1") to pieces
+            else:
+                append (the string form of "0") to pieces
+            append (the bim file name of openingType's name) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            clear pieces
+            append (the string form of "opening") to pieces
+            append (the string form of openingValue's id) to pieces
+            append (the string form of openingValue's typeId) to pieces
+            append (the string form of openingValue's hostId) to pieces
+            append (the bim exact text of openingValue's offset) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set dimension to the item at cursor in (modelValue's dimensions's values)
+            clear pieces
+            append (the string form of "dimension") to pieces
+            append (the string form of dimension's id) to pieces
+            append (the string form of dimension's first's elementId) to pieces
+            append (the string form of dimension's first's feature) to pieces
+            append (the string form of dimension's second's elementId) to pieces
+            append (the string form of dimension's second's feature) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            clear pieces
+            append (the string form of "slab") to pieces
+            append (the string form of slabValue's id) to pieces
+            append (the string form of slabValue's levelId) to pieces
+            append (the bim exact text of slabValue's thickness) to pieces
+            append (the string form of (the length of (slabValue's outline's values))) to pieces
+            loop corner from 0 to the length of (slabValue's outline's values):
+                append (the bim exact text of (the item at corner in (slabValue's outline's values))'s x) to pieces
+                append (the bim exact text of (the item at corner in (slabValue's outline's values))'s y) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            clear pieces
+            append (the string form of "grid") to pieces
+            append (the string form of gridValue's id) to pieces
+            append (the bim exact text of gridValue's start's x) to pieces
+            append (the bim exact text of gridValue's start's y) to pieces
+            append (the bim exact text of gridValue's finish's x) to pieces
+            append (the bim exact text of gridValue's finish's y) to pieces
+            append (the bim exact text of gridValue's low) to pieces
+            append (the bim exact text of gridValue's high) to pieces
+            append (the bim file name of gridValue's name) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's sketches's values):
+            append (the bim sketch line of (the item at cursor in (modelValue's sketches's values)) labelled (the string form of "sketch")) to lines
+        loop cursor from 0 to the length of (modelValue's components's values):
+            set definition to the item at cursor in (modelValue's components's values)
+            append (((the string form of "component ") + (the string form of definition's id)) + ((the string form of " ") + (the bim file name of definition's name))) to lines
+            loop part from 0 to the length of (definition's sketches's values):
+                append (the bim sketch line of (the item at part in (definition's sketches's values)) labelled (the string form of "part")) to lines
+        loop cursor from 0 to the length of (modelValue's instances's values):
+            set placement to the item at cursor in (modelValue's instances's values)
+            clear pieces
+            append (the string form of "instance") to pieces
+            append (the string form of placement's id) to pieces
+            append (the string form of placement's componentId) to pieces
+            append (the string form of placement's levelId) to pieces
+            append (the bim exact text of placement's origin's x) to pieces
+            append (the bim exact text of placement's origin's y) to pieces
+            append (the bim exact text of placement's angle) to pieces
+            append (the bim joined fields of pieces) to lines
+        free pieces
+        append (the string form of "") to lines
+        set result to lines joined with "\n"
+        free lines
+        return result
+
+# One `sketch` or `part` line.
+local function the bim sketch line of {bim sketch record:element} labelled {a string:label}:
+    execute:
+        set pieces to an empty list of a string
+        append label to pieces
+        append (the string form of element's id) to pieces
+        append (the string form of element's levelId) to pieces
+        append (the string form of element's kind) to pieces
+        append (the bim exact text of element's height) to pieces
+        append (the string form of (the length of (element's points's values))) to pieces
+        loop corner from 0 to the length of (element's points's values):
+            append (the bim exact text of (the item at corner in (element's points's values))'s x) to pieces
+            append (the bim exact text of (the item at corner in (element's points's values))'s y) to pieces
+        if element's kind = bim text sketch:
+            append (the bim file name of element's content) to pieces
+        set joined to the bim joined fields of pieces
+        free pieces
+        return joined
+
+# ---------------------------------------------------------------- reading
+
+# One view rule read from a file.
+class:
+    patterns:
+        [a|] bim view rule entry record
+    members:
+        kind as an integer
+        category as an integer
+        visible as a boolean
+        halftone as a boolean
+
+class:
+    patterns:
+        [a|] bim file result record
+    members:
+        valid as a boolean
+        modelValue as a bim model record
+        message as a string
+        viewRules as the type of (a cad topology list of a bim view rule entry record)
+
+class:
+    patterns:
+        [a|] bim real reading record
+    members:
+        valid as a boolean
+        value as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] bim whole reading record
+    members:
+        valid as a boolean
+        value as a 64 bit integer
+
+local function a bim file refusal saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a bim file result record, false, an empty bim model, reason, a cad topology list of a bim view rule entry record)
+
+local function a bim line refusal saying {a string:reason} on {integer:lineNumber}:
+    execute:
+        return a bim file refusal saying (((the string form of "line ") + (the string form of lineNumber)) + ((the string form of ": ") + reason))
+
+# `token` as a NUL-terminated copy, for the C number parsers.
+local function the bim terminated copy of {a string:token}:
+    execute:
+        set buffer to a new string buffer containing (the length of token) bytes
+        copy token into (the data of buffer) at offset 0
+        store (0 as a byte) into the data of buffer at (the length of token)
+        return buffer
+
+local function bim token {a string:token} uses only {a string:allowed}:
+    execute:
+        if ((the length of token) = 0) or ((the length of token) > 40):
+            return false
+        loop cursor from 0 to the length of token:
+            set character to the character at cursor in token
+            set known to false
+            loop slot from 0 to the length of allowed:
+                if (the character at slot in allowed) = character:
+                    set known to true
+            if known = false:
+                return false
+        return true
+
+# A decimal real written as C's `strtod` reads it, finite; no other text.
+function the bim real reading of {a string:token}:
+    execute:
+        set refused to @intrinsic("construct", a bim real reading record, false, 0.0)
+        if (bim token token uses only (the string form of "0123456789+-.eE")) = false:
+            return refused
+        set terminatedToken to the bim terminated copy of token
+        set ending to (0 as a pointer to a byte)
+        set value to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of terminatedToken, the address of ending)
+        if ending != ((the data of terminatedToken) + (the length of token)):
+            return refused
+        if (value - value) != 0.0:
+            return refused
+        return @intrinsic("construct", a bim real reading record, true, value)
+
+# A decimal integer that fits 64 bits; no other text.
+function the bim whole reading of {a string:token}:
+    execute:
+        set refused to @intrinsic("construct", a bim whole reading record, false, 0 as a 64 bit integer)
+        if (bim token token uses only (the string form of "0123456789-")) = false:
+            return refused
+        if (the length of token) > 19:
+            return refused
+        set terminatedToken to the bim terminated copy of token
+        set ending to (0 as a pointer to a byte)
+        set value to @intrinsic("call", "libc", "strtoll", a 64 bit integer, the data of terminatedToken, the address of ending, 10)
+        if ending != ((the data of terminatedToken) + (the length of token)):
+            return refused
+        return @intrinsic("construct", a bim whole reading record, true, value)
+
+# The text after the first `count` single-space separated fields of `line`:
+# a name. Invalid (the line itself) when the line has fewer separators.
+local function the bim remainder of {a string:line} after {integer:count} fields:
+    execute:
+        set seen to 0
+        loop cursor from 0 to the length of line:
+            if (the character at cursor in line) = 32:
+                set seen to seen + 1
+                if seen = count:
+                    return @intrinsic("construct", a bim text reading record, true, the substring of line from (cursor + 1) spanning ((the length of line) - (cursor + 1)) bytes)
+        return @intrinsic("construct", a bim text reading record, false, line)
+
+# The fields of one line, read as numbers: `whole` lists which fields are
+# integers; the others are reals. A field that does not read is refused by
+# the caller from `valid`.
+class:
+    patterns:
+        [a|] bim field reading record
+    members:
+        valid as a boolean
+        reals as the type of (an empty list of a 64 bit floating-point number)
+        wholes as the type of (an empty list of a 64 bit integer)
+
+# Reads fields `first` to `last` (inclusive) of `tokens`, each an integer
+# when its letter in `layout` is `i` and a real when it is `r`.
+local function the bim fields {integer:first} to {integer:last} of {a pointer to a list:tokens} laid out as {a string:layout}:
+    execute:
+        set result to @intrinsic("construct", a bim field reading record, true, an empty list of a 64 bit floating-point number, an empty list of a 64 bit integer)
+        if (the length of tokens) <= last:
+            set result's valid to false
+            return result
+        loop cursor from first to last + 1:
+            set token to the item at cursor in tokens
+            if (the character at (cursor - first) in layout) = 105:
+                set whole to the bim whole reading of token
+                if whole's valid = false:
+                    set result's valid to false
+                append whole's value to (result's wholes)
+            else:
+                set real to the bim real reading of token
+                if real's valid = false:
+                    set result's valid to false
+                append real's value to (result's reals)
+        return result
+
+local function free bim field reading {bim field reading record:reading}:
+    execute:
+        free reading's reals
+        free reading's wholes
+
+# True when `wanted` is above the last id of `records`, so `records` stays in
+# ascending id order.
+local function bim id {a 64 bit integer:wanted} follows {a pointer to a list:records}:
+    execute:
+        if (the length of records) = 0:
+            return true
+        return (the item at ((the length of records) - 1) in records)'s id < wanted
+
+local function the bim dimension feature {integer:featureKind} fits {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        if (the bim wall index of elementId in modelValue)'s valid:
+            return (featureKind >= bim wall start feature) and (featureKind <= bim wall interior feature)
+        if (the bim opening index of elementId in modelValue)'s valid:
+            return (featureKind = bim opening left feature) or (featureKind = bim opening right feature)
+        return false
+
+# Checks what single lines cannot: unique ids below `next`, references to
+# existing elements, and walls with layers. Empty when the model is sound.
+local function the bim reference fault of {bim model record:modelValue}:
+    execute:
+        set ids to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            append (the item at cursor in (modelValue's levels's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            append wallType's id to ids
+            if (the length of (wallType's layers's values)) = 0:
+                free ids
+                return (the string form of "wall type ") + ((the string form of wallType's id) + (the string form of " has no layers"))
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            append wallValue's id to ids
+            if ((the bim wall type index of wallValue's typeId in modelValue)'s valid = false) or ((the bim level index of wallValue's levelId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "wall ") + ((the string form of wallValue's id) + (the string form of " refers to a missing type or level"))
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            append (the item at cursor in (modelValue's openingTypes's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            append openingValue's id to ids
+            if ((the bim opening type index of openingValue's typeId in modelValue)'s valid = false) or ((the bim wall index of openingValue's hostId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "opening ") + ((the string form of openingValue's id) + (the string form of " refers to a missing type or host wall"))
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set dimension to the item at cursor in (modelValue's dimensions's values)
+            append dimension's id to ids
+            set firstFits to the bim dimension feature (dimension's first's feature) fits (dimension's first's elementId) in modelValue
+            set secondFits to the bim dimension feature (dimension's second's feature) fits (dimension's second's elementId) in modelValue
+            if (firstFits and secondFits) = false:
+                free ids
+                return (the string form of "dimension ") + ((the string form of dimension's id) + (the string form of " refers to a missing element or feature"))
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            append slabValue's id to ids
+            if (the bim level index of slabValue's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "slab ") + ((the string form of slabValue's id) + (the string form of " refers to a missing level"))
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            append (the item at cursor in (modelValue's grids's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's sketches's values):
+            set sketch to the item at cursor in (modelValue's sketches's values)
+            append sketch's id to ids
+            if (the bim level index of sketch's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "sketch ") + ((the string form of sketch's id) + (the string form of " refers to a missing level"))
+        loop cursor from 0 to the length of (modelValue's components's values):
+            append (the item at cursor in (modelValue's components's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's instances's values):
+            set placement to the item at cursor in (modelValue's instances's values)
+            append placement's id to ids
+            if ((the bim level index of placement's levelId in modelValue)'s valid = false) or ((the bim component index of placement's componentId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "instance ") + ((the string form of placement's id) + (the string form of " refers to a missing level or component"))
+        set total to the length of ids
+        sort and deduplicate bim ids ids
+        set problem to the string form of ""
+        if (the length of ids) != total:
+            set problem to the string form of "an id is used twice"
+        else if (the length of ids) > 0:
+            if ((the item at 0 in ids) <= (0 as a 64 bit integer)) or ((the item at ((the length of ids) - 1) in ids) >= modelValue's nextId):
+                set problem to the string form of "an id is not between 1 and next"
+        free ids
+        return problem
+
+# The lines of `viewRules`, one viewrule record per category, each ending in
+# a line break.
+function the bim view rule lines of {bim view rules record:viewRules}:
+    execute:
+        set written to the string form of ""
+        loop code from 0 to the bim category count:
+            set entry to the item at code in (viewRules's rules's values)
+            set line to ((the string form of "viewrule ") + (the string form of viewRules's kind)) + ((the string form of " ") + (the string form of code))
+            set shownText to the string form of " 0"
+            if entry's visible:
+                set shownText to the string form of " 1"
+            set faintText to the string form of " 0"
+            if entry's halftone:
+                set faintText to the string form of " 1"
+            set written to written + (((line + shownText) + faintText) + (the string form of "\n"))
+        return written
+
+# The model in `content`, or a refusal naming the first fault.
+function the bim model parsed from {a string:content}:
+    execute:
+        set lines to content split at "\n"
+        if ((the length of lines) = 0) or (((the item at 0 in lines) with "\r" replaced by "") != (the string form of "BIM-SLICE 1")):
+            free lines
+            return a bim file refusal saying (the string form of "not a BIM-SLICE 1 file")
+        set modelValue to an empty bim model
+        set ruleEntries to a cad topology list of a bim view rule entry record
+        set nextSeen to false
+        loop lineCursor from 1 to the length of lines:
+            set line to (the item at lineCursor in lines) with "\r" replaced by ""
+            set lineNumber to lineCursor + 1
+            if (the length of line) > 0:
+                set tokens to line split at " "
+                set kind to the item at 0 in tokens
+                set refusal to the string form of ""
+                if kind = (the string form of "next"):
+                    set fields to the bim fields 1 to 1 of tokens laid out as (the string form of "i")
+                    if nextSeen or ((fields's valid = false) or ((the length of tokens) != 2)):
+                        set refusal to the string form of "malformed or repeated next"
+                    else:
+                        set nextSeen to true
+                        set modelValue's nextId to the item at 0 in fields's wholes
+                    free bim field reading fields
+                else if kind = (the string form of "level"):
+                    set fields to the bim fields 1 to 3 of tokens laid out as (the string form of "irr")
+                    set label to the bim remainder of line after 4 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed level"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's levels's values)) = false:
+                        set refusal to the string form of "level ids out of order"
+                    else if (the item at 1 in (fields's reals)) <= 0.0:
+                        set refusal to the string form of "a level needs a positive height"
+                    else:
+                        append (@intrinsic("construct", a bim level record, the item at 0 in fields's wholes, label's text, the item at 0 in fields's reals, the item at 1 in (fields's reals))) to (modelValue's levels's values)
+                    free bim field reading fields
+                else if kind = (the string form of "walltype"):
+                    set fields to the bim fields 1 to 1 of tokens laid out as (the string form of "i")
+                    set label to the bim remainder of line after 2 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed walltype"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's wallTypes's values)) = false:
+                        set refusal to the string form of "walltype ids out of order"
+                    else:
+                        append (@intrinsic("construct", a bim wall type record, the item at 0 in fields's wholes, label's text, a cad topology list of a bim layer record)) to (modelValue's wallTypes's values)
+                    free bim field reading fields
+                else if kind = (the string form of "layer"):
+                    set fields to the bim fields 1 to 1 of tokens laid out as (the string form of "r")
+                    set label to the bim remainder of line after 2 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed layer"
+                    else if (the length of (modelValue's wallTypes's values)) = 0:
+                        set refusal to the string form of "a layer before any walltype"
+                    else if (the item at 0 in (fields's reals)) <= 0.0:
+                        set refusal to the string form of "a layer needs a positive thickness"
+                    else:
+                        set owner to the item at ((the length of (modelValue's wallTypes's values)) - 1) in (modelValue's wallTypes's values)
+                        append (@intrinsic("construct", a bim layer record, label's text, the item at 0 in (fields's reals))) to (owner's layers's values)
+                    free bim field reading fields
+                else if kind = (the string form of "wall"):
+                    set curved to (the length of tokens) = 10
+                    set fields to the bim fields 1 to 8 of tokens laid out as (the string form of "iiirrrrr")
+                    if curved:
+                        free bim field reading fields
+                        set fields to the bim fields 1 to 9 of tokens laid out as (the string form of "iiirrrrrr")
+                    if (fields's valid = false) or (((the length of tokens) != 9) and (curved = false)):
+                        set refusal to the string form of "malformed wall"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's walls's values)) = false:
+                        set refusal to the string form of "wall ids out of order"
+                    else:
+                        set startPoint to a cad vector2 with x (the item at 0 in (fields's reals)) and y (the item at 1 in (fields's reals))
+                        set finishPoint to a cad vector2 with x (the item at 2 in (fields's reals)) and y (the item at 3 in (fields's reals))
+                        if ((the cad distance from startPoint to finishPoint) <= 1e-6) or ((the item at 4 in (fields's reals)) <= 0.0):
+                            set refusal to the string form of "a wall needs a length and a positive height"
+                        else:
+                            set bulgeValue to 0.0
+                            if curved:
+                                set bulgeValue to the item at 5 in (fields's reals)
+                            if (the absolute value of bulgeValue) > ((the cad distance from startPoint to finishPoint) * 0.5):
+                                set refusal to the string form of "a wall's bulge exceeds a half circle"
+                            else:
+                                append (@intrinsic("construct", a bim wall record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, the item at 2 in fields's wholes, startPoint, finishPoint, the item at 4 in (fields's reals), bulgeValue)) to (modelValue's walls's values)
+                    free bim field reading fields
+                else if kind = (the string form of "openingtype"):
+                    set fields to the bim fields 1 to 6 of tokens laid out as (the string form of "irrrri")
+                    set label to the bim remainder of line after 7 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed openingtype"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's openingTypes's values)) = false:
+                        set refusal to the string form of "openingtype ids out of order"
+                    else:
+                        set doorFlag to the item at 1 in fields's wholes
+                        set sizesValid to ((the item at 0 in (fields's reals)) > 0.0) and ((the item at 1 in (fields's reals)) > 0.0)
+                        set offsetsValid to ((the item at 2 in (fields's reals)) >= 0.0) and ((the item at 3 in (fields's reals)) >= 0.0)
+                        set doorValid to (doorFlag = (0 as a 64 bit integer)) or ((doorFlag = (1 as a 64 bit integer)) and ((the item at 2 in (fields's reals)) = 0.0))
+                        if ((sizesValid and offsetsValid) and doorValid) = false:
+                            set refusal to the string form of "an opening type needs positive sizes, and a door a sill of 0"
+                        else:
+                            append (@intrinsic("construct", a bim opening type record, the item at 0 in fields's wholes, label's text, the item at 0 in fields's reals, the item at 1 in fields's reals, the item at 2 in fields's reals, the item at 3 in fields's reals, doorFlag = (1 as a 64 bit integer))) to (modelValue's openingTypes's values)
+                    free bim field reading fields
+                else if kind = (the string form of "opening"):
+                    set fields to the bim fields 1 to 4 of tokens laid out as (the string form of "iiir")
+                    if (fields's valid = false) or ((the length of tokens) != 5):
+                        set refusal to the string form of "malformed opening"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's openings's values)) = false:
+                        set refusal to the string form of "opening ids out of order"
+                    else:
+                        append (@intrinsic("construct", a bim opening record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, the item at 2 in fields's wholes, the item at 0 in (fields's reals))) to (modelValue's openings's values)
+                    free bim field reading fields
+                else if kind = (the string form of "dimension"):
+                    set fields to the bim fields 1 to 5 of tokens laid out as (the string form of "iiiii")
+                    if (fields's valid = false) or ((the length of tokens) != 6):
+                        set refusal to the string form of "malformed dimension"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's dimensions's values)) = false:
+                        set refusal to the string form of "dimension ids out of order"
+                    else:
+                        set firstEnd to @intrinsic("construct", a bim reference record, the item at 1 in fields's wholes, (the item at 2 in (fields's wholes)) as an integer)
+                        set secondEnd to @intrinsic("construct", a bim reference record, the item at 3 in fields's wholes, (the item at 4 in (fields's wholes)) as an integer)
+                        append (@intrinsic("construct", a bim dimension record, the item at 0 in fields's wholes, firstEnd, secondEnd)) to (modelValue's dimensions's values)
+                    free bim field reading fields
+                else if kind = (the string form of "slab"):
+                    set fields to the bim fields 1 to 4 of tokens laid out as (the string form of "iiri")
+                    if fields's valid = false:
+                        set refusal to the string form of "malformed slab"
+                    else:
+                        set cornerCount to the item at 2 in fields's wholes
+                        if (cornerCount < (3 as a 64 bit integer)) or (cornerCount > (1000000 as a 64 bit integer)):
+                            set refusal to the string form of "a slab needs at least 3 corners"
+                        else if (the length of tokens) != (5 + ((cornerCount as an integer) * 2)):
+                            set refusal to the string form of "malformed slab"
+                        else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's slabs's values)) = false:
+                            set refusal to the string form of "slab ids out of order"
+                        else if (the item at 0 in (fields's reals)) <= 0.0:
+                            set refusal to the string form of "a slab needs a positive thickness"
+                        else:
+                            set outline to a cad topology list of a cad vector2
+                            loop corner from 0 to (cornerCount as an integer):
+                                set across to the bim real reading of (the item at (5 + (corner * 2)) in tokens)
+                                set upward to the bim real reading of (the item at (6 + (corner * 2)) in tokens)
+                                if (across's valid and upward's valid) = false:
+                                    set refusal to the string form of "malformed slab corner"
+                                append (a cad vector2 with x across's value and y upward's value) to (outline's values)
+                            if ((the length of refusal) = 0) and ((bim outline (outline's values) is simple) = false):
+                                set refusal to the string form of "a slab outline must not cross itself"
+                            if (the length of refusal) = 0:
+                                append (@intrinsic("construct", a bim slab record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, outline, the item at 0 in (fields's reals))) to (modelValue's slabs's values)
+                    free bim field reading fields
+                else if kind = (the string form of "grid"):
+                    set fields to the bim fields 1 to 7 of tokens laid out as (the string form of "irrrrrr")
+                    set label to the bim remainder of line after 8 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed grid"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's grids's values)) = false:
+                        set refusal to the string form of "grid ids out of order"
+                    else:
+                        set startPoint to a cad vector2 with x (the item at 0 in (fields's reals)) and y (the item at 1 in (fields's reals))
+                        set finishPoint to a cad vector2 with x (the item at 2 in (fields's reals)) and y (the item at 3 in (fields's reals))
+                        if ((the cad distance from startPoint to finishPoint) <= 1e-6) or ((the item at 5 in (fields's reals)) <= (the item at 4 in (fields's reals))):
+                            set refusal to the string form of "a grid needs a length and a height"
+                        else:
+                            append (@intrinsic("construct", a bim grid record, the item at 0 in (fields's wholes), label's text, startPoint, finishPoint, the item at 4 in (fields's reals), the item at 5 in (fields's reals))) to (modelValue's grids's values)
+                    free bim field reading fields
+                else if kind = (the string form of "component"):
+                    set fields to the bim fields 1 to 1 of tokens laid out as (the string form of "i")
+                    set label to the bim remainder of line after 2 fields
+                    if (fields's valid and label's valid) = false:
+                        set refusal to the string form of "malformed component"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's components's values)) = false:
+                        set refusal to the string form of "component ids out of order"
+                    else:
+                        append (@intrinsic("construct", a bim component record, the item at 0 in fields's wholes, label's text, a cad topology list of a bim sketch record)) to (modelValue's components's values)
+                    free bim field reading fields
+                else if kind = (the string form of "instance"):
+                    set fields to the bim fields 1 to 6 of tokens laid out as (the string form of "iiirrr")
+                    if (fields's valid = false) or ((the length of tokens) != 7):
+                        set refusal to the string form of "malformed instance"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's instances's values)) = false:
+                        set refusal to the string form of "instance ids out of order"
+                    else:
+                        append (@intrinsic("construct", a bim instance record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, the item at 2 in fields's wholes, a cad vector2 with x (the item at 0 in (fields's reals)) and y (the item at 1 in (fields's reals)), the item at 2 in (fields's reals))) to (modelValue's instances's values)
+                    free bim field reading fields
+                else if (kind = (the string form of "sketch")) or (kind = (the string form of "part")):
+                    set isPart to kind = (the string form of "part")
+                    set fields to the bim fields 1 to 5 of tokens laid out as (the string form of "iiiri")
+                    if fields's valid = false:
+                        set refusal to the string form of "malformed sketch"
+                    else:
+                        set sketchKind to (the item at 2 in fields's wholes) as an integer
+                        set pointCount to (the item at 3 in fields's wholes) as an integer
+                        set fixedCount to 6 + (pointCount * 2)
+                        set shapeValid to ((sketchKind = bim line sketch) and (pointCount = 2)) or (((sketchKind = bim face sketch) and (pointCount >= 3)) or ((sketchKind = bim text sketch) and (pointCount = 1)))
+                        if (shapeValid = false) or ((pointCount < 1) or (pointCount > 1000000)):
+                            set refusal to the string form of "malformed sketch"
+                        else if (sketchKind != bim text sketch) and ((the length of tokens) != fixedCount):
+                            set refusal to the string form of "malformed sketch"
+                        else if (the length of tokens) < fixedCount:
+                            set refusal to the string form of "malformed sketch"
+                        else if isPart and ((the length of (modelValue's components's values)) = 0):
+                            set refusal to the string form of "a part before any component"
+                        else if (isPart = false) and ((bim id (the item at 0 in (fields's wholes)) follows (modelValue's sketches's values)) = false):
+                            set refusal to the string form of "sketch ids out of order"
+                        else if (the item at 0 in (fields's reals)) < 0.0:
+                            set refusal to the string form of "a mass needs a height of 0 or more"
+                        else:
+                            set sketchPoints to a cad topology list of a cad vector2
+                            loop corner from 0 to pointCount:
+                                set across to the bim real reading of (the item at (6 + (corner * 2)) in tokens)
+                                set upward to the bim real reading of (the item at (7 + (corner * 2)) in tokens)
+                                if (across's valid and upward's valid) = false:
+                                    set refusal to the string form of "malformed sketch point"
+                                append (a cad vector2 with x across's value and y upward's value) to (sketchPoints's values)
+                            set message to the string form of ""
+                            if sketchKind = bim text sketch:
+                                set rest to the bim remainder of line after fixedCount fields
+                                if rest's valid:
+                                    set message to rest's text
+                                else:
+                                    set refusal to the string form of "a text needs its words"
+                            if (sketchKind = bim face sketch) and ((the length of refusal) = 0):
+                                if (bim outline (sketchPoints's values) is simple) = false:
+                                    set refusal to the string form of "a face outline must not cross itself"
+                            if ((the length of refusal) = 0) and isPart:
+                                set owner to the item at ((the length of (modelValue's components's values)) - 1) in (modelValue's components's values)
+                                append (@intrinsic("construct", a bim sketch record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, sketchKind, sketchPoints, the item at 0 in (fields's reals), message)) to (owner's sketches's values)
+                            else if (the length of refusal) = 0:
+                                append (@intrinsic("construct", a bim sketch record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, sketchKind, sketchPoints, the item at 0 in (fields's reals), message)) to (modelValue's sketches's values)
+                    free bim field reading fields
+                else if kind = (the string form of "viewrule"):
+                    set fields to the bim fields 1 to 4 of tokens laid out as (the string form of "iiii")
+                    if (fields's valid = false) or ((the length of tokens) != 5):
+                        set refusal to the string form of "malformed viewrule"
+                    else:
+                        set viewKind to the item at 0 in (fields's wholes)
+                        set code to the item at 1 in (fields's wholes)
+                        set shownFlag to the item at 2 in (fields's wholes)
+                        set faintFlag to the item at 3 in (fields's wholes)
+                        set kindValid to (viewKind >= (0 as a 64 bit integer)) and (viewKind <= (2 as a 64 bit integer))
+                        set codeValid to (code >= (0 as a 64 bit integer)) and (code < ((the bim category count) as a 64 bit integer))
+                        set flagsValid to ((shownFlag = (0 as a 64 bit integer)) or (shownFlag = (1 as a 64 bit integer))) and ((faintFlag = (0 as a 64 bit integer)) or (faintFlag = (1 as a 64 bit integer)))
+                        if ((kindValid and codeValid) and flagsValid) = false:
+                            set refusal to the string form of "a viewrule needs a view kind, a category and two flags"
+                        else:
+                            append (@intrinsic("construct", a bim view rule entry record, viewKind as an integer, code as an integer, shownFlag = (1 as a 64 bit integer), faintFlag = (1 as a 64 bit integer))) to (ruleEntries's values)
+                    free bim field reading fields
+                else:
+                    set refusal to (the string form of "unknown record ") + kind
+                free tokens
+                if (the length of refusal) > 0:
+                    free lines
+                    return a bim line refusal saying refusal on lineNumber
+        free lines
+        if nextSeen = false:
+            return a bim file refusal saying (the string form of "the file has no next line")
+        set problem to the bim reference fault of modelValue
+        if (the length of problem) > 0:
+            return a bim file refusal saying problem
+        return @intrinsic("construct", a bim file result record, true, modelValue, the string form of "", ruleEntries)

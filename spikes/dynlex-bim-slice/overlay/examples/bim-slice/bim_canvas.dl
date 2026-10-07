@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: MPL-2.0
+# A recorded drawing: batches of coloured triangles and text labels in pixels,
+# replayed into a frame with an offset. The plan is recorded once and replayed
+# shifted while it is panned, so panning costs a replay, not a redraw; it is
+# recorded again only when the model, the storey, the zoom or the view rules
+# change.
+import examples/bim-slice/bim_text.dl
+import lib/cadkernel/topology_list.dl
+
+class:
+    patterns:
+        [a|] bim canvas batch record
+    members:
+        red as an integer
+        green as an integer
+        blue as an integer
+        pixels as the type of (a cad topology list of a cad vector2)
+
+class:
+    patterns:
+        [a|] bim canvas text record
+    members:
+        message as a string
+        x as a 64 bit floating-point number
+        y as a 64 bit floating-point number
+        red as an integer
+        green as an integer
+        blue as an integer
+
+class:
+    patterns:
+        [a|] bim canvas record
+    members:
+        batches as the type of (a cad topology list of a bim canvas batch record)
+        texts as the type of (a cad topology list of a bim canvas text record)
+
+function a new bim canvas:
+    execute:
+        return @intrinsic("construct", a bim canvas record, a cad topology list of a bim canvas batch record, a cad topology list of a bim canvas text record)
+
+# Appends the two triangles of a stroke `breadth` pixels wide from `first` to
+# `second`.
+function append bim stroke quad from {cad vector2:first} to {cad vector2:second} wide {a 64 bit floating-point number:breadth} into {a pointer to a list:pixels}:
+    execute:
+        set dx to second's x - first's x
+        set dy to second's y - first's y
+        set magnitude to the square root of ((dx * dx) + (dy * dy))
+        if magnitude <= 0.000001:
+            return nothing
+        set ox to (0.0 - dy) * (breadth / (2.0 * magnitude))
+        set oy to dx * (breadth / (2.0 * magnitude))
+        append (a cad vector2 with x (first's x + ox) and y (first's y + oy)) to pixels
+        append (a cad vector2 with x (first's x - ox) and y (first's y - oy)) to pixels
+        append (a cad vector2 with x (second's x + ox) and y (second's y + oy)) to pixels
+        append (a cad vector2 with x (second's x + ox) and y (second's y + oy)) to pixels
+        append (a cad vector2 with x (first's x - ox) and y (first's y - oy)) to pixels
+        append (a cad vector2 with x (second's x - ox) and y (second's y - oy)) to pixels
+
+# Records the triangles `pixels` (three per triangle) in one colour.
+function record bim triangles {a pointer to a list:pixels} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        if (the length of pixels) = 0:
+            return nothing
+        set copied to a cad topology list of a cad vector2
+        loop cursor from 0 to the length of pixels:
+            append (the item at cursor in pixels) to (copied's values)
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, copied)) to (canvas's batches's values)
+
+# Records the strokes between the pixel pairs `pairs`, `breadth` pixels wide.
+function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, {integer:green} and {integer:blue} wide {a 64 bit floating-point number:breadth} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        if (the length of pairs) = 0:
+            return nothing
+        set quads to a cad topology list of a cad vector2
+        set cursor to 0
+        loop while cursor < the length of pairs:
+            append bim stroke quad from (the item at cursor in pairs) to (the item at (cursor + 1) in pairs) wide breadth into (quads's values)
+            set cursor to cursor + 2
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads)) to (canvas's batches's values)
+
+# Records a label with its baseline starting at `x`, `y`.
+function record bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue)) to (canvas's texts's values)
+
+# The vertices replaying `canvas` streams: its triangle corners and six per
+# glyph of its labels.
+function the bim vertex count of {bim canvas record:canvas}:
+    execute:
+        set total to 0
+        loop cursor from 0 to the length of (canvas's batches's values):
+            set total to total + (the length of ((the item at cursor in (canvas's batches's values))'s pixels's values))
+        loop cursor from 0 to the length of (canvas's texts's values):
+            set total to total + (6 * (the length of ((the item at cursor in (canvas's texts's values))'s message)))
+        return total
+
+# Draws `canvas` into `frame` moved by `dx`, `dy` pixels: every batch in the
+# order recorded, then every label.
+function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} with {bim text atlas record:atlas} in {graphics frame:frame}:
+    execute:
+        loop cursor from 0 to the length of (canvas's batches's values):
+            set batch to the item at cursor in (canvas's batches's values)
+            start triangles in frame
+            use vertex color red batch's red, green batch's green and blue batch's blue in frame
+            loop corner from 0 to the length of (batch's pixels's values):
+                set pixel to the item at corner in (batch's pixels's values)
+                add a vertex at x (pixel's x + dx) and y (pixel's y + dy) to frame
+            finish triangles in frame
+        loop cursor from 0 to the length of (canvas's texts's values):
+            set label to the item at cursor in (canvas's texts's values)
+            draw bim text label's message at (label's x + dx) and (label's y + dy) with atlas coloured label's red, label's green and label's blue in frame
+
+# A recorded depth-tested drawing: triangles in pixels with depth, each with
+# its own colour (packed as red * 65536 + green * 256 + blue). The 3D view is
+# recorded once per camera, model, selection and view-rule state and replayed
+# every frame in between.
+class:
+    patterns:
+        [a|] bim depth recording record
+    members:
+        colours as the type of (a cad topology list of an integer)
+        corners as the type of (a cad topology list of a cad vector3)
+
+function a new bim depth recording:
+    execute:
+        return @intrinsic("construct", a bim depth recording record, a cad topology list of an integer, a cad topology list of a cad vector3)
+
+function the bim packed colour {integer:red}, {integer:green} and {integer:blue}:
+    execute:
+        return ((red * 65536) + (green * 256)) + blue
+
+function record bim depth triangle {cad vector3:first}, {cad vector3:second} and {cad vector3:third} coloured {integer:packed} on {a pointer to a bim depth recording record:recording}:
+    execute:
+        append packed to (recording's colours's values)
+        append first to (recording's corners's values)
+        append second to (recording's corners's values)
+        append third to (recording's corners's values)
+
+# Draws `recording` with depth testing, in one triangle batch.
+function replay bim depth recording {bim depth recording record:recording} in {graphics frame:frame}:
+    execute:
+        if (the length of (recording's colours's values)) = 0:
+            return nothing
+        enable depth testing in frame
+        start triangles in frame
+        loop cursor from 0 to the length of (recording's colours's values):
+            set packed to the item at cursor in (recording's colours's values)
+            use vertex color red (packed / 65536), green (the remainder of (packed / 256) divided by 256) and blue (the remainder of packed divided by 256) in frame
+            loop corner from 0 to 3:
+                set point to the item at ((cursor * 3) + corner) in (recording's corners's values)
+                add a vertex at x point's x, y point's y and z point's z to frame
+        finish triangles in frame
+        disable depth testing in frame
+
+# Draws `recording` without depth testing, in the order recorded: the ground
+# and the shadows under the GPU-resident model, which is drawn over them.
+function replay bim depth recording {bim depth recording record:recording} flat in {graphics frame:frame}:
+    execute:
+        if (the length of (recording's colours's values)) = 0:
+            return nothing
+        start triangles in frame
+        loop cursor from 0 to the length of (recording's colours's values):
+            set packed to the item at cursor in (recording's colours's values)
+            use vertex color red (packed / 65536), green (the remainder of (packed / 256) divided by 256) and blue (the remainder of packed divided by 256) in frame
+            loop corner from 0 to 3:
+                set point to the item at ((cursor * 3) + corner) in (recording's corners's values)
+                add a vertex at x point's x and y point's y to frame
+        finish triangles in frame

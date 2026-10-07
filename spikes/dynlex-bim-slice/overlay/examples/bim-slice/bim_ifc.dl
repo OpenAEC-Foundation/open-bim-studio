@@ -1,0 +1,408 @@
+# SPDX-License-Identifier: MPL-2.0
+# IFC4 export of the BIM slice as STEP physical file text. The spatial
+# structure is project, site, building and one storey per level; wall types
+# carry material layer sets; walls are extrusions of their junction-resolved
+# footprints with their type and material layer set usage; openings are
+# opening elements voiding their host and filled by a door or window; slabs
+# are extrusions of their outline down from their level. GlobalIds are
+# derived from the stable element ids, so an unchanged element keeps its
+# GlobalId across exports.
+import examples/bim-slice/bim_evaluate.dl
+import lib/text.dl
+import examples/bim-slice/bim_spaces.dl
+
+class:
+    patterns:
+        [a|] bim step writer record
+    members:
+        text as a string
+        nextEntity as an integer
+
+local function a new bim step writer:
+    execute:
+        return @intrinsic("construct", a bim step writer record, the string form of "", 1)
+
+# Appends one entity and returns its instance number.
+local function write bim entity {a string:body} to {a pointer to a bim step writer record:writer}:
+    execute:
+        set number to writer's nextEntity
+        set writer's nextEntity to number + 1
+        set writer's text to (((writer's text + (the string form of "#")) + (the string form of number)) + (the string form of "=")) + body
+        set writer's text to writer's text + (the string form of ";\n")
+        return number
+
+local function the bim reference text of {integer:number}:
+    execute:
+        return (the string form of "#") + (the string form of number)
+
+# A STEP real: shortest round-trip digits with the decimal point STEP requires.
+local function the bim real text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.17g", value)
+        set digits to the substring of buffer from 0 spanning written bytes
+        if (digits contains ".") or (digits contains "n"):
+            return digits
+        set exponent to the index of "e" in digits
+        if exponent < 0:
+            return digits + (the string form of ".")
+        return ((the substring of digits from 0 spanning exponent bytes) + (the string form of ".")) + (the substring of digits from exponent spanning ((the length of digits) - exponent) bytes)
+
+# An area for a name, to two decimals.
+local function the bim area text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
+        return the substring of buffer from 0 spanning written bytes
+
+# A STEP string: apostrophes are doubled; the slice writes ASCII names only.
+local function the bim label text of {a string:value}:
+    execute:
+        return ((the string form of "'") + (value with (the string form of "'") replaced by (the string form of "''"))) + (the string form of "'")
+
+local function the bim ifc alphabet:
+    execute:
+        return the string form of "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$"
+
+# The 22-character IFC encoding of the 128 bits `high`:`low`: two leading bits,
+# then 21 groups of six bits, most significant first.
+local function the bim global id for kind {integer:kindCode} of {a 64 bit integer:elementId}:
+    execute:
+        set alphabet to the bim ifc alphabet
+        set high to (5003681244157113 as a 64 bit unsigned integer) bitwise or ((kindCode as a 64 bit unsigned integer) shifted left by (56 as a 64 bit unsigned integer))
+        set low to elementId as a 64 bit unsigned integer
+        set result to a new string buffer containing 22 bytes
+        loop place from 0 to 22:
+            set bitOffset to 0
+            set width to 6
+            if place = 0:
+                set width to 2
+            else:
+                set bitOffset to 2 + ((place - 1) * 6)
+            # Bits [bitOffset, bitOffset + width) of the 128-bit value, counted
+            # from the most significant bit.
+            set value to 0 as a 64 bit unsigned integer
+            loop bit from 0 to width:
+                set position to bitOffset + bit
+                set taken to 0 as a 64 bit unsigned integer
+                if position < 64:
+                    set taken to (high shifted right by ((63 - position) as a 64 bit unsigned integer)) bitwise and (1 as a 64 bit unsigned integer)
+                else:
+                    set taken to (low shifted right by ((127 - position) as a 64 bit unsigned integer)) bitwise and (1 as a 64 bit unsigned integer)
+                set value to (value shifted left by (1 as a 64 bit unsigned integer)) bitwise or taken
+            store (the character at (value as an integer) in alphabet) into the data of result at place
+        return ((the string form of "'") + result) + (the string form of "'")
+
+local function the bim ifc point {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y} and {a 64 bit floating-point number:z} in {a pointer to a bim step writer record:writer}:
+    execute:
+        set body to (the string form of "IFCCARTESIANPOINT((") + (the bim real text of x)
+        set body to ((body + (the string form of ",")) + (the bim real text of y)) + (the string form of ",")
+        set body to (body + (the bim real text of z)) + (the string form of "))")
+        return write bim entity body to writer
+
+local function the bim ifc point2 {cad vector2:location} in {a pointer to a bim step writer record:writer}:
+    execute:
+        set body to (the string form of "IFCCARTESIANPOINT((") + (the bim real text of location's x)
+        set body to ((body + (the string form of ",")) + (the bim real text of location's y)) + (the string form of "))")
+        return write bim entity body to writer
+
+local function the bim ifc placement at height {a 64 bit floating-point number:elevation} relative to {integer:parent} in {a pointer to a bim step writer record:writer}:
+    execute:
+        set origin to the bim ifc point 0.0, 0.0 and elevation in writer
+        set axes to write bim entity ((the string form of "IFCAXIS2PLACEMENT3D(") + (the bim reference text of origin) + (the string form of ",$,$)")) to writer
+        set parentText to the string form of "$"
+        if parent > 0:
+            set parentText to the bim reference text of parent
+        return write bim entity ((((the string form of "IFCLOCALPLACEMENT(") + parentText) + (the string form of ",")) + ((the bim reference text of axes) + (the string form of ")"))) to writer
+
+# A body representation: the closed polygon extruded upward by `depth`.
+local function the bim ifc extrusion through {a pointer to a list:corners} depth {a 64 bit floating-point number:depth} in context {integer:context} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set pointList to the string form of ""
+        loop cursor from 0 to (the length of corners) + 1:
+            set pointNumber to the bim ifc point2 (the item at (the remainder of cursor divided by (the length of corners)) in corners) in writer
+            if cursor > 0:
+                set pointList to pointList + (the string form of ",")
+            set pointList to pointList + (the bim reference text of pointNumber)
+        set polyline to write bim entity (((the string form of "IFCPOLYLINE((") + pointList) + (the string form of "))")) to writer
+        set profile to write bim entity (((the string form of "IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,") + (the bim reference text of polyline)) + (the string form of ")")) to writer
+        set origin to the bim ifc point 0.0, 0.0 and 0.0 in writer
+        set position to write bim entity (((the string form of "IFCAXIS2PLACEMENT3D(") + (the bim reference text of origin)) + (the string form of ",$,$)")) to writer
+        set up to write bim entity (the string form of "IFCDIRECTION((0.,0.,1.))") to writer
+        set solidBody to (the string form of "IFCEXTRUDEDAREASOLID(") + (the bim reference text of profile)
+        set solidBody to ((solidBody + (the string form of ",")) + (the bim reference text of position)) + (the string form of ",")
+        set solidBody to (((solidBody + (the bim reference text of up)) + (the string form of ",")) + (the bim real text of depth)) + (the string form of ")")
+        set solid to write bim entity solidBody to writer
+        set representationBody to (the string form of "IFCSHAPEREPRESENTATION(") + (the bim reference text of context)
+        set representationBody to ((representationBody + (the string form of ",'Body','SweptSolid',(")) + (the bim reference text of solid)) + (the string form of "))")
+        set representation to write bim entity representationBody to writer
+        return write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of representation)) + (the string form of "))")) to writer
+
+local function the bim ifc list of {a pointer to a list:numbers}:
+    execute:
+        set text to the string form of "("
+        loop cursor from 0 to the length of numbers:
+            if cursor > 0:
+                set text to text + (the string form of ",")
+            set text to text + (the bim reference text of (the item at cursor in numbers))
+        return text + (the string form of ")")
+
+local function relate bim {string:relation} named {integer:kind} from {integer:relating} to {a pointer to a list:related} first {boolean:relatingFirst} in {a pointer to a bim step writer record:writer}:
+    execute:
+        if (the length of related) = 0:
+            return nothing
+        set body to (relation + (the string form of "(")) + (the bim global id for kind kind of ((writer's nextEntity) as a 64 bit integer))
+        if relatingFirst:
+            set body to (((body + (the string form of ",$,$,$,")) + (the bim reference text of relating)) + (the string form of ",")) + (the bim ifc list of related)
+        else:
+            set body to (((body + (the string form of ",$,$,$,")) + (the bim ifc list of related)) + (the string form of ",")) + (the bim reference text of relating)
+        ignore write bim entity (body + (the string form of ")")) to writer
+
+# A relationship with a single related object (voids and fills).
+local function relate bim single {string:relation} named {integer:kind} from {integer:relating} to {integer:relatedOne} in {a pointer to a bim step writer record:writer}:
+    execute:
+        set body to (relation + (the string form of "(")) + (the bim global id for kind kind of ((writer's nextEntity) as a 64 bit integer))
+        set body to (((body + (the string form of ",$,$,$,")) + (the bim reference text of relating)) + (the string form of ",")) + (the bim reference text of relatedOne)
+        ignore write bim entity (body + (the string form of ")")) to writer
+
+# The complete IFC4 file text of `modelValue`.
+function the bim ifc text of {bim model record:modelValue}:
+    execute:
+        set writer to a new bim step writer
+        set w to the address of writer
+        set lengthUnit to write bim entity (the string form of "IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)") to w
+        set areaUnit to write bim entity (the string form of "IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)") to w
+        set volumeUnit to write bim entity (the string form of "IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)") to w
+        set angleUnit to write bim entity (the string form of "IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.)") to w
+        set unitNumbers to an empty list of an integer
+        append lengthUnit to unitNumbers
+        append areaUnit to unitNumbers
+        append volumeUnit to unitNumbers
+        append angleUnit to unitNumbers
+        set units to write bim entity ((the string form of "IFCUNITASSIGNMENT(") + (the bim ifc list of unitNumbers) + (the string form of ")")) to w
+        free unitNumbers
+        set worldOrigin to the bim ifc point 0.0, 0.0 and 0.0 in w
+        set world to write bim entity (((the string form of "IFCAXIS2PLACEMENT3D(") + (the bim reference text of worldOrigin)) + (the string form of ",$,$)")) to w
+        set context to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-06,") + (the bim reference text of world)) + (the string form of ",$)")) to w
+        set bodyContext to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,") + (the bim reference text of context)) + (the string form of ",$,.MODEL_VIEW.,$)")) to w
+        set projectBody to ((the string form of "IFCPROJECT(") + (the bim global id for kind 1 of (1 as a 64 bit integer))) + (the string form of ",$,'BIM slice',$,$,$,$,(")
+        set project to write bim entity (((projectBody + (the bim reference text of context)) + (the string form of "),")) + ((the bim reference text of units) + (the string form of ")"))) to w
+        set sitePlacement to the bim ifc placement at height 0.0 relative to 0 in w
+        set site to write bim entity (((the string form of "IFCSITE(") + (the bim global id for kind 2 of (1 as a 64 bit integer))) + (((the string form of ",$,'Site',$,$,") + (the bim reference text of sitePlacement)) + (the string form of ",$,$,.ELEMENT.,$,$,$,$,$)"))) to w
+        set buildingPlacement to the bim ifc placement at height 0.0 relative to sitePlacement in w
+        set building to write bim entity (((the string form of "IFCBUILDING(") + (the bim global id for kind 3 of (1 as a 64 bit integer))) + (((the string form of ",$,'Building',$,$,") + (the bim reference text of buildingPlacement)) + (the string form of ",$,$,.ELEMENT.,$,$,$)"))) to w
+        set siteList to an empty list of an integer
+        append site to siteList
+        relate bim (the string form of "IFCRELAGGREGATES") named 20 from project to siteList first true in w
+        set buildingList to an empty list of an integer
+        append building to buildingList
+        relate bim (the string form of "IFCRELAGGREGATES") named 21 from site to buildingList first true in w
+        free siteList
+        free buildingList
+
+        # Storeys.
+        set storeyNumbers to an empty list of an integer
+        set storeyPlacements to an empty list of an integer
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            set placement to the bim ifc placement at height levelValue's elevation relative to buildingPlacement in w
+            set storeyBody to ((the string form of "IFCBUILDINGSTOREY(") + (the bim global id for kind 4 of levelValue's id)) + (the string form of ",$,")
+            set storeyBody to (((storeyBody + (the bim label text of levelValue's name)) + (the string form of ",$,$,")) + (the bim reference text of placement)) + (the string form of ",$,$,.ELEMENT.,")
+            append (write bim entity ((storeyBody + (the bim real text of levelValue's elevation)) + (the string form of ")")) to w) to storeyNumbers
+            append placement to storeyPlacements
+        relate bim (the string form of "IFCRELAGGREGATES") named 22 from building to storeyNumbers first true in w
+
+        # Wall types with their material layer sets.
+        set typeNumbers to an empty list of an integer
+        set layerSetNumbers to an empty list of an integer
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            set layerNumbers to an empty list of an integer
+            loop layerCursor from 0 to the length of (wallType's layers's values):
+                set layerValue to the item at layerCursor in (wallType's layers's values)
+                set material to write bim entity (((the string form of "IFCMATERIAL(") + (the bim label text of layerValue's material)) + (the string form of ",$,$)")) to w
+                set layerBody to ((the string form of "IFCMATERIALLAYER(") + (the bim reference text of material)) + (the string form of ",")
+                append (write bim entity ((layerBody + (the bim real text of layerValue's thickness)) + (the string form of ",$,$,$,$,$)")) to w) to layerNumbers
+            set layerSet to write bim entity ((((the string form of "IFCMATERIALLAYERSET(") + (the bim ifc list of layerNumbers)) + (the string form of ",")) + ((the bim label text of wallType's name) + (the string form of ",$)"))) to w
+            free layerNumbers
+            set typeBody to ((the string form of "IFCWALLTYPE(") + (the bim global id for kind 5 of wallType's id)) + (the string form of ",$,")
+            set typeNumber to write bim entity ((typeBody + (the bim label text of wallType's name)) + (the string form of ",$,$,$,$,$,$,.STANDARD.)")) to w
+            set typeList to an empty list of an integer
+            append typeNumber to typeList
+            relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 23 from layerSet to typeList first false in w
+            free typeList
+            append typeNumber to typeNumbers
+            append layerSet to layerSetNumbers
+
+        # Walls, their openings and the windows filling them.
+        # Every contained element with the position of its storey.
+        set containedNumbers to an empty list of an integer
+        set containedStoreys to an empty list of an integer
+        set joins to the bim join index of modelValue
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            set levelFound to the bim level index of wallValue's levelId in modelValue
+            set typeFound to the bim wall type index of wallValue's typeId in modelValue
+            if levelFound's valid and typeFound's valid:
+                set wallPlacement to the item at levelFound's position in storeyPlacements
+                set footprint to the bim footprint of wallValue in modelValue using joins
+                # A curved wall's profile follows its arcs within half a millimetre.
+                set corners to the bim outline of wallValue with footprint wide (the bim wall thickness of wallValue in modelValue)
+                set wallShape to the bim ifc extrusion through corners depth wallValue's height in context bodyContext with w
+                free corners
+                set wallLocal to the bim ifc placement at height 0.0 relative to wallPlacement in w
+                set wallBody to ((the string form of "IFCWALL(") + (the bim global id for kind 6 of wallValue's id)) + (the string form of ",$,")
+                set wallBody to (((wallBody + (the bim label text of ((the string form of "Wall ") + (the string form of wallValue's id)))) + (the string form of ",$,$,")) + (the bim reference text of wallLocal)) + (the string form of ",")
+                set wall to write bim entity ((wallBody + (the bim reference text of wallShape)) + (the string form of ",$,.STANDARD.)")) to w
+                append wall to containedNumbers
+                append levelFound's position to containedStoreys
+                set thickness to the bim wall thickness of wallValue in modelValue
+                set usageBody to ((the string form of "IFCMATERIALLAYERSETUSAGE(") + (the bim reference text of (the item at typeFound's position in layerSetNumbers))) + (the string form of ",.AXIS2.,.NEGATIVE.,")
+                set usage to write bim entity ((usageBody + (the bim real text of (thickness * 0.5))) + (the string form of ",$)")) to w
+                set wallList to an empty list of an integer
+                append wall to wallList
+                relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 24 from usage to wallList first false in w
+                relate bim (the string form of "IFCRELDEFINESBYTYPE") named 25 from (the item at typeFound's position in typeNumbers) to wallList first false in w
+                free wallList
+                set direction to the bim direction of wallValue
+                set normal to the bim exterior normal of wallValue
+                set reach to (thickness * 0.5) + 0.01
+                loop openingCursor from 0 to the length of (modelValue's openings's values):
+                    set openingValue to the item at openingCursor in (modelValue's openings's values)
+                    set openingTypeFound to the bim opening type index of openingValue's typeId in modelValue
+                    if (openingValue's hostId = wallValue's id) and openingTypeFound's valid:
+                        set openingType to the item at openingTypeFound's position in (modelValue's openingTypes's values)
+                        set halfWidth to (the bim rough width of openingType) * 0.5
+                        set leftAlong to openingValue's offset - halfWidth
+                        set rightAlong to openingValue's offset + halfWidth
+                        set left to a cad vector2 with x (wallValue's start's x + (leftAlong * direction's x)) and y (wallValue's start's y + (leftAlong * direction's y))
+                        set right to a cad vector2 with x (wallValue's start's x + (rightAlong * direction's x)) and y (wallValue's start's y + (rightAlong * direction's y))
+                        set normal to the bim exterior normal of wallValue
+                        set box to an empty list of a cad vector2
+                        set hostArc to the bim arc of wallValue
+                        if hostArc's curved:
+                            # Along a curved wall the opening is a ring sector
+                            # with radial jambs, as the fast kernel cuts it,
+                            # reaching past both faces.
+                            set arcLength to the bim centreline length of wallValue
+                            set leftT to leftAlong / arcLength
+                            set rightT to rightAlong / arcLength
+                            set count to the bim pieces of hostArc reaching (thickness * 0.5)
+                            set far to (thickness * 0.5) + 0.05
+                            append (the bim point of hostArc at leftT offset far) to box
+                            loop piece from 1 to count:
+                                set t to (piece as a 64 bit floating-point number) / (count as a 64 bit floating-point number)
+                                if (t > leftT) and (t < rightT):
+                                    append (the bim point of hostArc at t offset far) to box
+                            append (the bim point of hostArc at rightT offset far) to box
+                            append (the bim point of hostArc at rightT offset (0.0 - far)) to box
+                            set piece to count - 1
+                            loop while piece >= 1:
+                                set t to (piece as a 64 bit floating-point number) / (count as a 64 bit floating-point number)
+                                if (t > leftT) and (t < rightT):
+                                    append (the bim point of hostArc at t offset (0.0 - far)) to box
+                                set piece to piece - 1
+                            append (the bim point of hostArc at leftT offset (0.0 - far)) to box
+                        else:
+                            append (a cad vector2 with x (left's x + (reach * normal's x)) and y (left's y + (reach * normal's y))) to box
+                            append (a cad vector2 with x (right's x + (reach * normal's x)) and y (right's y + (reach * normal's y))) to box
+                            append (a cad vector2 with x (right's x - (reach * normal's x)) and y (right's y - (reach * normal's y))) to box
+                            append (a cad vector2 with x (left's x - (reach * normal's x)) and y (left's y - (reach * normal's y))) to box
+                        set openingShape to the bim ifc extrusion through box depth (the bim rough height of openingType) in context bodyContext with w
+                        free box
+                        set openingLocal to the bim ifc placement at height openingType's sill relative to wallLocal in w
+                        set openingBody to ((the string form of "IFCOPENINGELEMENT(") + (the bim global id for kind 7 of openingValue's id)) + (the string form of ",$,'Opening',$,$,")
+                        set openingBody to (((openingBody + (the bim reference text of openingLocal)) + (the string form of ",")) + (the bim reference text of openingShape)) + (the string form of ",$,.OPENING.)")
+                        set openingElement to write bim entity openingBody to w
+                        relate bim single (the string form of "IFCRELVOIDSELEMENT") named 26 from wall to openingElement in w
+                        # A filling door or window, with its overall size.
+                        set fillingEntity to the string form of "IFCWINDOW("
+                        set fillingKind to the string form of ",.WINDOW.,$,$)"
+                        if openingType's isDoor:
+                            set fillingEntity to the string form of "IFCDOOR("
+                            set fillingKind to the string form of ",.DOOR.,$,$)"
+                        set windowBody to (fillingEntity + (the bim global id for kind 8 of openingValue's id)) + (the string form of ",$,")
+                        set windowBody to (((windowBody + (the bim label text of openingType's name)) + (the string form of ",$,$,")) + (the bim reference text of openingLocal)) + (the string form of ",$,$,")
+                        set windowBody to (((windowBody + (the bim real text of openingType's height)) + (the string form of ",")) + (the bim real text of openingType's width)) + fillingKind
+                        set window to write bim entity windowBody to w
+                        append window to containedNumbers
+                        append levelFound's position to containedStoreys
+                        relate bim single (the string form of "IFCRELFILLSELEMENT") named 27 from openingElement to window in w
+        # Slabs, extruded up to their level from their underside.
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            set levelFound to the bim level index of slabValue's levelId in modelValue
+            if levelFound's valid:
+                set slabShape to the bim ifc extrusion through (slabValue's outline's values) depth slabValue's thickness in context bodyContext with w
+                set slabLocal to the bim ifc placement at height (0.0 - slabValue's thickness) relative to (the item at levelFound's position in storeyPlacements) in w
+                set slabBody to ((the string form of "IFCSLAB(") + (the bim global id for kind 10 of slabValue's id)) + (the string form of ",$,")
+                set slabBody to (((slabBody + (the bim label text of ((the string form of "Slab ") + (the string form of slabValue's id)))) + (the string form of ",$,$,")) + (the bim reference text of slabLocal)) + (the string form of ",")
+                append (write bim entity ((slabBody + (the bim reference text of slabShape)) + (the string form of ",$,.FLOOR.)")) to w) to containedNumbers
+                append levelFound's position to containedStoreys
+        # Grids: one IfcGrid of all grid lines, lettered lines as U axes and
+        # numbered lines as V axes, contained in the lowest storey. IFC4 needs
+        # both, so a model with grids in one direction only writes none.
+        if (the length of storeyNumbers) > 0:
+            set uAxes to an empty list of an integer
+            set vAxes to an empty list of an integer
+            set curves to an empty list of an integer
+            loop cursor from 0 to the length of (modelValue's grids's values):
+                set gridValue to the item at cursor in (modelValue's grids's values)
+                set startNumber to the bim ifc point2 gridValue's start in w
+                set finishNumber to the bim ifc point2 gridValue's finish in w
+                set polyline to write bim entity (((the string form of "IFCPOLYLINE((") + (the bim reference text of startNumber)) + (((the string form of ",") + (the bim reference text of finishNumber)) + (the string form of "))"))) to w
+                append polyline to curves
+                set axisNumber to write bim entity ((((the string form of "IFCGRIDAXIS(") + (the bim label text of gridValue's name)) + (the string form of ",")) + ((the bim reference text of polyline) + (the string form of ",.T.)"))) to w
+                set numbered to (the absolute value of (gridValue's finish's y - gridValue's start's y)) > (the absolute value of (gridValue's finish's x - gridValue's start's x))
+                if numbered:
+                    append axisNumber to vAxes
+                else:
+                    append axisNumber to uAxes
+            if ((the length of uAxes) > 0) and ((the length of vAxes) > 0):
+                set curveSet to write bim entity (((the string form of "IFCGEOMETRICCURVESET(") + (the bim ifc list of curves)) + (the string form of ")")) to w
+                set footprintBody to (the string form of "IFCSHAPEREPRESENTATION(") + (the bim reference text of context)
+                set footprint to write bim entity (((footprintBody + (the string form of ",'FootPrint','GeometricCurveSet',(")) + (the bim reference text of curveSet)) + (the string form of "))")) to w
+                set gridShape to write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of footprint)) + (the string form of "))")) to w
+                set gridLocal to the bim ifc placement at height 0.0 relative to (the item at 0 in storeyPlacements) in w
+                set gridBody to ((the string form of "IFCGRID(") + (the bim global id for kind 11 of (1 as a 64 bit integer))) + (the string form of ",$,'Grid',$,$,")
+                set gridBody to (((gridBody + (the bim reference text of gridLocal)) + (the string form of ",")) + (the bim reference text of gridShape)) + (the string form of ",")
+                set gridBody to (((gridBody + (the bim ifc list of uAxes)) + (the string form of ",")) + (the bim ifc list of vAxes)) + (the string form of ",$,.RECTANGULAR.)")
+                append (write bim entity gridBody to w) to containedNumbers
+                append 0 to containedStoreys
+            free uAxes
+            free vAxes
+            free curves
+        loop storeyCursor from 0 to the length of storeyNumbers:
+            set storeyContents to an empty list of an integer
+            loop cursor from 0 to the length of containedNumbers:
+                if (the item at cursor in containedStoreys) = storeyCursor:
+                    append (the item at cursor in containedNumbers) to storeyContents
+            if (the length of storeyContents) > 0:
+                relate bim (the string form of "IFCRELCONTAINEDINSPATIALSTRUCTURE") named 28 from (the item at storeyCursor in storeyNumbers) to storeyContents first false in w
+            free storeyContents
+
+        # Spaces of each storey, derived from its walls and extruded over the
+        # storey height. A space is named by its floor area.
+        loop levelCursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at levelCursor in (modelValue's levels's values)
+            set derived to the bim spaces of modelValue on level levelValue's id using joins
+            set spaceNumbers to an empty list of an integer
+            loop spaceCursor from 0 to the length of (derived's values):
+                set space to the item at spaceCursor in (derived's values)
+                set spaceShape to the bim ifc extrusion through (space's outline's values) depth levelValue's height in context bodyContext with w
+                set spaceLocal to the bim ifc placement at height 0.0 relative to (the item at levelCursor in storeyPlacements) in w
+                set spaceBody to ((the string form of "IFCSPACE(") + (the bim global id for kind 9 of (the bim identity of space))) + (the string form of ",$,")
+                set spaceName to ((the string form of "Space ") + (the bim area text of space's area)) + (the string form of " m2")
+                set spaceBody to (((spaceBody + (the bim label text of spaceName)) + (the string form of ",$,$,")) + (the bim reference text of spaceLocal)) + (the string form of ",")
+                append (write bim entity ((spaceBody + (the bim reference text of spaceShape)) + (the string form of ",$,.ELEMENT.,.SPACE.,$)")) to w) to spaceNumbers
+            relate bim (the string form of "IFCRELAGGREGATES") named 29 from (the item at levelCursor in storeyNumbers) to spaceNumbers first true in w
+            free spaceNumbers
+        free containedNumbers
+        free containedStoreys
+        free storeyNumbers
+        free storeyPlacements
+        free typeNumbers
+        free layerSetNumbers
+        set header to the string form of "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');\n"
+        set header to header + (the string form of "FILE_NAME('bim-slice.ifc','',(''),(''),'DynLex BIM slice','DynLex BIM slice','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n")
+        return (header + writer's text) + (the string form of "ENDSEC;\nEND-ISO-10303-21;\n")

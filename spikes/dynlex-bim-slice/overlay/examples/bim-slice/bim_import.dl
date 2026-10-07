@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MPL-2.0
+# Imported elements: read-only meshes read from a BIM-MESH file, the format
+# `import/ifc_to_mesh.py` writes from an IFC file through IfcOpenShell. Each
+# element becomes a scene mesh in its category, flat-shaded, with an id from
+# `the bim imported id base` up and its label ("<IFC class> <GlobalId>
+# <Name>") alongside. A later step reads IFC directly in DynLex.
+import examples/bim-slice/bim_scene.dl
+import examples/bim-slice/bim_file.dl
+
+class:
+    patterns:
+        [a|] bim import record
+    members:
+        valid as a boolean
+        message as a string
+        meshes as the type of (a cad topology list of a bim scene mesh record)
+        labels as the type of (a cad topology list of a string)
+        triangleCount as an integer
+        low as a cad vector3
+        high as a cad vector3
+        # Polylines (IfcX basiscurves) as pairs of points: space boundaries,
+        # axes, alignments.
+        curves as the type of (a cad topology list of a cad vector3)
+
+local function a bim import refusal saying {a string:reason}:
+    execute:
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3)
+
+local function the bim unsigned at {integer:offset} in {a string:content}:
+    execute:
+        return (@intrinsic("dereference", ((the data of content) + offset) as a pointer to a 32 bit unsigned integer)) as an integer
+
+local function the bim double at {integer:offset} in {a string:content}:
+    execute:
+        return @intrinsic("dereference", ((the data of content) + offset) as a pointer to a 64 bit floating-point number)
+
+# The elements of the BIM-MESH file at `path`, or a refusal naming the fault.
+function the bim import of {a string:path}:
+    execute:
+        set loaded to the bim file content at path
+        if loaded's valid = false:
+            return a bim import refusal saying ((the string form of "could not read ") + path)
+        set content to loaded's text
+        set size to the length of content
+        if (size < 12) or ((the substring of content from 0 spanning 8 bytes) != (the string form of "BIMMESH1")):
+            return a bim import refusal saying (the string form of "not a BIM-MESH file")
+        set count to the bim unsigned at 8 in content
+        set meshes to a cad topology list of a bim scene mesh record
+        set labels to a cad topology list of a string
+        set infinity to 1.0 / 0.0
+        set lowX to infinity
+        set lowY to infinity
+        set lowZ to infinity
+        set highX to 0.0 - infinity
+        set highY to highX
+        set highZ to highX
+        set triangles to 0
+        set offset to 12
+        loop element from 0 to count:
+            if (offset + 8) > size:
+                return a bim import refusal saying (the string form of "the file ends inside an element")
+            set category to the bim unsigned at offset in content
+            set labelLength to the bim unsigned at (offset + 4) in content
+            set offset to offset + 8
+            if ((offset + labelLength) + 4) > size:
+                return a bim import refusal saying (the string form of "the file ends inside a label")
+            set label to the substring of content from offset spanning labelLength bytes
+            set offset to offset + labelLength
+            set vertexCount to the bim unsigned at offset in content
+            set offset to offset + 4
+            set vertexStart to offset
+            if ((offset + (vertexCount * 24)) + 4) > size:
+                return a bim import refusal saying (the string form of "the file ends inside the vertices")
+            set offset to offset + (vertexCount * 24)
+            set triangleCount to the bim unsigned at offset in content
+            set offset to offset + 4
+            if (offset + (triangleCount * 12)) > size:
+                return a bim import refusal saying (the string form of "the file ends inside the triangles")
+            # Flat shading: each triangle gets its own three corners with its
+            # face normal.
+            set shape to an empty fast mesh
+            loop face from 0 to triangleCount:
+                set corners to an empty list of a cad vector3
+                loop corner from 0 to 3:
+                    set index to the bim unsigned at (offset + (((face * 3) + corner) * 4)) in content
+                    if (index < 0) or (index >= vertexCount):
+                        free corners
+                        return a bim import refusal saying (the string form of "a triangle refers to a missing vertex")
+                    set vertexOffset to vertexStart + (index * 24)
+                    append (a cad vector3 with x (the bim double at vertexOffset in content), y (the bim double at (vertexOffset + 8) in content) and z (the bim double at (vertexOffset + 16) in content)) to corners
+                set first to the item at 0 in corners
+                set second to the item at 1 in corners
+                set third to the item at 2 in corners
+                set normal to the cad cross of (the cad difference of second and first) and (the cad difference of third and first)
+                set magnitude to the cad length of normal
+                if magnitude > 0.0:
+                    set normal to normal scaled by (1.0 / magnitude)
+                    set base to the length of (shape's positions's values)
+                    loop corner from 0 to 3:
+                        set point to the item at corner in corners
+                        append point to (shape's positions's values)
+                        append normal to (shape's normals's values)
+                        append (base + corner) to (shape's triangles's values)
+                        set lowX to the minimum of lowX and point's x
+                        set lowY to the minimum of lowY and point's y
+                        set lowZ to the minimum of lowZ and point's z
+                        set highX to the maximum of highX and point's x
+                        set highY to the maximum of highY and point's y
+                        set highZ to the maximum of highZ and point's z
+                    set triangles to triangles + 1
+                free corners
+            set offset to offset + (triangleCount * 12)
+            if (category < 0) or (category >= (the bim category count)):
+                set category to bim other category
+            set elementId to (the bim imported id base) + (element as a 64 bit integer)
+            append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, shape, category, the bim category colouring)) to (meshes's values)
+            append label to (labels's values)
+        return @intrinsic("construct", a bim import record, true, the string form of "", meshes, labels, triangles, (a cad vector3 with x lowX, y lowY and z lowZ), (a cad vector3 with x highX, y highY and z highZ), a cad topology list of a cad vector3)

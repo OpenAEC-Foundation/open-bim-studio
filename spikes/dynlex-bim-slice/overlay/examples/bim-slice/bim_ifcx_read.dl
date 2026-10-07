@@ -1,0 +1,585 @@
+# SPDX-License-Identifier: MPL-2.0
+# IFC5 (IfcX, `ifcx_alpha`) import, in DynLex: one or more IfcX files are
+# read as layers, flattened and composed as the buildingSMART IFC5 reference
+# implementation does, and every composed mesh becomes a read-only imported
+# element (as `bim_import.dl` makes them), placed by the `usd::xformop`
+# transforms along its path and coloured by its `diffuseColor`.
+#
+# - Flattening: the nodes of every layer, in order, merge by path; a later
+#   child, inheritance or attribute of the same name wins, and a null child
+#   or inheritance removes it.
+# - Composition of a node: first what each inherited node composes to (its
+#   children and attributes), then its own children, then its own attributes;
+#   then the node at its instance path (`root/child/...`), when there is one,
+#   overrides. A reference with a tail (`uuid/child/child`) descends into the
+#   composed children.
+# - A mesh belongs to the nearest node up its path with a `bsi::ifc::class`,
+#   which gives its category, its label and its pick.
+import examples/bim-slice/bim_import.dl
+import lib/json.dl
+
+# Whether `value` is present and of JSON kind `kind`; checked in two steps,
+# since `and` evaluates both sides.
+function bim ifcx json {a pointer to a JSON value:value} has kind {integer:kind}:
+    execute:
+        if value = (0 as a pointer to a JSON value):
+            return false
+        return (the kind of value) = kind
+
+# A child or an inheritance: `target` empty when it is removed.
+class:
+    patterns:
+        [a|] bim ifcx link record
+    members:
+        name as a string
+        target as a string
+
+class:
+    patterns:
+        [a|] bim ifcx attribute record
+    members:
+        key as a string
+        value as a pointer to a JSON value
+
+class:
+    patterns:
+        [a|] bim ifcx flat node record
+    members:
+        path as a string
+        children as the type of (a cad topology list of a bim ifcx link record)
+        inherits as the type of (a cad topology list of a bim ifcx link record)
+        attributes as the type of (a cad topology list of a bim ifcx attribute record)
+
+# What a node composes to.
+class:
+    patterns:
+        [a|] bim ifcx composed record
+    members:
+        children as the type of (a cad topology list of a bim ifcx link record)
+        attributes as the type of (a cad topology list of a bim ifcx attribute record)
+
+# The flattened layers: the nodes, and an open-addressing hash index of their
+# paths (slot values are node positions, -1 when empty).
+class:
+    patterns:
+        [a|] bim ifcx layers record
+    members:
+        nodes as the type of (a cad topology list of a bim ifcx flat node record)
+        slots as the type of (a cad topology list of an integer)
+        composed as the type of (a cad topology list of a bim ifcx composed record)
+        ready as the type of (a cad topology list of a boolean)
+
+local function the bim ifcx slot hash of {a string:label}:
+    execute:
+        set digest to 14695981039346656037 as a 64 bit unsigned integer
+        loop cursor from 0 to the length of label:
+            set code to (the character at cursor in label) as a 64 bit unsigned integer
+            set digest to (digest bitwise xor code) * (1099511628211 as a 64 bit unsigned integer)
+        return (digest shifted right by (1 as a 64 bit unsigned integer)) as a 64 bit integer
+
+# The position of the node at `path`, or -1.
+function the bim ifcx place of {a string:path} in {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set capacity to the length of (layers's slots's values)
+        if capacity = 0:
+            return -1
+        set slot to (the remainder of (the bim ifcx slot hash of path) divided by (capacity as a 64 bit integer)) as an integer
+        loop while true:
+            set held to the item at slot in (layers's slots's values)
+            if held < 0:
+                return -1
+            if (the item at held in (layers's nodes's values))'s path = path:
+                return held
+            set slot to the remainder of (slot + 1) divided by capacity
+        return -1
+
+local function index bim ifcx flattened {integer:position} in {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set capacity to the length of (layers's slots's values)
+        set path to (the item at position in (layers's nodes's values))'s path
+        set slot to (the remainder of (the bim ifcx slot hash of path) divided by (capacity as a 64 bit integer)) as an integer
+        loop while (the item at slot in (layers's slots's values)) >= 0:
+            set slot to the remainder of (slot + 1) divided by capacity
+        replace item at index slot in (layers's slots's values) with position
+
+# Doubles the index when it is half full.
+local function grow bim ifcx index of {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set wanted to 64
+        loop while wanted < ((the length of (layers's nodes's values)) * 2):
+            set wanted to wanted * 2
+        if wanted <= (the length of (layers's slots's values)):
+            return nothing
+        set layers's slots to a cad topology list of an integer
+        loop cursor from 0 to wanted:
+            append -1 to (layers's slots's values)
+        loop cursor from 0 to the length of (layers's nodes's values):
+            index bim ifcx flattened cursor in layers
+
+# `links` with `name` set to `target` (removed when `target` is empty and
+# `removing`): a later opinion of the same name replaces the earlier one.
+local function set bim ifcx link {a string:name} to {a string:target} in {a pointer to a list:links}:
+    execute:
+        loop cursor from 0 to the length of links:
+            if (the item at cursor in links)'s name = name:
+                replace item at index cursor in links with (@intrinsic("construct", a bim ifcx link record, name, target))
+                return nothing
+        append (@intrinsic("construct", a bim ifcx link record, name, target)) to links
+
+local function set bim ifcx attribute {a string:key} to {a pointer to a JSON value:value} in {a pointer to a list:attributes}:
+    execute:
+        loop cursor from 0 to the length of attributes:
+            if (the item at cursor in attributes)'s key = key:
+                replace item at index cursor in attributes with (@intrinsic("construct", a bim ifcx attribute record, key, value))
+                return nothing
+        append (@intrinsic("construct", a bim ifcx attribute record, key, value)) to attributes
+
+# The links of the JSON object `group` (children or inherits), merged into
+# `links`; null removes a child (kept with an empty target, so that it also
+# removes an inherited one) and removes an inheritance outright.
+local function merge bim ifcx links of {a pointer to a JSON value:group} into {a pointer to a list:linkList} removing {boolean:removing}:
+    execute:
+        if ((bim ifcx json group has kind the JSON object kind) = false):
+            return nothing
+        loop cursor from 0 to the length of group:
+            set member to the item at cursor in (group's members)
+            if bim ifcx json member's value has kind the JSON null kind:
+                if removing:
+                    set entry to 0
+                    loop while entry < the length of linkList:
+                        if (the item at entry in linkList)'s name = member's name:
+                            remove item entry from linkList
+                        else:
+                            set entry to entry + 1
+                else:
+                    set bim ifcx link member's name to (the string form of "") in linkList
+            else if (the kind of member's value) = the JSON text kind:
+                set bim ifcx link member's name to (the text of member's value) in linkList
+
+# Merges the layer `document` (a parsed IfcX file) into `layers`; refuses
+# with a reason, or returns the empty string.
+function merge bim ifcx layer {a pointer to a JSON value:document} into {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        if ((bim ifcx json document has kind the JSON object kind) = false):
+            return the string form of "an IfcX file is a JSON object"
+        if (document lacks JSON member named "header") or (document lacks JSON member named "data"):
+            return the string form of "an IfcX file needs a header and data"
+        set header to the JSON member named "header" in document
+        if (bim ifcx json header has kind the JSON object kind) = false:
+            return the string form of "the header is not an object"
+        if header lacks JSON member named "ifcxVersion":
+            return the string form of "the header names no ifcxVersion"
+        set version to the JSON member named "ifcxVersion" in header
+        if ((the kind of version) != the JSON text kind) or ((the text of version) != (the string form of "ifcx_alpha")):
+            return the string form of "only ifcx_alpha files are read"
+        set data to the JSON member named "data" in document
+        if ((bim ifcx json data has kind the JSON array kind) = false):
+            return the string form of "data is not an array"
+        loop cursor from 0 to the length of data:
+            set entry to the JSON value at index cursor in data
+            set usable to false
+            if bim ifcx json entry has kind the JSON object kind:
+                set usable to entry has JSON member named "path"
+            if usable:
+                set pathValue to the JSON member named "path" in entry
+                if (the kind of pathValue) = the JSON text kind:
+                    set path to the text of pathValue
+                    set position to the bim ifcx place of path in layers
+                    if position < 0:
+                        append (@intrinsic("construct", a bim ifcx flat node record, path, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)) to (layers's nodes's values)
+                        append (@intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)) to (layers's composed's values)
+                        append false to (layers's ready's values)
+                        set position to (the length of (layers's nodes's values)) - 1
+                        if ((the length of (layers's nodes's values)) * 2) > (the length of (layers's slots's values)):
+                            grow bim ifcx index of layers
+                        else:
+                            index bim ifcx flattened position in layers
+                    set node to the item at position in (layers's nodes's values)
+                    if entry has JSON member named "children":
+                        merge bim ifcx links of (the JSON member named "children" in entry) into (node's children's values) removing false
+                    if entry has JSON member named "inherits":
+                        merge bim ifcx links of (the JSON member named "inherits" in entry) into (node's inherits's values) removing true
+                    if entry has JSON member named "attributes":
+                        set group to the JSON member named "attributes" in entry
+                        if (bim ifcx json group has kind the JSON object kind):
+                            loop attributeCursor from 0 to the length of group:
+                                set member to the item at attributeCursor in (group's members)
+                                set bim ifcx attribute member's name to member's value in (node's attributes's values)
+        return the string form of ""
+
+# The part of `reference` before its first slash, and the rest.
+local function the bim ifcx head of {a string:reference}:
+    execute:
+        set slash to the index of "/" in reference
+        if slash < 0:
+            return reference
+        return the substring of reference from 0 spanning slash bytes
+
+local function the bim ifcx tail of {a string:reference}:
+    execute:
+        set slash to the index of "/" in reference
+        if slash < 0:
+            return the string form of ""
+        return the substring of reference from (slash + 1) spanning (((the length of reference) - slash) - 1) bytes
+
+# Composes the node at `position` (without instance overrides) into the
+# cache of `layers`, once. `depth` stops a cycle: a node met again while it is
+# being composed composes to nothing.
+function compose bim ifcx flattened {integer:position} in {a pointer to a bim ifcx layers record:layers} at depth {integer:depth}:
+    execute:
+        if (position < 0) or (depth > 64):
+            return nothing
+        if the item at position in (layers's ready's values):
+            return nothing
+        replace item at index position in (layers's ready's values) with true
+        set result to @intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)
+        set node to the item at position in (layers's nodes's values)
+        loop cursor from 0 to the length of (node's inherits's values):
+            set inheritance to the item at cursor in (node's inherits's values)
+            set inherited to the bim ifcx composition along inheritance's target in layers at depth (depth + 1)
+            loop entry from 0 to the length of (inherited's children's values):
+                set child to the item at entry in (inherited's children's values)
+                set bim ifcx link child's name to child's target in (result's children's values)
+            loop entry from 0 to the length of (inherited's attributes's values):
+                set opinion to the item at entry in (inherited's attributes's values)
+                set bim ifcx attribute opinion's key to opinion's value in (result's attributes's values)
+        loop cursor from 0 to the length of (node's children's values):
+            set child to the item at cursor in (node's children's values)
+            set bim ifcx link child's name to child's target in (result's children's values)
+        loop cursor from 0 to the length of (node's attributes's values):
+            set opinion to the item at cursor in (node's attributes's values)
+            set bim ifcx attribute opinion's key to opinion's value in (result's attributes's values)
+        replace item at index position in (layers's composed's values) with result
+
+# What `target` composes to: its head node, then down its tail through the
+# composed children; nothing when a step is missing.
+function the bim ifcx composition along {a string:target} in {a pointer to a bim ifcx layers record:layers} at depth {integer:depth}:
+    execute:
+        set nothingComposed to @intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)
+        set position to the bim ifcx place of (the bim ifcx head of target) in layers
+        if (position < 0) or (depth > 64):
+            return nothingComposed
+        compose bim ifcx flattened position in layers at depth depth
+        set current to the item at position in (layers's composed's values)
+        set rest to the bim ifcx tail of target
+        loop while (the length of rest) > 0:
+            set step to the bim ifcx head of rest
+            set rest to the bim ifcx tail of rest
+            set next to the string form of ""
+            loop cursor from 0 to the length of (current's children's values):
+                if (the item at cursor in (current's children's values))'s name = step:
+                    set next to (the item at cursor in (current's children's values))'s target
+            set nextPosition to -1
+            if (the length of next) > 0:
+                set nextPosition to the bim ifcx place of (the bim ifcx head of next) in layers
+            if nextPosition < 0:
+                return nothingComposed
+            compose bim ifcx flattened nextPosition in layers at depth (depth + 1)
+            set current to the item at nextPosition in (layers's composed's values)
+            # A child reference with its own tail descends further.
+            set rest to ((the bim ifcx tail of next) + (the string form of "/")) + rest
+            if (the length of (the bim ifcx tail of next)) = 0:
+                set rest to the substring of rest from 1 spanning ((the length of rest) - 1) bytes
+        return current
+
+function the bim ifcx attribute {a string:key} of {bim ifcx composed record:node}:
+    execute:
+        loop cursor from 0 to the length of (node's attributes's values):
+            set opinion to the item at cursor in (node's attributes's values)
+            if opinion's key = key:
+                return opinion's value
+        return 0 as a pointer to a JSON value
+
+# A number of the JSON array `values` at `position`, read exactly from its text.
+local function the bim ifcx number at {integer:position} in {a pointer to a JSON value:values}:
+    execute:
+        if (bim ifcx json values has kind the JSON array kind) = false:
+            return 0.0
+        if position >= the length of values:
+            return 0.0
+        set entry to the JSON value at index position in values
+        if (the kind of entry) != the JSON number kind:
+            return 0.0
+        set reading to the bim real reading of (the text of entry)
+        return reading's value
+
+# The 4 x 4 matrix (row-major, a point is a row vector, translation in the
+# last row) of `usd::xformop` on `node`, or the identity.
+local function the bim ifcx transform of {bim ifcx composed record:node}:
+    execute:
+        set matrix to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to 16:
+            if (the remainder of cursor divided by 5) = 0:
+                append 1.0 to matrix
+            else:
+                append 0.0 to matrix
+        set operation to the bim ifcx attribute (the string form of "usd::xformop") of node
+        set present to false
+        if bim ifcx json operation has kind the JSON object kind:
+            set present to operation has JSON member named "transform"
+        if present:
+            set rows to the JSON member named "transform" in operation
+            set fourRows to false
+            if bim ifcx json rows has kind the JSON array kind:
+                set fourRows to (the length of rows) = 4
+            if fourRows:
+                loop row from 0 to 4:
+                    set columns to the JSON value at index row in rows
+                    set fourColumns to false
+                    if bim ifcx json columns has kind the JSON array kind:
+                        set fourColumns to (the length of columns) = 4
+                    if fourColumns:
+                        loop column from 0 to 4:
+                            replace item at index ((row * 4) + column) in matrix with (the bim ifcx number at column in columns)
+        return matrix
+
+# `first` then `second`: the row-vector product first x second.
+local function the bim ifcx product of {a pointer to a list:first} and {a pointer to a list:second}:
+    execute:
+        set result to an empty list of a 64 bit floating-point number
+        loop row from 0 to 4:
+            loop column from 0 to 4:
+                set total to 0.0
+                loop inner from 0 to 4:
+                    set total to total + ((the item at ((row * 4) + inner) in first) * (the item at ((inner * 4) + column) in second))
+                append total to result
+        return result
+
+# The category of IFC class `code`.
+function the bim category of ifc class {a string:code}:
+    execute:
+        if ((code = (the string form of "IfcWall")) or (code = (the string form of "IfcWallStandardCase"))) or (code = (the string form of "IfcCurtainWall")):
+            return bim wall category
+        if (code = (the string form of "IfcSlab")) or (code = (the string form of "IfcCovering")):
+            return bim slab category
+        if code = (the string form of "IfcWindow"):
+            return bim window category
+        if code = (the string form of "IfcDoor"):
+            return bim door category
+        if code = (the string form of "IfcSpace"):
+            return bim space category
+        if code = (the string form of "IfcColumn"):
+            return bim column category
+        if (code = (the string form of "IfcBeam")) or (code = (the string form of "IfcMember")):
+            return bim beam category
+        if code = (the string form of "IfcRoof"):
+            return bim roof category
+        if (code = (the string form of "IfcStair")) or (code = (the string form of "IfcStairFlight")):
+            return bim stair category
+        if code = (the string form of "IfcRailing"):
+            return bim railing category
+        if (code = (the string form of "IfcFurniture")) or (code = (the string form of "IfcFurnishingElement")):
+            return bim furniture category
+        return bim other category
+
+# The walk's state: what is collected and the running extent.
+class:
+    patterns:
+        [a|] bim ifcx gathering record
+    members:
+        meshes as the type of (a cad topology list of a bim scene mesh record)
+        labels as the type of (a cad topology list of a string)
+        triangleCount as an integer
+        low as a cad vector3
+        high as a cad vector3
+        problem as a string
+        curves as the type of (a cad topology list of a cad vector3)
+
+# Adds the mesh `mesh` (a `usd::usdgeom::mesh` value) placed by `matrix`.
+local function gather bim ifcx mesh {a pointer to a JSON value:meshValue} placed by {a pointer to a list:matrix} as {integer:category} coloured {cad vector3:colour} labelled {a string:label} into {a pointer to a bim ifcx gathering record:gathering}:
+    execute:
+        if (bim ifcx json meshValue has kind the JSON object kind) = false:
+            return nothing
+        if (meshValue lacks JSON member named "points") or (meshValue lacks JSON member named "faceVertexIndices"):
+            return nothing
+        set pointValues to the JSON member named "points" in meshValue
+        set indexValues to the JSON member named "faceVertexIndices" in meshValue
+        if (((bim ifcx json pointValues has kind the JSON array kind) = false)) or (((bim ifcx json indexValues has kind the JSON array kind) = false)):
+            return nothing
+        set corners to an empty list of a cad vector3
+        loop cursor from 0 to the length of pointValues:
+            set coordinates to the JSON value at index cursor in pointValues
+            set x to the bim ifcx number at 0 in coordinates
+            set y to the bim ifcx number at 1 in coordinates
+            set z to the bim ifcx number at 2 in coordinates
+            set px to (((x * (the item at 0 in matrix)) + (y * (the item at 4 in matrix))) + (z * (the item at 8 in matrix))) + (the item at 12 in matrix)
+            set py to (((x * (the item at 1 in matrix)) + (y * (the item at 5 in matrix))) + (z * (the item at 9 in matrix))) + (the item at 13 in matrix)
+            set pz to (((x * (the item at 2 in matrix)) + (y * (the item at 6 in matrix))) + (z * (the item at 10 in matrix))) + (the item at 14 in matrix)
+            append (a cad vector3 with x px, y py and z pz) to corners
+        set shape to an empty fast mesh
+        set count to the length of corners
+        set corner to 0
+        loop while (corner + 2) < the length of indexValues:
+            set firstIndex to (the bim ifcx number at corner in indexValues) as an integer
+            set secondIndex to (the bim ifcx number at (corner + 1) in indexValues) as an integer
+            set thirdIndex to (the bim ifcx number at (corner + 2) in indexValues) as an integer
+            set corner to corner + 3
+            set inside to ((firstIndex >= 0) and (firstIndex < count)) and (((secondIndex >= 0) and (secondIndex < count)) and ((thirdIndex >= 0) and (thirdIndex < count)))
+            if inside:
+                set first to the item at firstIndex in corners
+                set second to the item at secondIndex in corners
+                set third to the item at thirdIndex in corners
+                set normal to the cad cross of (the cad difference of second and first) and (the cad difference of third and first)
+                set magnitude to the cad length of normal
+                if magnitude > 0.0:
+                    set normal to normal scaled by (1.0 / magnitude)
+                    set base to the length of (shape's positions's values)
+                    append first to (shape's positions's values)
+                    append second to (shape's positions's values)
+                    append third to (shape's positions's values)
+                    loop side from 0 to 3:
+                        append normal to (shape's normals's values)
+                        append (base + side) to (shape's triangles's values)
+                    set gathering's triangleCount to gathering's triangleCount + 1
+        loop cursor from 0 to count:
+            set point to the item at cursor in corners
+            set gathering's low to a cad vector3 with x (the minimum of gathering's low's x and point's x), y (the minimum of gathering's low's y and point's y) and z (the minimum of gathering's low's z and point's z)
+            set gathering's high to a cad vector3 with x (the maximum of gathering's high's x and point's x), y (the maximum of gathering's high's y and point's y) and z (the maximum of gathering's high's z and point's z)
+        free corners
+        set elementId to (the bim imported id base) + ((the length of (gathering's meshes's values)) as a 64 bit integer)
+        append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, shape, category, colour)) to (gathering's meshes's values)
+        append label to (gathering's labels's values)
+
+# Walks the composed node `reference` at instance path `instancePath` under
+# a parent placed by `parentMatrix`, gathering every mesh below it.
+local function walk bim ifcx {a string:reference} at {a string:instancePath} under {a pointer to a list:parentMatrix} owned by {a string:ownerLabel} as {integer:ownerCategory} coloured {cad vector3:ownerColour} in {a pointer to a bim ifcx layers record:layers} into {a pointer to a bim ifcx gathering record:gathering} at depth {integer:depth}:
+    execute:
+        if depth > 64:
+            set gathering's problem to the string form of "the composition is deeper than 64 levels"
+            return nothing
+        set base to the bim ifcx composition along reference in layers at depth 0
+        set node to @intrinsic("construct", a bim ifcx composed record, the cad clone of base's children, the cad clone of base's attributes)
+        # An opinion at the instance path overrides what is composed there.
+        set overrideAt to the bim ifcx place of instancePath in layers
+        if (overrideAt >= 0) and (instancePath != reference):
+            set extra to the item at overrideAt in (layers's nodes's values)
+            loop cursor from 0 to the length of (extra's children's values):
+                set child to the item at cursor in (extra's children's values)
+                set bim ifcx link child's name to child's target in (node's children's values)
+            loop cursor from 0 to the length of (extra's attributes's values):
+                set opinion to the item at cursor in (extra's attributes's values)
+                set bim ifcx attribute opinion's key to opinion's value in (node's attributes's values)
+        set ownMatrix to the bim ifcx transform of node
+        set matrix to the bim ifcx product of ownMatrix and parentMatrix
+        free ownMatrix
+        set ownLabel to ownerLabel
+        set ownCategory to ownerCategory
+        set ownColour to ownerColour
+        set classValue to the bim ifcx attribute (the string form of "bsi::ifc::class") of node
+        set classified to false
+        if bim ifcx json classValue has kind the JSON object kind:
+            set classified to classValue has JSON member named "code"
+        if classified:
+            set code to the JSON member named "code" in classValue
+            if (the kind of code) = the JSON text kind:
+                set ownCategory to the bim category of ifc class (the text of code)
+                set ownLabel to ((the text of code) + (the string form of " ")) + instancePath
+                set nameValue to the bim ifcx attribute (the string form of "bsi::ifc::prop::Name") of node
+                if bim ifcx json nameValue has kind the JSON text kind:
+                    set ownLabel to ((the text of code) + (the string form of " ")) + (the text of nameValue)
+        set colourValue to the bim ifcx attribute (the string form of "bsi::ifc::presentation::diffuseColor") of node
+        set hasColour to false
+        if bim ifcx json colourValue has kind the JSON array kind:
+            set hasColour to (the length of colourValue) = 3
+        if hasColour:
+            set ownColour to a cad vector3 with x ((the bim ifcx number at 0 in colourValue) * 255.0), y ((the bim ifcx number at 1 in colourValue) * 255.0) and z ((the bim ifcx number at 2 in colourValue) * 255.0)
+        # A polyline: its points placed, as pairs.
+        set curveValue to the bim ifcx attribute (the string form of "usd::usdgeom::basiscurves") of node
+        if bim ifcx json curveValue has kind the JSON object kind:
+            if curveValue has JSON member named "points":
+                set curvePoints to the JSON member named "points" in curveValue
+                if bim ifcx json curvePoints has kind the JSON array kind:
+                    loop curveCursor from 1 to the length of curvePoints:
+                        loop endIndex from 0 to 2:
+                            set coordinates to the JSON value at index ((curveCursor - 1) + endIndex) in curvePoints
+                            set x to the bim ifcx number at 0 in coordinates
+                            set y to the bim ifcx number at 1 in coordinates
+                            set z to the bim ifcx number at 2 in coordinates
+                            set px to (((x * (the item at 0 in matrix)) + (y * (the item at 4 in matrix))) + (z * (the item at 8 in matrix))) + (the item at 12 in matrix)
+                            set py to (((x * (the item at 1 in matrix)) + (y * (the item at 5 in matrix))) + (z * (the item at 9 in matrix))) + (the item at 13 in matrix)
+                            set pz to (((x * (the item at 2 in matrix)) + (y * (the item at 6 in matrix))) + (z * (the item at 10 in matrix))) + (the item at 14 in matrix)
+                            append (a cad vector3 with x px, y py and z pz) to (gathering's curves's values)
+        set meshValue to the bim ifcx attribute (the string form of "usd::usdgeom::mesh") of node
+        if meshValue != (0 as a pointer to a JSON value):
+            gather bim ifcx mesh meshValue placed by matrix as ownCategory coloured ownColour labelled ownLabel into gathering
+        loop cursor from 0 to the length of (node's children's values):
+            set child to the item at cursor in (node's children's values)
+            if (the length of child's target) > 0:
+                walk bim ifcx child's target at ((instancePath + (the string form of "/")) + child's name) under matrix owned by ownLabel as ownCategory coloured ownColour in layers into gathering at depth (depth + 1)
+        free matrix
+
+# The elements of the IfcX files at `paths`, read as layers in order, or a
+# refusal naming the fault.
+function the bim ifcx import of files {a pointer to a list:paths}:
+    execute:
+        set layersValue to @intrinsic("construct", a bim ifcx layers record, a cad topology list of a bim ifcx flat node record, a cad topology list of an integer, a cad topology list of a bim ifcx composed record, a cad topology list of a boolean)
+        set layers to the address of layersValue
+        grow bim ifcx index of layers
+        set documents to an empty list of a JSON result
+        set fault to the string form of ""
+        loop cursor from 0 to the length of paths:
+            if (the length of fault) = 0:
+                set loaded to the bim file content at (the item at cursor in paths)
+                if loaded's valid = false:
+                    set fault to (the string form of "could not read ") + (the item at cursor in paths)
+                else:
+                    set parsed to the JSON document parsed from loaded's text
+                    if parsed failed:
+                        set fault to (the string form of "not JSON at byte ") + (the string form of (the JSON error position in parsed))
+                    else:
+                        append parsed to documents
+                        set fault to merge bim ifcx layer (the value of parsed) into layers
+        if (the length of fault) > 0:
+            loop cursor from 0 to the length of documents:
+                free (the item at cursor in documents)
+            free documents
+            return a bim ifcx refusal saying fault
+        # The roots: nodes no child or inheritance refers to.
+        set referenced to an empty list of a boolean
+        loop cursor from 0 to the length of (layers's nodes's values):
+            append false to referenced
+        loop cursor from 0 to the length of (layers's nodes's values):
+            set node to the item at cursor in (layers's nodes's values)
+            loop entry from 0 to the length of (node's children's values):
+                set position to the bim ifcx place of (the bim ifcx head of (the item at entry in (node's children's values))'s target) in layers
+                if position >= 0:
+                    replace item at index position in referenced with true
+            loop entry from 0 to the length of (node's inherits's values):
+                set position to the bim ifcx place of (the bim ifcx head of (the item at entry in (node's inherits's values))'s target) in layers
+                if position >= 0:
+                    replace item at index position in referenced with true
+        set infinity to 1.0 / 0.0
+        set gatheringValue to @intrinsic("construct", a bim ifcx gathering record, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, (a cad vector3 with x infinity, y infinity and z infinity), (a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)), the string form of "", a cad topology list of a cad vector3)
+        set gathering to the address of gatheringValue
+        set identity to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to 16:
+            if (the remainder of cursor divided by 5) = 0:
+                append 1.0 to identity
+            else:
+                append 0.0 to identity
+        loop cursor from 0 to the length of (layers's nodes's values):
+            if (the item at cursor in referenced) = false:
+                set rootPath to (the item at cursor in (layers's nodes's values))'s path
+                walk bim ifcx rootPath at rootPath under identity owned by (the string form of "IfcX ") + rootPath as bim other category coloured (the bim category colouring) in layers into gathering at depth 0
+        free identity
+        free referenced
+        loop cursor from 0 to the length of documents:
+            free (the item at cursor in documents)
+        free documents
+        if (the length of gatheringValue's problem) > 0:
+            return a bim ifcx refusal saying gatheringValue's problem
+        return @intrinsic("construct", a bim import record, true, the string form of "", gatheringValue's meshes, gatheringValue's labels, gatheringValue's triangleCount, gatheringValue's low, gatheringValue's high, gatheringValue's curves)
+
+local function a bim ifcx refusal saying {a string:reason}:
+    execute:
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3)
+
+# The elements of the one IfcX file at `path`.
+function the bim ifcx import of file {a string:path}:
+    execute:
+        set paths to an empty list of a string
+        append path to paths
+        set result to the bim ifcx import of files paths
+        free paths
+        return result

@@ -1,0 +1,607 @@
+# SPDX-License-Identifier: MPL-2.0
+# IFC5 (IfcX, `ifcx_alpha`) export of the BIM slice: one JSON file of nodes
+# composed by path, as the buildingSMART IFC5 development repository defines
+# it. The tree is a root, the project, the site, the building and one storey
+# per level; under a storey hang its walls, slabs, spaces, sketch elements and
+# component instances, and under a wall its openings.
+#
+# - Geometry is `usd::usdgeom::mesh` (triangles, metres, Z up) on a `Body`
+#   child, in plan coordinates; a layered wall has one body per layer.
+# - Materials are separate nodes (`bsi::ifc::material` with a colour) that
+#   elements and layer bodies reach through `inherits`, as IFC5 does.
+# - A component is a type node holding its parts in its own coordinates; each
+#   instance inherits it and carries a `usd::xformop` placing it on its
+#   storey, so the geometry is written once however often it is placed.
+# - Grid lines and sketch lines are `usd::usdgeom::basiscurves`.
+#
+# Paths are UUIDs in the canonical 8-4-4-4-12 form, derived from a project
+# key, a kind code and the element id: an unchanged element keeps its path
+# across exports (so a later layer can add to it), and two projects never
+# share a path. The file id in the header names this one export.
+import examples/bim-slice/bim_ifc.dl
+import examples/bim-slice/bim_scene.dl
+
+# One JSON text being written, kept as pieces and joined once.
+class:
+    patterns:
+        [a|] bim ifcx writer record
+    members:
+        pieces as the type of (an empty list of a string)
+        seed as a 64 bit unsigned integer
+        first as a boolean
+
+# Kind codes of the paths.
+function bim ifcx root kind:
+    replacement:
+        1
+function bim ifcx project kind:
+    replacement:
+        2
+function bim ifcx site kind:
+    replacement:
+        3
+function bim ifcx building kind:
+    replacement:
+        4
+function bim ifcx element kind:
+    replacement:
+        5
+function bim ifcx body kind:
+    replacement:
+        6
+function bim ifcx material kind:
+    replacement:
+        7
+function bim ifcx space kind:
+    replacement:
+        8
+function bim ifcx part kind:
+    replacement:
+        9
+function bim ifcx part body kind:
+    replacement:
+        10
+
+# The element number of part `partIndex` of component `componentId`, and of
+# space `spaceIndex` of storey `levelId`, for their paths.
+local function the bim ifcx number of item {integer:itemIndex} within {a 64 bit integer:ownerId}:
+    execute:
+        return (ownerId * (65536 as a 64 bit integer)) + (itemIndex as a 64 bit integer)
+
+local function the bim ifcx hex of {a 64 bit unsigned integer:value} in {integer:digitCount} digits:
+    execute:
+        set alphabet to the string form of "0123456789abcdef"
+        set result to a new string buffer containing digitCount bytes
+        loop place from 0 to digitCount:
+            set shift to ((digitCount - 1) - place) * 4
+            set nibble to (value shifted right by (shift as a 64 bit unsigned integer)) bitwise and (15 as a 64 bit unsigned integer)
+            store (the character at (nibble as an integer) in alphabet) into the data of result at place
+        return result
+
+# The FNV-1a hash of `label`.
+local function the bim ifcx hash of {a string:label}:
+    execute:
+        set digest to 14695981039346656037 as a 64 bit unsigned integer
+        loop cursor from 0 to the length of label:
+            set code to ((the character at cursor in label) as an integer) as a 64 bit unsigned integer
+            set digest to (digest bitwise xor code) * (1099511628211 as a 64 bit unsigned integer)
+        return digest
+
+# The path of element `elementId` of kind `kindCode` (layer `serial` for a
+# body, 0 otherwise), as a UUID with version nibble 5 and the RFC 4122 variant.
+function the bim ifcx uuid of kind {integer:kindCode} for {a 64 bit integer:elementId} serial {integer:serial} in {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set low to elementId as a 64 bit unsigned integer
+        set high to writer's seed
+        set text to (the bim ifcx hex of (high shifted right by (32 as a 64 bit unsigned integer)) in 8 digits) + (the string form of "-")
+        set text to (text + (the bim ifcx hex of (high shifted right by (16 as a 64 bit unsigned integer)) in 4 digits)) + (the string form of "-5")
+        set text to (text + (the bim ifcx hex of (((kindCode as a 64 bit unsigned integer) shifted left by (8 as a 64 bit unsigned integer)) bitwise or ((serial as a 64 bit unsigned integer) bitwise and (255 as a 64 bit unsigned integer))) in 3 digits)) + (the string form of "-8")
+        set text to (text + (the bim ifcx hex of (low shifted right by (48 as a 64 bit unsigned integer)) in 3 digits)) + (the string form of "-")
+        return text + (the bim ifcx hex of low in 12 digits)
+
+# A JSON string: quotes, backslashes and control characters escaped.
+function the bim json string of {a string:value}:
+    execute:
+        # A literal may not end in a backslash, so the backslash is made.
+        set backslash to a new string buffer containing 1 bytes
+        store (92 as a byte) into the data of backslash at 0
+        set escaped to (value with backslash replaced by (backslash + backslash)) with (the string form of "\"") replaced by (backslash + (the string form of "\""))
+        set escaped to ((escaped with "\n" replaced by "\\n") with "\r" replaced by "\\r") with "\t" replaced by "\\t"
+        return ((the string form of "\"") + escaped) + (the string form of "\"")
+
+# A JSON number, to ten significant digits (a tenth of a millimetre at 100 km
+# from the origin); never NaN or infinite.
+function the bim json number of {a 64 bit floating-point number:value}:
+    execute:
+        if (value != value) or ((the absolute value of value) > 1e300):
+            return the string form of "0"
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.10g", value)
+        return the substring of buffer from 0 spanning written bytes
+
+local function write bim ifcx {a string:text} to {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        append text to (writer's pieces)
+
+# The IFC class attribute of `code` (an IFC 4.3 class name).
+local function the bim ifcx class {a string:code}:
+    execute:
+        set uri to (the string form of "https://identifier.buildingsmart.org/uri/buildingsmart/ifc/4.3/class/") + code
+        return (((the string form of "\"bsi::ifc::class\": {\"code\": ") + (the bim json string of code)) + ((the string form of ", \"uri\": ") + (the bim json string of uri))) + (the string form of "}")
+
+local function the bim ifcx property {a string:name} as {a string:jsonValue}:
+    execute:
+        return ((the string form of "\"bsi::ifc::prop::") + name) + ((the string form of "\": ") + jsonValue)
+
+# One node: `children` and `inherits` are lists of name and path pairs (name
+# at even places), `attributes` a list of ready `"key": value` members.
+local function write bim ifcx node {a string:path} with children {a pointer to a list:childPairs} inheriting {a pointer to a list:inheritPairs} and {a pointer to a list:attributes} to {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set parts to an empty list of a string
+        append ((the string form of "\"path\": ") + (the bim json string of path)) to parts
+        if (the length of childPairs) > 0:
+            set members to an empty list of a string
+            set cursor to 0
+            loop while cursor < the length of childPairs:
+                append (((the bim json string of (the item at cursor in childPairs)) + (the string form of ": ")) + (the bim json string of (the item at (cursor + 1) in childPairs))) to members
+                set cursor to cursor + 2
+            append (((the string form of "\"children\": {") + (members joined with ", ")) + (the string form of "}")) to parts
+            free members
+        if (the length of inheritPairs) > 0:
+            set members to an empty list of a string
+            set cursor to 0
+            loop while cursor < the length of inheritPairs:
+                append (((the bim json string of (the item at cursor in inheritPairs)) + (the string form of ": ")) + (the bim json string of (the item at (cursor + 1) in inheritPairs))) to members
+                set cursor to cursor + 2
+            append (((the string form of "\"inherits\": {") + (members joined with ", ")) + (the string form of "}")) to parts
+            free members
+        if (the length of attributes) > 0:
+            append (((the string form of "\"attributes\": {") + (attributes joined with ",\n      ")) + (the string form of "}")) to parts
+        if writer's first:
+            set writer's first to false
+        else:
+            write bim ifcx (the string form of ",\n") to writer
+        write bim ifcx (((the string form of "    { ") + (parts joined with ",\n      ")) + (the string form of " }")) to writer
+        free parts
+
+# The `usd::usdgeom::mesh` attribute of `triangles`, its points shifted by
+# `shift` (to place a component's parts in its own coordinates).
+local function the bim ifcx mesh of {fast mesh record:triangles} shifted by {cad vector3:shift}:
+    execute:
+        set points to an empty list of a string
+        loop cursor from 0 to the length of (triangles's positions's values):
+            set point to the item at cursor in (triangles's positions's values)
+            append (((the string form of "[") + (the bim json number of (point's x - shift's x))) + ((the string form of ",") + ((the bim json number of (point's y - shift's y)) + ((the string form of ",") + ((the bim json number of (point's z - shift's z)) + (the string form of "]")))))) to points
+        set indices to an empty list of a string
+        loop cursor from 0 to the length of (triangles's triangles's values):
+            append (the string form of (the item at cursor in (triangles's triangles's values))) to indices
+        set text to (the string form of "\"usd::usdgeom::mesh\": {\"points\": [") + (points joined with ",")
+        set text to (text + (the string form of "], \"faceVertexIndices\": [")) + ((indices joined with ",") + (the string form of "]}"))
+        free points
+        free indices
+        return text
+
+# The volume a closed triangle mesh encloses (the divergence theorem).
+function the bim volume of mesh {fast mesh record:triangles}:
+    execute:
+        set total to 0.0
+        set corners to triangles's triangles's values
+        set points to triangles's positions's values
+        set cursor to 0
+        loop while (cursor + 2) < the length of corners:
+            set alpha to the item at (the item at cursor in corners) in points
+            set beta to the item at (the item at (cursor + 1) in corners) in points
+            set gamma to the item at (the item at (cursor + 2) in corners) in points
+            set total to total + ((alpha's x * ((beta's y * gamma's z) - (beta's z * gamma's y))) - ((alpha's y * ((beta's x * gamma's z) - (beta's z * gamma's x))) - (alpha's z * ((beta's x * gamma's y) - (beta's y * gamma's x)))))
+            set cursor to cursor + 3
+        return the absolute value of (total / 6.0)
+
+# A name usable as a child name: letters, digits and underscores.
+function the bim ifcx child name of {a string:label}:
+    execute:
+        set result to a new string buffer containing (the length of label) bytes
+        loop cursor from 0 to the length of label:
+            set code to (the character at cursor in label) as an integer
+            set kept to (((code >= 48) and (code <= 57)) or ((code >= 65) and (code <= 90))) or (((code >= 97) and (code <= 122)) or (code = 95))
+            if kept:
+                store (code as a byte) into the data of result at cursor
+            else:
+                store (95 as a byte) into the data of result at cursor
+        return result
+
+local function the bim ifcx colour of {cad vector3:colour}:
+    execute:
+        return (((the string form of "[") + (the bim json number of (colour's x / 255.0))) + ((the string form of ", ") + (the bim json number of (colour's y / 255.0)))) + (((the string form of ", ") + (the bim json number of (colour's z / 255.0))) + (the string form of "]"))
+
+# The material node path of material `name`, written the first time it is
+# needed; `materials` lists the names written so far.
+local function the bim ifcx material node of {a string:materialName} among {a pointer to a list:materials} in {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set found to -1
+        loop cursor from 0 to the length of materials:
+            if (the item at cursor in materials) = materialName:
+                set found to cursor
+        if found < 0:
+            set found to the length of materials
+            append materialName to materials
+            set path to the bim ifcx uuid of kind bim ifcx material kind for (found as a 64 bit integer) serial 0 in writer
+            set noPairs to an empty list of a string
+            set attributes to an empty list of a string
+            set code to (the bim ifcx child name of materialName) with (the string form of "_") replaced by (the string form of "-")
+            append (((the string form of "\"bsi::ifc::material\": {\"code\": ") + (the bim json string of code)) + (((the string form of ", \"uri\": ") + (the bim json string of ((the string form of "urn:open-bim-studio:material:") + code))) + (the string form of "}"))) to attributes
+            append ((the string form of "\"bsi::ifc::presentation::diffuseColor\": ") + (the bim ifcx colour of (the bim material colour of materialName))) to attributes
+            append (the string form of "\"bsi::ifc::presentation::opacity\": 1") to attributes
+            write bim ifcx node path with children noPairs inheriting noPairs and attributes to writer
+            free noPairs
+            free attributes
+        return the bim ifcx uuid of kind bim ifcx material kind for (found as a 64 bit integer) serial 0 in writer
+
+# The body node of `triangles` coloured `colour` (negative red: the colour of
+# category `category`), or reaching material `material` when it is named.
+local function write bim ifcx body {a string:path} of {fast mesh record:triangles} shifted by {cad vector3:shift} coloured {cad vector3:colour} in category {integer:categoryCode} of material {a string:layerMaterial} among {a pointer to a list:materials} to {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set noPairs to an empty list of a string
+        set inheritPairs to an empty list of a string
+        set attributes to an empty list of a string
+        append (the bim ifcx mesh of triangles shifted by shift) to attributes
+        if (the length of layerMaterial) > 0:
+            append (the string form of "material") to inheritPairs
+            append (the bim ifcx material node of layerMaterial among materials in writer) to inheritPairs
+        else:
+            set shade to colour
+            if colour's x < 0.0:
+                set shade to the bim colour of category categoryCode
+            append ((the string form of "\"bsi::ifc::presentation::diffuseColor\": ") + (the bim ifcx colour of shade)) to attributes
+            append (the string form of "\"bsi::ifc::presentation::opacity\": 1") to attributes
+        write bim ifcx node path with children noPairs inheriting inheritPairs and attributes to writer
+        free noPairs
+        free inheritPairs
+        free attributes
+
+# The polyline attribute through `corners` at `elevation`, closed when
+# `closed`.
+local function the bim ifcx curve through {a pointer to a list:corners} at {a 64 bit floating-point number:elevation} closed {boolean:closed}:
+    execute:
+        set texts to an empty list of a string
+        set count to the length of corners
+        set total to count
+        if closed:
+            set total to count + 1
+        loop cursor from 0 to total:
+            set point to the item at (the remainder of cursor divided by count) in corners
+            append (((the string form of "[") + (the bim json number of point's x)) + ((the string form of ",") + ((the bim json number of point's y) + ((the string form of ",") + ((the bim json number of elevation) + (the string form of "]")))))) to texts
+        set text to ((the string form of "\"usd::usdgeom::basiscurves\": {\"points\": [") + (texts joined with ",")) + (the string form of "]}")
+        free texts
+        return text
+
+# Sketch element `sketchValue` as node `path` on a storey at `elevation`: a
+# face as a proxy element (a mass when pushed) with its body, a line as an
+# annotation curve, a text as an annotation with its words.
+local function write bim ifcx sketch {bim sketch record:sketchValue} at {a string:path} with body {a string:bodyPath} on {a 64 bit floating-point number:elevation} among {a pointer to a list:materials} to {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set noPairs to an empty list of a string
+        set pairs to an empty list of a string
+        set attributes to an empty list of a string
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        if sketchValue's kind = bim face sketch:
+            set triangles to the bim sketch mesh of sketchValue at elevation
+            append (the string form of "Body") to pairs
+            append bodyPath to pairs
+            append (the bim ifcx class (the string form of "IfcBuildingElementProxy")) to attributes
+            set area to the absolute value of (the cad signed area of (sketchValue's points's values))
+            append (the bim ifcx property (the string form of "NetArea") as (the bim json number of area)) to attributes
+            if sketchValue's height > 0.0:
+                append (the bim ifcx property (the string form of "Height") as (the bim json number of sketchValue's height)) to attributes
+                append (the bim ifcx property (the string form of "Volume") as (the bim json number of (area * sketchValue's height))) to attributes
+            write bim ifcx node path with children pairs inheriting noPairs and attributes to writer
+            write bim ifcx body bodyPath of triangles shifted by origin coloured (the bim category colouring) in category bim mass category of material (the string form of "") among materials to writer
+        else if sketchValue's kind = bim line sketch:
+            append (the bim ifcx class (the string form of "IfcAnnotation")) to attributes
+            append (the bim ifcx curve through (sketchValue's points's values) at elevation closed false) to attributes
+            write bim ifcx node path with children noPairs inheriting noPairs and attributes to writer
+        else:
+            set anchor to the item at 0 in (sketchValue's points's values)
+            append (the bim ifcx class (the string form of "IfcAnnotation")) to attributes
+            append (the bim ifcx property (the string form of "Description") as (the bim json string of sketchValue's content)) to attributes
+            set spot to a cad vector3 with x anchor's x, y anchor's y and z elevation
+            append (((the string form of "\"usd::xformop\": {\"transform\": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[") + (the bim json number of spot's x)) + ((the string form of ",") + ((the bim json number of spot's y) + ((the string form of ",") + ((the bim json number of spot's z) + (the string form of ",1]]}")))))) to attributes
+            write bim ifcx node path with children noPairs inheriting noPairs and attributes to writer
+        free noPairs
+        free pairs
+        free attributes
+
+# Wall or slab `elementId` with its bodies (the meshes of `sceneMeshes` that
+# carry its id, in layer order) and, for a wall, its openings.
+local function write bim ifcx built element {a 64 bit integer:elementId} of {bim model record:modelValue} with {a pointer to a list:sceneMeshes} among {a pointer to a list:materials} to {a pointer to a bim ifcx writer record:writer}:
+    execute:
+        set noPairs to an empty list of a string
+        set pairs to an empty list of a string
+        set attributes to an empty list of a string
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set path to the bim ifcx uuid of kind bim ifcx element kind for elementId serial 0 in writer
+        set bodies to an empty list of an integer
+        loop cursor from 0 to the length of sceneMeshes:
+            if (the item at cursor in sceneMeshes)'s elementId = elementId:
+                append cursor to bodies
+        set layerNames to an empty list of a string
+        set wallFound to the bim wall index of elementId in modelValue
+        set enclosed to 0.0
+        loop cursor from 0 to the length of bodies:
+            set enclosed to enclosed + (the bim volume of mesh (the item at (the item at cursor in bodies) in sceneMeshes)'s shape)
+        if wallFound's valid:
+            set wallValue to the item at wallFound's position in (modelValue's walls's values)
+            set typeFound to the bim wall type index of wallValue's typeId in modelValue
+            set typeName to the string form of ""
+            if typeFound's valid:
+                set wallType to the item at typeFound's position in (modelValue's wallTypes's values)
+                set typeName to wallType's name
+                loop cursor from 0 to the length of (wallType's layers's values):
+                    append (the item at cursor in (wallType's layers's values))'s material to layerNames
+            set thickness to the bim wall thickness of wallValue in modelValue
+            if (the length of bodies) = 1:
+                append (the string form of "Body") to pairs
+                append (the bim ifcx uuid of kind bim ifcx body kind for elementId serial 0 in writer) to pairs
+            else:
+                loop cursor from 0 to the length of bodies:
+                    set layerLabel to (the string form of "Layer_") + (the string form of (cursor + 1))
+                    if cursor < the length of layerNames:
+                        set layerLabel to layerLabel + ((the string form of "_") + (the bim ifcx child name of (the item at cursor in layerNames)))
+                    append layerLabel to pairs
+                    append (the bim ifcx uuid of kind bim ifcx body kind for elementId serial cursor in writer) to pairs
+            loop openingCursor from 0 to the length of (modelValue's openings's values):
+                set openingValue to the item at openingCursor in (modelValue's openings's values)
+                if openingValue's hostId = elementId:
+                    append ((the string form of "Opening_") + (the string form of openingValue's id)) to pairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for openingValue's id serial 0 in writer) to pairs
+            append (the bim ifcx class (the string form of "IfcWall")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of ((typeName + (the string form of " ")) + (the string form of elementId)))) to attributes
+            append (the bim ifcx property (the string form of "TypeName") as (the bim json string of typeName)) to attributes
+            append (the bim ifcx property (the string form of "Height") as (the bim json number of wallValue's height)) to attributes
+            append (the bim ifcx property (the string form of "Width") as (the bim json number of thickness)) to attributes
+            append (the bim ifcx property (the string form of "Length") as (the bim json number of (the bim centreline length of wallValue))) to attributes
+            append (the bim ifcx property (the string form of "Volume") as (the bim json number of enclosed)) to attributes
+        else:
+            set slabFound to the bim slab index of elementId in modelValue
+            append (the string form of "Body") to pairs
+            append (the bim ifcx uuid of kind bim ifcx body kind for elementId serial 0 in writer) to pairs
+            append (the bim ifcx class (the string form of "IfcSlab")) to attributes
+            if slabFound's valid:
+                set slabValue to the item at slabFound's position in (modelValue's slabs's values)
+                append (the bim ifcx property (the string form of "Depth") as (the bim json number of slabValue's thickness)) to attributes
+                append (the bim ifcx property (the string form of "NetArea") as (the bim json number of (the absolute value of (the cad signed area of (slabValue's outline's values))))) to attributes
+            append (the bim ifcx property (the string form of "Volume") as (the bim json number of enclosed)) to attributes
+        write bim ifcx node path with children pairs inheriting noPairs and attributes to writer
+        clear attributes
+        # The bodies: one per layer in its material, or one in its colour.
+        loop cursor from 0 to the length of bodies:
+            set entry to the item at (the item at cursor in bodies) in sceneMeshes
+            set bodyPath to the bim ifcx uuid of kind bim ifcx body kind for elementId serial cursor in writer
+            set layerMaterial to the string form of ""
+            if ((the length of bodies) > 1) and (cursor < the length of layerNames):
+                set layerMaterial to the item at cursor in layerNames
+            write bim ifcx body bodyPath of entry's shape shifted by origin coloured entry's colour in category entry's category of material layerMaterial among materials to writer
+        # The openings: a door or window inheriting its type.
+        if wallFound's valid:
+            loop openingCursor from 0 to the length of (modelValue's openings's values):
+                set openingValue to the item at openingCursor in (modelValue's openings's values)
+                set typeFound to the bim opening type index of openingValue's typeId in modelValue
+                if (openingValue's hostId = elementId) and typeFound's valid:
+                    set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                    set inheritPairs to an empty list of a string
+                    append (the string form of "type") to inheritPairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for openingType's id serial 0 in writer) to inheritPairs
+                    if openingType's isDoor:
+                        append (the bim ifcx class (the string form of "IfcDoor")) to attributes
+                    else:
+                        append (the bim ifcx class (the string form of "IfcWindow")) to attributes
+                    append (the bim ifcx property (the string form of "Station") as (the bim json number of openingValue's offset)) to attributes
+                    write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for openingValue's id serial 0 in writer) with children noPairs inheriting inheritPairs and attributes to writer
+                    clear attributes
+                    free inheritPairs
+        free bodies
+        free layerNames
+        free noPairs
+        free pairs
+        free attributes
+
+# The IfcX text of `modelValue`, with the file id `fileId` and the paths of
+# project `projectKey`, written by `author` at `timestamp` (ISO 8601). Walls
+# are written in their layers.
+function the bim ifcx text of {bim model record:modelValue} identified as {a string:fileId} for project {a string:projectKey} by {a string:author} at {a string:timestamp}:
+    execute:
+        set evaluation to the bim evaluation of modelValue after (an empty bim evaluation)
+        set noMeshes to a cad topology list of a bim scene mesh record
+        set sceneMeshes to the bim scene meshes of evaluation after (noMeshes's values) layered true
+        set writerValue to @intrinsic("construct", a bim ifcx writer record, an empty list of a string, the bim ifcx hash of projectKey, true)
+        set writer to the address of writerValue
+        set materials to an empty list of a string
+        set noPairs to an empty list of a string
+        set pairs to an empty list of a string
+        set attributes to an empty list of a string
+        write bim ifcx (the string form of "{\n  \"header\": {\n") to writer
+        write bim ifcx (((the string form of "    \"id\": ") + (the bim json string of fileId)) + (the string form of ",\n")) to writer
+        write bim ifcx (the string form of "    \"ifcxVersion\": \"ifcx_alpha\",\n    \"dataVersion\": \"1.0.0\",\n") to writer
+        write bim ifcx (((the string form of "    \"author\": ") + (the bim json string of author)) + (the string form of ",\n")) to writer
+        write bim ifcx (((the string form of "    \"timestamp\": ") + (the bim json string of timestamp)) + (the string form of "\n  },\n")) to writer
+        write bim ifcx (the string form of "  \"imports\": [\n    { \"uri\": \"https://ifcx.dev/@standards.buildingsmart.org/ifc/core/ifc@v5a.ifcx\" },\n") to writer
+        write bim ifcx (the string form of "    { \"uri\": \"https://ifcx.dev/@standards.buildingsmart.org/ifc/core/prop@v5a.ifcx\" },\n") to writer
+        write bim ifcx (the string form of "    { \"uri\": \"https://ifcx.dev/@openusd.org/usd@v1.ifcx\" }\n  ],\n  \"schemas\": {},\n  \"data\": [\n") to writer
+        set zero to 0 as a 64 bit integer
+        set rootPath to the bim ifcx uuid of kind bim ifcx root kind for zero serial 0 in writer
+        set projectPath to the bim ifcx uuid of kind bim ifcx project kind for zero serial 0 in writer
+        set sitePath to the bim ifcx uuid of kind bim ifcx site kind for zero serial 0 in writer
+        set buildingPath to the bim ifcx uuid of kind bim ifcx building kind for zero serial 0 in writer
+        append (the string form of "Project") to pairs
+        append projectPath to pairs
+        write bim ifcx node rootPath with children pairs inheriting noPairs and noPairs to writer
+        clear pairs
+        append (the string form of "Site") to pairs
+        append sitePath to pairs
+        append (the bim ifcx class (the string form of "IfcProject")) to attributes
+        append (the bim ifcx property (the string form of "Name") as (the bim json string of (the string form of "Open BIM Studio project"))) to attributes
+        write bim ifcx node projectPath with children pairs inheriting noPairs and attributes to writer
+        clear pairs
+        clear attributes
+        append (the string form of "Building") to pairs
+        append buildingPath to pairs
+        append (the bim ifcx class (the string form of "IfcSite")) to attributes
+        write bim ifcx node sitePath with children pairs inheriting noPairs and attributes to writer
+        clear pairs
+        clear attributes
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            append ((the bim ifcx child name of levelValue's name) + ((the string form of "_") + (the string form of levelValue's id))) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for levelValue's id serial 0 in writer) to pairs
+        # Grid lines hang under the building as curves.
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            append ((the string form of "Grid_") + (the bim ifcx child name of gridValue's name)) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for gridValue's id serial 0 in writer) to pairs
+        append (the bim ifcx class (the string form of "IfcBuilding")) to attributes
+        append (the bim ifcx property (the string form of "NumberOfStoreys") as (the string form of (the length of (modelValue's levels's values)))) to attributes
+        write bim ifcx node buildingPath with children pairs inheriting noPairs and attributes to writer
+        clear pairs
+        clear attributes
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            set ends to an empty list of a cad vector2
+            append gridValue's start to ends
+            append gridValue's finish to ends
+            append (the bim ifcx class (the string form of "IfcGridAxis")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of gridValue's name)) to attributes
+            append (the bim ifcx curve through ends at gridValue's low closed false) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for gridValue's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
+            clear attributes
+            free ends
+        # Opening types: the door and window type nodes their openings inherit.
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            set openingType to the item at cursor in (modelValue's openingTypes's values)
+            if openingType's isDoor:
+                append (the bim ifcx class (the string form of "IfcDoorType")) to attributes
+            else:
+                append (the bim ifcx class (the string form of "IfcWindowType")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of openingType's name)) to attributes
+            append (the bim ifcx property (the string form of "Width") as (the bim json number of openingType's width)) to attributes
+            append (the bim ifcx property (the string form of "Height") as (the bim json number of openingType's height)) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for openingType's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
+            clear attributes
+        # Components: a type node holding its parts in its own coordinates.
+        loop cursor from 0 to the length of (modelValue's components's values):
+            set definition to the item at cursor in (modelValue's components's values)
+            loop partIndex from 0 to the length of (definition's sketches's values):
+                append ((the string form of "Part_") + (the string form of (partIndex + 1))) to pairs
+                append (the bim ifcx uuid of kind bim ifcx part kind for (the bim ifcx number of item partIndex within definition's id) serial 0 in writer) to pairs
+            append (the bim ifcx class (the string form of "IfcBuildingElementProxyType")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of definition's name)) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for definition's id serial 0 in writer) with children pairs inheriting noPairs and attributes to writer
+            clear pairs
+            clear attributes
+            loop partIndex from 0 to the length of (definition's sketches's values):
+                set partNumber to the bim ifcx number of item partIndex within definition's id
+                write bim ifcx sketch (the item at partIndex in (definition's sketches's values)) at (the bim ifcx uuid of kind bim ifcx part kind for partNumber serial 0 in writer) with body (the bim ifcx uuid of kind bim ifcx part body kind for partNumber serial 0 in writer) on 0.0 among materials to writer
+        # The storeys and their elements.
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            set builtIds to an empty list of a 64 bit integer
+            loop wallCursor from 0 to the length of (modelValue's walls's values):
+                set wallValue to the item at wallCursor in (modelValue's walls's values)
+                if wallValue's levelId = levelValue's id:
+                    append wallValue's id to builtIds
+                    append ((the string form of "Wall_") + (the string form of wallValue's id)) to pairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for wallValue's id serial 0 in writer) to pairs
+            loop slabCursor from 0 to the length of (modelValue's slabs's values):
+                set slabValue to the item at slabCursor in (modelValue's slabs's values)
+                if slabValue's levelId = levelValue's id:
+                    append slabValue's id to builtIds
+                    append ((the string form of "Slab_") + (the string form of slabValue's id)) to pairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for slabValue's id serial 0 in writer) to pairs
+            loop sketchCursor from 0 to the length of (modelValue's sketches's values):
+                set sketchValue to the item at sketchCursor in (modelValue's sketches's values)
+                if sketchValue's levelId = levelValue's id:
+                    append ((the string form of "Sketch_") + (the string form of sketchValue's id)) to pairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for sketchValue's id serial 0 in writer) to pairs
+            loop instanceCursor from 0 to the length of (modelValue's instances's values):
+                set placement to the item at instanceCursor in (modelValue's instances's values)
+                if placement's levelId = levelValue's id:
+                    append ((the string form of "Instance_") + (the string form of placement's id)) to pairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for placement's id serial 0 in writer) to pairs
+            set levelSpaces to the bim spaces of modelValue on level levelValue's id using evaluation's index
+            loop spaceCursor from 0 to the length of (levelSpaces's values):
+                append ((the string form of "Space_") + (the string form of (spaceCursor + 1))) to pairs
+                append (the bim ifcx uuid of kind bim ifcx space kind for (the bim ifcx number of item spaceCursor within levelValue's id) serial 0 in writer) to pairs
+            append (the bim ifcx class (the string form of "IfcBuildingStorey")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of levelValue's name)) to attributes
+            append (the bim ifcx property (the string form of "Height") as (the bim json number of levelValue's height)) to attributes
+            append (the bim ifcx property (the string form of "RefElevation") as (the bim json number of levelValue's elevation)) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for levelValue's id serial 0 in writer) with children pairs inheriting noPairs and attributes to writer
+            clear pairs
+            clear attributes
+            loop builtCursor from 0 to the length of builtIds:
+                write bim ifcx built element (the item at builtCursor in builtIds) of modelValue with (sceneMeshes's values) among materials to writer
+            free builtIds
+            loop sketchCursor from 0 to the length of (modelValue's sketches's values):
+                set sketchValue to the item at sketchCursor in (modelValue's sketches's values)
+                if sketchValue's levelId = levelValue's id:
+                    write bim ifcx sketch sketchValue at (the bim ifcx uuid of kind bim ifcx element kind for sketchValue's id serial 0 in writer) with body (the bim ifcx uuid of kind bim ifcx body kind for sketchValue's id serial 0 in writer) on levelValue's elevation among materials to writer
+            # An instance inherits its component and places it on the storey.
+            loop instanceCursor from 0 to the length of (modelValue's instances's values):
+                set placement to the item at instanceCursor in (modelValue's instances's values)
+                if placement's levelId = levelValue's id:
+                    set inheritPairs to an empty list of a string
+                    append (the string form of "type") to inheritPairs
+                    append (the bim ifcx uuid of kind bim ifcx element kind for placement's componentId serial 0 in writer) to inheritPairs
+                    set cosine to the cosine of placement's angle
+                    set sine to the sine of placement's angle
+                    set matrix to (the string form of "\"usd::xformop\": {\"transform\": [[") + ((the bim json number of cosine) + ((the string form of ",") + ((the bim json number of sine) + (the string form of ",0,0],["))))
+                    set matrix to matrix + ((the bim json number of (0.0 - sine)) + ((the string form of ",") + ((the bim json number of cosine) + (the string form of ",0,0],[0,0,1,0],["))))
+                    set matrix to matrix + ((the bim json number of placement's origin's x) + ((the string form of ",") + ((the bim json number of placement's origin's y) + ((the string form of ",") + ((the bim json number of levelValue's elevation) + (the string form of ",1]]}"))))))
+                    append (the bim ifcx class (the string form of "IfcBuildingElementProxy")) to attributes
+                    append matrix to attributes
+                    write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for placement's id serial 0 in writer) with children noPairs inheriting inheritPairs and attributes to writer
+                    clear attributes
+                    free inheritPairs
+            # Spaces: their boundary as a closed curve and their net area.
+            loop spaceCursor from 0 to the length of (levelSpaces's values):
+                set spaceValue to the item at spaceCursor in (levelSpaces's values)
+                append (the bim ifcx class (the string form of "IfcSpace")) to attributes
+                append (the bim ifcx property (the string form of "Name") as (the bim json string of ((the string form of "Space ") + (the string form of (spaceCursor + 1))))) to attributes
+                append (the bim ifcx property (the string form of "NetArea") as (the bim json number of spaceValue's area)) to attributes
+                if (the length of (spaceValue's outline's values)) > 0:
+                    append (the bim ifcx curve through (spaceValue's outline's values) at levelValue's elevation closed true) to attributes
+                write bim ifcx node (the bim ifcx uuid of kind bim ifcx space kind for (the bim ifcx number of item spaceCursor within levelValue's id) serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
+                clear attributes
+        free pairs
+        free attributes
+        free noPairs
+        write bim ifcx (the string form of "\n  ]\n}\n") to writer
+        set result to writerValue's pieces joined with ""
+        free materials
+        return result
+
+# POSIX `struct tm`, its first six fields.
+class:
+    patterns:
+        [a|] bim calendar record
+    members:
+        second as a 32 bit integer
+        minute as a 32 bit integer
+        hour as a 32 bit integer
+        day as a 32 bit integer
+        month as a 32 bit integer
+        year as a 32 bit integer
+        weekday as a 32 bit integer
+        yearday as a 32 bit integer
+        daylight as a 32 bit integer
+        padding as a 32 bit integer
+        offset as a 64 bit integer
+        zone as a pointer
+
+# The time now in UTC as ISO 8601, to the second.
+function the bim utc timestamp:
+    execute:
+        set seconds to @intrinsic("call", "libc", "time", a 64 bit integer, 0 as a pointer)
+        set calendar to @intrinsic("construct", a bim calendar record, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 32 bit integer, 0 as a 64 bit integer, 0 as a pointer)
+        ignore @intrinsic("call", "libc", "gmtime_r", a pointer, the address of seconds, the address of calendar)
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%04d-%02d-%02dT%02d:%02d:%02dZ", (calendar's year as an integer) + 1900, (calendar's month as an integer) + 1, calendar's day as an integer, calendar's hour as an integer, calendar's minute as an integer, calendar's second as an integer)
+        return the substring of buffer from 0 spanning written bytes

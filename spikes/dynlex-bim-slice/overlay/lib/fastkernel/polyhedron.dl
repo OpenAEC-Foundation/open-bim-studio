@@ -1,0 +1,685 @@
+# SPDX-License-Identifier: MPL-2.0
+# A light planar polyhedron for building elements: shared positions, faces as
+# loops of position indices (the first loop outer, the others holes) and an
+# exact outward plane per face. It holds four flat lists, so building one takes
+# few allocations, and it imports only the vector, plane, triangulation and
+# section-loop modules, not the B-rep stack.
+#
+# Faces are added with their intended outward normal; loops are reoriented to
+# run counter-clockwise about it (holes clockwise). Validation checks that the
+# polyhedron is closed and consistently oriented: every edge is used exactly
+# twice, in opposite directions, and the enclosed volume is positive.
+import lib/cadkernel/triangulate2.dl
+import lib/cadkernel/section_loops.dl
+import lib/cadkernel/operation_tolerance.dl
+
+# One face: loops `firstLoop` to `firstLoop + loopCount - 1` of the
+# polyhedron; points p on it satisfy normal . p = offset.
+class:
+    patterns:
+        [a|] fast face record
+    members:
+        firstLoop as an integer
+        loopCount as an integer
+        normal as a cad vector3
+        offset as a 64 bit floating-point number
+
+# Loop l uses indices `loopStarts[l]` to `loopStarts[l + 1] - 1`.
+class:
+    patterns:
+        [a|] fast polyhedron record
+    members:
+        positions as the type of (a cad topology list of a cad vector3)
+        indices as the type of (a cad topology list of an integer)
+        loopStarts as the type of (a cad topology list of an integer)
+        faces as the type of (a cad topology list of a fast face record)
+
+function an empty fast polyhedron:
+    execute:
+        set result to @intrinsic("construct", a fast polyhedron record, a cad topology list of a cad vector3, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a fast face record)
+        append 0 to (result's loopStarts's values)
+        return result
+
+function add fast position {cad vector3:location} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        append location to (target's positions's values)
+        return (the length of (target's positions's values)) - 1
+
+# Twice the area vector of a loop of position indices (Newell), relative to
+# the loop's first point.
+local function the fast area vector of {a pointer to a list:ring} in {a pointer to a list:points}:
+    execute:
+        set total to the cad zero vector3
+        set anchor to the item at (the item at 0 in ring) in points
+        loop cursor from 1 to (the length of ring) - 1:
+            set here to the cad difference of (the item at (the item at cursor in ring) in points) and anchor
+            set following to the cad difference of (the item at (the item at (cursor + 1) in ring) in points) and anchor
+            set total to the cad sum of total and (the cad cross of here and following)
+        return total
+
+local function append fast loop {a pointer to a list:ring} oriented {boolean:counterClockwise} about {cad vector3:normal} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set agrees to (the cad dot of (the fast area vector of ring in (target's positions's values)) and normal) > 0.0
+        if agrees = counterClockwise:
+            loop cursor from 0 to the length of ring:
+                append (the item at cursor in ring) to (target's indices's values)
+        else:
+            set back to (the length of ring) - 1
+            loop while back >= 0:
+                append (the item at back in ring) to (target's indices's values)
+                set back to back - 1
+        append (the length of (target's indices's values)) to (target's loopStarts's values)
+
+# Adds a face with outer loop `outer` and hole loops `holes` (a list of index
+# lists), facing `normal` (unit length). The plane passes through the outer
+# loop's first point.
+function add fast face {a pointer to a list:outer} with holes {a pointer to a list:holes} facing {cad vector3:normal} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set firstLoop to (the length of (target's loopStarts's values)) - 1
+        append fast loop outer oriented true about normal to target
+        loop cursor from 0 to the length of holes:
+            append fast loop (the item at cursor in holes) oriented false about normal to target
+        set offset to the cad dot of normal and (the item at (the item at 0 in outer) in (target's positions's values))
+        append (@intrinsic("construct", a fast face record, firstLoop, 1 + (the length of holes), normal, offset)) to (target's faces's values)
+
+function the fast loop count of {fast polyhedron record:shape}:
+    execute:
+        return (the length of (shape's loopStarts's values)) - 1
+
+# The enclosed volume, by the divergence theorem over faces, relative to the
+# first position so that it stays exact far from the origin.
+function the fast volume of {fast polyhedron record:shape}:
+    execute:
+        set points to shape's positions's values
+        if (the length of points) = 0:
+            return 0.0
+        set anchor to the item at 0 in points
+        set total to 0.0
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set area to the cad zero vector3
+            loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                set first to the item at ringCursor in (shape's loopStarts's values)
+                set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                loop cursor from (first + 1) to (past - 1):
+                    set here to the cad difference of (the item at (the item at cursor in (shape's indices's values)) in points) and (the item at (the item at first in (shape's indices's values)) in points)
+                    set following to the cad difference of (the item at (the item at (cursor + 1) in (shape's indices's values)) in points) and (the item at (the item at first in (shape's indices's values)) in points)
+                    set area to the cad sum of area and (the cad cross of here and following)
+            set facePoint to the cad difference of (the item at (the item at (the item at face's firstLoop in (shape's loopStarts's values)) in (shape's indices's values)) in points) and anchor
+            set total to total + (the cad dot of facePoint and area)
+        return total / 6.0
+
+class:
+    patterns:
+        [a|] fast directed edge record
+    members:
+        code as a 64 bit integer
+        forward as a boolean
+
+local function fast directed edge ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to the value at (left as a pointer to a fast directed edge record)
+        set second to the value at (right as a pointer to a fast directed edge record)
+        if first's code < second's code:
+            return -1
+        if first's code > second's code:
+            return 1
+        if first's forward = second's forward:
+            return 0
+        if first's forward:
+            return -1
+        return 1
+
+# 0 when closed and consistently oriented with positive volume; 1 when an edge
+# is not used exactly twice in opposite directions; 2 when a face is not flat
+# within `tolerance`; 3 when the volume is not positive.
+function the fast flaw of {fast polyhedron record:shape} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set points to shape's positions's values
+        set count to (the length of points) as a 64 bit integer
+        set edges to an empty list of a fast directed edge record
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                set first to the item at ringCursor in (shape's loopStarts's values)
+                set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                loop cursor from first to past:
+                    set fromIndex to the item at cursor in (shape's indices's values)
+                    set nextCursor to cursor + 1
+                    if nextCursor = past:
+                        set nextCursor to first
+                    set toIndex to the item at nextCursor in (shape's indices's values)
+                    set gap to (the cad dot of face's normal and (the item at fromIndex in points)) - face's offset
+                    if (the absolute value of gap) > tolerance:
+                        free edges
+                        return 2
+                    set low to the minimum of fromIndex and toIndex
+                    set high to the maximum of fromIndex and toIndex
+                    append (@intrinsic("construct", a fast directed edge record, ((low as a 64 bit integer) * count) + (high as a 64 bit integer), fromIndex < toIndex)) to edges
+        set comparator to the function named "fast directed edge ordering $ and $"
+        sort native array at ((the data of edges) as a pointer) with ((the length of edges) as a word sized unsigned integer) items of ((the size of a fast directed edge record) as a word sized unsigned integer) bytes using comparator
+        set paired to (the remainder of (the length of edges) divided by 2) = 0
+        set cursor to 0
+        loop while paired and (cursor < the length of edges):
+            set first to the item at cursor in edges
+            set second to the item at (cursor + 1) in edges
+            if (first's code != second's code) or (first's forward = second's forward):
+                set paired to false
+            else if (cursor + 2) < the length of edges:
+                if (the item at (cursor + 2) in edges)'s code = first's code:
+                    set paired to false
+            set cursor to cursor + 2
+        free edges
+        if paired = false:
+            return 1
+        if (the fast volume of shape) <= 0.0:
+            return 3
+        return 0
+
+# The tolerance cadkernel's operations apply to a body with these positions.
+function the fast tolerance of {fast polyhedron record:shape}:
+    execute:
+        set points to shape's positions's values
+        set coordinateScale to 1.0
+        set extent to 1.0
+        if (the length of points) = 0:
+            return the cad operation tolerance for extent (extent) and coordinate scale (coordinateScale)
+        set low to the item at 0 in points
+        set high to low
+        loop cursor from 0 to the length of points:
+            set location to the item at cursor in points
+            set low to a cad vector3 with x (the minimum of low's x and location's x), y (the minimum of low's y and location's y) and z (the minimum of low's z and location's z)
+            set high to a cad vector3 with x (the maximum of high's x and location's x), y (the maximum of high's y and location's y) and z (the maximum of high's z and location's z)
+            set coordinateScale to the maximum of coordinateScale and (the maximum of (the absolute value of location's x) and (the maximum of (the absolute value of location's y) and (the absolute value of location's z)))
+        set extent to the maximum of extent and (the maximum of (high's x - low's x) and (the maximum of (high's y - low's y) and (high's z - low's z)))
+        return the cad operation tolerance for extent (extent) and coordinate scale (coordinateScale)
+
+# ---------------------------------------------------------------- tessellation
+
+# Flat-shaded triangles: every face gets its own copies of its points with the
+# face normal. `triangles` holds three position indices per triangle.
+class:
+    patterns:
+        [a|] fast mesh record
+    members:
+        positions as the type of (a cad topology list of a cad vector3)
+        normals as the type of (a cad topology list of a cad vector3)
+        triangles as the type of (a cad topology list of an integer)
+
+function an empty fast mesh:
+    execute:
+        return @intrinsic("construct", a fast mesh record, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of an integer)
+
+local function the fast ring of loop {integer:loopIndex} in {fast polyhedron record:shape} from {cad vector3:origin} along {cad vector3:uAxis} and {cad vector3:vAxis}:
+    execute:
+        set result to an empty list of a cad vector2
+        set first to the item at loopIndex in (shape's loopStarts's values)
+        set past to the item at (loopIndex + 1) in (shape's loopStarts's values)
+        loop cursor from first to past:
+            set offset to the cad difference of (the item at (the item at cursor in (shape's indices's values)) in (shape's positions's values)) and origin
+            append (a cad vector2 with x (the cad dot of offset and uAxis) and y (the cad dot of offset and vAxis)) to result
+        return result
+
+# Radians between a face's first edge and the direction its triangulation
+# bridges holes along; any angle no face edge takes will do.
+function the fast bridge turn:
+    replacement:
+        0.4142135623730951
+
+# A point of the tessellation: a polyhedron position (`vertex` at least 0),
+# or a point the triangulator inserted on the polyhedron edge `edgeCode`, at
+# `parameter` from its lower to its higher position index.
+class:
+    patterns:
+        [a|] fast mesh point record
+    members:
+        vertex as an integer
+        edgeCode as a 64 bit integer
+        parameter as a 64 bit floating-point number
+        location as a cad vector3
+
+class:
+    patterns:
+        [a|] fast edge split record
+    members:
+        edgeCode as a 64 bit integer
+        parameter as a 64 bit floating-point number
+        point as an integer
+
+class:
+    patterns:
+        [a|] fast pending triangle record
+    members:
+        face as an integer
+        first as an integer
+        second as an integer
+        third as an integer
+
+local function fast edge split ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to the value at (left as a pointer to a fast edge split record)
+        set second to the value at (right as a pointer to a fast edge split record)
+        if first's edgeCode < second's edgeCode:
+            return -1
+        if first's edgeCode > second's edgeCode:
+            return 1
+        if first's parameter < second's parameter:
+            return -1
+        if first's parameter > second's parameter:
+            return 1
+        return 0
+
+# Everything the tessellation passes share.
+class:
+    patterns:
+        [a|] fast tessellation record
+    members:
+        points as the type of (an empty list of a fast mesh point record)
+        vertexPoints as the type of (an empty list of an integer)
+        splits as the type of (an empty list of a fast edge split record)
+        meshIndices as the type of (an empty list of an integer)
+        touched as the type of (an empty list of an integer)
+
+local function the fast point of vertex {integer:vertexIndex} in {fast polyhedron record:shape} with {a pointer to a fast tessellation record:state}:
+    execute:
+        set known to the item at vertexIndex in (state's vertexPoints)
+        if known >= 0:
+            return known
+        append (@intrinsic("construct", a fast mesh point record, vertexIndex, (-1) as a 64 bit integer, 0.0, the item at vertexIndex in (shape's positions's values))) to (state's points)
+        set created to (the length of (state's points)) - 1
+        replace item at index vertexIndex in (state's vertexPoints) with created
+        append -1 to (state's meshIndices)
+        return created
+
+# The point the triangulator inserted on the edge from `here` to `there` at
+# `fraction` of the way: one shared point per edge position, whichever face
+# inserted it.
+local function the fast point on edge from {integer:here} to {integer:there} at {a 64 bit floating-point number:fraction} in {fast polyhedron record:shape} with {a pointer to a fast tessellation record:state}:
+    execute:
+        set low to the minimum of here and there
+        set high to the maximum of here and there
+        set parameter to fraction
+        if here > there:
+            set parameter to 1.0 - fraction
+        set code to ((low as a 64 bit integer) * ((the length of (shape's positions's values)) as a 64 bit integer)) + (high as a 64 bit integer)
+        loop cursor from 0 to the length of (state's splits):
+            set split to the item at cursor in (state's splits)
+            if (split's edgeCode = code) and ((the absolute value of (split's parameter - parameter)) <= 1e-12):
+                return split's point
+        set start to the item at low in (shape's positions's values)
+        set location to the cad sum of start and ((the cad difference of (the item at high in (shape's positions's values)) and start) scaled by parameter)
+        append (@intrinsic("construct", a fast mesh point record, -1, code, parameter, location)) to (state's points)
+        set created to (the length of (state's points)) - 1
+        append -1 to (state's meshIndices)
+        append (@intrinsic("construct", a fast edge split record, code, parameter, created)) to (state's splits)
+        return created
+
+class:
+    patterns:
+        [a|] fast edge span record
+    members:
+        valid as a boolean
+        edgeCode as a 64 bit integer
+        from as a 64 bit floating-point number
+        to as a 64 bit floating-point number
+
+# The polyhedron edge both points lie on, with their parameters along it.
+local function the fast span from {fast mesh point record:first} to {fast mesh point record:second} among {integer:positionCount}:
+    execute:
+        set none to @intrinsic("construct", a fast edge span record, false, (-1) as a 64 bit integer, 0.0, 0.0)
+        set count to positionCount as a 64 bit integer
+        if (first's vertex >= 0) and (second's vertex >= 0):
+            set low to the minimum of first's vertex and second's vertex
+            set high to the maximum of first's vertex and second's vertex
+            set code to ((low as a 64 bit integer) * count) + (high as a 64 bit integer)
+            set startParameter to 0.0
+            set endParameter to 1.0
+            if first's vertex > second's vertex:
+                set startParameter to 1.0
+                set endParameter to 0.0
+            return @intrinsic("construct", a fast edge span record, true, code, startParameter, endParameter)
+        if (first's vertex < 0) and (second's vertex < 0):
+            if first's edgeCode != second's edgeCode:
+                return none
+            return @intrinsic("construct", a fast edge span record, true, first's edgeCode, first's parameter, second's parameter)
+        set split to first
+        set corner to second
+        set reversed to false
+        if first's vertex >= 0:
+            set split to second
+            set corner to first
+            set reversed to true
+        set low to (split's edgeCode / count) as an integer
+        set high to (the remainder of split's edgeCode divided by count) as an integer
+        set cornerParameter to -1.0
+        if corner's vertex = low:
+            set cornerParameter to 0.0
+        if corner's vertex = high:
+            set cornerParameter to 1.0
+        if cornerParameter < 0.0:
+            return none
+        if reversed:
+            return @intrinsic("construct", a fast edge span record, true, split's edgeCode, cornerParameter, split's parameter)
+        return @intrinsic("construct", a fast edge span record, true, split's edgeCode, split's parameter, cornerParameter)
+
+local function the fast mesh index of point {integer:pointIndex} facing {cad vector3:normal} into {a pointer to a fast mesh record:target} with {a pointer to a fast tessellation record:state}:
+    execute:
+        set known to the item at pointIndex in (state's meshIndices)
+        if known >= 0:
+            return known
+        append (the item at pointIndex in (state's points))'s location to (target's positions's values)
+        append normal to (target's normals's values)
+        set created to (the length of (target's positions's values)) - 1
+        replace item at index pointIndex in (state's meshIndices) with created
+        append pointIndex to (state's touched)
+        return created
+
+# Emits a triangle, first splitting it at every inserted point that lies
+# strictly inside one of its edges, so that no edge of the mesh ends in the
+# middle of another.
+local function emit fast triangle {integer:a}, {integer:b} and {integer:c} facing {cad vector3:normal} of {fast polyhedron record:shape} into {a pointer to a fast mesh record:target} with {a pointer to a fast tessellation record:state}:
+    execute:
+        set corners to an empty list of an integer
+        append a to corners
+        append b to corners
+        append c to corners
+        loop side from 0 to 3:
+            set here to the item at side in corners
+            set there to the item at (the remainder of (side + 1) divided by 3) in corners
+            set opposite to the item at (the remainder of (side + 2) divided by 3) in corners
+            set span to the fast span from (the item at here in (state's points)) to (the item at there in (state's points)) among (the length of (shape's positions's values))
+            if span's valid:
+                set lower to the minimum of span's from and span's to
+                set upper to the maximum of span's from and span's to
+                set inside to an empty list of an integer
+                loop cursor from 0 to the length of (state's splits):
+                    set split to the item at cursor in (state's splits)
+                    if (split's edgeCode = span's edgeCode) and ((split's parameter > (lower + 1e-12)) and (split's parameter < (upper - 1e-12))):
+                        append split's point to inside
+                if (the length of inside) > 0:
+                    # `splits` is ordered by parameter; walk from `here`.
+                    if span's from > span's to:
+                        set reordered to an empty list of an integer
+                        set back to (the length of inside) - 1
+                        loop while back >= 0:
+                            append (the item at back in inside) to reordered
+                            set back to back - 1
+                        free inside
+                        set inside to reordered
+                    set previous to here
+                    loop cursor from 0 to the length of inside:
+                        emit fast triangle previous, (the item at cursor in inside) and opposite facing normal of shape into target with state
+                        set previous to the item at cursor in inside
+                    emit fast triangle previous, there and opposite facing normal of shape into target with state
+                    free inside
+                    free corners
+                    return nothing
+                free inside
+        loop side from 0 to 3:
+            append (the fast mesh index of point (the item at side in corners) facing normal into target with state) to (target's triangles's values)
+        free corners
+
+# Appends the triangulation of every face of `shape` to `target`. Each face is
+# triangulated in its own plane, relative to its first point, by the 2D
+# triangulator of the port, holes included. That triangulator inserts a point
+# where it bridges a hole to a boundary; such a point lies on an edge the
+# neighbouring face shares, so every triangle along that edge, of either face,
+# is split there too. The mesh therefore has no T-junctions, and its positions
+# are the polyhedron's own (inserted points exactly on their edges).
+function append fast mesh of {fast polyhedron record:shape} to {a pointer to a fast mesh record:target}:
+    execute:
+        set positionCount to the length of (shape's positions's values)
+        set state to @intrinsic("construct", a fast tessellation record, an empty list of a fast mesh point record, an empty list of an integer, an empty list of a fast edge split record, an empty list of an integer, an empty list of an integer)
+        loop cursor from 0 to positionCount:
+            append -1 to (state's vertexPoints)
+        set pending to an empty list of a fast pending triangle record
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set firstIndex to the item at (the item at face's firstLoop in (shape's loopStarts's values)) in (shape's indices's values)
+            set secondIndex to the item at ((the item at face's firstLoop in (shape's loopStarts's values)) + 1) in (shape's indices's values)
+            set origin to the item at firstIndex in (shape's positions's values)
+            set edge to the cad difference of (the item at secondIndex in (shape's positions's values)) and origin
+            set edgeAxis to (the cad difference of edge and (face's normal scaled by (the cad dot of edge and face's normal))) scaled by (1.0 / (the cad length of edge))
+            # The triangulator bridges each hole to the boundary along the
+            # frame's x direction. Turning the frame off the face's first edge
+            # keeps those bridges off edges parallel or perpendicular to it,
+            # as the edges of rectangular holes are; a bridge running along
+            # another hole's edge would leave the ring invalid.
+            set uAxis to the cad sum of (edgeAxis scaled by (the cosine of (the fast bridge turn))) and ((the cad cross of face's normal and edgeAxis) scaled by (the sine of (the fast bridge turn)))
+            set vAxis to the cad cross of face's normal and uAxis
+            set outer to the fast ring of loop face's firstLoop in shape from origin along uAxis and vAxis
+            set holes to an empty list of the type of outer
+            loop ringCursor from (face's firstLoop + 1) to (face's firstLoop + face's loopCount):
+                append (the fast ring of loop ringCursor in shape from origin along uAxis and vAxis) to holes
+            set triangulated to the cad triangulation of outer with holes holes
+            # Each triangulation point is a loop vertex of the face, or lies
+            # on one of the face's loop edges.
+            set references to an empty list of an integer
+            loop pointCursor from 0 to the length of (the points of triangulated):
+                set flat to the item at pointCursor in (the points of triangulated)
+                set found to -1
+                set bestGap to 1.0 / 0.0
+                set bestHere to -1
+                set bestThere to -1
+                set bestFraction to 0.0
+                loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                    set ringPoints to outer
+                    if ringCursor > face's firstLoop:
+                        set ringPoints to the item at (ringCursor - (face's firstLoop + 1)) in holes
+                    set first to the item at ringCursor in (shape's loopStarts's values)
+                    set count to (the item at (ringCursor + 1) in (shape's loopStarts's values)) - first
+                    loop corner from 0 to count:
+                        set here to the item at corner in ringPoints
+                        if (here's x = flat's x) and (here's y = flat's y):
+                            set found to the item at (first + corner) in (shape's indices's values)
+                        set there to the item at (the remainder of (corner + 1) divided by count) in ringPoints
+                        set runX to there's x - here's x
+                        set runY to there's y - here's y
+                        set runSquared to (runX * runX) + (runY * runY)
+                        if runSquared > 0.0:
+                            set fraction to (((flat's x - here's x) * runX) + ((flat's y - here's y) * runY)) / runSquared
+                            if (fraction > 0.0) and (fraction < 1.0):
+                                set gap to the absolute value of ((((flat's x - here's x) * runY) - ((flat's y - here's y) * runX)) / (the square root of runSquared))
+                                if gap < bestGap:
+                                    set bestGap to gap
+                                    set bestHere to the item at (first + corner) in (shape's indices's values)
+                                    set bestThere to the item at (first + (the remainder of (corner + 1) divided by count)) in (shape's indices's values)
+                                    set bestFraction to fraction
+                if found >= 0:
+                    append (the fast point of vertex found in shape with (the address of state)) to references
+                else:
+                    append (the fast point on edge from bestHere to bestThere at bestFraction in shape with (the address of state)) to references
+            loop triangleCursor from 0 to the length of (the triangles of triangulated):
+                set triangleValue to the item at triangleCursor in (the triangles of triangulated)
+                append (@intrinsic("construct", a fast pending triangle record, faceCursor, the item at (the first of triangleValue) in references, the item at (the second of triangleValue) in references, the item at (the third of triangleValue) in references)) to pending
+            free references
+            free cad triangulation triangulated
+            loop ringCursor from 0 to the length of holes:
+                free (the item at ringCursor in holes)
+            free holes
+            free outer
+        set comparator to the function named "fast edge split ordering $ and $"
+        sort native array at ((the data of (state's splits)) as a pointer) with ((the length of (state's splits)) as a word sized unsigned integer) items of ((the size of a fast edge split record) as a word sized unsigned integer) bytes using comparator
+        set currentFace to -1
+        loop cursor from 0 to the length of pending:
+            set triangleValue to the item at cursor in pending
+            if triangleValue's face != currentFace:
+                # Every face gets its own copies of its points, with its normal.
+                loop touchedCursor from 0 to the length of (state's touched):
+                    replace item at index (the item at touchedCursor in (state's touched)) in (state's meshIndices) with -1
+                clear (state's touched)
+                set currentFace to triangleValue's face
+            set normal to (the item at triangleValue's face in (shape's faces's values))'s normal
+            emit fast triangle triangleValue's first, triangleValue's second and triangleValue's third facing normal of shape into target with (the address of state)
+        free pending
+        free (state's points)
+        free (state's vertexPoints)
+        free (state's splits)
+        free (state's meshIndices)
+        free (state's touched)
+
+class:
+    patterns:
+        [a|] fast mesh edge record
+    members:
+        first as an integer
+        second as an integer
+
+local function fast mesh edge ordering {pointer:left} and {pointer:right}:
+    execute:
+        set one to the value at (left as a pointer to a fast mesh edge record)
+        set other to the value at (right as a pointer to a fast mesh edge record)
+        if one's first < other's first:
+            return -1
+        if one's first > other's first:
+            return 1
+        if one's second < other's second:
+            return -1
+        if one's second > other's second:
+            return 1
+        return 0
+
+local function fast mesh position {cad vector3:one} precedes {cad vector3:other}:
+    execute:
+        if one's x != other's x:
+            return one's x < other's x
+        if one's y != other's y:
+            return one's y < other's y
+        return one's z < other's z
+
+# The number of directed triangle edges without an opposite twin, counting
+# positions that are equal as the same point: 0 for a closed, consistently
+# oriented mesh without T-junctions.
+function the fast mesh flaw of {fast mesh record:shape}:
+    execute:
+        set points to shape's positions's values
+        set count to the length of points
+        # Number equal positions alike: sort indices by position.
+        set order to an empty list of an integer
+        loop cursor from 0 to count:
+            append cursor to order
+        loop outer from 1 to count:
+            set moving to the item at outer in order
+            set slot to outer
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if fast mesh position (the item at moving in points) precedes (the item at (the item at (slot - 1) in order) in points):
+                    replace item at index slot in order with (the item at (slot - 1) in order)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in order with moving
+        set canonical to an empty list of an integer
+        loop cursor from 0 to count:
+            append 0 to canonical
+        set label to -1
+        loop cursor from 0 to count:
+            set here to the item at (the item at cursor in order) in points
+            set fresh to true
+            if cursor > 0:
+                set before to the item at (the item at (cursor - 1) in order) in points
+                set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
+            if fresh:
+                set label to label + 1
+            replace item at index (the item at cursor in order) in canonical with label
+        free order
+        set forward to an empty list of a fast mesh edge record
+        set backward to an empty list of a fast mesh edge record
+        set corners to shape's triangles's values
+        set cursor to 0
+        loop while cursor < the length of corners:
+            loop side from 0 to 3:
+                set from to the item at (the item at (cursor + side) in corners) in canonical
+                set onward to the item at (the item at (cursor + (the remainder of (side + 1) divided by 3)) in corners) in canonical
+                append (@intrinsic("construct", a fast mesh edge record, from, onward)) to forward
+                append (@intrinsic("construct", a fast mesh edge record, onward, from)) to backward
+            set cursor to cursor + 3
+        free canonical
+        set comparator to the function named "fast mesh edge ordering $ and $"
+        sort native array at ((the data of forward) as a pointer) with ((the length of forward) as a word sized unsigned integer) items of ((the size of a fast mesh edge record) as a word sized unsigned integer) bytes using comparator
+        sort native array at ((the data of backward) as a pointer) with ((the length of backward) as a word sized unsigned integer) items of ((the size of a fast mesh edge record) as a word sized unsigned integer) bytes using comparator
+        set unpaired to 0
+        loop cursor from 0 to the length of forward:
+            set one to the item at cursor in forward
+            set other to the item at cursor in backward
+            if (one's first != other's first) or (one's second != other's second):
+                set unpaired to unpaired + 1
+        free forward
+        free backward
+        return unpaired
+
+# The volume enclosed by a closed mesh, relative to its first position.
+function the fast mesh volume of {fast mesh record:shape}:
+    execute:
+        set points to shape's positions's values
+        if (the length of points) = 0:
+            return 0.0
+        set anchor to the item at 0 in points
+        set total to 0.0
+        set corners to shape's triangles's values
+        set cursor to 0
+        loop while cursor < the length of corners:
+            set a to the cad difference of (the item at (the item at cursor in corners) in points) and anchor
+            set b to the cad difference of (the item at (the item at (cursor + 1) in corners) in points) and anchor
+            set c to the cad difference of (the item at (the item at (cursor + 2) in corners) in points) and anchor
+            set total to total + (the cad dot of a and (the cad cross of b and c))
+            set cursor to cursor + 3
+        return total / 6.0
+
+# ---------------------------------------------------------------- section
+
+# The loops in which the plane meets the polyhedron, with the method and the
+# results of `the cad plane section of` for an equivalent B-rep body.
+function the fast section of {fast polyhedron record:shape} by {cad plane:givenPlane}:
+    execute:
+        set points to shape's positions's values
+        if (the length of (shape's faces's values)) = 0:
+            return an empty cad section
+        set frame to the cad section frame of givenPlane
+        if frame's valid = false:
+            return a cad section refusal cad section invalid plane snag
+        set tolerance to the fast tolerance of shape
+        set heights to an empty list of a 64 bit floating-point number
+        ensure enough capacity in heights for (the length of points) items
+        set lowest to 1.0 / 0.0
+        set highest to 0.0 - (1.0 / 0.0)
+        loop cursor from 0 to the length of points:
+            set height to the cad dot of (the cad difference of (the item at cursor in points) and frame's framePlane's origin) and frame's unitNormal
+            append height to heights
+            set lowest to the minimum of lowest and height
+            set highest to the maximum of highest and height
+        if (lowest >= (-tolerance)) or (highest <= tolerance):
+            free heights
+            return an empty cad section
+        set count to (the length of points) as a 64 bit integer
+        set crossings to an empty list of a cad section crossing record
+        set faceCrossings to an empty list of a cad section crossing record
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set lineDirection to the cad cross of frame's unitNormal and face's normal
+            clear faceCrossings
+            loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                set first to the item at ringCursor in (shape's loopStarts's values)
+                set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                loop cursor from first to past:
+                    set nextCursor to cursor + 1
+                    if nextCursor = past:
+                        set nextCursor to first
+                    set here to the item at cursor in (shape's indices's values)
+                    set there to the item at nextCursor in (shape's indices's values)
+                    # An edge is the same for both its faces: from its lower
+                    # to its higher position index.
+                    set low to the minimum of here and there
+                    set high to the maximum of here and there
+                    add cad section crossing of edge (((low as a 64 bit integer) * count) + (high as a 64 bit integer)) from (the item at low in points) at (the item at low in heights) to (the item at high in points) at (the item at high in heights) along lineDirection within tolerance into faceCrossings
+            set snag to close cad section face faceCrossings along lineDirection into crossings
+            if snag != 0:
+                free faceCrossings
+                free crossings
+                free heights
+                return a cad section refusal snag
+        free faceCrossings
+        free heights
+        return the cad section loops of crossings on frame within tolerance

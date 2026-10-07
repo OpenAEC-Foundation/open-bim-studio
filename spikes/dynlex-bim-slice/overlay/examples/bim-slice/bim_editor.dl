@@ -1,0 +1,2762 @@
+# SPDX-License-Identifier: MPL-2.0
+# Editor core of the BIM slice: tools, inference snapping, numeric input during
+# a gesture, transactions and incremental evaluation, driven by abstract
+# location and key events so it runs without a window. Commands are verb first:
+# choose a tool, gesture, optionally type a number, confirm.
+import examples/bim-slice/bim_drawing.dl
+import examples/bim-slice/bim_ifc.dl
+import examples/bim-slice/bim_ifcx.dl
+import examples/bim-slice/bim_scene.dl
+import examples/bim-slice/bim_file.dl
+import examples/bim-slice/bim_view.dl
+
+function bim select tool:
+    replacement:
+        0
+function bim wall tool:
+    replacement:
+        1
+function bim opening tool:
+    replacement:
+        2
+function bim section tool:
+    replacement:
+        3
+function bim grid tool:
+    replacement:
+        4
+# The SketchUp-like tools: lines that close into faces, rectangles,
+# push/pull of a face into a mass, texts, and moving the selection.
+function bim line tool:
+    replacement:
+        5
+function bim rectangle tool:
+    replacement:
+        6
+function bim push tool:
+    replacement:
+        7
+function bim text tool:
+    replacement:
+        8
+function bim move tool:
+    replacement:
+        9
+# Places instances of the chosen component.
+function bim place tool:
+    replacement:
+        10
+# Copies the selection from a base point, as often as clicked.
+function bim copy tool:
+    replacement:
+        11
+# Turns the selection about a point: by two clicks, or typed degrees.
+function bim rotate tool:
+    replacement:
+        12
+# Mirrors a copy of the selection in a line through two clicks.
+function bim mirror tool:
+    replacement:
+        13
+# A parallel copy of a wall or line at the typed distance, on the side clicked.
+function bim offset tool:
+    replacement:
+        14
+# Cuts walls and lines back to a boundary, or runs them on to it.
+function bim trim tool:
+    replacement:
+        15
+function bim extend tool:
+    replacement:
+        16
+
+# Key codes follow the windowing layer: printable keys are their upper-case
+# ASCII code.
+function bim enter key code:
+    replacement:
+        257
+function bim backspace key code:
+    replacement:
+        259
+function bim delete key code:
+    replacement:
+        261
+function bim escape key code:
+    replacement:
+        256
+function bim page up key code:
+    replacement:
+        266
+function bim page down key code:
+    replacement:
+        267
+
+# The thickness of the slabs the editor makes.
+function the bim slab thickness:
+    replacement:
+        0.25
+
+class:
+    patterns:
+        [a|] bim snap record
+    members:
+        point as a cad vector2
+        label as a string
+
+class:
+    patterns:
+        [a|] bim space choice record
+    members:
+        valid as a boolean
+        space as a bim space record
+
+class:
+    patterns:
+        [a|] bim slab choice record
+    members:
+        valid as a boolean
+        slab as a bim slab record
+
+class:
+    patterns:
+        [a|] bim wall end record
+    members:
+        wallId as a 64 bit integer
+        atFinish as a boolean
+        origin as a cad vector2
+
+class:
+    patterns:
+        [a|] bim editor record
+    members:
+        documentValue as a bim document record
+        tool as an integer
+        levelId as a 64 bit integer
+        wallTypeId as a 64 bit integer
+        openingTypeId as a 64 bit integer
+        chainActive as a boolean
+        chainStart as a cad vector2
+        snap as a bim snap record
+        numeric as a string
+        dragging as a boolean
+        dragMoved as a boolean
+        dragEnds as the type of (a cad topology list of a bim wall end record)
+        hoverWall as a 64 bit integer
+        evaluation as a bim evaluation record
+        evaluatedRevision as a 64 bit integer
+        evaluatedDrag as a boolean
+        plan as a bim view record
+        lastRebuilt as an integer
+        lastMicroseconds as a 64 bit integer
+        message as a string
+        sectionActive as a boolean
+        sectionStart as a cad vector2
+        hasSection as a boolean
+        sectionFirst as a cad vector2
+        sectionSecond as a cad vector2
+        section as a bim view record
+        viewsDirty as a boolean
+        adopted as a boolean
+        adoptedMicroseconds as a 64 bit integer
+        spaces as the type of (a cad topology list of a bim space record)
+        selectionKind as an integer
+        selectionId as a 64 bit integer
+        pointerLocation as a cad vector2
+        windowTypeId as a 64 bit integer
+        doorTypeId as a 64 bit integer
+        dragOrigin as a cad vector2
+        slabCorner as an integer
+        pickTolerance as a 64 bit floating-point number
+        planRules as a bim view rules record
+        sectionRules as a bim view rules record
+        modelRules as a bim view rules record
+        gridActive as a boolean
+        gridStart as a cad vector2
+        gridDragId as a 64 bit integer
+        gridDragAtFinish as a boolean
+        bendWallId as a 64 bit integer
+        sketchChain as the type of (a cad topology list of a cad vector2)
+        pushId as a 64 bit integer
+        pushOrigin as a cad vector2
+        pushBase as a 64 bit floating-point number
+        textActive as a boolean
+        textAnchor as a cad vector2
+        textBuffer as a string
+        moveStage as an integer
+        moveBase as a cad vector2
+        extending as a boolean
+        chosenSketches as the type of (a cad topology list of a 64 bit integer)
+        placeComponentId as a 64 bit integer
+        editingInstanceId as a 64 bit integer
+        editingComponentId as a 64 bit integer
+        editingOrigin as a cad vector2
+        editingAngle as a 64 bit floating-point number
+        editingFirstId as a 64 bit integer
+        editingParts as the type of (a cad topology list of a 64 bit integer)
+        pendingLetter as an integer
+        pendingAt as a 64 bit integer
+        turnStart as a 64 bit floating-point number
+        boundaryId as a 64 bit integer
+        offsetDistance as a 64 bit floating-point number
+
+# POSIX `struct timespec` on 64-bit targets: two 64-bit fields.
+class:
+    patterns:
+        [a|] bim clock reading record
+    members:
+        seconds as a 64 bit integer
+        nanoseconds as a 64 bit integer
+
+# Monotonic wall time, so the measured evaluation excludes nothing that runs
+# on other threads and includes nothing they consume.
+function the bim microseconds now:
+    execute:
+        set reading to @intrinsic("construct", a bim clock reading record, 0 as a 64 bit integer, 0 as a 64 bit integer)
+        set status to @intrinsic("call", "libc", "clock_gettime", an integer, 1, the address of reading)
+        if status != 0:
+            @intrinsic("call", "libc", "abort", nothing)
+        return (reading's seconds * (1000000 as a 64 bit integer)) + (reading's nanoseconds / (1000 as a 64 bit integer))
+
+# A new editor holds one storey, a cavity wall type, a partition type and a
+# window type, created in the first transaction.
+function a new bim editor:
+    execute:
+        set documentValue to a new bim document
+        begin bim transaction in (the address of documentValue)
+        set storey to add bim level named (the string form of "Ground floor") at 0.0 with height 3.0 to (the address of (documentValue's current))
+        set layerValues to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, the string form of "brick", 0.1)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "insulation", 0.12)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "concrete", 0.1)) to layerValues
+        set cavity to add bim wall type named (the string form of "Cavity wall") with layerValues to (the address of (documentValue's current))
+        free layerValues
+        set windowType to add bim opening type named (the string form of "Window 1200") sized 1.2 by 1.5 with sill 0.9 and frame 0.05 to (the address of (documentValue's current))
+        set doorType to add bim door type named (the string form of "Door 900") sized 0.9 by 2.1 with frame 0.05 to (the address of (documentValue's current))
+        commit bim transaction in (the address of documentValue)
+        set origin to a cad vector2 with x 0.0 and y 0.0
+        set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "")
+        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 0, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0)
+
+# ---------------------------------------------------------------- snapping
+
+local function the bim snap {cad vector2:point} labelled {a string:label}:
+    execute:
+        return @intrinsic("construct", a bim snap record, point, the string form of label)
+
+local function the bim grid point near {cad vector2:location} step {a 64 bit floating-point number:stepSize}:
+    execute:
+        set x to (@intrinsic("call", "libc", "round", a 64 bit floating-point number, location's x / stepSize)) * stepSize
+        set y to (@intrinsic("call", "libc", "round", a 64 bit floating-point number, location's y / stepSize)) * stepSize
+        return a cad vector2 with x x and y y
+
+# Inference snapping in priority order: a wall end point, a wall mid point,
+# horizontal or vertical alignment with the chain start, then the 0.05 m grid.
+# Wall points snap on every storey, so walls can be stacked over the storey
+# below. `tolerance` is the pick radius in model units.
+function the bim snap of {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        # Only the walls of the active storey near the pointer are candidates,
+        # found through the evaluation's spatial index.
+        set modelValue to editor's documentValue's current
+        set candidates to the bim walls within tolerance of location for editor
+        set bestDistance to tolerance
+        set found to false
+        set best to location
+        loop cursor from 0 to the length of candidates:
+            set wallFound to the bim wall index of (the item at cursor in candidates) in modelValue
+            if wallFound's valid:
+                set wallValue to the item at wallFound's position in (modelValue's walls's values)
+                if (the cad distance from location to wallValue's start) <= bestDistance:
+                    set bestDistance to the cad distance from location to wallValue's start
+                    set best to wallValue's start
+                    set found to true
+                if (the cad distance from location to wallValue's finish) <= bestDistance:
+                    set bestDistance to the cad distance from location to wallValue's finish
+                    set best to wallValue's finish
+                    set found to true
+        if found:
+            free candidates
+            return the bim snap best labelled "End point"
+        loop cursor from 0 to the length of candidates:
+            set wallFound to the bim wall index of (the item at cursor in candidates) in modelValue
+            if wallFound's valid:
+                set middle to the bim middle of wall (the item at wallFound's position in (modelValue's walls's values))
+                if (the cad distance from location to middle) <= bestDistance:
+                    set bestDistance to the cad distance from location to middle
+                    set best to middle
+                    set found to true
+        free candidates
+        if found:
+            return the bim snap best labelled "Mid point"
+        if editor's chainActive:
+            set gridded to the bim grid point near location step 0.05
+            if (the absolute value of (location's y - editor's chainStart's y)) <= tolerance:
+                return the bim snap (a cad vector2 with x gridded's x and y editor's chainStart's y) labelled "Horizontal"
+            if (the absolute value of (location's x - editor's chainStart's x)) <= tolerance:
+                return the bim snap (a cad vector2 with x editor's chainStart's x and y gridded's y) labelled "Vertical"
+        return the bim snap (the bim grid point near location step 0.05) labelled "Grid"
+
+# The ids of the walls of the active storey that can pass within `tolerance`
+# of `location`: through the evaluation's spatial index, or, while the model
+# has changed since it was evaluated, all of the storey's walls.
+function the bim walls within {a 64 bit floating-point number:tolerance} of {cad vector2:location} for {bim editor record:editor}:
+    execute:
+        if editor's evaluatedRevision = editor's documentValue's revision:
+            return the bim walls within tolerance of location on level editor's levelId in editor's evaluation's index
+        set found to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (editor's documentValue's current's walls's values):
+            set wallValue to the item at cursor in (editor's documentValue's current's walls's values)
+            if wallValue's levelId = editor's levelId:
+                append wallValue's id to found
+        return found
+
+# The nearest wall of the active storey whose centreline passes within
+# `tolerance` of `location`; none while walls are hidden in the plan.
+function the bim wall near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set best to the bim refused id
+        if (bim category bim wall category is visible in editor's planRules) = false:
+            return best
+        set modelValue to editor's documentValue's current
+        set candidates to the bim walls within tolerance of location for editor
+        set bestDistance to tolerance
+        loop cursor from 0 to the length of candidates:
+            set wallFound to the bim wall index of (the item at cursor in candidates) in modelValue
+            if wallFound's valid:
+                set wallValue to the item at wallFound's position in (modelValue's walls's values)
+                set gap to the bim distance from location to the centreline of wallValue
+                if (gap <= bestDistance) and (wallValue's levelId = editor's levelId):
+                    set bestDistance to gap
+                    set best to wallValue's id
+        free candidates
+        return best
+
+# ---------------------------------------------------------------- evaluation
+
+# Re-evaluates when the model changed since the last evaluation, or while a
+# drag is open; only the affected walls are rebuilt. The plan, cut 1.2 m above
+# the level, and the section follow the evaluation per rebuilt wall; spaces are
+# derived again. Views whose definition changed are cut again in full.
+function refresh bim editor {a pointer to a bim editor record:editor}:
+    execute:
+        set revision to editor's documentValue's revision
+        set modelChanged to ((revision != editor's evaluatedRevision) or editor's dragging) or (editor's dragging != editor's evaluatedDrag)
+        if (modelChanged = false) and (editor's viewsDirty = false):
+            return nothing
+        set started to the bim microseconds now
+        set rebuiltNow to 0
+        set alreadySpent to 0 as a 64 bit integer
+        if modelChanged:
+            if editor's adopted:
+                set alreadySpent to editor's adoptedMicroseconds
+            else:
+                update bim evaluation (the address of (editor's evaluation)) to editor's documentValue's current
+            set rebuiltNow to editor's evaluation's rebuilt
+        set editor's adopted to false
+        # Undoing the creation of the active storey leaves the first storey
+        # active.
+        set levelFound to the bim level index of editor's levelId in editor's documentValue's current
+        if (levelFound's valid = false) and ((the length of (editor's documentValue's current's levels's values)) > 0):
+            set editor's levelId to (the item at 0 in (editor's documentValue's current's levels's values))'s id
+            set levelFound to the bim level index of editor's levelId in editor's documentValue's current
+        set elevation to 0.0
+        if levelFound's valid:
+            set elevation to (the item at levelFound's position in (editor's documentValue's current's levels's values))'s elevation
+        set planPlane to the bim plan plane at elevation cut at 1.2
+        if bim planes editor's plan's viewPlane and planPlane are identical:
+            if modelChanged:
+                update bim view (the address of (editor's plan)) from editor's evaluation
+        else:
+            set editor's plan to the bim view of editor's evaluation cut by planPlane
+        if editor's hasSection:
+            set sectionPlane to the bim section plane from editor's sectionFirst to editor's sectionSecond
+            if bim planes editor's section's viewPlane and sectionPlane are identical:
+                if modelChanged:
+                    update bim view (the address of (editor's section)) from editor's evaluation
+            else:
+                set editor's section to the bim view of editor's evaluation cut by sectionPlane
+        set editor's spaces to the bim spaces of editor's documentValue's current on level editor's levelId using editor's evaluation's index
+        set editor's lastRebuilt to rebuiltNow
+        set editor's lastMicroseconds to ((the bim microseconds now) - started) + alreadySpent
+        set editor's evaluatedRevision to revision
+        set editor's evaluatedDrag to editor's dragging
+        set editor's viewsDirty to false
+
+local function the bim failure count of {bim evaluation record:evaluation}:
+    execute:
+        set failures to 0
+        loop cursor from 0 to the length of (evaluation's elements's values):
+            if (the item at cursor in (evaluation's elements's values))'s status != 0:
+                set failures to failures + 1
+        return failures
+
+# Ends the open transaction: commits it with `description` as the message, or
+# rolls it back when it would leave more walls failing to evaluate than
+# before (an opening that no longer fits its wall), reporting `refusal`.
+local function settle bim editor change in {a pointer to a bim editor record:editor} described {a string:description} or refused as {a string:refusal}:
+    execute:
+        set trialStarted to the bim microseconds now
+        set trial to the bim evaluation of editor's documentValue's current after editor's evaluation
+        set trialSpent to (the bim microseconds now) - trialStarted
+        if (the bim failure count of trial) > (the bim failure count of editor's evaluation):
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to (the string form of "Refused: ") + refusal
+            return false
+        commit bim transaction in (the address of (editor's documentValue))
+        # The trial already evaluates the committed model; refresh adopts it.
+        set editor's evaluation to trial
+        set editor's adopted to true
+        set editor's adoptedMicroseconds to trialSpent
+        set editor's message to description
+        return true
+
+local function the bim metres of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
+        return the substring of buffer from 0 spanning written bytes
+
+# Changes the current opening type; every opening of that type follows.
+local function resize bim editor opening type by {a 64 bit floating-point number:widthChange} and {a 64 bit floating-point number:heightChange} in {a pointer to a bim editor record:editor}:
+    execute:
+        refresh bim editor editor
+        set found to the bim opening type index of editor's openingTypeId in editor's documentValue's current
+        if found's valid = false:
+            return nothing
+        set openingType to the item at found's position in (editor's documentValue's current's openingTypes's values)
+        set newWidth to openingType's width + widthChange
+        set newHeight to openingType's height + heightChange
+        if (newWidth < 0.3) or (newHeight < 0.3):
+            set editor's message to the string form of "Refused: a window stays at least 0.30 m wide and high"
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        if (set bim opening type editor's openingTypeId sized newWidth by newHeight with sill openingType's sill in (the address of (editor's documentValue's current))) = false:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: invalid window size"
+            return nothing
+        set description to ((openingType's name + (the string form of ": ")) + (the bim metres of newWidth)) + (the string form of " x ")
+        ignore settle bim editor change in editor described ((description + (the bim metres of newHeight)) + (the string form of " m")) or refused as (the string form of "a window would not fit its wall")
+
+local function the bim example point {a 64 bit floating-point number:x} {a 64 bit floating-point number:y} from {cad vector2:base}:
+    execute:
+        return a cad vector2 with x (x + base's x) and y (y + base's y)
+
+# A 10 m x 7 m house with a partition across it, a wall from the partition to
+# the east facade, seven windows, three doors and a ground slab, and a first
+# floor above it and six grids, added as one undoable transaction, with its
+# plan coordinates moved by `base`.
+function add bim example building to {a pointer to a bim editor record:editor} at {cad vector2:base}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set wallTypeId to editor's wallTypeId
+        set levelId to editor's levelId
+        set south to add bim wall typed wallTypeId on levelId from (the bim example point -2.0 -1.5 from base) to (the bim example point 8.0 -1.5 from base) to target
+        set east to add bim wall typed wallTypeId on levelId from (the bim example point 8.0 -1.5 from base) to (the bim example point 8.0 5.5 from base) to target
+        set north to add bim wall typed wallTypeId on levelId from (the bim example point 8.0 5.5 from base) to (the bim example point -2.0 5.5 from base) to target
+        set west to add bim wall typed wallTypeId on levelId from (the bim example point -2.0 5.5 from base) to (the bim example point -2.0 -1.5 from base) to target
+        set across to add bim wall typed wallTypeId on levelId from (the bim example point 3.0 -1.5 from base) to (the bim example point 3.0 5.5 from base) to target
+        set between to add bim wall typed wallTypeId on levelId from (the bim example point 3.0 2.0 from base) to (the bim example point 8.0 2.0 from base) to target
+        ignore add bim opening typed editor's windowTypeId in south at 2.5 to target
+        ignore add bim opening typed editor's windowTypeId in south at 7.5 to target
+        ignore add bim opening typed editor's windowTypeId in east at 1.75 to target
+        ignore add bim opening typed editor's windowTypeId in east at 5.25 to target
+        ignore add bim opening typed editor's windowTypeId in north at 2.5 to target
+        ignore add bim opening typed editor's windowTypeId in north at 8.0 to target
+        ignore add bim opening typed editor's windowTypeId in west at 4.5 to target
+        # A front door, and a door into each of the two east rooms.
+        ignore add bim opening typed editor's doorTypeId in south at 6.0 to target
+        ignore add bim opening typed editor's doorTypeId in across at 2.0 to target
+        ignore add bim opening typed editor's doorTypeId in between at 1.5 to target
+        # A ground slab under the whole house, flush with the exterior faces.
+        set reach to (the bim thickness of (the item at (the bim wall type index of wallTypeId in (@intrinsic("dereference", target)))'s position in (target's wallTypes's values))) * 0.5
+        set groundOutline to an empty list of a cad vector2
+        append (the bim example point (-2.0 - reach) (-1.5 - reach) from base) to groundOutline
+        append (the bim example point (8.0 + reach) (-1.5 - reach) from base) to groundOutline
+        append (the bim example point (8.0 + reach) (5.5 + reach) from base) to groundOutline
+        append (the bim example point (-2.0 - reach) (5.5 + reach) from base) to groundOutline
+        ignore add bim slab on levelId around groundOutline thick the bim slab thickness to target
+        free groundOutline
+        # A first floor on the ground floor: the same facades with six windows
+        # and the partition, without a floor slab, so the 3D view looks into
+        # the rooms below.
+        set ground to the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values)
+        set upper to add bim level named (the string form of "First floor") at (ground's elevation + ground's height) with height ground's height to target
+        set upperSouth to add bim wall typed wallTypeId on upper from (the bim example point -2.0 -1.5 from base) to (the bim example point 8.0 -1.5 from base) to target
+        set upperEast to add bim wall typed wallTypeId on upper from (the bim example point 8.0 -1.5 from base) to (the bim example point 8.0 5.5 from base) to target
+        set upperNorth to add bim wall typed wallTypeId on upper from (the bim example point 8.0 5.5 from base) to (the bim example point -2.0 5.5 from base) to target
+        set upperWest to add bim wall typed wallTypeId on upper from (the bim example point -2.0 5.5 from base) to (the bim example point -2.0 -1.5 from base) to target
+        ignore add bim wall typed wallTypeId on upper from (the bim example point 3.0 -1.5 from base) to (the bim example point 3.0 5.5 from base) to target
+        ignore add bim opening typed editor's windowTypeId in upperSouth at 2.5 to target
+        ignore add bim opening typed editor's windowTypeId in upperSouth at 7.5 to target
+        ignore add bim opening typed editor's windowTypeId in upperEast at 3.5 to target
+        ignore add bim opening typed editor's windowTypeId in upperNorth at 2.5 to target
+        ignore add bim opening typed editor's windowTypeId in upperNorth at 8.0 to target
+        ignore add bim opening typed editor's windowTypeId in upperWest at 3.5 to target
+        # Grids on the facades and the partition: 1 to 3 across, A to C along.
+        set reachValue to the bim grid reach of (@intrinsic("dereference", target))
+        ignore add bim grid named (the string form of "1") from (the bim example point -2.0 -3.0 from base) to (the bim example point -2.0 7.0 from base) reaching reachValue's x to reachValue's y to target
+        ignore add bim grid named (the string form of "2") from (the bim example point 3.0 -3.0 from base) to (the bim example point 3.0 7.0 from base) reaching reachValue's x to reachValue's y to target
+        ignore add bim grid named (the string form of "3") from (the bim example point 8.0 -3.0 from base) to (the bim example point 8.0 7.0 from base) reaching reachValue's x to reachValue's y to target
+        ignore add bim grid named (the string form of "A") from (the bim example point -3.5 -1.5 from base) to (the bim example point 9.5 -1.5 from base) reaching reachValue's x to reachValue's y to target
+        ignore add bim grid named (the string form of "B") from (the bim example point -3.5 2.0 from base) to (the bim example point 9.5 2.0 from base) reaching reachValue's x to reachValue's y to target
+        ignore add bim grid named (the string form of "C") from (the bim example point -3.5 5.5 from base) to (the bim example point 9.5 5.5 from base) reaching reachValue's x to reachValue's y to target
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to the string form of "Example building"
+
+function add bim example building to {a pointer to a bim editor record:editor}:
+    execute:
+        add bim example building to editor at (a cad vector2 with x 0.0 and y 0.0)
+
+# An imaginary tower of at least `wallCount` walls, for testing at scale. Each
+# storey is a grid of `roomCount` x `roomCount` rooms of 4 m x 4 m: cavity walls on the
+# facade with a window in each, sand-lime partitions inside (one wall per room
+# side), and a floor slab under the storey, flush with the facade. Storeys of
+# 3 m are added until the walls reach `wallCount`. Returns the storey count.
+function add bim generated tower of {integer:wallCount} walls with {integer:roomCount} rooms a side to {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set partitionLayers to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, the string form of "sand-lime", 0.1)) to partitionLayers
+        set partition to add bim wall type named (the string form of "Partition 100") with partitionLayers to target
+        free partitionLayers
+        set facade to editor's wallTypeId
+        set reach to (the bim thickness of (the item at (the bim wall type index of facade in (@intrinsic("dereference", target)))'s position in (target's wallTypes's values))) * 0.5
+        set perStorey to (2 * roomCount) * (roomCount + 1)
+        set storeys to ((wallCount + perStorey) - 1) / perStorey
+        set extent to 4.0 * (roomCount as a 64 bit floating-point number)
+        set levelId to editor's levelId
+        set placed to 0
+        loop storey from 0 to storeys:
+            if storey > 0:
+                set levelId to add bim level named ((the string form of "Storey ") + (the string form of storey)) at (3.0 * (storey as a 64 bit floating-point number)) with height 3.0 to target
+            loop row from 0 to roomCount + 1:
+                set y to 4.0 * (row as a 64 bit floating-point number)
+                set onFacade to (row = 0) or (row = roomCount)
+                loop column from 0 to roomCount:
+                    set x to 4.0 * (column as a 64 bit floating-point number)
+                    set typeId to partition
+                    if onFacade:
+                        set typeId to facade
+                    # Facade walls run so that their exterior faces out.
+                    set fromPoint to a cad vector2 with x x and y y
+                    set toPoint to a cad vector2 with x (x + 4.0) and y y
+                    if row = roomCount:
+                        set fromPoint to a cad vector2 with x (x + 4.0) and y y
+                        set toPoint to a cad vector2 with x x and y y
+                    set wallId to add bim wall typed typeId on levelId from fromPoint to toPoint to target
+                    if onFacade:
+                        ignore add bim opening typed editor's windowTypeId in wallId at 2.0 to target
+                    set placed to placed + 1
+            loop column from 0 to roomCount + 1:
+                set x to 4.0 * (column as a 64 bit floating-point number)
+                set onFacade to (column = 0) or (column = roomCount)
+                loop row from 0 to roomCount:
+                    set y to 4.0 * (row as a 64 bit floating-point number)
+                    set typeId to partition
+                    if onFacade:
+                        set typeId to facade
+                    set fromPoint to a cad vector2 with x x and y (y + 4.0)
+                    set toPoint to a cad vector2 with x x and y y
+                    if column = roomCount:
+                        set fromPoint to a cad vector2 with x x and y y
+                        set toPoint to a cad vector2 with x x and y (y + 4.0)
+                    set wallId to add bim wall typed typeId on levelId from fromPoint to toPoint to target
+                    if onFacade:
+                        ignore add bim opening typed editor's windowTypeId in wallId at 2.0 to target
+                    set placed to placed + 1
+            set outline to an empty list of a cad vector2
+            append (a cad vector2 with x (0.0 - reach) and y (0.0 - reach)) to outline
+            append (a cad vector2 with x (extent + reach) and y (0.0 - reach)) to outline
+            append (a cad vector2 with x (extent + reach) and y (extent + reach)) to outline
+            append (a cad vector2 with x (0.0 - reach) and y (extent + reach)) to outline
+            ignore add bim slab on levelId around outline thick the bim slab thickness to target
+            free outline
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to ((the string form of "Generated ") + (the string form of placed)) + ((the string form of " walls on ") + ((the string form of storeys) + (the string form of " storeys")))
+        return storeys
+
+# ---------------------------------------------------------------- selection
+
+function select bim editor {integer:kindCode} numbered {a 64 bit integer:elementId} in {a pointer to a bim editor record:editor}:
+    execute:
+        set chosenKind to kindCode
+        if (kindCode = bim sketch picked) and ((the bim instance index of elementId in editor's documentValue's current)'s valid):
+            set chosenKind to bim instance picked
+        # Shift adds sketch elements and instances to the selection; any
+        # other pick starts it afresh.
+        set gathering to (chosenKind = bim sketch picked) or (chosenKind = bim instance picked)
+        if (editor's extending = false) or (gathering = false):
+            set editor's chosenSketches to a cad topology list of a 64 bit integer
+        if gathering:
+            set already to false
+            loop cursor from 0 to the length of (editor's chosenSketches's values):
+                if (the item at cursor in (editor's chosenSketches's values)) = elementId:
+                    set already to true
+            if already = false:
+                append elementId to (editor's chosenSketches's values)
+        set editor's selectionKind to chosenKind
+        set editor's selectionId to elementId
+        set editor's message to the bim selection description of (@intrinsic("dereference", editor))
+
+# The opening of the hovered wall, else the hovered wall, else a slab of the
+# active storey with an edge near `location`, else the space under
+# `location`; nothing when none. Hidden categories are passed over.
+# ---------------------------------------------------------------- sketches
+
+# The sketch element of the active storey at `location`: a text whose anchor
+# is near, a line passing near, or a face containing it, in that order; the
+# refused id when there is none or sketches are hidden.
+function the bim sketch at {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set drawn to the bim drawn sketches of editor's documentValue's current
+        set sketches to drawn's values
+        loop cursor from 0 to the length of sketches:
+            set entry to the item at cursor in sketches
+            if (entry's levelId = editor's levelId) and (entry's kind = bim text sketch):
+                if (bim category bim text category is visible in editor's planRules) and ((the cad distance from location to (the item at 0 in (entry's points's values))) <= (tolerance * 2.0)):
+                    return entry's id
+        loop cursor from 0 to the length of sketches:
+            set entry to the item at cursor in sketches
+            if (entry's levelId = editor's levelId) and (entry's kind = bim line sketch):
+                set gap to the cad distance from location to the segment from (the item at 0 in (entry's points's values)) to (the item at 1 in (entry's points's values))
+                if (gap <= tolerance) and (bim category bim line category is visible in editor's planRules):
+                    return entry's id
+        loop cursor from 0 to the length of sketches:
+            set entry to the item at cursor in sketches
+            if (entry's levelId = editor's levelId) and (entry's kind = bim face sketch):
+                if (bim category bim mass category is visible in editor's planRules) and (bim flat point location lies in (entry's points's values)):
+                    return entry's id
+        return the bim refused id
+
+# The face of the active storey containing `location`, or the refused id.
+function the bim face at {cad vector2:location} in {bim editor record:editor}:
+    execute:
+        set sketches to editor's documentValue's current's sketches's values
+        loop cursor from 0 to the length of sketches:
+            set sketch to the item at cursor in sketches
+            if ((sketch's levelId = editor's levelId) and (sketch's kind = bim face sketch)) and (bim flat point location lies in (sketch's points's values)):
+                return sketch's id
+        return the bim refused id
+
+# ---------------------------------------------------------------- components
+
+# The selected sketch elements become a new component, with one instance in
+# their place (Ctrl+G).
+function make bim editor component in {a pointer to a bim editor record:editor}:
+    execute:
+        set gathered to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (editor's chosenSketches's values):
+            set elementId to the item at cursor in (editor's chosenSketches's values)
+            if (the bim sketch index of elementId in editor's documentValue's current)'s valid:
+                append elementId to gathered
+        if ((the length of gathered) = 0) and (editor's selectionKind = bim sketch picked):
+            append editor's selectionId to gathered
+        if (the length of gathered) = 0:
+            set editor's message to the string form of "Make component: select sketch elements first (Shift adds)"
+            free gathered
+            return nothing
+        set title to (the string form of "Component ") + (the string form of ((the length of (editor's documentValue's current's components's values)) + 1))
+        begin bim transaction in (the address of (editor's documentValue))
+        set placed to make bim component named title from gathered on editor's levelId to (the address of (editor's documentValue's current))
+        free gathered
+        if placed = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set found to the bim instance index of placed in editor's documentValue's current
+        set editor's placeComponentId to (the item at found's position in (editor's documentValue's current's instances's values))'s componentId
+        set editor's chosenSketches to a cad topology list of a 64 bit integer
+        select bim editor bim instance picked numbered placed in editor
+        set editor's message to title + (the string form of ": made; Ctrl+I places more")
+
+# Explodes the selected instance into free sketch elements (Ctrl+U).
+function explode bim editor instance in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind != bim instance picked:
+            set editor's message to the string form of "Explode: select an instance"
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to explode bim instance editor's selectionId in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim nothing picked numbered (the bim refused id) in editor
+        set editor's message to (the string form of "Exploded into ") + ((the string form of made) + (the string form of " elements"))
+
+# Opens the selected instance's component for editing (Ctrl+E): its parts
+# become free sketch elements where the instance is, and the instance steps
+# aside until the component is closed again.
+function open bim editor component in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's editingInstanceId != the bim refused id:
+            return nothing
+        if editor's selectionKind != bim instance picked:
+            set editor's message to the string form of "Edit component: select an instance"
+            return nothing
+        set target to the address of (editor's documentValue's current)
+        set found to the bim instance index of editor's selectionId in (@intrinsic("dereference", target))
+        set placement to the item at found's position in (target's instances's values)
+        set definitionFound to the bim component index of placement's componentId in (@intrinsic("dereference", target))
+        set definition to the item at definitionFound's position in (target's components's values)
+        begin bim transaction in (the address of (editor's documentValue))
+        set editor's editingInstanceId to placement's id
+        set editor's editingComponentId to placement's componentId
+        set editor's editingOrigin to placement's origin
+        set editor's editingAngle to placement's angle
+        set editor's editingFirstId to target's nextId
+        set editor's editingParts to a cad topology list of a 64 bit integer
+        loop part from 0 to the length of (definition's sketches's values):
+            set shown to the bim sketch (the item at part in (definition's sketches's values)) placed by placement
+            set fresh to the bim new id in target
+            append (@intrinsic("construct", a bim sketch record, fresh, placement's levelId, shown's kind, shown's points, shown's height, shown's content)) to (target's sketches's values)
+            append fresh to (editor's editingParts's values)
+            note bim change of fresh in target
+        ignore delete bim instance placement's id from target
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim nothing picked numbered (the bim refused id) in editor
+        set editor's message to ((the string form of "Editing ") + definition's name) + (the string form of ": Ctrl+E closes it, every instance follows")
+
+# Closes the component being edited: the sketch elements made while it was
+# open (its parts and any new ones on its storey) become its contents again,
+# in its own coordinates, and its instance returns.
+function close bim editor component in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's editingInstanceId = the bim refused id:
+            return nothing
+        set target to the address of (editor's documentValue's current)
+        set parts to an empty list of a bim sketch record
+        set doomed to an empty list of a 64 bit integer
+        set levelId to editor's levelId
+        loop cursor from 0 to the length of (target's sketches's values):
+            set element to the item at cursor in (target's sketches's values)
+            set member to element's id >= editor's editingFirstId
+            if member:
+                set relative to a cad topology list of a cad vector2
+                loop corner from 0 to the length of (element's points's values):
+                    append (the bim component coordinates of (the item at corner in (element's points's values)) at editor's editingOrigin turned editor's editingAngle) to (relative's values)
+                append (@intrinsic("construct", a bim sketch record, element's id, 0 as a 64 bit integer, element's kind, relative, element's height, element's content)) to parts
+                append element's id to doomed
+                set levelId to element's levelId
+        begin bim transaction in (the address of (editor's documentValue))
+        loop cursor from 0 to the length of doomed:
+            ignore delete bim sketch (the item at cursor in doomed) from target
+        ignore set bim component editor's editingComponentId contents to parts in target
+        set back to @intrinsic("construct", a bim instance record, editor's editingInstanceId, editor's editingComponentId, levelId, editor's editingOrigin, editor's editingAngle)
+        set slot to the bim insertion position of back's id among (target's instances's values)
+        insert back into (target's instances's values) at index slot
+        note bim change of back's id in target
+        commit bim transaction in (the address of (editor's documentValue))
+        free parts
+        free doomed
+        set editor's message to the string form of "Component closed"
+        set editor's editingInstanceId to the bim refused id
+        set editor's editingParts to a cad topology list of a 64 bit integer
+        select bim editor bim instance picked numbered back's id in editor
+
+# The edge of `ring` that `location` lies on (within a micrometre), or -1.
+local function the bim edge of {a pointer to a list:ring} under {cad vector2:location}:
+    execute:
+        set count to the length of ring
+        loop cursor from 0 to count:
+            set here to the item at cursor in ring
+            set following to the item at (the remainder of (cursor + 1) divided by count) in ring
+            if (the cad distance from location to the segment from here to following) <= 1e-6:
+                return cursor
+        return -1
+
+# The faces of the active storey that the line from `first` to `second`
+# crosses from edge to edge are split in two along it, as in SketchUp; a mass
+# keeps its height on both parts. Returns how many faces were split.
+local function split bim editor faces along {cad vector2:first} to {cad vector2:second} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set middle to a cad vector2 with x ((first's x + second's x) * 0.5) and y ((first's y + second's y) * 0.5)
+        set candidates to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (target's sketches's values):
+            set element to the item at cursor in (target's sketches's values)
+            if ((element's levelId = editor's levelId) and (element's kind = bim face sketch)) and (bim flat point middle lies in (element's points's values)):
+                append element's id to candidates
+        set splitCount to 0
+        loop candidateCursor from 0 to the length of candidates:
+            set faceId to the item at candidateCursor in candidates
+            set found to the bim sketch index of faceId in (@intrinsic("dereference", target))
+            set element to the item at found's position in (target's sketches's values)
+            set ring to element's points's values
+            set firstEdge to the bim edge of ring under first
+            set secondEdge to the bim edge of ring under second
+            if ((firstEdge >= 0) and (secondEdge >= 0)) and (firstEdge != secondEdge):
+                # The outline with both cut points in it, and where they sit.
+                set cut to an empty list of a cad vector2
+                set firstAt to -1
+                set secondAt to -1
+                loop corner from 0 to the length of ring:
+                    set here to the item at corner in ring
+                    if (the cad distance from here to first) <= 1e-6:
+                        set firstAt to the length of cut
+                    if (the cad distance from here to second) <= 1e-6:
+                        set secondAt to the length of cut
+                    append here to cut
+                    set following to the item at (the remainder of (corner + 1) divided by (the length of ring)) in ring
+                    if (corner = firstEdge) and (((the cad distance from first to here) > 1e-6) and ((the cad distance from first to following) > 1e-6)):
+                        set firstAt to the length of cut
+                        append first to cut
+                    if (corner = secondEdge) and (((the cad distance from second to here) > 1e-6) and ((the cad distance from second to following) > 1e-6)):
+                        set secondAt to the length of cut
+                        append second to cut
+                set onePart to an empty list of a cad vector2
+                set otherPart to an empty list of a cad vector2
+                set step to firstAt
+                set walking to true
+                loop while walking:
+                    append (the item at step in cut) to onePart
+                    if step = secondAt:
+                        set walking to false
+                    set step to the remainder of (step + 1) divided by (the length of cut)
+                set step to secondAt
+                set walking to true
+                loop while walking:
+                    append (the item at step in cut) to otherPart
+                    if step = firstAt:
+                        set walking to false
+                    set step to the remainder of (step + 1) divided by (the length of cut)
+                if ((the length of onePart) >= 3) and ((the length of otherPart) >= 3):
+                    set rise to element's height
+                    ignore delete bim sketch faceId from target
+                    set oneId to add bim face on editor's levelId around onePart to target
+                    set otherId to add bim face on editor's levelId around otherPart to target
+                    if rise > 0.0:
+                        ignore set bim face oneId height to rise in target
+                        ignore set bim face otherId height to rise in target
+                    set splitCount to splitCount + 1
+                free onePart
+                free otherPart
+                free cut
+        free candidates
+        return splitCount
+
+# The next line of the sketch chain, to `point`. Returning to the chain's
+# first point closes it: the loop becomes a face, as in SketchUp.
+local function add bim editor sketch line to {cad vector2:point} in {a pointer to a bim editor record:editor}:
+    execute:
+        set chain to editor's sketchChain's values
+        set last to the item at ((the length of chain) - 1) in chain
+        if (the cad distance from last to point) <= 1e-6:
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim line on editor's levelId from last to point to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            return nothing
+        set closing to ((the length of chain) >= 3) and ((the cad distance from point to (the item at 0 in chain)) <= 1e-6)
+        if closing:
+            set faceId to add bim face on editor's levelId around chain to (the address of (editor's documentValue's current))
+            set editor's sketchChain to a cad topology list of a cad vector2
+            if faceId = the bim refused id:
+                set editor's message to the string form of "Lines closed, but they cross: no face"
+            else:
+                set editor's message to (the string form of "Face ") + (the string form of faceId)
+        else:
+            append point to (editor's sketchChain's values)
+            set editor's message to (the string form of "Line ") + (the string form of fresh)
+            set splitCount to split bim editor faces along last to point in editor
+            if splitCount > 0:
+                set editor's message to (the string form of "Line ") + ((the string form of fresh) + (the string form of ": face split in two"))
+                set editor's sketchChain to a cad topology list of a cad vector2
+        commit bim transaction in (the address of (editor's documentValue))
+
+# A rectangle from corner `first` to the opposite corner `second`: its four
+# lines and its face.
+local function add bim editor rectangle from {cad vector2:first} to {cad vector2:second} in {a pointer to a bim editor record:editor}:
+    execute:
+        if ((the absolute value of (second's x - first's x)) <= 1e-6) or ((the absolute value of (second's y - first's y)) <= 1e-6):
+            set editor's message to the string form of "A rectangle needs a width and a depth"
+            return nothing
+        set corners to an empty list of a cad vector2
+        append first to corners
+        append (a cad vector2 with x second's x and y first's y) to corners
+        append second to corners
+        append (a cad vector2 with x first's x and y second's y) to corners
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        loop side from 0 to 4:
+            ignore add bim line on editor's levelId from (the item at side in corners) to (the item at (the remainder of (side + 1) divided by 4) in corners) to target
+        set faceId to add bim face on editor's levelId around corners to target
+        commit bim transaction in (the address of (editor's documentValue))
+        free corners
+        set editor's message to (the string form of "Rectangle, face ") + (the string form of faceId)
+
+# Marks the open edit as changed, so that the views follow it before it is
+# committed.
+local function show bim editor preview in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's documentValue's revision to editor's documentValue's revision + (1 as a 64 bit integer)
+
+local function finish bim editor push in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim sketch index of editor's pushId in editor's documentValue's current
+        commit bim transaction in (the address of (editor's documentValue))
+        if found's valid:
+            set rise to (the item at found's position in (editor's documentValue's current's sketches's values))'s height
+            set editor's message to ((the string form of "Push/pull to ") + (the bim metres text of rise)) + (the string form of " m")
+        set editor's pushId to the bim refused id
+        set editor's numeric to the string form of ""
+
+# Types character `code` into the text being written.
+function type bim editor character {integer:code} in {a pointer to a bim editor record:editor}:
+    execute:
+        if ((editor's tool = bim text tool) and editor's textActive) and ((code >= 32) and (code < 127)):
+            set letter to a new string buffer containing 1 bytes
+            store (code as a byte) into the data of letter at 0
+            set editor's textBuffer to editor's textBuffer + letter
+
+function select bim editor element at {cad vector2:location} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set sketchId to the bim sketch at location in (@intrinsic("dereference", editor)) within editor's pickTolerance
+        if sketchId != the bim refused id:
+            select bim editor bim sketch picked numbered sketchId in editor
+            return nothing
+        if editor's hoverWall != the bim refused id:
+            set host to the item at (the bim wall index of editor's hoverWall in modelValue)'s position in (modelValue's walls's values)
+            set along to the bim offset along host nearest location
+            loop cursor from 0 to the length of (modelValue's openings's values):
+                set openingValue to the item at cursor in (modelValue's openings's values)
+                if (openingValue's hostId = host's id) and (bim category (the bim category of element openingValue's id in modelValue) is visible in editor's planRules):
+                    set typeFound to the bim opening type index of openingValue's typeId in modelValue
+                    if typeFound's valid:
+                        set halfWidth to (the bim rough width of (the item at typeFound's position in (modelValue's openingTypes's values))) * 0.5
+                        if (the absolute value of (along - openingValue's offset)) <= halfWidth:
+                            select bim editor bim opening picked numbered openingValue's id in editor
+                            return nothing
+            select bim editor bim wall picked numbered host's id in editor
+            return nothing
+        set gridId to the bim grid near location in (@intrinsic("dereference", editor)) within editor's pickTolerance
+        if gridId != the bim refused id:
+            select bim editor bim grid picked numbered gridId in editor
+            return nothing
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            if ((slabValue's levelId = editor's levelId) and (bim category bim slab category is visible in editor's planRules)) and (bim slab slabValue has an edge near location within editor's pickTolerance):
+                select bim editor bim slab picked numbered slabValue's id in editor
+                return nothing
+        loop cursor from 0 to the length of (editor's spaces's values):
+            set space to the item at cursor in (editor's spaces's values)
+            if (bim category bim space category is visible in editor's planRules) and (bim ring (space's outline's values) encloses location):
+                select bim editor bim space picked numbered (the bim identity of space) in editor
+                return nothing
+        select bim editor bim nothing picked numbered (the bim refused id) in editor
+
+# The selected slab, when a slab is selected and still exists.
+function the bim selected slab of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim slab picked:
+            set found to the bim slab index of editor's selectionId in modelValue
+            if found's valid:
+                return @intrinsic("construct", a bim slab choice record, true, the item at found's position in (modelValue's slabs's values))
+        return @intrinsic("construct", a bim slab choice record, false, @intrinsic("construct", a bim slab record, the bim refused id, the bim refused id, a cad topology list of a cad vector2, 0.0))
+
+# The corner of `slabValue` nearest to `location` within `tolerance`, or -1.
+function the bim slab corner near {cad vector2:location} in {bim slab record:slabValue} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set best to -1
+        set bestDistance to tolerance
+        loop cursor from 0 to the length of (slabValue's outline's values):
+            set gap to the cad distance from location to (the item at cursor in (slabValue's outline's values))
+            if gap <= bestDistance:
+                set best to cursor
+                set bestDistance to gap
+        return best
+
+# The middle of edge `edgeIndex` of `slabValue`, from corner `edgeIndex` to
+# the next.
+function the bim middle of slab edge {integer:edgeIndex} of {bim slab record:slabValue}:
+    execute:
+        set here to the item at edgeIndex in (slabValue's outline's values)
+        set following to the item at (the remainder of (edgeIndex + 1) divided by (the length of (slabValue's outline's values))) in (slabValue's outline's values)
+        return a cad vector2 with x ((here's x + following's x) * 0.5) and y ((here's y + following's y) * 0.5)
+
+# The edge of `slabValue` whose middle is nearest to `location` within
+# `tolerance`, or -1.
+function the bim slab edge middle near {cad vector2:location} in {bim slab record:slabValue} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set best to -1
+        set bestDistance to tolerance
+        loop cursor from 0 to the length of (slabValue's outline's values):
+            set gap to the cad distance from location to (the bim middle of slab edge cursor of slabValue)
+            if gap <= bestDistance:
+                set best to cursor
+                set bestDistance to gap
+        return best
+
+# True when an edge of `slabValue` passes within `tolerance` of `location`.
+local function bim slab {bim slab record:slabValue} has an edge near {cad vector2:location} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set count to the length of (slabValue's outline's values)
+        loop cursor from 0 to count:
+            set here to the item at cursor in (slabValue's outline's values)
+            set following to the item at (the remainder of (cursor + 1) divided by count) in (slabValue's outline's values)
+            if (the cad distance from location to the segment from here to following) <= tolerance:
+                return true
+        return false
+
+# The wall ends that move when wall `wallId` is dragged whole: both of its
+# ends, and every end of another wall of its storey that meets one of them or
+# lies on the wall (a T join), so its joins stay joined.
+function the bim wall ends moving with {a 64 bit integer:wallId} in {bim editor record:editor}:
+    execute:
+        set walls to editor's documentValue's current's walls's values
+        set moved to a cad topology list of a bim wall end record
+        set found to the bim wall index of wallId in editor's documentValue's current
+        if found's valid = false:
+            return moved
+        set dragged to the item at found's position in walls
+        append (@intrinsic("construct", a bim wall end record, wallId, false, dragged's start)) to (moved's values)
+        append (@intrinsic("construct", a bim wall end record, wallId, true, dragged's finish)) to (moved's values)
+        loop cursor from 0 to the length of walls:
+            set other to the item at cursor in walls
+            if (other's id != wallId) and (other's levelId = dragged's levelId):
+                if (the bim distance from other's start to the centreline of dragged) <= the bim join tolerance:
+                    append (@intrinsic("construct", a bim wall end record, other's id, false, other's start)) to (moved's values)
+                if (the bim distance from other's finish to the centreline of dragged) <= the bim join tolerance:
+                    append (@intrinsic("construct", a bim wall end record, other's id, true, other's finish)) to (moved's values)
+        return moved
+
+# The ends of the walls on level `levelId` that meet at `location`.
+function the bim wall ends meeting {cad vector2:location} on level {a 64 bit integer:levelId} in {bim editor record:editor}:
+    execute:
+        set found to a cad topology list of a bim wall end record
+        loop cursor from 0 to the length of (editor's documentValue's current's walls's values):
+            set wallValue to the item at cursor in (editor's documentValue's current's walls's values)
+            if wallValue's levelId = levelId:
+                if (the cad distance from location to wallValue's start) <= the bim join tolerance:
+                    append (@intrinsic("construct", a bim wall end record, wallValue's id, false, wallValue's start)) to (found's values)
+                if (the cad distance from location to wallValue's finish) <= the bim join tolerance:
+                    append (@intrinsic("construct", a bim wall end record, wallValue's id, true, wallValue's finish)) to (found's values)
+        return found
+
+# A handle of the selection, as shown in the 3D view: an end of the selected
+# wall (`corner` is -1) or a corner of the selected slab, at its level's
+# elevation.
+class:
+    patterns:
+        [a|] bim grip record
+    members:
+        location as a cad vector3
+        wallId as a 64 bit integer
+        atFinish as a boolean
+        corner as an integer
+
+# The `corner` of a grip on a wall's middle, which bends it.
+function bim bend grip:
+    replacement:
+        -2
+
+local function the bim elevation of level {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim level index of levelId in modelValue
+        if found's valid = false:
+            return 0.0
+        return (the item at found's position in (modelValue's levels's values))'s elevation
+
+# The handles of the selected wall or slab; none for another selection.
+function the bim grips of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set handles to a cad topology list of a bim grip record
+        if editor's selectionKind = bim wall picked:
+            set found to the bim wall index of editor's selectionId in modelValue
+            if found's valid:
+                set wallValue to the item at found's position in (modelValue's walls's values)
+                set elevation to the bim elevation of level wallValue's levelId in modelValue
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x wallValue's start's x, y wallValue's start's y and z elevation), wallValue's id, false, -1)) to (handles's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x wallValue's finish's x, y wallValue's finish's y and z elevation), wallValue's id, true, -1)) to (handles's values)
+                # The middle handle bends the wall.
+                set middle to the bim middle of wall wallValue
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x middle's x, y middle's y and z elevation), wallValue's id, false, bim bend grip)) to (handles's values)
+        set chosen to the bim selected slab of editor
+        if chosen's valid:
+            set elevation to the bim elevation of level chosen's slab's levelId in modelValue
+            loop cursor from 0 to the length of (chosen's slab's outline's values):
+                set point to the item at cursor in (chosen's slab's outline's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x point's x, y point's y and z elevation), the bim refused id, false, cursor)) to (handles's values)
+        return handles
+
+# Starts dragging handle `grip`: a wall end with every end of its storey that
+# meets it, a wall's middle, which bends it, or a slab corner. The pointer then
+# moves in plan coordinates.
+function start bim editor drag of {bim grip record:grip} in {a pointer to a bim editor record:editor}:
+    execute:
+        set origin to a cad vector2 with x grip's location's x and y grip's location's y
+        if grip's corner = bim bend grip:
+            set editor's bendWallId to grip's wallId
+            set editor's slabCorner to -1
+        else if grip's corner >= 0:
+            set editor's slabCorner to grip's corner
+        else:
+            set found to the bim wall index of grip's wallId in editor's documentValue's current
+            if found's valid = false:
+                return nothing
+            set levelId to (the item at found's position in (editor's documentValue's current's walls's values))'s levelId
+            set editor's dragEnds to the bim wall ends meeting origin on level levelId in (@intrinsic("dereference", editor))
+            set editor's slabCorner to -1
+        begin bim transaction in (the address of (editor's documentValue))
+        set editor's dragOrigin to origin
+        set editor's dragging to true
+        set editor's dragMoved to false
+
+# The elevations a new grid reaches: a metre below the lowest storey to a
+# metre above the top of the highest.
+function the bim grid reach of {bim model record:modelValue}:
+    execute:
+        set lowest to 0.0
+        set highest to 3.0
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            if cursor = 0:
+                set lowest to levelValue's elevation
+                set highest to levelValue's elevation + levelValue's height
+            set lowest to the minimum of lowest and levelValue's elevation
+            set highest to the maximum of highest and (levelValue's elevation + levelValue's height)
+        return a cad vector2 with x (lowest - 1.0) and y (highest + 1.0)
+
+# The name of a new grid from `startPoint` to `finishPoint`: grids running
+# mostly north-south are numbered 1, 2, 3...; the others are lettered A, B,
+# C..., after the grids of their kind that exist.
+function the bim next grid name from {cad vector2:startPoint} to {cad vector2:finishPoint} in {bim model record:modelValue}:
+    execute:
+        set numbered to (the absolute value of (finishPoint's y - startPoint's y)) > (the absolute value of (finishPoint's x - startPoint's x))
+        set alike to 0
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set other to the item at cursor in (modelValue's grids's values)
+            set otherNumbered to (the absolute value of (other's finish's y - other's start's y)) > (the absolute value of (other's finish's x - other's start's x))
+            if otherNumbered = numbered:
+                set alike to alike + 1
+        if numbered:
+            return the string form of (alike + 1)
+        set letter to a new string buffer containing 1 bytes
+        store ((65 + (the remainder of alike divided by 26)) as a byte) into the data of letter at 0
+        if alike >= 26:
+            return letter + (the string form of ((alike / 26) + 1))
+        return letter
+
+# The grid whose line passes within `tolerance` of `location`, or the refused
+# id; none while grids are hidden in the plan.
+function the bim grid near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set best to the bim refused id
+        set bestDistance to tolerance
+        if (bim category bim grid category is visible in editor's planRules) = false:
+            return best
+        loop cursor from 0 to the length of (editor's documentValue's current's grids's values):
+            set gridValue to the item at cursor in (editor's documentValue's current's grids's values)
+            set gap to the cad distance from location to the segment from gridValue's start to gridValue's finish
+            if gap <= bestDistance:
+                set best to gridValue's id
+                set bestDistance to gap
+        return best
+
+# The selected space, when a space is selected and still exists.
+function the bim selected space of {bim editor record:editor}:
+    execute:
+        loop cursor from 0 to the length of (editor's spaces's values):
+            set candidate to the item at cursor in (editor's spaces's values)
+            if (editor's selectionKind = bim space picked) and ((the bim identity of candidate) = editor's selectionId):
+                return @intrinsic("construct", a bim space choice record, true, candidate)
+        return @intrinsic("construct", a bim space choice record, false, @intrinsic("construct", a bim space record, the bim refused id, a cad topology list of a 64 bit integer, a cad topology list of a cad vector2, 0.0))
+
+local function the bim metres text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
+        return the substring of buffer from 0 spanning written bytes
+
+# A one-line description of the selection; empty when nothing (still) exists.
+function the bim selection description of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim instance picked:
+            set found to the bim instance index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set placement to the item at found's position in (modelValue's instances's values)
+            set definition to the item at (the bim component index of placement's componentId in modelValue)'s position in (modelValue's components's values)
+            set copies to 0
+            loop cursor from 0 to the length of (modelValue's instances's values):
+                if (the item at cursor in (modelValue's instances's values))'s componentId = placement's componentId:
+                    set copies to copies + 1
+            return ((the string form of "Instance ") + ((the string form of placement's id) + (the string form of " of "))) + (definition's name + ((the string form of ", ") + ((the string form of copies) + (the string form of " placed (Ctrl+E edits, Ctrl+U explodes)"))))
+        if editor's selectionKind = bim sketch picked:
+            set sketchFound to the bim sketch index of editor's selectionId in modelValue
+            if sketchFound's valid = false:
+                return the string form of ""
+            set sketch to the item at sketchFound's position in (modelValue's sketches's values)
+            set label to (the string form of " ") + ((the string form of sketch's id) + (the string form of ": "))
+            if sketch's kind = bim line sketch:
+                return ((the string form of "Line") + label) + ((the string form of "length ") + ((the bim metres text of (the cad distance from (the item at 0 in (sketch's points's values)) to (the item at 1 in (sketch's points's values)))) + (the string form of " m")))
+            if sketch's kind = bim text sketch:
+                return ((the string form of "Text") + label) + sketch's content
+            set area to the absolute value of (the cad signed area of (sketch's points's values))
+            if sketch's height > 0.0:
+                return ((the string form of "Mass") + label) + ((the string form of "area ") + ((the bim metres text of area) + ((the string form of " m2, height ") + ((the bim metres text of sketch's height) + (the string form of " m")))))
+            return ((the string form of "Face") + label) + ((the string form of "area ") + ((the bim metres text of area) + (the string form of " m2 (P: push/pull)")))
+        if editor's selectionKind = bim wall picked:
+            set found to the bim wall index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set wallValue to the item at found's position in (modelValue's walls's values)
+            set typeName to the string form of "untyped"
+            set typeFound to the bim wall type index of wallValue's typeId in modelValue
+            if typeFound's valid:
+                set typeName to (the item at typeFound's position in (modelValue's wallTypes's values))'s name
+            set hostedCount to 0
+            loop cursor from 0 to the length of (modelValue's openings's values):
+                if (the item at cursor in (modelValue's openings's values))'s hostId = wallValue's id:
+                    set hostedCount to hostedCount + 1
+            set text to ((the string form of "Wall ") + (the string form of wallValue's id)) + (the string form of ": ")
+            set text to ((text + typeName) + (the string form of " ")) + (the bim metres text of (the bim wall thickness of wallValue in modelValue))
+            set text to ((text + (the string form of " m, length ")) + (the bim metres text of (the bim centreline length of wallValue))) + (the string form of " m, height ")
+            set text to ((text + (the bim metres text of wallValue's height)) + (the string form of " m, openings ")) + (the string form of hostedCount)
+            set wallArc to the bim arc of wallValue
+            if wallArc's curved:
+                set text to ((text + (the string form of ", radius ")) + (the bim metres text of wallArc's radius)) + (the string form of " m")
+            return text
+        if editor's selectionKind = bim opening picked:
+            set found to the bim opening index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set openingValue to the item at found's position in (modelValue's openings's values)
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            set text to ((the string form of "Opening ") + (the string form of openingValue's id)) + (the string form of ": ")
+            if typeFound's valid:
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                set text to ((text + openingType's name) + (the string form of " ")) + (the bim metres text of openingType's width)
+                set text to ((text + (the string form of " x ")) + (the bim metres text of openingType's height)) + (the string form of " m, sill ")
+                set text to (text + (the bim metres text of openingType's sill)) + (the string form of " m, ")
+            set text to ((text + (the string form of "in wall ")) + (the string form of openingValue's hostId)) + (the string form of " at ")
+            return (text + (the bim metres text of openingValue's offset)) + (the string form of " m")
+        if editor's selectionKind = bim space picked:
+            set chosen to the bim selected space of editor
+            if chosen's valid = false:
+                return the string form of ""
+            set text to ((the string form of "Space: ") + (the bim metres text of chosen's space's area)) + (the string form of " m2, bounded by ")
+            return (text + (the string form of (the length of (chosen's space's boundingWalls's values)))) + (the string form of " walls")
+        if editor's selectionKind = bim grid picked:
+            set found to the bim grid index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set gridValue to the item at found's position in (modelValue's grids's values)
+            set text to ((the string form of "Grid ") + gridValue's name) + (the string form of ": length ")
+            return (text + (the bim metres text of (the cad distance from gridValue's start to gridValue's finish))) + (the string form of " m")
+        if editor's selectionKind = bim slab picked:
+            set found to the bim slab index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set slabValue to the item at found's position in (modelValue's slabs's values)
+            set text to ((the string form of "Slab ") + (the string form of slabValue's id)) + (the string form of ": thickness ")
+            set text to ((text + (the bim metres text of slabValue's thickness)) + (the string form of " m, area ")) + (the bim metres text of (the bim slab area of slabValue))
+            return (text + (the string form of " m2, corners ")) + (the string form of (the length of (slabValue's outline's values)))
+        return the string form of ""
+
+# Adds a slab of the editor's thickness under the selected space, following
+# its outline, as one undoable transaction.
+function add bim editor slab under the selection in {a pointer to a bim editor record:editor}:
+    execute:
+        set chosen to the bim selected space of (@intrinsic("dereference", editor))
+        if chosen's valid = false:
+            set editor's message to the string form of "Select a space first"
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim slab on chosen's space's levelId around (chosen's space's outline's values) thick the bim slab thickness to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: the space has no valid outline"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim slab picked numbered fresh in editor
+
+# The name of the active storey; empty when it no longer exists.
+function the bim storey name of {bim editor record:editor}:
+    execute:
+        set found to the bim level index of editor's levelId in editor's documentValue's current
+        if found's valid = false:
+            return the string form of ""
+        return (the item at found's position in (editor's documentValue's current's levels's values))'s name
+
+# Makes the storey above or below the active one active. Going up from the top
+# storey adds a storey on it, as high as the top storey, in one undoable
+# transaction. Ends a wall chain and clears the selection.
+function change bim editor storey up {boolean:upward} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set adjacent to the bim level next to editor's levelId going up upward in modelValue
+        if adjacent's valid:
+            set editor's levelId to (the item at adjacent's position in (modelValue's levels's values))'s id
+        else if upward:
+            set here to the bim level index of editor's levelId in modelValue
+            if here's valid = false:
+                return nothing
+            set top to the item at here's position in (modelValue's levels's values)
+            set storeyName to (the string form of "Level ") + (the string form of ((the length of (modelValue's levels's values)) + 1))
+            begin bim transaction in (the address of (editor's documentValue))
+            set fresh to add bim level named storeyName at (top's elevation + top's height) with height top's height to (the address of (editor's documentValue's current))
+            if fresh = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's levelId to fresh
+        else:
+            set editor's message to the string form of "No storey below"
+            return nothing
+        set editor's chainActive to false
+        set editor's selectionKind to bim nothing picked
+        set editor's selectionId to the bim refused id
+        set editor's viewsDirty to true
+        set editor's message to (the string form of "Storey: ") + (the bim storey name of (@intrinsic("dereference", editor)))
+
+# Removes corner `doomedCorner` of `slabValue` in one undoable transaction;
+# refused when the outline would keep less than three corners or cross
+# itself.
+local function remove bim editor slab corner {integer:doomedCorner} of {bim slab record:slabValue} in {a pointer to a bim editor record:editor}:
+    execute:
+        set corners to an empty list of a cad vector2
+        loop cursor from 0 to the length of (slabValue's outline's values):
+            if cursor != doomedCorner:
+                append (the item at cursor in (slabValue's outline's values)) to corners
+        begin bim transaction in (the address of (editor's documentValue))
+        if set bim slab slabValue's id outline to corners in (the address of (editor's documentValue's current)):
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Corner removed"
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: a slab keeps at least three corners and may not cross itself"
+        free corners
+
+# ---------------------------------------------------------------- files
+
+# Saves the model in the native format to `path`, with the rules of the
+# plan, the section and the 3D view.
+function save bim editor to {a string:path} in {a pointer to a bim editor record:editor}:
+    execute:
+        set written to the bim file text of editor's documentValue's current
+        set written to written + (the bim view rule lines of editor's planRules)
+        set written to written + (the bim view rule lines of editor's sectionRules)
+        set written to written + (the bim view rule lines of editor's modelRules)
+        if write bim text written to file path:
+            set editor's message to (the string form of "Saved ") + path
+        else:
+            set editor's message to (the string form of "Could not save ") + path
+
+# The first record of `records` (opening types) that is a door when
+# `wantDoor`, or a window otherwise; invalid when there is none.
+local function the bim first opening type of {a pointer to a list:records} being door {boolean:wantDoor}:
+    execute:
+        loop cursor from 0 to the length of records:
+            if (the item at cursor in records)'s isDoor = wantDoor:
+                return @intrinsic("construct", a bim index result record, true, cursor)
+        return @intrinsic("construct", a bim index result record, false, -1)
+
+# Replaces the model with the one saved at `path`. The editor needs a level,
+# a wall type, a window type and a door type in it; a file without them, or
+# one that does not read, is refused and the current model kept. Opening
+# clears the undo history and the selection, makes the lowest storey active,
+# and restores the views' rules saved with the file.
+function open bim editor from {a string:path} in {a pointer to a bim editor record:editor}:
+    execute:
+        set loaded to the bim file content at path
+        if loaded's valid = false:
+            set editor's message to (the string form of "Could not read ") + path
+            return nothing
+        set parsed to the bim model parsed from loaded's text
+        if parsed's valid = false:
+            set editor's message to ((the string form of "Not opened, ") + path) + ((the string form of ": ") + parsed's message)
+            return nothing
+        set modelValue to parsed's modelValue
+        set windowFound to the bim first opening type of (modelValue's openingTypes's values) being door false
+        set doorFound to the bim first opening type of (modelValue's openingTypes's values) being door true
+        set hasLevel to (the length of (modelValue's levels's values)) > 0
+        set hasWallType to (the length of (modelValue's wallTypes's values)) > 0
+        if ((hasLevel and hasWallType) and (windowFound's valid and doorFound's valid)) = false:
+            set editor's message to ((the string form of "Not opened, ") + path) + (the string form of ": it needs a level, a wall type, a window type and a door type")
+            return nothing
+        set lowest to 0
+        loop cursor from 1 to the length of (modelValue's levels's values):
+            if (the item at cursor in (modelValue's levels's values))'s elevation < (the item at lowest in (modelValue's levels's values))'s elevation:
+                set lowest to cursor
+        set revision to editor's documentValue's revision + (1 as a 64 bit integer)
+        set editor's documentValue to @intrinsic("construct", a bim document record, modelValue, a cad topology list of a bim model record, a cad topology list of a bim model record, revision)
+        set editor's levelId to (the item at lowest in (modelValue's levels's values))'s id
+        set editor's wallTypeId to (the item at 0 in (modelValue's wallTypes's values))'s id
+        set editor's windowTypeId to (the item at windowFound's position in (modelValue's openingTypes's values))'s id
+        set editor's doorTypeId to (the item at doorFound's position in (modelValue's openingTypes's values))'s id
+        set editor's openingTypeId to editor's windowTypeId
+        set editor's chainActive to false
+        set editor's dragging to false
+        set editor's dragEnds to a cad topology list of a bim wall end record
+        set editor's hoverWall to the bim refused id
+        set editor's selectionKind to bim nothing picked
+        set editor's selectionId to the bim refused id
+        set editor's planRules to the bim template rules of view kind bim plan view kind
+        set editor's sectionRules to the bim template rules of view kind bim section view kind
+        set editor's modelRules to the bim template rules of view kind bim model view kind
+        loop cursor from 0 to the length of (parsed's viewRules's values):
+            set entry to the item at cursor in (parsed's viewRules's values)
+            set rule to @intrinsic("construct", a bim category rule record, entry's visible, entry's halftone)
+            if entry's kind = bim plan view kind:
+                replace item at index entry's category in (editor's planRules's rules's values) with rule
+            else if entry's kind = bim section view kind:
+                replace item at index entry's category in (editor's sectionRules's rules's values) with rule
+            else:
+                replace item at index entry's category in (editor's modelRules's rules's values) with rule
+        set editor's viewsDirty to true
+        set editor's message to (the string form of "Opened ") + path
+
+# ---------------------------------------------------------------- events
+
+function move bim editor pointer to {cad vector2:location} within {a 64 bit floating-point number:tolerance} in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's pointerLocation to location
+        set editor's pickTolerance to tolerance
+        set editor's snap to the bim snap of location in (@intrinsic("dereference", editor)) within tolerance
+        set editor's hoverWall to the bim wall near location in (@intrinsic("dereference", editor)) within tolerance
+        # Push/pull follows the pointer up the plan; a move follows it from
+        # its base point.
+        if (editor's tool = bim push tool) and ((editor's pushId != the bim refused id) and ((the length of editor's numeric) = 0)):
+            set rise to the maximum of 0.0 and (editor's pushBase + (location's y - editor's pushOrigin's y))
+            if set bim face editor's pushId height to rise in (the address of (editor's documentValue's current)):
+                show bim editor preview in editor
+        if (editor's tool = bim rotate tool) and (editor's moveStage = 3):
+            set turned to @intrinsic("atan2", editor's snap's point's y - editor's moveBase's y, editor's snap's point's x - editor's moveBase's x) - editor's turnStart
+            reposition bim editor selection by (the bim turn transform about editor's moveBase by turned) in editor
+            show bim editor preview in editor
+        if (editor's tool = bim move tool) and (editor's moveStage = 2):
+            apply bim editor move by (a cad vector2 with x (editor's snap's point's x - editor's moveBase's x) and y (editor's snap's point's y - editor's moveBase's y)) in editor
+            show bim editor preview in editor
+        if editor's dragging = false:
+            return nothing
+        set target to editor's snap's point
+        if editor's bendWallId != the bim refused id:
+            # The arc follows the pointer: its middle lies over the pointer.
+            set found to the bim wall index of editor's bendWallId in editor's documentValue's current
+            if found's valid:
+                set wallValue to the item at found's position in (editor's documentValue's current's walls's values)
+                if bend bim wall editor's bendWallId keeping its joins by (the bim bulge of wallValue toward location) in (the address of (editor's documentValue's current)):
+                    set editor's dragMoved to true
+            return nothing
+        if editor's gridDragId != the bim refused id:
+            set found to the bim grid index of editor's gridDragId in editor's documentValue's current
+            if found's valid:
+                set gridValue to the item at found's position in (editor's documentValue's current's grids's values)
+                set newStart to gridValue's start
+                set newFinish to gridValue's finish
+                if editor's gridDragAtFinish:
+                    set newFinish to target
+                else:
+                    set newStart to target
+                if move bim grid editor's gridDragId to newStart and newFinish in (the address of (editor's documentValue's current)):
+                    set editor's dragMoved to true
+            return nothing
+        if editor's slabCorner >= 0:
+            set chosen to the bim selected slab of (@intrinsic("dereference", editor))
+            if chosen's valid:
+                set corners to an empty list of a cad vector2
+                loop cursor from 0 to the length of (chosen's slab's outline's values):
+                    if cursor = editor's slabCorner:
+                        append target to corners
+                    else:
+                        append (the item at cursor in (chosen's slab's outline's values)) to corners
+                # A corner moved to where it would make the outline cross
+                # itself stays where it last was.
+                if set bim slab chosen's slab's id outline to corners in (the address of (editor's documentValue's current)):
+                    set editor's dragMoved to true
+                free corners
+            return nothing
+        # Every dragged wall end moves by the pointer's displacement from where
+        # the drag began.
+        set dx to target's x - editor's dragOrigin's x
+        set dy to target's y - editor's dragOrigin's y
+        loop cursor from 0 to the length of (editor's dragEnds's values):
+            set endValue to the item at cursor in (editor's dragEnds's values)
+            set found to the bim wall index of endValue's wallId in editor's documentValue's current
+            if found's valid:
+                set wallValue to the item at found's position in (editor's documentValue's current's walls's values)
+                set placed to a cad vector2 with x (endValue's origin's x + dx) and y (endValue's origin's y + dy)
+                set newStart to wallValue's start
+                set newFinish to wallValue's finish
+                if endValue's atFinish:
+                    set newFinish to placed
+                else:
+                    set newStart to placed
+                if move bim wall endValue's wallId to newStart and newFinish in (the address of (editor's documentValue's current)):
+                    set editor's dragMoved to true
+
+local function add bim editor wall to {cad vector2:finishPoint} in {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim wall typed editor's wallTypeId on editor's levelId from editor's chainStart to finishPoint to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Wall refused: zero length"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's chainStart to finishPoint
+        set editor's message to (the string form of "Wall ") + (the string form of fresh)
+
+function press bim editor pointer in {a pointer to a bim editor record:editor}:
+    execute:
+        set point to editor's snap's point
+        if editor's tool = bim line tool:
+            if (the length of (editor's sketchChain's values)) = 0:
+                append point to (editor's sketchChain's values)
+                set editor's message to the string form of "Line: click the next point; back on the first closes a face"
+            else:
+                add bim editor sketch line to point in editor
+            return nothing
+        if editor's tool = bim rectangle tool:
+            if (the length of (editor's sketchChain's values)) = 0:
+                append point to (editor's sketchChain's values)
+                set editor's message to the string form of "Rectangle: click the opposite corner"
+            else:
+                add bim editor rectangle from (the item at 0 in (editor's sketchChain's values)) to point in editor
+                set editor's sketchChain to a cad topology list of a cad vector2
+            return nothing
+        if editor's tool = bim push tool:
+            if editor's pushId = the bim refused id:
+                set faceId to the bim face at editor's pointerLocation in (@intrinsic("dereference", editor))
+                if faceId = the bim refused id:
+                    set editor's message to the string form of "Push/pull: click a face"
+                    return nothing
+                set found to the bim sketch index of faceId in editor's documentValue's current
+                begin bim transaction in (the address of (editor's documentValue))
+                set editor's pushId to faceId
+                set editor's pushOrigin to editor's pointerLocation
+                set editor's pushBase to (the item at found's position in (editor's documentValue's current's sketches's values))'s height
+                set editor's numeric to the string form of ""
+                set editor's message to the string form of "Push/pull: move up the plan or type a height, then click or Enter"
+            else:
+                finish bim editor push in editor
+            return nothing
+        if editor's tool = bim place tool:
+            begin bim transaction in (the address of (editor's documentValue))
+            set placed to place bim component editor's placeComponentId on editor's levelId at point turned 0.0 to (the address of (editor's documentValue's current))
+            if placed = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Place: make a component first (Ctrl+G)"
+            else:
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's message to (the string form of "Instance ") + (the string form of placed)
+            return nothing
+        if editor's tool = bim text tool:
+            set editor's textActive to true
+            set editor's textAnchor to point
+            set editor's textBuffer to the string form of ""
+            set editor's message to the string form of "Text: type, then Enter"
+            return nothing
+        if (editor's tool = bim rotate tool) or (editor's tool = bim mirror tool):
+            set verb to the string form of "Rotate"
+            if editor's tool = bim mirror tool:
+                set verb to the string form of "Mirror"
+            if editor's moveStage = 0:
+                select bim editor element at editor's pointerLocation in editor
+                if (editor's selectionKind = bim nothing picked) or ((editor's selectionKind = bim space picked) or (editor's selectionKind = bim opening picked)):
+                    set editor's message to verb + (the string form of ": click a wall, slab, grid, sketch element or instance")
+                    return nothing
+                set editor's moveStage to 1
+                if editor's tool = bim rotate tool:
+                    set editor's message to the string form of "Rotate: click the centre"
+                else:
+                    set editor's message to the string form of "Mirror: click the first point of the mirror line"
+                return nothing
+            if editor's moveStage = 1:
+                if editor's selectionKind = bim nothing picked:
+                    set editor's moveStage to 0
+                    return nothing
+                set editor's moveBase to point
+                set editor's moveStage to 2
+                set editor's numeric to the string form of ""
+                if editor's tool = bim rotate tool:
+                    set editor's message to the string form of "Rotate: click a reference direction, or type degrees and Enter"
+                else:
+                    set editor's message to the string form of "Mirror: click the second point of the mirror line"
+                return nothing
+            if editor's tool = bim mirror tool:
+                if (the cad distance from point to editor's moveBase) <= 1e-6:
+                    return nothing
+                set made to copy bim editor selection changed by (the bim mirror transform from editor's moveBase through point) in editor
+                set editor's message to (the string form of "Mirrored ") + (the string form of made)
+                set editor's moveStage to 0
+                set editor's tool to bim select tool
+                return nothing
+            if editor's moveStage = 2:
+                if (the cad distance from point to editor's moveBase) <= 1e-6:
+                    return nothing
+                set editor's turnStart to @intrinsic("atan2", point's y - editor's moveBase's y, point's x - editor's moveBase's x)
+                begin bim transaction in (the address of (editor's documentValue))
+                set editor's moveStage to 3
+                set editor's message to the string form of "Rotate: click the new direction"
+                return nothing
+            set turned to @intrinsic("atan2", point's y - editor's moveBase's y, point's x - editor's moveBase's x) - editor's turnStart
+            reposition bim editor selection by (the bim turn transform about editor's moveBase by turned) in editor
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's moveStage to 0
+            set editor's tool to bim select tool
+            set editor's message to (the string form of "Rotated ") + ((the bim metres text of (turned * (180.0 / 3.141592653589793))) + (the string form of " degrees"))
+            return nothing
+        if editor's tool = bim offset tool:
+            if editor's moveStage = 0:
+                select bim editor element at editor's pointerLocation in editor
+                set usable to (editor's selectionKind = bim wall picked) or (editor's selectionKind = bim sketch picked)
+                if usable:
+                    set usable to (the bim segment of editor's selectionId in editor's documentValue's current)'s valid
+                if usable = false:
+                    set editor's message to the string form of "Offset: click a straight wall or a line"
+                    return nothing
+                set editor's moveStage to 1
+                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: click the side")
+                return nothing
+            set piece to the bim segment of editor's selectionId in editor's documentValue's current
+            set run to the cad distance from piece's start to piece's finish
+            if run > 1e-9:
+                set nx to (0.0 - (piece's finish's y - piece's start's y)) / run
+                set ny to (piece's finish's x - piece's start's x) / run
+                set side to ((point's x - piece's start's x) * nx) + ((point's y - piece's start's y) * ny)
+                if side < 0.0:
+                    set nx to 0.0 - nx
+                    set ny to 0.0 - ny
+                ignore copy bim editor selection changed by (the bim shift transform by (a cad vector2 with x (nx * editor's offsetDistance) and y (ny * editor's offsetDistance))) in editor
+                set editor's message to (the string form of "Offset ") + ((the bim metres text of editor's offsetDistance) + (the string form of " m; click the next, or type a distance"))
+            set editor's moveStage to 0
+            return nothing
+        if (editor's tool = bim trim tool) or (editor's tool = bim extend tool):
+            set extending to editor's tool = bim extend tool
+            if editor's moveStage = 0:
+                select bim editor element at editor's pointerLocation in editor
+                if (editor's selectionKind = bim nothing picked) or (((the bim segment of editor's selectionId in editor's documentValue's current)'s valid) = false):
+                    set editor's message to the string form of "Trim/extend: click the boundary: a straight wall, a line or a grid"
+                    return nothing
+                set editor's boundaryId to editor's selectionId
+                set editor's moveStage to 1
+                set editor's message to the string form of "Click the walls or lines to trim or extend; Esc ends"
+                return nothing
+            set pick to editor's pointerLocation
+            set previousKind to editor's selectionKind
+            set previousId to editor's selectionId
+            select bim editor element at pick in editor
+            if (editor's selectionKind != bim wall picked) and (editor's selectionKind != bim sketch picked):
+                set editor's message to the string form of "Click a wall or a line"
+                return nothing
+            set outcome to trim bim editor element editor's selectionId at pick extending extending in editor
+            select bim editor previousKind numbered previousId in editor
+            set editor's message to outcome
+            return nothing
+        if editor's tool = bim copy tool:
+            if editor's moveStage = 0:
+                select bim editor element at editor's pointerLocation in editor
+                if (editor's selectionKind = bim nothing picked) or ((editor's selectionKind = bim space picked) or (editor's selectionKind = bim opening picked)):
+                    set editor's message to the string form of "Copy: click a wall, slab, grid, sketch element or instance"
+                    return nothing
+                set editor's moveStage to 1
+                set editor's message to the string form of "Copy: click the base point"
+                return nothing
+            if editor's moveStage = 1:
+                set editor's moveBase to point
+                set editor's moveStage to 2
+                set editor's message to the string form of "Copy: click where the copy goes"
+                return nothing
+            copy bim editor selection by (a cad vector2 with x (point's x - editor's moveBase's x) and y (point's y - editor's moveBase's y)) in editor
+            return nothing
+        if editor's tool = bim move tool:
+            if editor's moveStage = 0:
+                select bim editor element at editor's pointerLocation in editor
+                if editor's selectionKind = bim nothing picked:
+                    set editor's message to the string form of "Move: click an element"
+                    return nothing
+                if editor's selectionKind = bim space picked:
+                    set editor's message to the string form of "Move: spaces follow their walls"
+                    return nothing
+                set editor's moveStage to 1
+                set editor's message to the string form of "Move: click the base point"
+                return nothing
+            if editor's moveStage = 1:
+                set editor's moveBase to point
+                set editor's moveStage to 2
+                begin bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Move: click the destination"
+                return nothing
+            apply bim editor move by (a cad vector2 with x (point's x - editor's moveBase's x) and y (point's y - editor's moveBase's y)) in editor
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's moveStage to 0
+            set editor's message to the string form of "Moved"
+            return nothing
+        if editor's tool = bim wall tool:
+            if editor's chainActive:
+                add bim editor wall to point in editor
+            else:
+                set editor's chainActive to true
+                set editor's chainStart to point
+            set editor's numeric to the string form of ""
+            return nothing
+        if editor's tool = bim opening tool:
+            if editor's hoverWall = the bim refused id:
+                set editor's message to the string form of "Openings are hosted: point at a wall"
+                return nothing
+            set found to the bim wall index of editor's hoverWall in editor's documentValue's current
+            set host to the item at found's position in (editor's documentValue's current's walls's values)
+            set along to the bim offset along host nearest point
+            refresh bim editor editor
+            begin bim transaction in (the address of (editor's documentValue))
+            set fresh to add bim opening typed editor's openingTypeId in editor's hoverWall at along to (the address of (editor's documentValue's current))
+            if fresh = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Refused: no opening type"
+                return nothing
+            ignore settle bim editor change in editor described ((the string form of "Opening ") + (the string form of fresh)) or refused as (the string form of "the window does not fit there")
+            return nothing
+        if editor's tool = bim grid tool:
+            if editor's gridActive = false:
+                set editor's gridActive to true
+                set editor's gridStart to point
+                set editor's message to the string form of "Grid: click its end"
+                return nothing
+            set reach to the bim grid reach of editor's documentValue's current
+            set gridName to the bim next grid name from editor's gridStart to point in editor's documentValue's current
+            begin bim transaction in (the address of (editor's documentValue))
+            set fresh to add bim grid named gridName from editor's gridStart to point reaching reach's x to reach's y to (the address of (editor's documentValue's current))
+            if fresh = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Refused: a grid needs a length"
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's gridActive to false
+            set editor's message to (the string form of "Grid ") + gridName
+            return nothing
+        if editor's tool = bim section tool:
+            if editor's sectionActive = false:
+                set editor's sectionActive to true
+                set editor's sectionStart to point
+                set editor's message to the string form of "Section: click the second point"
+                return nothing
+            if (the cad distance from editor's sectionStart to point) <= the bim join tolerance:
+                return nothing
+            set editor's sectionActive to false
+            set editor's hasSection to true
+            set editor's sectionFirst to editor's sectionStart
+            set editor's sectionSecond to point
+            set editor's viewsDirty to true
+            set editor's message to the string form of "Section placed"
+            return nothing
+        # Select tool. On the selected slab, pressing on a corner drags it and
+        # pressing on an edge's middle adds a corner there and drags that.
+        # Pressing on a wall end point of the active storey drags every wall
+        # end of that storey that meets there, so joins stay joined. Pressing
+        # elsewhere selects what lies under the pointer; pressing on a wall
+        # drags the whole wall, with the ends of the walls joined to it.
+        set editor's dragOrigin to point
+        set editor's slabCorner to -1
+        set editor's gridDragId to the bim refused id
+        set editor's bendWallId to the bim refused id
+        # The end of a grid under the pointer drags that end.
+        if bim category bim grid category is visible in editor's planRules:
+            loop cursor from 0 to the length of (editor's documentValue's current's grids's values):
+                set gridValue to the item at cursor in (editor's documentValue's current's grids's values)
+                set nearStart to (the cad distance from editor's pointerLocation to gridValue's start) <= editor's pickTolerance
+                set nearFinish to (the cad distance from editor's pointerLocation to gridValue's finish) <= editor's pickTolerance
+                if (nearStart or nearFinish) and (editor's gridDragId = the bim refused id):
+                    set editor's gridDragId to gridValue's id
+                    set editor's gridDragAtFinish to nearFinish
+            if editor's gridDragId != the bim refused id:
+                begin bim transaction in (the address of (editor's documentValue))
+                set editor's dragging to true
+                set editor's dragMoved to false
+                select bim editor bim grid picked numbered editor's gridDragId in editor
+                return nothing
+        set chosen to the bim selected slab of (@intrinsic("dereference", editor))
+        if chosen's valid:
+            set cornerIndex to the bim slab corner near editor's pointerLocation in chosen's slab within editor's pickTolerance
+            if cornerIndex >= 0:
+                begin bim transaction in (the address of (editor's documentValue))
+                set editor's slabCorner to cornerIndex
+                set editor's dragging to true
+                set editor's dragMoved to false
+                return nothing
+            set edgeIndex to the bim slab edge middle near editor's pointerLocation in chosen's slab within editor's pickTolerance
+            if edgeIndex >= 0:
+                set corners to an empty list of a cad vector2
+                loop cursor from 0 to the length of (chosen's slab's outline's values):
+                    append (the item at cursor in (chosen's slab's outline's values)) to corners
+                    if cursor = edgeIndex:
+                        append (the bim middle of slab edge edgeIndex of chosen's slab) to corners
+                begin bim transaction in (the address of (editor's documentValue))
+                if set bim slab chosen's slab's id outline to corners in (the address of (editor's documentValue's current)):
+                    set editor's slabCorner to edgeIndex + 1
+                    set editor's dragging to true
+                    set editor's dragMoved to true
+                    set editor's message to the string form of "Corner added"
+                else:
+                    roll back bim transaction in (the address of (editor's documentValue))
+                free corners
+                return nothing
+        # The middle of the selected wall bends it.
+        if editor's selectionKind = bim wall picked:
+            set selectedFound to the bim wall index of editor's selectionId in editor's documentValue's current
+            if selectedFound's valid:
+                set selectedWall to the item at selectedFound's position in (editor's documentValue's current's walls's values)
+                if (the cad distance from editor's pointerLocation to (the bim middle of wall selectedWall)) <= editor's pickTolerance:
+                    begin bim transaction in (the address of (editor's documentValue))
+                    set editor's bendWallId to selectedWall's id
+                    set editor's dragging to true
+                    set editor's dragMoved to false
+                    return nothing
+        set draggedEnds to a cad topology list of a bim wall end record
+        if editor's snap's label = "End point":
+            set draggedEnds to the bim wall ends meeting point on level editor's levelId in (@intrinsic("dereference", editor))
+        if (the length of (draggedEnds's values)) = 0:
+            select bim editor element at editor's pointerLocation in editor
+            if editor's selectionKind != bim wall picked:
+                return nothing
+            set draggedEnds to the bim wall ends moving with editor's selectionId in (@intrinsic("dereference", editor))
+        begin bim transaction in (the address of (editor's documentValue))
+        set editor's dragEnds to draggedEnds
+        set editor's dragging to true
+        set editor's dragMoved to false
+
+function release bim editor pointer in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's dragging = false:
+            return nothing
+        set editor's dragging to false
+        if editor's dragMoved:
+            commit bim transaction in (the address of (editor's documentValue))
+            if editor's bendWallId != the bim refused id:
+                set editor's message to the string form of "Bent"
+            else if editor's slabCorner < 0:
+                set editor's message to the string form of "Moved"
+            else if editor's message != "Corner added":
+                set editor's message to the string form of "Corner moved"
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+        set editor's dragEnds to a cad topology list of a bim wall end record
+        set editor's slabCorner to -1
+        set editor's gridDragId to the bim refused id
+        set editor's bendWallId to the bim refused id
+
+local function the bim numeric value of {a string:digits}:
+    execute:
+        return @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of digits, 0 as a pointer)
+
+# ---------------------------------------------------------------- bending with joins
+
+# One wall end that meets another wall's centreline between its ends.
+class:
+    patterns:
+        [a|] bim attached end record
+    members:
+        wallId as a 64 bit integer
+        atFinish as a boolean
+
+# Bends wall `wallId` to `amount` (as `bend bim wall` does) and keeps the
+# walls that meet it along its length (a T join) meeting it: each such end
+# slides along its own wall onto the new centreline. Without this a partition
+# would stop short of a wall bent away from it, and its rooms would run
+# together.
+function bend bim wall {a 64 bit integer:wallId} keeping its joins by {a 64 bit floating-point number:amount} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim wall index of wallId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set host to the item at found's position in (target's walls's values)
+        set attached to an empty list of a bim attached end record
+        loop cursor from 0 to the length of (target's walls's values):
+            set other to the item at cursor in (target's walls's values)
+            if (other's id != wallId) and (other's levelId = host's levelId):
+                loop endIndex from 0 to 2:
+                    set place to other's start
+                    if endIndex = 1:
+                        set place to other's finish
+                    set onHost to (the bim distance from place to the centreline of host) <= 1e-6
+                    set atHostEnd to ((the cad distance from place to host's start) <= 1e-6) or ((the cad distance from place to host's finish) <= 1e-6)
+                    if onHost and (atHostEnd = false):
+                        append (@intrinsic("construct", a bim attached end record, other's id, endIndex = 1)) to attached
+        if (bend bim wall wallId by amount in target) = false:
+            free attached
+            return false
+        set bent to the item at (the bim wall index of wallId in (@intrinsic("dereference", target)))'s position in (target's walls's values)
+        set arc to the bim arc of bent
+        loop cursor from 0 to the length of attached:
+            set entry to the item at cursor in attached
+            set otherFound to the bim wall index of entry's wallId in (@intrinsic("dereference", target))
+            if otherFound's valid:
+                set other to the item at otherFound's position in (target's walls's values)
+                set anchorEnd to other's start
+                set movingEnd to other's finish
+                if entry's atFinish = false:
+                    set anchorEnd to other's finish
+                    set movingEnd to other's start
+                set runLength to the cad distance from anchorEnd to movingEnd
+                if runLength > 1e-9:
+                    set dx to (movingEnd's x - anchorEnd's x) / runLength
+                    set dy to (movingEnd's y - anchorEnd's y) / runLength
+                    # Where the line from the anchorEnd end meets the new
+                    # centreline: a circle, or the straight chord.
+                    set reach to -1.0
+                    if arc's curved:
+                        set fx to anchorEnd's x - arc's centre's x
+                        set fy to anchorEnd's y - arc's centre's y
+                        set half to (fx * dx) + (fy * dy)
+                        set rest to ((fx * fx) + (fy * fy)) - (arc's radius * arc's radius)
+                        set discriminant to (half * half) - rest
+                        if discriminant >= 0.0:
+                            set root to the square root of discriminant
+                            set nearer to (0.0 - half) - root
+                            set farther to (0.0 - half) + root
+                            # Prefer the crossing on the arc itself, then the one
+                            # nearer where the end was.
+                            set nearerPoint to a cad vector2 with x (anchorEnd's x + (nearer * dx)) and y (anchorEnd's y + (nearer * dy))
+                            set fartherPoint to a cad vector2 with x (anchorEnd's x + (farther * dx)) and y (anchorEnd's y + (farther * dy))
+                            set nearerFraction to the bim fraction of nearerPoint on arc
+                            set fartherFraction to the bim fraction of fartherPoint on arc
+                            set nearerOnArc to (nearerFraction >= -0.000001) and (nearerFraction <= 1.000001)
+                            set fartherOnArc to (fartherFraction >= -0.000001) and (fartherFraction <= 1.000001)
+                            set reach to nearer
+                            if fartherOnArc and (nearerOnArc = false):
+                                set reach to farther
+                            else if (fartherOnArc = nearerOnArc) and ((the absolute value of (farther - runLength)) < (the absolute value of (nearer - runLength))):
+                                set reach to farther
+                    else:
+                        set cx to bent's finish's x - bent's start's x
+                        set cy to bent's finish's y - bent's start's y
+                        set denominator to (dx * cy) - (dy * cx)
+                        if (the absolute value of denominator) > 1e-12:
+                            set reach to (((bent's start's x - anchorEnd's x) * cy) - ((bent's start's y - anchorEnd's y) * cx)) / denominator
+                    if reach > 1e-6:
+                        set landed to a cad vector2 with x (anchorEnd's x + (reach * dx)) and y (anchorEnd's y + (reach * dy))
+                        if entry's atFinish:
+                            ignore move bim wall other's id to other's start and landed in target
+                        else:
+                            ignore move bim wall other's id to landed and other's finish in target
+        free attached
+        return true
+
+# ---------------------------------------------------------------- transforms
+
+# A rigid change of the plan: a shift by `shift`, a turn about `centre` by
+# `angle` (radians, anticlockwise), or a mirror in the line through `centre`
+# along the unit `axis`.
+class:
+    patterns:
+        [a|] bim transform record
+    members:
+        kind as an integer
+        shift as a cad vector2
+        centre as a cad vector2
+        angle as a 64 bit floating-point number
+        axis as a cad vector2
+
+function bim shift transform kind:
+    replacement:
+        0
+function bim turn transform kind:
+    replacement:
+        1
+function bim mirror transform kind:
+    replacement:
+        2
+
+function the bim shift transform by {cad vector2:offset}:
+    execute:
+        set origin to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim transform record, bim shift transform kind, offset, origin, 0.0, (a cad vector2 with x 1.0 and y 0.0))
+
+function the bim turn transform about {cad vector2:pivot} by {a 64 bit floating-point number:turnAngle}:
+    execute:
+        set origin to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim transform record, bim turn transform kind, origin, pivot, turnAngle, (a cad vector2 with x 1.0 and y 0.0))
+
+# The mirror in the line from `first` through `second`.
+function the bim mirror transform from {cad vector2:first} through {cad vector2:second}:
+    execute:
+        set origin to a cad vector2 with x 0.0 and y 0.0
+        set run to the cad distance from first to second
+        set direction to a cad vector2 with x 1.0 and y 0.0
+        if run > 1e-12:
+            set direction to a cad vector2 with x ((second's x - first's x) / run) and y ((second's y - first's y) / run)
+        return @intrinsic("construct", a bim transform record, bim mirror transform kind, origin, first, @intrinsic("atan2", direction's y, direction's x), direction)
+
+function the bim point {cad vector2:location} under {bim transform record:change}:
+    execute:
+        if change's kind = bim shift transform kind:
+            return a cad vector2 with x (location's x + change's shift's x) and y (location's y + change's shift's y)
+        set dx to location's x - change's centre's x
+        set dy to location's y - change's centre's y
+        if change's kind = bim turn transform kind:
+            set cosine to the cosine of change's angle
+            set sine to the sine of change's angle
+            return a cad vector2 with x (change's centre's x + ((dx * cosine) - (dy * sine))) and y (change's centre's y + ((dx * sine) + (dy * cosine)))
+        set along to (dx * change's axis's x) + (dy * change's axis's y)
+        return a cad vector2 with x (change's centre's x + (((2.0 * along) * change's axis's x) - dx)) and y (change's centre's y + (((2.0 * along) * change's axis's y) - dy))
+
+# The direction `heading` (radians) after `change`.
+function the bim heading {a 64 bit floating-point number:bearing} under {bim transform record:change}:
+    execute:
+        if change's kind = bim turn transform kind:
+            return bearing + change's angle
+        if change's kind = bim mirror transform kind:
+            return (2.0 * change's angle) - bearing
+        return bearing
+
+# `points` after `change`, in reverse order when it mirrors (so that a ring
+# keeps its turning sense).
+function the bim corners {a pointer to a list:points} under {bim transform record:change}:
+    execute:
+        set result to an empty list of a cad vector2
+        loop cursor from 0 to the length of points:
+            set slot to cursor
+            if change's kind = bim mirror transform kind:
+                set slot to ((the length of points) - 1) - cursor
+            append (the bim point (the item at slot in points) under change) to result
+        return result
+
+# The ids the selection covers: the selected element, and with sketch
+# elements or instances every chosen one.
+function the bim selection members of {bim editor record:editor}:
+    execute:
+        set ids to an empty list of a 64 bit integer
+        append editor's selectionId to ids
+        if (editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked):
+            loop cursor from 0 to the length of (editor's chosenSketches's values):
+                set chosen to the item at cursor in (editor's chosenSketches's values)
+                if chosen != editor's selectionId:
+                    append chosen to ids
+        return ids
+
+# Places the selection as it was when the open transaction began (the
+# snapshot it keeps), changed by `change`. A mirrored wall runs the other way,
+# so that its exterior side follows, and its openings keep their places.
+function reposition bim editor selection by {bim transform record:change} in {a pointer to a bim editor record:editor}:
+    execute:
+        set stack to editor's documentValue's undoStack's values
+        if (the length of stack) = 0:
+            return nothing
+        set original to the item at ((the length of stack) - 1) in stack
+        set target to the address of (editor's documentValue's current)
+        set ids to the bim selection members of (@intrinsic("dereference", editor))
+        loop cursor from 0 to the length of ids:
+            set elementId to the item at cursor in ids
+            set wallFound to the bim wall index of elementId in original
+            set gridFound to the bim grid index of elementId in original
+            set slabFound to the bim slab index of elementId in original
+            set instanceFound to the bim instance index of elementId in original
+            set sketchFound to the bim sketch index of elementId in original
+            if wallFound's valid:
+                set wallValue to the item at wallFound's position in (original's walls's values)
+                set newStart to the bim point wallValue's start under change
+                set newFinish to the bim point wallValue's finish under change
+                if change's kind = bim mirror transform kind:
+                    ignore move bim wall elementId to newFinish and newStart in target
+                    set run to the bim centreline length of wallValue
+                    loop openingCursor from 0 to the length of (original's openings's values):
+                        set openingValue to the item at openingCursor in (original's openings's values)
+                        if openingValue's hostId = elementId:
+                            ignore move bim opening openingValue's id to (run - openingValue's offset) in target
+                else:
+                    ignore move bim wall elementId to newStart and newFinish in target
+            else if gridFound's valid:
+                set gridValue to the item at gridFound's position in (original's grids's values)
+                ignore move bim grid elementId to (the bim point gridValue's start under change) and (the bim point gridValue's finish under change) in target
+            else if slabFound's valid:
+                set placed to the bim corners ((the item at slabFound's position in (original's slabs's values))'s outline's values) under change
+                ignore set bim slab elementId outline to placed in target
+                free placed
+            else if instanceFound's valid:
+                set placement to the item at instanceFound's position in (original's instances's values)
+                ignore move bim instance elementId to (the bim point placement's origin under change) turned (the bim heading placement's angle under change) in target
+            else if sketchFound's valid:
+                set placed to the bim corners ((the item at sketchFound's position in (original's sketches's values))'s points's values) under change
+                ignore set bim sketch elementId points to placed in target
+                free placed
+        free ids
+
+local function apply bim editor move by {cad vector2:offset} in {a pointer to a bim editor record:editor}:
+    execute:
+        reposition bim editor selection by (the bim shift transform by offset) in editor
+
+# Copies of the selection changed by `change`, as one edit. A wall keeps its
+# type, bulge and openings.
+function copy bim editor selection changed by {bim transform record:change} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set ids to the bim selection members of (@intrinsic("dereference", editor))
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to 0
+        loop cursor from 0 to the length of ids:
+            set elementId to the item at cursor in ids
+            set wallFound to the bim wall index of elementId in (@intrinsic("dereference", target))
+            set slabFound to the bim slab index of elementId in (@intrinsic("dereference", target))
+            set gridFound to the bim grid index of elementId in (@intrinsic("dereference", target))
+            set sketchFound to the bim sketch index of elementId in (@intrinsic("dereference", target))
+            set instanceFound to the bim instance index of elementId in (@intrinsic("dereference", target))
+            if wallFound's valid:
+                set wallValue to the item at wallFound's position in (target's walls's values)
+                set newStart to the bim point wallValue's start under change
+                set newFinish to the bim point wallValue's finish under change
+                set mirrored to change's kind = bim mirror transform kind
+                if mirrored:
+                    set swap to newStart
+                    set newStart to newFinish
+                    set newFinish to swap
+                set fresh to add bim wall typed wallValue's typeId on wallValue's levelId from newStart to newFinish to target
+                if fresh != the bim refused id:
+                    set made to made + 1
+                    if wallValue's bulge != 0.0:
+                        ignore bend bim wall fresh by wallValue's bulge in target
+                    set run to the bim centreline length of wallValue
+                    loop openingCursor from 0 to the length of (target's openings's values):
+                        set openingValue to the item at openingCursor in (target's openings's values)
+                        if openingValue's hostId = elementId:
+                            set along to openingValue's offset
+                            if mirrored:
+                                set along to run - openingValue's offset
+                            ignore add bim opening typed openingValue's typeId in fresh at along to target
+            else if slabFound's valid:
+                set slabValue to the item at slabFound's position in (target's slabs's values)
+                set placed to the bim corners (slabValue's outline's values) under change
+                if (add bim slab on slabValue's levelId around placed thick slabValue's thickness to target) != the bim refused id:
+                    set made to made + 1
+                free placed
+            else if gridFound's valid:
+                set gridValue to the item at gridFound's position in (target's grids's values)
+                set startPoint to the bim point gridValue's start under change
+                set finishPoint to the bim point gridValue's finish under change
+                set label to the bim next grid name from startPoint to finishPoint in (@intrinsic("dereference", target))
+                if (add bim grid named label from startPoint to finishPoint reaching gridValue's low to gridValue's high to target) != the bim refused id:
+                    set made to made + 1
+            else if sketchFound's valid:
+                set element to the item at sketchFound's position in (target's sketches's values)
+                set placed to the bim corners (element's points's values) under change
+                set fresh to the bim refused id
+                if element's kind = bim line sketch:
+                    set fresh to add bim line on element's levelId from (the item at 0 in placed) to (the item at 1 in placed) to target
+                else if element's kind = bim face sketch:
+                    set fresh to add bim face on element's levelId around placed to target
+                    if (fresh != the bim refused id) and (element's height > 0.0):
+                        ignore set bim face fresh height to element's height in target
+                else:
+                    set fresh to add bim text on element's levelId at (the item at 0 in placed) saying element's content to target
+                if fresh != the bim refused id:
+                    set made to made + 1
+                free placed
+            else if instanceFound's valid:
+                set placement to the item at instanceFound's position in (target's instances's values)
+                if (place bim component placement's componentId on placement's levelId at (the bim point placement's origin under change) turned (the bim heading placement's angle under change) to target) != the bim refused id:
+                    set made to made + 1
+        free ids
+        if made = 0:
+            roll back bim transaction in (the address of (editor's documentValue))
+        else:
+            commit bim transaction in (the address of (editor's documentValue))
+        return made
+
+function copy bim editor selection by {cad vector2:offset} in {a pointer to a bim editor record:editor}:
+    execute:
+        set made to copy bim editor selection changed by (the bim shift transform by offset) in editor
+        if made = 0:
+            set editor's message to the string form of "Copy: nothing here can be copied"
+        else:
+            set editor's message to (the string form of "Copied ") + ((the string form of made) + (the string form of "; click again for another copy, Esc ends"))
+
+# ---------------------------------------------------------------- trim and extend
+
+# The straight line of wall, sketch line or grid `elementId`, or not valid
+# (curved walls are not trimmed against yet).
+class:
+    patterns:
+        [a|] bim segment choice record
+    members:
+        valid as a boolean
+        start as a cad vector2
+        finish as a cad vector2
+
+function the bim segment of {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        set origin to a cad vector2 with x 0.0 and y 0.0
+        set wallFound to the bim wall index of elementId in modelValue
+        if wallFound's valid:
+            set wallValue to the item at wallFound's position in (modelValue's walls's values)
+            if wallValue's bulge = 0.0:
+                return @intrinsic("construct", a bim segment choice record, true, wallValue's start, wallValue's finish)
+        set gridFound to the bim grid index of elementId in modelValue
+        if gridFound's valid:
+            set gridValue to the item at gridFound's position in (modelValue's grids's values)
+            return @intrinsic("construct", a bim segment choice record, true, gridValue's start, gridValue's finish)
+        set sketchFound to the bim sketch index of elementId in modelValue
+        if sketchFound's valid:
+            set element to the item at sketchFound's position in (modelValue's sketches's values)
+            if element's kind = bim line sketch:
+                return @intrinsic("construct", a bim segment choice record, true, the item at 0 in (element's points's values), the item at 1 in (element's points's values))
+        return @intrinsic("construct", a bim segment choice record, false, origin, origin)
+
+# Trims (`extending` false) or extends wall or sketch line `elementId` to the
+# line of the boundary: trimming keeps the side `pick` is on, extending moves
+# the end nearer `pick` onto the boundary. Returns a description, empty when
+# nothing changed.
+function trim bim editor element {a 64 bit integer:elementId} at {cad vector2:pick} extending {boolean:extending} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set boundary to the bim segment of editor's boundaryId in (@intrinsic("dereference", target))
+        set piece to the bim segment of elementId in (@intrinsic("dereference", target))
+        if (boundary's valid = false) or (piece's valid = false):
+            return the string form of "pick a straight wall or a line"
+        set dx to piece's finish's x - piece's start's x
+        set dy to piece's finish's y - piece's start's y
+        set boundaryX to boundary's finish's x - boundary's start's x
+        set boundaryY to boundary's finish's y - boundary's start's y
+        set denominator to (dx * boundaryY) - (dy * boundaryX)
+        if (the absolute value of denominator) <= 1e-12:
+            return the string form of "it runs parallel to the boundary"
+        set t to (((boundary's start's x - piece's start's x) * boundaryY) - ((boundary's start's y - piece's start's y) * boundaryX)) / denominator
+        set meeting to a cad vector2 with x (piece's start's x + (t * dx)) and y (piece's start's y + (t * dy))
+        set runSquared to (dx * dx) + (dy * dy)
+        set pickT to (((pick's x - piece's start's x) * dx) + ((pick's y - piece's start's y) * dy)) / runSquared
+        set newStart to piece's start
+        set newFinish to piece's finish
+        if extending:
+            if pickT < 0.5:
+                set newStart to meeting
+            else:
+                set newFinish to meeting
+        else:
+            if (t <= 0.0) or (t >= 1.0):
+                return the string form of "the boundary does not cross it"
+            if pickT > t:
+                set newStart to meeting
+            else:
+                set newFinish to meeting
+        if (the cad distance from newStart to newFinish) <= 1e-6:
+            return the string form of "nothing would be left"
+        begin bim transaction in (the address of (editor's documentValue))
+        set changed to false
+        if (the bim wall index of elementId in (@intrinsic("dereference", target)))'s valid:
+            set changed to move bim wall elementId to newStart and newFinish in target
+        else:
+            set ends to an empty list of a cad vector2
+            append newStart to ends
+            append newFinish to ends
+            set changed to set bim sketch elementId points to ends in target
+            free ends
+        if changed:
+            commit bim transaction in (the address of (editor's documentValue))
+            if extending:
+                return the string form of "Extended"
+            return the string form of "Trimmed"
+        roll back bim transaction in (the address of (editor's documentValue))
+        return the string form of "refused"
+
+# ---------------------------------------------------------------- two-letter commands
+
+# The commands typed as two letters within 750 ms, as in Open 2D Studio, by
+# their key codes (upper-case ASCII). The result is the editor command they
+# stand for, or -1. Codes from 2000 up are commands of their own.
+function the bim two letter command of {integer:first} then {integer:second}:
+    execute:
+        set pair to (first * 100) + second
+        if pair = 8765:
+            return 87
+        if pair = 8779:
+            return 79
+        if pair = 8376:
+            return 66
+        if pair = 7176:
+            return 73
+        if pair = 7768:
+            return 83
+        if pair = 7786:
+            return 77
+        if (pair = 6779) or (pair = 6767):
+            return 2002
+        if pair = 6783:
+            return 2001
+        if pair = 7673:
+            return 78
+        if pair = 8267:
+            return 82
+        if pair = 8488:
+            return 1084
+        if pair = 9065:
+            return 70
+        if pair = 8279:
+            return 2010
+        if pair = 7777:
+            return 2011
+        if pair = 8482:
+            return 2012
+        if pair = 6988:
+            return 2013
+        if pair = 7970:
+            return 2014
+        if (pair = 6873) or ((pair = 6876) or ((pair = 6865) or ((pair = 6882) or (pair = 6868)))):
+            return 2015
+        if pair = 8269:
+            return 2016
+        if pair = 7076:
+            return 2017
+        if pair = 6773:
+            return 2018
+        if pair = 6582:
+            return 2019
+        if pair = 8076:
+            return 2020
+        if pair = 6976:
+            return 2021
+        if pair = 8380:
+            return 2022
+        if pair = 7669:
+            return 2023
+        if pair = 6576:
+            return 2024
+        if pair = 6589:
+            return 2025
+        if pair = 7666:
+            return 2026
+        if pair = 7377:
+            return 2027
+        if pair = 8476:
+            return 2028
+        return -1
+
+# The name of a two-letter command the modeller does not have yet.
+function the bim name of command {integer:code}:
+    execute:
+        if code = 2010:
+            return the string form of "Rotate (RO)"
+        if code = 2011:
+            return the string form of "Mirror (MM)"
+        if code = 2012:
+            return the string form of "Trim (TR)"
+        if code = 2013:
+            return the string form of "Extend (EX)"
+        if code = 2014:
+            return the string form of "Offset (OF)"
+        if code = 2015:
+            return the string form of "Dimension (DI)"
+        if code = 2016:
+            return the string form of "Scale (RE)"
+        if code = 2017:
+            return the string form of "Fillet (FL)"
+        if code = 2018:
+            return the string form of "Circle (CI)"
+        if code = 2019:
+            return the string form of "Arc (AR)"
+        if code = 2020:
+            return the string form of "Polyline (PL)"
+        if code = 2021:
+            return the string form of "Ellipse (EL)"
+        if code = 2022:
+            return the string form of "Spline (SP)"
+        if code = 2023:
+            return the string form of "Leader (LE)"
+        if code = 2024:
+            return the string form of "Align (AL)"
+        if code = 2025:
+            return the string form of "Array (AY)"
+        if code = 2026:
+            return the string form of "Label (LB)"
+        if code = 2027:
+            return the string form of "Image (IM)"
+        if code = 2028:
+            return the string form of "Thin lines (TL)"
+        return the string form of "This command"
+
+function bim letter {integer:code} starts a two letter command:
+    execute:
+        loop second from 65 to 91:
+            if (the bim two letter command of code then second) >= 0:
+                return true
+        return false
+
+# The editor commands that letter `code`, typed at `now` (microseconds), sets
+# off at once: none while it waits for a second letter, the waiting letter
+# and this one when they make no command, or the two-letter command. G acts
+# at once on a selection.
+function resolve bim editor letter {integer:code} at {a 64 bit integer:now} in {a pointer to a bim editor record:editor}:
+    execute:
+        set result to an empty list of an integer
+        if editor's pendingLetter != 0:
+            set combined to the bim two letter command of editor's pendingLetter then code
+            set waited to editor's pendingLetter
+            set editor's pendingLetter to 0
+            if combined >= 0:
+                append combined to result
+                return result
+            append waited to result
+        set immediate to (code = 71) and (editor's selectionKind != bim nothing picked)
+        if immediate or ((bim letter code starts a two letter command) = false):
+            append code to result
+            return result
+        set editor's pendingLetter to code
+        set editor's pendingAt to now
+        set typed to a new string buffer containing 1 bytes
+        store (code as a byte) into the data of typed at 0
+        set editor's message to typed + (the string form of "_")
+        return result
+
+# The waiting letter, once 750 ms have passed without a second one.
+function the bim letters timed out at {a 64 bit integer:now} in {a pointer to a bim editor record:editor}:
+    execute:
+        set result to an empty list of an integer
+        if (editor's pendingLetter != 0) and ((now - editor's pendingAt) >= (750000 as a 64 bit integer)):
+            append editor's pendingLetter to result
+            set editor's pendingLetter to 0
+        return result
+
+# Create similar (CS): the tool that draws another element like the
+# selection, with its type.
+function create bim editor similar in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set kind to editor's selectionKind
+        set editor's chainActive to false
+        set editor's sketchChain to a cad topology list of a cad vector2
+        set editor's moveStage to 0
+        if kind = bim wall picked:
+            set found to the bim wall index of editor's selectionId in modelValue
+            set wallValue to the item at found's position in (modelValue's walls's values)
+            set editor's wallTypeId to wallValue's typeId
+            set editor's tool to bim wall tool
+            set editor's message to the string form of "Create similar: wall of the same type"
+            return nothing
+        if kind = bim opening picked:
+            set found to the bim opening index of editor's selectionId in modelValue
+            set editor's openingTypeId to (the item at found's position in (modelValue's openings's values))'s typeId
+            set editor's tool to bim opening tool
+            set editor's message to the string form of "Create similar: opening of the same type"
+            return nothing
+        if kind = bim grid picked:
+            set editor's tool to bim grid tool
+            set editor's gridActive to false
+            set editor's message to the string form of "Create similar: grid line"
+            return nothing
+        if kind = bim instance picked:
+            set found to the bim instance index of editor's selectionId in modelValue
+            set editor's placeComponentId to (the item at found's position in (modelValue's instances's values))'s componentId
+            set editor's tool to bim place tool
+            set editor's message to the string form of "Create similar: another instance; click where"
+            return nothing
+        if kind = bim sketch picked:
+            set found to the bim sketch index of editor's selectionId in modelValue
+            set element to the item at found's position in (modelValue's sketches's values)
+            if element's kind = bim line sketch:
+                set editor's tool to bim line tool
+            else if element's kind = bim face sketch:
+                set editor's tool to bim rectangle tool
+            else:
+                set editor's tool to bim text tool
+                set editor's textActive to false
+            set editor's message to the string form of "Create similar: the same kind of sketch element"
+            return nothing
+        set editor's message to the string form of "Create similar (CS): select an element first"
+
+function type bim editor key {integer:code} in {a pointer to a bim editor record:editor}:
+    execute:
+        # While a text is written, keys only edit it.
+        if (editor's tool = bim text tool) and editor's textActive:
+            if code = bim backspace key code:
+                if (the length of editor's textBuffer) > 0:
+                    set editor's textBuffer to the substring of editor's textBuffer from 0 spanning ((the length of editor's textBuffer) - 1) bytes
+            if code = bim enter key code:
+                begin bim transaction in (the address of (editor's documentValue))
+                set fresh to add bim text on editor's levelId at editor's textAnchor saying editor's textBuffer to (the address of (editor's documentValue's current))
+                if fresh = the bim refused id:
+                    roll back bim transaction in (the address of (editor's documentValue))
+                else:
+                    commit bim transaction in (the address of (editor's documentValue))
+                    set editor's message to (the string form of "Text ") + (the string form of fresh)
+                set editor's textActive to false
+            if code = bim escape key code:
+                set editor's textActive to false
+            return nothing
+        set editor's message to the string form of ""
+        if ((code >= 48) and (code <= 57)) or (code = 46):
+            if (editor's tool = bim push tool) and (editor's pushId != the bim refused id):
+                set digit to a new string buffer containing 1 bytes
+                store (code as a byte) into the data of digit at 0
+                set editor's numeric to editor's numeric + digit
+                set rise to the bim numeric value of editor's numeric
+                if set bim face editor's pushId height to rise in (the address of (editor's documentValue's current)):
+                    show bim editor preview in editor
+                return nothing
+            set typing to ((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) or (editor's tool = bim offset tool)
+            if typing or ((editor's tool = bim wall tool) and editor's chainActive):
+                set character to a new string buffer containing 1 bytes
+                store (code as a byte) into the data of character at 0
+                set editor's numeric to editor's numeric + character
+            return nothing
+        if code = bim backspace key code:
+            if (the length of editor's numeric) > 0:
+                set editor's numeric to the substring of editor's numeric from 0 spanning ((the length of editor's numeric) - 1) bytes
+            return nothing
+        if code = bim enter key code:
+            if (editor's tool = bim push tool) and (editor's pushId != the bim refused id):
+                finish bim editor push in editor
+                return nothing
+            if (editor's tool = bim line tool) or (editor's tool = bim rectangle tool):
+                set editor's sketchChain to a cad topology list of a cad vector2
+                return nothing
+            # A typed angle turns the selection about the centre at once.
+            if ((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) and ((the length of editor's numeric) > 0):
+                set degrees to the bim numeric value of editor's numeric
+                if editor's moveStage = 2:
+                    begin bim transaction in (the address of (editor's documentValue))
+                reposition bim editor selection by (the bim turn transform about editor's moveBase by (degrees * (3.141592653589793 / 180.0))) in editor
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's moveStage to 0
+                set editor's tool to bim select tool
+                set editor's numeric to the string form of ""
+                set editor's message to (the string form of "Rotated ") + ((the bim metres text of degrees) + (the string form of " degrees"))
+                return nothing
+            if (editor's tool = bim offset tool) and ((the length of editor's numeric) > 0):
+                set distance to the bim numeric value of editor's numeric
+                if distance > 0.0:
+                    set editor's offsetDistance to distance
+                set editor's numeric to the string form of ""
+                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: click a wall or a line")
+                return nothing
+            # A typed length places the next wall along the location's direction.
+            if ((editor's tool = bim wall tool) and editor's chainActive) and ((the length of editor's numeric) > 0):
+                set amount to the bim numeric value of editor's numeric
+                set dx to editor's snap's point's x - editor's chainStart's x
+                set dy to editor's snap's point's y - editor's chainStart's y
+                set magnitude to the square root of ((dx * dx) + (dy * dy))
+                if (magnitude > 1e-9) and (amount > 0.0):
+                    add bim editor wall to (a cad vector2 with x (editor's chainStart's x + ((dx / magnitude) * amount)) and y (editor's chainStart's y + ((dy / magnitude) * amount))) in editor
+                set editor's numeric to the string form of ""
+            return nothing
+        if code = bim escape key code:
+            set editor's pendingLetter to 0
+            if editor's pushId != the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's pushId to the bim refused id
+            # Only a move keeps a transaction open while it follows the
+            # pointer; a copy commits each copy.
+            if (editor's moveStage = 2) and (editor's tool = bim move tool):
+                roll back bim transaction in (the address of (editor's documentValue))
+            if (editor's moveStage = 3) and (editor's tool = bim rotate tool):
+                roll back bim transaction in (the address of (editor's documentValue))
+            # Escape leaves the command, as in CAD: back to selecting.
+            set editor's tool to bim select tool
+            set editor's textActive to false
+            set editor's moveStage to 0
+            set editor's sketchChain to a cad topology list of a cad vector2
+            set editor's chainActive to false
+            set editor's sectionActive to false
+            set editor's gridActive to false
+            set editor's selectionKind to bim nothing picked
+            set editor's selectionId to the bim refused id
+            set editor's numeric to the string form of ""
+            return nothing
+        if (code = 78) or ((code = 82) or ((code = 80) or ((code = 77) or (code = 1084)))):
+            if editor's pushId != the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's pushId to the bim refused id
+            set editor's sketchChain to a cad topology list of a cad vector2
+            set editor's moveStage to 0
+            set editor's chainActive to false
+            if code = 78:
+                set editor's tool to bim line tool
+            if code = 82:
+                set editor's tool to bim rectangle tool
+            if code = 80:
+                set editor's tool to bim push tool
+            if code = 77:
+                set editor's tool to bim move tool
+                if editor's selectionKind != bim nothing picked:
+                    set editor's moveStage to 1
+            if code = 1084:
+                set editor's tool to bim text tool
+            return nothing
+        if code = 2001:
+            create bim editor similar in editor
+            return nothing
+        if code = 2002:
+            set editor's tool to bim copy tool
+            set editor's chainActive to false
+            set editor's moveStage to 0
+            set editor's message to the string form of "Copy: click an element"
+            if (editor's selectionKind != bim nothing picked) and ((editor's selectionKind != bim space picked) and (editor's selectionKind != bim opening picked)):
+                set editor's moveStage to 1
+                set editor's message to the string form of "Copy: click the base point"
+            return nothing
+        if (code >= 2010) and (code <= 2014):
+            if editor's pushId != the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's pushId to the bim refused id
+            set editor's chainActive to false
+            set editor's sketchChain to a cad topology list of a cad vector2
+            set editor's numeric to the string form of ""
+            set editor's moveStage to 0
+            set hasSelection to (editor's selectionKind != bim nothing picked) and ((editor's selectionKind != bim space picked) and (editor's selectionKind != bim opening picked))
+            if code = 2010:
+                set editor's tool to bim rotate tool
+                set editor's message to the string form of "Rotate: click an element"
+                if hasSelection:
+                    set editor's moveStage to 1
+                    set editor's message to the string form of "Rotate: click the centre"
+            if code = 2011:
+                set editor's tool to bim mirror tool
+                set editor's message to the string form of "Mirror: click an element"
+                if hasSelection:
+                    set editor's moveStage to 1
+                    set editor's message to the string form of "Mirror: click the first point of the mirror line"
+            if code = 2012:
+                set editor's tool to bim trim tool
+                set editor's message to the string form of "Trim: click the boundary (wall, line or grid)"
+            if code = 2013:
+                set editor's tool to bim extend tool
+                set editor's message to the string form of "Extend: click the boundary (wall, line or grid)"
+            if code = 2014:
+                set editor's tool to bim offset tool
+                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: type a distance, or click a wall or a line")
+            return nothing
+        if (code >= 2015) and (code < 2100):
+            set editor's message to (the bim name of command code) + (the string form of ": not in the modeller yet")
+            return nothing
+        # G moves the selection, as in Blender and Open 2D Studio.
+        if code = 71:
+            if editor's selectionKind = bim nothing picked:
+                set editor's message to the string form of "G: select something to move"
+                return nothing
+            set editor's tool to bim move tool
+            set editor's chainActive to false
+            set editor's moveStage to 1
+            set editor's message to the string form of "Move: click the base point"
+            return nothing
+        # Components: Ctrl+G makes one of the selection, Ctrl+I places
+        # instances, Ctrl+E opens and closes one for editing, Ctrl+U explodes.
+        if code = 1071:
+            make bim editor component in editor
+            return nothing
+        if code = 1073:
+            if editor's selectionKind = bim instance picked:
+                set found to the bim instance index of editor's selectionId in editor's documentValue's current
+                set editor's placeComponentId to (the item at found's position in (editor's documentValue's current's instances's values))'s componentId
+            set editor's tool to bim place tool
+            set editor's message to the string form of "Place component: click where"
+            return nothing
+        if code = 1069:
+            if editor's editingInstanceId = the bim refused id:
+                open bim editor component in editor
+            else:
+                close bim editor component in editor
+            return nothing
+        if code = 1085:
+            explode bim editor instance in editor
+            return nothing
+        if code = 87:
+            set editor's tool to bim wall tool
+            set editor's chainActive to false
+            return nothing
+        if code = 67:
+            set editor's tool to bim section tool
+            set editor's chainActive to false
+            set editor's sectionActive to false
+            return nothing
+        if code = 91:
+            resize bim editor opening type by -0.1 and 0.0 in editor
+            return nothing
+        if code = 93:
+            resize bim editor opening type by 0.1 and 0.0 in editor
+            return nothing
+        if code = 59:
+            resize bim editor opening type by 0.0 and -0.1 in editor
+            return nothing
+        if code = 39:
+            resize bim editor opening type by 0.0 and 0.1 in editor
+            return nothing
+        if code = 79:
+            set editor's tool to bim opening tool
+            set editor's openingTypeId to editor's windowTypeId
+            set editor's chainActive to false
+            return nothing
+        if code = 68:
+            set editor's tool to bim opening tool
+            set editor's openingTypeId to editor's doorTypeId
+            set editor's chainActive to false
+            return nothing
+        if code = 66:
+            add bim editor slab under the selection in editor
+            return nothing
+        if code = 73:
+            set editor's tool to bim grid tool
+            set editor's chainActive to false
+            set editor's gridActive to false
+            return nothing
+        if (code = bim page up key code) or (code = bim page down key code):
+            change bim editor storey up (code = bim page up key code) in editor
+            return nothing
+        if code = 83:
+            set editor's tool to bim select tool
+            set editor's chainActive to false
+            return nothing
+        if code = 90:
+            if undo bim transaction in (the address of (editor's documentValue)):
+                set editor's message to the string form of "Undone"
+            return nothing
+        if code = 89:
+            if redo bim transaction in (the address of (editor's documentValue)):
+                set editor's message to the string form of "Redone"
+            return nothing
+        if code = bim delete key code:
+            # A corner of the selected slab under the pointer, while the slab
+            # keeps three; else the selected wall, opening or slab, or else
+            # the wall under the pointer.
+            set chosen to the bim selected slab of (@intrinsic("dereference", editor))
+            if chosen's valid:
+                set cornerIndex to the bim slab corner near editor's pointerLocation in chosen's slab within editor's pickTolerance
+                if cornerIndex >= 0:
+                    remove bim editor slab corner cornerIndex of chosen's slab in editor
+                    return nothing
+            set doomedKind to bim nothing picked
+            set doomedId to the bim refused id
+            if ((((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim opening picked)) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim grid picked)) or ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)):
+                set doomedKind to editor's selectionKind
+                set doomedId to editor's selectionId
+            else if editor's hoverWall != the bim refused id:
+                set doomedKind to bim wall picked
+                set doomedId to editor's hoverWall
+            if doomedKind = bim nothing picked:
+                return nothing
+            begin bim transaction in (the address of (editor's documentValue))
+            set removed to false
+            if doomedKind = bim wall picked:
+                set removed to delete bim wall doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim slab picked:
+                set removed to delete bim slab doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim grid picked:
+                set removed to delete bim grid doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim sketch picked:
+                set removed to delete bim sketch doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim instance picked:
+                set removed to delete bim instance doomedId from (the address of (editor's documentValue's current))
+            else:
+                set removed to delete bim opening doomedId from (the address of (editor's documentValue's current))
+            if removed:
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Deleted"
+            else:
+                roll back bim transaction in (the address of (editor's documentValue))
+            set editor's selectionKind to bim nothing picked
+            set editor's selectionId to the bim refused id
+            return nothing
+        # Ctrl+X exports IFC5 (IfcX), its paths keyed to the model file.
+        if code = 1088:
+            set stamp to the bim utc timestamp
+            set exportText to the bim ifcx text of editor's documentValue's current identified as ((the string form of "open-bim-studio/bim-slice@") + (stamp + (the string form of ".ifcx"))) for project (the string form of "open-bim-studio/bim-slice") by (the string form of "Open BIM Studio") at stamp
+            if write bim text exportText to file (the string form of "bim-slice.ifcx"):
+                set editor's message to the string form of "Exported bim-slice.ifcx (IFC5)"
+            else:
+                set editor's message to the string form of "Export failed"
+            return nothing
+        if code = 88:
+            if write bim text (the bim ifc text of editor's documentValue's current) to file (the string form of "bim-slice.ifc"):
+                set editor's message to the string form of "Exported bim-slice.ifc"
+            else:
+                set editor's message to the string form of "Export failed"

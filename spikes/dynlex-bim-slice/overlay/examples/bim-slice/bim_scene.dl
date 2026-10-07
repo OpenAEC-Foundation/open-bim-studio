@@ -1,0 +1,314 @@
+# SPDX-License-Identifier: MPL-2.0
+# The 3D scene of the BIM slice: one triangle mesh per evaluated wall or slab,
+# cached per build, and picking of walls, slabs, openings and spaces along a
+# ray.
+#
+# A ray picks the nearest of: a wall or slab triangle; an opening's rectangle in its
+# host's centre plane (so a window is picked through its hole, and also when
+# the ray first touches the opening's reveals); and a space's floor, at its
+# level's elevation inside its outline. A space's floor coincides with the top
+# of a slab under it, so it is picked only when it lies clearly (by more than
+# the bim pick margin) in front of every element hit; the slab is picked
+# otherwise. Every intersection is computed
+# relative to the ray's origin, so picking stays exact far from the
+# coordinate origin.
+import examples/bim-slice/bim_spaces.dl
+import examples/bim-slice/bim_view.dl
+
+class:
+    patterns:
+        [a|] bim scene mesh record
+    members:
+        elementId as a 64 bit integer
+        serial as a 64 bit integer
+        shape as a fast mesh record
+        category as an integer
+        # The mesh's own colour (red, green, blue in 0..255), or a negative
+        # red to colour it by its category.
+        colour as a cad vector3
+
+# The colour that leaves a mesh coloured by its category.
+function the bim category colouring:
+    execute:
+        return a cad vector3 with x -1.0, y 0.0 and z 0.0
+
+# Meshes of the evaluated walls and slabs, reusing every mesh of `previous`
+# whose build (serial) is unchanged. Both lists follow ascending element ids.
+function the bim scene meshes of {bim evaluation record:evaluation} after {a pointer to a list:previous}:
+    execute:
+        return the bim scene meshes of evaluation after previous layered false
+
+# The same, and when `layered`, each wall as one mesh per layer in its
+# material's colour (the fine detail level); `previous` must have been built
+# with the same `layered`.
+function the bim scene meshes of {bim evaluation record:evaluation} after {a pointer to a list:previous} layered {boolean:layered}:
+    execute:
+        set result to a cad topology list of a bim scene mesh record
+        set earlier to 0
+        loop cursor from 0 to the length of (evaluation's elements's values):
+            set geometry to the item at cursor in (evaluation's elements's values)
+            set searching to true
+            loop while searching:
+                if earlier = the length of previous:
+                    set searching to false
+                else if (the item at earlier in previous)'s elementId < geometry's id:
+                    set earlier to earlier + 1
+                else:
+                    set searching to false
+            if geometry's status = 0:
+                set reused to false
+                # A wall shown in layers has several meshes in a row.
+                set scanning to true
+                loop while scanning:
+                    if earlier < the length of previous:
+                        set cached to the item at earlier in previous
+                        if (cached's elementId = geometry's id) and (cached's serial = geometry's serial):
+                            append cached to (result's values)
+                            set reused to true
+                            set earlier to earlier + 1
+                        else:
+                            set scanning to false
+                    else:
+                        set scanning to false
+                if reused = false:
+                    set category to the bim category of element geometry's id in evaluation's modelValue
+                    set layers to a cad topology list of a bim layer solid record
+                    if layered and (category = bim wall category):
+                        set wallFound to the bim wall index of geometry's id in evaluation's modelValue
+                        if wallFound's valid:
+                            set layers to the bim layer solids of (the item at wallFound's position in (evaluation's modelValue's walls's values)) in evaluation's modelValue using evaluation's index
+                    if (the length of (layers's values)) > 0:
+                        loop layerCursor from 0 to the length of (layers's values):
+                            set layer to the item at layerCursor in (layers's values)
+                            set triangles to an empty fast mesh
+                            append fast mesh of layer's shape to (the address of triangles)
+                            append (@intrinsic("construct", a bim scene mesh record, geometry's id, geometry's serial, triangles, category, the bim material colour of layer's material)) to (result's values)
+                    else:
+                        set triangles to an empty fast mesh
+                        append bim mesh of geometry to (the address of triangles)
+                        append (@intrinsic("construct", a bim scene mesh record, geometry's id, geometry's serial, triangles, category, the bim category colouring)) to (result's values)
+        return result
+
+# The mesh of sketch face `element` on a storey at `elevation`: a flat face
+# as one triangulated polygon drawn from both sides, a pushed face as the
+# prism the fast kernel builds from its storey up its height.
+function the bim sketch mesh of {bim sketch record:element} at {a 64 bit floating-point number:elevation}:
+    execute:
+        set triangles to an empty fast mesh
+        if element's height > 0.0:
+            set noHoles to an empty list of the type of (an empty list of a cad vector2)
+            set built to the fast prism over (element's points's values) with holes noHoles from elevation rising element's height within 1e-9
+            free noHoles
+            if built's reason = fast prism built:
+                append fast mesh of built's shape to (the address of triangles)
+        else:
+            set noHoles to an empty list of the type of (an empty list of a cad vector2)
+            set flat to the cad triangulation of (element's points's values) with holes noHoles
+            free noHoles
+            set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+            set downward to a cad vector3 with x 0.0, y 0.0 and z -1.0
+            loop corner from 0 to the length of (the points of flat):
+                set point to the item at corner in (the points of flat)
+                append (a cad vector3 with x point's x, y point's y and z (elevation + 0.002)) to (triangles's positions's values)
+                append upward to (triangles's normals's values)
+            set count to the length of (the points of flat)
+            loop corner from 0 to count:
+                set point to the item at corner in (the points of flat)
+                append (a cad vector3 with x point's x, y point's y and z (elevation + 0.002)) to (triangles's positions's values)
+                append downward to (triangles's normals's values)
+            loop face from 0 to the length of (the triangles of flat):
+                set triple to the item at face in (the triangles of flat)
+                append (the first of triple) to (triangles's triangles's values)
+                append (the second of triple) to (triangles's triangles's values)
+                append (the third of triple) to (triangles's triangles's values)
+                append ((the first of triple) + count) to (triangles's triangles's values)
+                append ((the third of triple) + count) to (triangles's triangles's values)
+                append ((the second of triple) + count) to (triangles's triangles's values)
+            free cad triangulation flat
+        return triangles
+
+# The meshes of the sketch faces of `modelValue`, free and in instances.
+function the bim sketch meshes of {bim model record:modelValue}:
+    execute:
+        set result to a cad topology list of a bim scene mesh record
+        set drawn to the bim drawn sketches of modelValue
+        loop cursor from 0 to the length of (drawn's values):
+            set element to the item at cursor in (drawn's values)
+            set levelFound to the bim level index of element's levelId in modelValue
+            if (element's kind = bim face sketch) and levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                append (@intrinsic("construct", a bim scene mesh record, element's id, 0 as a 64 bit integer, the bim sketch mesh of element at elevation, bim mass category, the bim category colouring)) to (result's values)
+        return result
+
+class:
+    patterns:
+        [a|] bim ray record
+    members:
+        origin as a cad vector3
+        direction as a cad vector3
+
+function bim nothing picked:
+    replacement:
+        0
+function bim wall picked:
+    replacement:
+        1
+function bim opening picked:
+    replacement:
+        2
+function bim space picked:
+    replacement:
+        3
+function bim slab picked:
+    replacement:
+        4
+function bim grid picked:
+    replacement:
+        5
+# An imported element, read-only; `id` is its scene mesh's element id.
+function bim imported picked:
+    replacement:
+        6
+# A sketch element: a line, a face or mass, or a text.
+function bim sketch picked:
+    replacement:
+        7
+# An instance of a component.
+function bim instance picked:
+    replacement:
+        8
+
+# Scene meshes of imported elements have ids from here up, above any id the
+# model hands out.
+function the bim imported id base:
+    execute:
+        return 1099511627776 as a 64 bit integer
+
+# `id` is the wall, slab or opening id, or the space's identity; `distance` is along
+# the ray.
+class:
+    patterns:
+        [a|] bim pick record
+    members:
+        kind as an integer
+        id as a 64 bit integer
+        distance as a 64 bit floating-point number
+
+# How far a space's floor must lie in front of an element hit to be picked
+# instead of it.
+function the bim pick margin:
+    replacement:
+        1e-6
+
+function no bim pick:
+    execute:
+        return @intrinsic("construct", a bim pick record, bim nothing picked, the bim refused id, 1.0 / 0.0)
+
+# The distance along the ray to the triangle, or infinity (Möller–Trumbore).
+local function the bim ray distance to {cad vector3:first}, {cad vector3:second} and {cad vector3:third} along {bim ray record:ray}:
+    execute:
+        set miss to 1.0 / 0.0
+        set a to the cad difference of first and ray's origin
+        set edgeOne to the cad difference of second and first
+        set edgeTwo to the cad difference of third and first
+        set crossing to the cad cross of ray's direction and edgeTwo
+        set determinant to the cad dot of edgeOne and crossing
+        if (the absolute value of determinant) <= 1e-18:
+            return miss
+        set inverse to 1.0 / determinant
+        set offset to a scaled by -1.0
+        set u to (the cad dot of offset and crossing) * inverse
+        if (u < 0.0) or (u > 1.0):
+            return miss
+        set turned to the cad cross of offset and edgeOne
+        set v to (the cad dot of ray's direction and turned) * inverse
+        if (v < 0.0) or ((u + v) > 1.0):
+            return miss
+        set reach to (the cad dot of edgeTwo and turned) * inverse
+        if reach <= 0.0:
+            return miss
+        return reach
+
+# True when `location` lies inside the closed polygon `outline` (even-odd).
+function bim flat point {cad vector2:location} lies in {a pointer to a list:outline}:
+    execute:
+        set enclosed to false
+        set count to the length of outline
+        loop cursor from 0 to count:
+            set here to the item at cursor in outline
+            set following to the item at (the remainder of (cursor + 1) divided by count) in outline
+            if (here's y > location's y) != (following's y > location's y):
+                set crossingX to here's x + (((location's y - here's y) / (following's y - here's y)) * (following's x - here's x))
+                if location's x < crossingX:
+                    set enclosed to (enclosed = false)
+        return enclosed
+
+# The nearest wall, slab, opening or space along `ray`. `meshes` are the scene
+# meshes of `modelValue`'s evaluation and `spaces` its spaces.
+function the bim pick along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue} with {a pointer to a list:spaces}:
+    execute:
+        set best to no bim pick
+        loop meshCursor from 0 to the length of meshes:
+            set entry to the item at meshCursor in meshes
+            set entryKind to bim imported picked
+            if entry's elementId < (the bim imported id base):
+                set entryKind to bim wall picked
+                if entry's category = bim slab category:
+                    set entryKind to bim slab picked
+                if entry's category = bim mass category:
+                    set entryKind to bim sketch picked
+            set points to entry's shape's positions's values
+            set corners to entry's shape's triangles's values
+            set cursor to 0
+            loop while cursor < the length of corners:
+                set triangleDistance to the bim ray distance to (the item at (the item at cursor in corners) in points), (the item at (the item at (cursor + 1) in corners) in points) and (the item at (the item at (cursor + 2) in corners) in points) along ray
+                if triangleDistance < best's distance:
+                    set best to @intrinsic("construct", a bim pick record, entryKind, entry's elementId, triangleDistance)
+                set cursor to cursor + 3
+        # An opening wins over its own wall when the ray reaches its centre
+        # plane within the wall's thickness of the wall hit: the ray entered
+        # the opening or touched its reveals.
+        loop openingCursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at openingCursor in (modelValue's openings's values)
+            set hostFound to the bim wall index of openingValue's hostId in modelValue
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if hostFound's valid and typeFound's valid:
+                set host to the item at hostFound's position in (modelValue's walls's values)
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                set levelFound to the bim level index of host's levelId in modelValue
+                set elevation to 0.0
+                if levelFound's valid:
+                    set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                # The opening's centre plane; along a curved host, on the
+                # tangent at the opening's middle.
+                set halfWidth to (the bim rough width of openingType) * 0.5
+                set span to the bim span of host at openingValue's offset reaching halfWidth
+                set direction to span's direction
+                set normal to span's normal
+                set base to span's left
+                set facing to (ray's direction's x * normal's x) + (ray's direction's y * normal's y)
+                if (the absolute value of facing) > 1e-12:
+                    set planeGap to ((base's x - ray's origin's x) * normal's x) + ((base's y - ray's origin's y) * normal's y)
+                    set openingDistance to planeGap / facing
+                    if openingDistance > 0.0:
+                        set hitX to (ray's origin's x - base's x) + (openingDistance * ray's direction's x)
+                        set hitY to (ray's origin's y - base's y) + (openingDistance * ray's direction's y)
+                        set hitZ to (ray's origin's z + (openingDistance * ray's direction's z)) - elevation
+                        set alongWall to (openingValue's offset - halfWidth) + ((hitX * direction's x) + (hitY * direction's y))
+                        set inside to ((alongWall >= (openingValue's offset - halfWidth)) and (alongWall <= (openingValue's offset + halfWidth))) and ((hitZ >= openingType's sill) and (hitZ <= (the bim head height of openingType)))
+                        if inside:
+                            set throughHost to (best's kind = bim wall picked) and (best's id = host's id)
+                            set nearHost to throughHost and (openingDistance <= (best's distance + (the bim wall thickness of host in modelValue)))
+                            if (openingDistance < best's distance) or nearHost:
+                                set best to @intrinsic("construct", a bim pick record, bim opening picked, openingValue's id, openingDistance)
+        loop spaceCursor from 0 to the length of spaces:
+            set space to the item at spaceCursor in spaces
+            set levelFound to the bim level index of space's levelId in modelValue
+            if levelFound's valid and ((the absolute value of ray's direction's z) > 1e-12):
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                set floorDistance to (elevation - ray's origin's z) / ray's direction's z
+                if (floorDistance > 0.0) and (floorDistance < (best's distance - the bim pick margin)):
+                    set floorPoint to a cad vector2 with x (ray's origin's x + (floorDistance * ray's direction's x)) and y (ray's origin's y + (floorDistance * ray's direction's y))
+                    if bim flat point floorPoint lies in (space's outline's values):
+                        set best to @intrinsic("construct", a bim pick record, bim space picked, the bim identity of space, floorDistance)
+        return best

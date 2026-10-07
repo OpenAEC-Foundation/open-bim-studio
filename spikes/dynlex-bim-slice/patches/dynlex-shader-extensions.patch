@@ -1,0 +1,342 @@
+diff -ruN a/src/cpp/compiler/codegen/codegenIntrinsicEffects.inl b/src/cpp/compiler/codegen/codegenIntrinsicEffects.inl
+--- a/src/cpp/compiler/codegen/codegenIntrinsicEffects.inl
++++ b/src/cpp/compiler/codegen/codegenIntrinsicEffects.inl
+@@ -693,11 +693,13 @@
+ 		globalName = "gl_FragCoord";
+ 	} else if (inputName == "Position") {
+ 		globalName = "in_Position";
++	} else if (isShaderVertexAttributeName(inputName)) {
++		globalName = "in_" + inputName;
+ 	} else {
+ 		crashCompilerBug("unknown shader input reached codegen after type inference");
+ 	}
+ 	llvm::GlobalVariable *global = context.llvmModule->getGlobalVariable(globalName);
+-	if (!global && kind == IntrinsicKind::ShaderInterpolantInput) {
++	if (!global && (kind == IntrinsicKind::ShaderInterpolantInput || isShaderVertexAttributeName(inputName))) {
+ 		constexpr unsigned spirvInputAddressSpace = 7;
+ 		llvm::Type *vec4Ty = llvm::FixedVectorType::get(builder.getFloatTy(), 4);
+ 		global = new llvm::GlobalVariable(
+@@ -713,6 +715,114 @@
+ 	return input;
+ }
+ 
++if (kind == IntrinsicKind::ShaderDerivativeX || kind == IntrinsicKind::ShaderDerivativeY) {
++	// How a fragment value changes from one pixel to the next across (x) or
++	// down (y) the screen.
++	llvm::Value *value = nullptr;
++	if (!generateRuntimeValue(args[1], value))
++		return CodegenResult::failure();
++	DataType floatType = {DataType::Kind::Float, 4};
++	value = ensureType(context, value, finalizedExpressionType(context, args[1]), floatType);
++	llvm::Function *derivative = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule,
++		kind == IntrinsicKind::ShaderDerivativeX ? llvm::Intrinsic::spv_ddx : llvm::Intrinsic::spv_ddy,
++		{builder.getFloatTy()}
++	);
++	return builder.CreateCall(derivative, {value});
++}
++
++if (kind == IntrinsicKind::ShaderBufferRead) {
++	// Float `index` of the read-only storage buffer at `binding` in descriptor
++	// set zero: shader parameters in one buffer, and data looked up per
++	// vertex or per element.
++	std::optional<std::int64_t> bindingValue =
++		getCompileTimeIntegerValue(resolveStoredCompileTimeValue(args[1], context.flexBindingFrames));
++	requireCompilerInvariant(
++		bindingValue && *bindingValue >= 0 && *bindingValue < 1000, "shader buffer read reached codegen without a binding"
++	);
++	llvm::Value *index = nullptr;
++	if (!generateRuntimeValue(args[2], index))
++		return CodegenResult::failure();
++	DataType indexType = {DataType::Kind::Int, 4};
++	index = ensureType(context, index, finalizedExpressionType(context, args[2]), indexType);
++	llvm::LLVMContext &llvmContext = *context.llvmContext;
++	llvm::Type *f32Ty = builder.getFloatTy();
++	// spirv.VulkanBuffer: a runtime array of floats in StorageBuffer storage,
++	// read-only.
++	llvm::Type *bufferTy =
++		llvm::TargetExtType::get(llvmContext, "spirv.VulkanBuffer", {llvm::ArrayType::get(f32Ty, 0)}, {12, 0});
++	std::string bindingText = std::to_string(*bindingValue);
++	llvm::GlobalVariable *bufferName = context.llvmModule->getGlobalVariable("dynlex_buffer_name_" + bindingText, true);
++	llvm::Value *nameValue = bufferName ? static_cast<llvm::Value *>(bufferName)
++										: builder.CreateGlobalString("dynlex_buffer_" + bindingText, "dynlex_buffer_name_" + bindingText);
++	llvm::Function *handleFunction = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule, llvm::Intrinsic::spv_resource_handlefrombinding, {bufferTy}
++	);
++	llvm::Value *handle = builder.CreateCall(
++		handleFunction,
++		{builder.getInt32(0), builder.getInt32(static_cast<std::uint32_t>(*bindingValue)), builder.getInt32(1),
++		 builder.getInt32(0), nameValue}
++	);
++	llvm::Type *pointerTy = llvm::PointerType::get(llvmContext, 11);
++	llvm::Function *pointerFunction = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule, llvm::Intrinsic::spv_resource_getpointer, {pointerTy, bufferTy, builder.getInt32Ty()}
++	);
++	llvm::Value *element = builder.CreateCall(pointerFunction, {handle, index});
++	return builder.CreateLoad(f32Ty, element, "buffer_value");
++}
++
++if (kind == IntrinsicKind::ShaderSample) {
++	// A 2D texture sampled at (u, v): a sampled image at the binding given and
++	// its sampler at the next binding, both in descriptor set zero.
++	std::optional<std::int64_t> bindingValue =
++		getCompileTimeIntegerValue(resolveStoredCompileTimeValue(args[1], context.flexBindingFrames));
++	requireCompilerInvariant(
++		bindingValue && *bindingValue >= 0 && *bindingValue < 1000, "shader sample reached codegen without a binding"
++	);
++	llvm::Value *u = nullptr;
++	llvm::Value *v = nullptr;
++	if (!generateRuntimeValue(args[2], u) || !generateRuntimeValue(args[3], v))
++		return CodegenResult::failure();
++	DataType floatType = {DataType::Kind::Float, 4};
++	u = ensureType(context, u, finalizedExpressionType(context, args[2]), floatType);
++	v = ensureType(context, v, finalizedExpressionType(context, args[3]), floatType);
++	llvm::LLVMContext &llvmContext = *context.llvmContext;
++	llvm::Type *f32Ty = builder.getFloatTy();
++	llvm::Type *i32Ty = builder.getInt32Ty();
++	// spirv.Image: sampled type float, Dim 2D, depth unknown, not arrayed, not
++	// multisampled, sampled, format unknown.
++	llvm::Type *imageTy = llvm::TargetExtType::get(llvmContext, "spirv.Image", {f32Ty}, {1, 2, 0, 0, 1, 0});
++	llvm::Type *samplerTy = llvm::TargetExtType::get(llvmContext, "spirv.Sampler");
++	std::string bindingText = std::to_string(*bindingValue);
++	llvm::Value *imageName = builder.CreateGlobalString("dynlex_image_" + bindingText, "dynlex_image_name_" + bindingText);
++	llvm::Value *samplerName =
++		builder.CreateGlobalString("dynlex_sampler_" + bindingText, "dynlex_sampler_name_" + bindingText);
++	llvm::Function *handleImage = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule, llvm::Intrinsic::spv_resource_handlefrombinding, {imageTy}
++	);
++	llvm::Function *handleSampler = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule, llvm::Intrinsic::spv_resource_handlefrombinding, {samplerTy}
++	);
++	std::uint32_t binding = static_cast<std::uint32_t>(*bindingValue);
++	llvm::Value *image = builder.CreateCall(
++		handleImage, {builder.getInt32(0), builder.getInt32(binding), builder.getInt32(1), builder.getInt32(0), imageName}
++	);
++	llvm::Value *sampler = builder.CreateCall(
++		handleSampler,
++		{builder.getInt32(0), builder.getInt32(binding + 1), builder.getInt32(1), builder.getInt32(0), samplerName}
++	);
++	llvm::Type *vec2Ty = llvm::FixedVectorType::get(f32Ty, 2);
++	llvm::Type *ivec2Ty = llvm::FixedVectorType::get(i32Ty, 2);
++	llvm::Type *vec4Ty = llvm::FixedVectorType::get(f32Ty, 4);
++	llvm::Value *coordinates = llvm::Constant::getNullValue(vec2Ty);
++	coordinates = builder.CreateInsertElement(coordinates, u, builder.getInt32(0));
++	coordinates = builder.CreateInsertElement(coordinates, v, builder.getInt32(1));
++	llvm::Function *sample = llvm::Intrinsic::getOrInsertDeclaration(
++		context.llvmModule, llvm::Intrinsic::spv_resource_sample, {vec4Ty, imageTy, samplerTy, vec2Ty, ivec2Ty}
++	);
++	return builder.CreateCall(sample, {image, sampler, coordinates, llvm::Constant::getNullValue(ivec2Ty)});
++}
++
+ if (kind == IntrinsicKind::ShaderUniform) {
+ 	// The SPIR-V patcher wraps this scalar global in a set-zero UBO at the explicit binding.
+ 	std::string uniformName = getCompileTimeString(context, args[1]);
+diff -ruN a/src/cpp/compiler/codegen/codegenIntrinsics.cpp b/src/cpp/compiler/codegen/codegenIntrinsics.cpp
+--- a/src/cpp/compiler/codegen/codegenIntrinsics.cpp
++++ b/src/cpp/compiler/codegen/codegenIntrinsics.cpp
+@@ -1,4 +1,6 @@
+ #include "arithmeticTypePromotion.h"
++#include "llvm/IR/DerivedTypes.h"
++#include "llvm/IR/IntrinsicsSPIRV.h"
+ #include "atomicIntrinsics.h"
+ #include "classDefinition.h"
+ #include "codegenInternal.h"
+diff -ruN a/src/cpp/compiler/codegen/spirv.cpp b/src/cpp/compiler/codegen/spirv.cpp
+--- a/src/cpp/compiler/codegen/spirv.cpp
++++ b/src/cpp/compiler/codegen/spirv.cpp
+@@ -1,4 +1,5 @@
+ #include "spirv.h"
++#include "intrinsicInfo.h"
+ #include "compilerUtils.h"
+ #include "parseContext.h"
+ #include "targetOptions.h"
+@@ -240,14 +241,22 @@
+ 
+ 	// First pass: collect all OpVariable result IDs so we only match names against actual variables
+ 	std::unordered_set<uint32_t> variableIds;
++	// Resource variables the backend declared itself (sampled images,
++	// samplers and storage buffers) join the entry point's
++	// interface, which SPIR-V 1.4 and later require to list every global used.
++	std::vector<uint32_t> resourceIds;
+ 	size_t pos = 5;
+ 	while (pos < binary.size()) {
+ 		uint32_t wc = spvWordCount(binary[pos]);
+ 		uint32_t op = spvOpcode(binary[pos]);
+ 		if (wc == 0)
+ 			break;
+-		if (op == spvOpVariable && wc >= 4)
++		if (op == spvOpVariable && wc >= 4) {
+ 			variableIds.insert(binary[pos + 2]); // result ID
++			// UniformConstant (images, samplers) and StorageBuffer.
++			if (binary[pos + 3] == 0 || binary[pos + 3] == 12)
++				resourceIds.push_back(binary[pos + 2]);
++		}
+ 		pos += wc;
+ 	}
+ 
+@@ -318,13 +327,15 @@
+ 
+ 			// Then emit the EntryPoint
+ 			std::vector<uint32_t> nameWords = encodeSpvString("main");
+-			uint32_t entryWc = 3 + nameWords.size() + vars.size();
++			uint32_t entryWc = 3 + nameWords.size() + vars.size() + resourceIds.size();
+ 			output.push_back(spvInstWord(entryWc, spvOpEntryPoint));
+ 			output.push_back(executionModel);
+ 			output.push_back(mainId);
+ 			output.insert(output.end(), nameWords.begin(), nameWords.end());
+ 			for (const auto &v : vars)
+ 				output.push_back(v.id);
++			for (uint32_t resourceId : resourceIds)
++				output.push_back(resourceId);
+ 			if (executionModel == 5) { // GLCompute, with a fixed 64-thread workgroup.
+ 				output.insert(output.end(), {spvInstWord(6, spvOpExecutionMode), mainId, 17, 64, 1, 1});
+ 			}
+@@ -660,6 +671,12 @@
+ 	std::vector<ShaderIoVar> ioVars;
+ 	if (isVertex) {
+ 		ioVars.push_back(makeIoVar("in_Position", spvStorageClassInput, false, 0));
++		// Extra vertex attributes, at the locations their names give.
++		for (uint32_t location = 1; location <= maxShaderVertexAttribute; location++) {
++			std::string attributeName = "in_Attribute" + std::to_string(location);
++			if (context.llvmModule->getGlobalVariable(attributeName))
++				ioVars.push_back(makeIoVar(attributeName, spvStorageClassInput, false, location));
++		}
+ 		ioVars.push_back(makeIoVar("gl_Position", spvStorageClassOutput, true, 0));
+ 	} else if (!isCompute) {
+ 		ioVars.push_back(makeIoVar("gl_FragCoord", spvStorageClassInput, true, 15));
+diff -ruN a/src/cpp/compiler/intrinsicInfo.h b/src/cpp/compiler/intrinsicInfo.h
+--- a/src/cpp/compiler/intrinsicInfo.h
++++ b/src/cpp/compiler/intrinsicInfo.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <string_view>
+ #include <string>
+ #include <unordered_map>
+ 
+@@ -74,6 +75,10 @@
+ 	X(ShaderInterpolantOutput, "shader interpolant output", 6, IntrinsicReturnKind::Void, 0, 0, IntrinsicPurityKind::Impure)   \
+ 	X(ShaderInterpolantInput, "shader interpolant input", 2, IntrinsicReturnKind::Custom, 0, 0, IntrinsicPurityKind::Impure)   \
+ 	X(ShaderUniform, "shader uniform", 3, IntrinsicReturnKind::Float, 1, 2, IntrinsicPurityKind::Impure)                       \
++	X(ShaderSample, "shader sample", 4, IntrinsicReturnKind::Custom, 1, 1, IntrinsicPurityKind::Impure)                       \
++	X(ShaderBufferRead, "shader buffer read", 3, IntrinsicReturnKind::Float, 1, 1, IntrinsicPurityKind::Impure)               \
++	X(ShaderDerivativeX, "shader derivative x", 2, IntrinsicReturnKind::Float, 0, 0, IntrinsicPurityKind::Impure)             \
++	X(ShaderDerivativeY, "shader derivative y", 2, IntrinsicReturnKind::Float, 0, 0, IntrinsicPurityKind::Impure)             \
+ 	X(ExtractElement, "extract element", 3, IntrinsicReturnKind::Custom, 0, 0, IntrinsicPurityKind::Pure)                      \
+ 	X(InsertElement, "insert element", 4, IntrinsicReturnKind::Custom, 0, 0, IntrinsicPurityKind::Pure)                        \
+ 	X(Function, "function", 2, IntrinsicReturnKind::Custom, 1, 1, IntrinsicPurityKind::Pure)                                   \
+@@ -273,10 +278,21 @@
+ 
+ constexpr bool isAlwaysPureIntrinsicKind(IntrinsicKind kind) { return intrinsicPurityKind(kind) == IntrinsicPurityKind::Pure; }
+ 
++// Vertex shaders read extra per-vertex inputs named "Attribute1" to
++// "Attribute7", at the SPIR-V input locations their digits give; location 0
++// is "Position".
++constexpr unsigned maxShaderVertexAttribute = 7;
++constexpr bool isShaderVertexAttributeName(std::string_view name) {
++	return name.size() == 10 && name.substr(0, 9) == "Attribute" && name[9] >= '1' &&
++		   name[9] < static_cast<char>('1' + maxShaderVertexAttribute);
++}
++
+ constexpr bool isShaderRuntimeIntrinsicKind(IntrinsicKind kind) {
+ 	return kind == IntrinsicKind::ShaderInput || kind == IntrinsicKind::ShaderInterpolantInput ||
+ 		   kind == IntrinsicKind::ShaderInterpolantOutput || kind == IntrinsicKind::ShaderUniform ||
+-		   kind == IntrinsicKind::ShaderOutput;
++		   kind == IntrinsicKind::ShaderOutput || kind == IntrinsicKind::ShaderSample ||
++		   kind == IntrinsicKind::ShaderBufferRead || kind == IntrinsicKind::ShaderDerivativeX ||
++		   kind == IntrinsicKind::ShaderDerivativeY;
+ }
+ 
+ static_assert(isAlwaysPureIntrinsicKind(IntrinsicKind::Multiply));
+diff -ruN a/src/cpp/compiler/type_inference/intrinsic_preflight_inference.inl b/src/cpp/compiler/type_inference/intrinsic_preflight_inference.inl
+--- a/src/cpp/compiler/type_inference/intrinsic_preflight_inference.inl
++++ b/src/cpp/compiler/type_inference/intrinsic_preflight_inference.inl
+@@ -32,7 +32,7 @@
+ 			break;
+ 		}
+ 		if (kind == IntrinsicKind::ShaderInput) {
+-			bool knownInput = *name == "FragCoord" || *name == "Position";
++			bool knownInput = *name == "FragCoord" || *name == "Position" || isShaderVertexAttributeName(*name);
+ 			if (!knownInput) {
+ 				failWithDetail(
+ 					expr->arguments[1]->range,
+@@ -47,7 +47,8 @@
+ 			if (context.parseContext.options.emitSPIRV) {
+ 				bool stageProvidesInput =
+ 					context.parseContext.options.shaderStage != ParseContext::ShaderStage::Compute &&
+-					(*name == "Position") == (context.parseContext.options.shaderStage == ParseContext::ShaderStage::Vertex);
++					(*name == "Position" || isShaderVertexAttributeName(*name)) ==
++						(context.parseContext.options.shaderStage == ParseContext::ShaderStage::Vertex);
+ 				if (!stageProvidesInput) {
+ 					failWithDetail(
+ 						expr->arguments[1]->range,
+diff -ruN a/src/cpp/compiler/type_inference/intrinsics/aggregate_inference.inl b/src/cpp/compiler/type_inference/intrinsics/aggregate_inference.inl
+--- a/src/cpp/compiler/type_inference/intrinsics/aggregate_inference.inl
++++ b/src/cpp/compiler/type_inference/intrinsics/aggregate_inference.inl
+@@ -1,5 +1,5 @@
+ bool handledAggregateIntrinsic = true;
+-if (kind == IntrinsicKind::ShaderInput) {
++if (kind == IntrinsicKind::ShaderInput || kind == IntrinsicKind::ShaderSample) {
+ 	expr->type = {DataType::Kind::Vector};
+ 	expr->type.arraySize = 4;
+ 	expr->type.arrayElementType = std::make_shared<DataType>(DataType::Kind::Float, 4);
+diff -ruN a/src/cpp/compiler/type_inference/intrinsics/shader_runtime_inference.inl b/src/cpp/compiler/type_inference/intrinsics/shader_runtime_inference.inl
+--- a/src/cpp/compiler/type_inference/intrinsics/shader_runtime_inference.inl
++++ b/src/cpp/compiler/type_inference/intrinsics/shader_runtime_inference.inl
+@@ -25,7 +25,7 @@
+ 			context.fail(buildFailureDetailDiagnostic(expr->arguments[1]->range, detail), 0);
+ 		};
+ 		if (kind == IntrinsicKind::ShaderInput) {
+-			bool knownInput = *name == "FragCoord" || *name == "Position";
++			bool knownInput = *name == "FragCoord" || *name == "Position" || isShaderVertexAttributeName(*name);
+ 			if (!knownInput) {
+ 				failWithDetail("unknown shader input");
+ 				return false;
+@@ -33,7 +33,8 @@
+ 			if (context.parseContext.options.emitSPIRV) {
+ 				bool stageProvidesInput =
+ 					context.parseContext.options.shaderStage != ParseContext::ShaderStage::Compute &&
+-					(*name == "Position") == (context.parseContext.options.shaderStage == ParseContext::ShaderStage::Vertex);
++					(*name == "Position" || isShaderVertexAttributeName(*name)) ==
++						(context.parseContext.options.shaderStage == ParseContext::ShaderStage::Vertex);
+ 				if (!stageProvidesInput) {
+ 					failWithDetail("shader input unavailable");
+ 					return false;
+diff -ruN a/src/cpp/compiler/type_inference/type_resolution.inl b/src/cpp/compiler/type_inference/type_resolution.inl
+--- a/src/cpp/compiler/type_inference/type_resolution.inl
++++ b/src/cpp/compiler/type_inference/type_resolution.inl
+@@ -401,7 +401,7 @@
+ 			DataType aggregateType = resolveKnownExpressionType(resolved->arguments[1], effectiveBindingFrameStack);
+ 			if (aggregateType.hasAggregateElementType())
+ 				return aggregateType;
+-		} else if (kind == IntrinsicKind::ShaderInput) {
++		} else if (kind == IntrinsicKind::ShaderInput || kind == IntrinsicKind::ShaderSample) {
+ 			DataType vectorType{DataType::Kind::Vector};
+ 			vectorType.arraySize = 4;
+ 			vectorType.arrayElementType = std::make_shared<DataType>(DataType::Kind::Float, 4);
+--- a/lib/shader.dl
++++ b/lib/shader.dl
+@@ -43,6 +43,24 @@
+     replacement:
+         @intrinsic("extract element", @intrinsic("shader input", "Position"), 3)
+ 
++# Extra per-vertex inputs, named "Attribute1" to "Attribute7": each is read
++# at the vertex input location its digit gives (location 0 is the position).
++function the vertex input named {a value:name} x:
++    replacement:
++        @intrinsic("extract element", @intrinsic("shader input", name), 0)
++
++function the vertex input named {a value:name} y:
++    replacement:
++        @intrinsic("extract element", @intrinsic("shader input", name), 1)
++
++function the vertex input named {a value:name} z:
++    replacement:
++        @intrinsic("extract element", @intrinsic("shader input", name), 2)
++
++function the vertex input named {a value:name} w:
++    replacement:
++        @intrinsic("extract element", @intrinsic("shader input", name), 3)
++
+ function set the output position with x {a value:horizontal}, y {a value:vertical}, z {a value:depth} and w {a value:magnitude}:
+     replacement:
+         @intrinsic(

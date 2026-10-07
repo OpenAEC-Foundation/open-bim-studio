@@ -1,0 +1,521 @@
+# SPDX-License-Identifier: MPL-2.0
+# A GPU-resident triangle renderer written against libvulkan and GLFW
+# directly, with no C runtime in between: a window, a swapchain, a depth
+# buffer, one pipeline from DynLex-compiled SPIR-V shaders, persistent vertex
+# and index buffers, and the shaders' parameters as the floats of one storage
+# buffer at binding 0.
+#
+# Vertices are 20 bytes: the position as three 32-bit floats (location 0), the
+# unit normal as four signed bytes (location 1, read as -1..1) and the colour
+# as four unsigned bytes (location 2, read as 0..1). Buffers live in
+# host-visible memory, which on integrated GPUs is the GPU's own memory, and
+# are written in place through a mapping.
+import lib/vulkan/structs.dl
+
+function vk vertex size:
+    replacement:
+        20
+
+# A failed Vulkan or GLFW step names itself and stops the program.
+function check vk {integer:result} doing {a string:step}:
+    execute:
+        if result != 0:
+            print ((the string form of "Vulkan failed: ") + step) + ((the string form of " (") + ((the string form of result) + (the string form of ")"))) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+
+local function the vk u32 at {integer:offset} in {pointer:base}:
+    execute:
+        return (@intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a 32 bit unsigned integer)) as an integer
+
+local function the vk u64 at {integer:offset} in {pointer:base}:
+    execute:
+        return @intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a 64 bit unsigned integer)
+
+local function the vk pointer at {integer:offset} in {pointer:base}:
+    execute:
+        return @intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a pointer)
+
+# A zeroed block of `size` bytes from libc, for Vulkan to fill.
+function a vk block of {integer:size} bytes:
+    execute:
+        return @intrinsic("call", "libc", "calloc", a pointer, (size as a word sized unsigned integer), 1 as a word sized unsigned integer)
+
+function free vk block {pointer:block}:
+    execute:
+        @intrinsic("call", "libc", "free", nothing, block)
+
+class:
+    patterns:
+        [a|] vk buffer record
+    members:
+        handle as a 64 bit unsigned integer
+        memory as a 64 bit unsigned integer
+        mapped as a pointer
+        size as a 64 bit unsigned integer
+
+class:
+    patterns:
+        [a|] vk renderer record
+    members:
+        window as a pointer
+        instance as a pointer
+        surface as a 64 bit unsigned integer
+        physical as a pointer
+        device as a pointer
+        queue as a pointer
+        family as a 32 bit unsigned integer
+        memoryProperties as a pointer
+        swapchain as a 64 bit unsigned integer
+        format as a 32 bit unsigned integer
+        width as a 32 bit unsigned integer
+        height as a 32 bit unsigned integer
+        imageCount as a 32 bit unsigned integer
+        images as a pointer
+        views as a pointer
+        framebuffers as a pointer
+        depthImage as a 64 bit unsigned integer
+        depthMemory as a 64 bit unsigned integer
+        depthView as a 64 bit unsigned integer
+        renderPass as a 64 bit unsigned integer
+        setLayout as a 64 bit unsigned integer
+        pipelineLayout as a 64 bit unsigned integer
+        pipeline as a 64 bit unsigned integer
+        descriptorPool as a 64 bit unsigned integer
+        descriptorSet as a 64 bit unsigned integer
+        uniforms as a vk buffer record
+        uniformCount as an integer
+        commandPool as a 64 bit unsigned integer
+        commands as a pointer
+        imageReady as a 64 bit unsigned integer
+        renderDone as a 64 bit unsigned integer
+        inFlight as a 64 bit unsigned integer
+        vertices as a vk buffer record
+        indices as a vk buffer record
+        indexCount as a 32 bit unsigned integer
+        presentMode as a 32 bit unsigned integer
+
+# The index of a memory type allowed by `allowedBits` with all of `wanted`.
+local function the vk memory type for {integer:allowedBits} with {integer:wanted} in {vk renderer record:renderer}:
+    execute:
+        set count to the vk u32 at 0 in renderer's memoryProperties
+        loop index from 0 to count:
+            set flags to the vk u32 at (4 + (index * 8)) in renderer's memoryProperties
+            set allowed to ((allowedBits as a 64 bit integer) shifted right by (index as a 64 bit integer)) bitwise and (1 as a 64 bit integer)
+            if (allowed = (1 as a 64 bit integer)) and ((flags bitwise and wanted) = wanted):
+                return index
+        print "Vulkan failed: no suitable memory type" as a line
+        @intrinsic("call", "libc", "exit", nothing, 1)
+        return 0
+
+# A buffer of `size` bytes for `usage`, in host-visible coherent memory,
+# mapped for writing.
+function a vk buffer of {a 64 bit unsigned integer:size} for {integer:usage} in {vk renderer record:renderer}:
+    execute:
+        set info to @intrinsic("construct", a vk buffer create info, 12 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, size, usage as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set handle to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateBuffer", an integer, renderer's device, the address of info, 0 as a pointer, the address of handle)) doing "vkCreateBuffer"
+        set requirements to a vk block of 24 bytes
+        @intrinsic("call", "vulkan", "vkGetBufferMemoryRequirements", nothing, renderer's device, handle, requirements)
+        set typeIndex to the vk memory type for (the vk u32 at 16 in requirements) with 6 in renderer
+        set allocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the vk u64 at 0 in requirements, typeIndex as a 32 bit unsigned integer)
+        free vk block requirements
+        set memory to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, renderer's device, the address of allocation, 0 as a pointer, the address of memory)) doing "vkAllocateMemory"
+        check vk (@intrinsic("call", "vulkan", "vkBindBufferMemory", an integer, renderer's device, handle, memory, 0 as a 64 bit unsigned integer)) doing "vkBindBufferMemory"
+        set mapped to 0 as a pointer
+        check vk (@intrinsic("call", "vulkan", "vkMapMemory", an integer, renderer's device, memory, 0 as a 64 bit unsigned integer, size, 0 as a 32 bit unsigned integer, the address of mapped)) doing "vkMapMemory"
+        return @intrinsic("construct", a vk buffer record, handle, memory, mapped, size)
+
+function release vk buffer {vk buffer record:buffer} in {vk renderer record:renderer}:
+    execute:
+        if buffer's handle = (0 as a 64 bit unsigned integer):
+            return nothing
+        @intrinsic("call", "vulkan", "vkDestroyBuffer", nothing, renderer's device, buffer's handle, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkFreeMemory", nothing, renderer's device, buffer's memory, 0 as a pointer)
+
+local function a vk shader module from {a string:path} in {vk renderer record:renderer}:
+    execute:
+        set handle to @intrinsic("call", "libc", "fopen", a pointer, the data of path, "rb")
+        if handle = (0 as a pointer):
+            print ((the string form of "Vulkan failed: cannot open shader ") + path) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        ignore @intrinsic("call", "libc", "fseek", an integer, handle, 0 as a C long integer, 2)
+        set size to (@intrinsic("call", "libc", "ftell", a C long integer, handle)) as an integer
+        ignore @intrinsic("call", "libc", "fseek", an integer, handle, 0 as a C long integer, 0)
+        set code to a vk block of size bytes
+        ignore @intrinsic("call", "libc", "fread", a word sized unsigned integer, code, 1 as a word sized unsigned integer, size as a word sized unsigned integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", an integer, handle)
+        set info to @intrinsic("construct", a vk shader module create info, 16 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, size as a word sized unsigned integer, code)
+        set compiled to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateShaderModule", an integer, renderer's device, the address of info, 0 as a pointer, the address of compiled)) doing "vkCreateShaderModule"
+        free vk block code
+        return compiled
+
+# The swapchain, its image views, the depth buffer and the framebuffers, for
+# the window's current size.
+local function create vk swapchain for {a pointer to a vk renderer record:renderer}:
+    execute:
+        set capabilities to a vk block of 64 bytes
+        check vk (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", an integer, renderer's physical, renderer's surface, capabilities)) doing "surface capabilities"
+        set width to the vk u32 at 8 in capabilities
+        set height to the vk u32 at 12 in capabilities
+        if (width < 0) or (width > 16384):
+            set pixelWidth to 0
+            set pixelHeight to 0
+            @intrinsic("call", "glfw", "glfwGetFramebufferSize", nothing, renderer's window, the address of pixelWidth, the address of pixelHeight)
+            set width to pixelWidth
+            set height to pixelHeight
+        set wanted to (the vk u32 at 0 in capabilities) + 1
+        set most to the vk u32 at 4 in capabilities
+        if (most > 0) and (wanted > most):
+            set wanted to most
+        set transform to the vk u32 at 40 in capabilities
+        free vk block capabilities
+        set renderer's width to width as a 32 bit unsigned integer
+        set renderer's height to height as a 32 bit unsigned integer
+        set info to @intrinsic("construct", a vk swapchain create info, 1000001000 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, renderer's surface, wanted as a 32 bit unsigned integer, renderer's format, 0 as a 32 bit unsigned integer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, transform as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, renderer's presentMode, 1 as a 32 bit unsigned integer, 0 as a 64 bit unsigned integer)
+        set chain to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateSwapchainKHR", an integer, renderer's device, the address of info, 0 as a pointer, the address of chain)) doing "vkCreateSwapchainKHR"
+        set renderer's swapchain to chain
+        set count to 0 as a 32 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkGetSwapchainImagesKHR", an integer, renderer's device, chain, the address of count, 0 as a pointer)) doing "chain image count"
+        set renderer's imageCount to count
+        set renderer's images to a vk block of ((count as an integer) * 8) bytes
+        check vk (@intrinsic("call", "vulkan", "vkGetSwapchainImagesKHR", an integer, renderer's device, chain, the address of count, renderer's images)) doing "chain images"
+        # The depth buffer.
+        set imageInfo to @intrinsic("construct", a vk image create info, 14 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 32 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer)
+        set depthImage to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateImage", an integer, renderer's device, the address of imageInfo, 0 as a pointer, the address of depthImage)) doing "depth image"
+        set requirements to a vk block of 24 bytes
+        @intrinsic("call", "vulkan", "vkGetImageMemoryRequirements", nothing, renderer's device, depthImage, requirements)
+        set allocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the vk u64 at 0 in requirements, (the vk memory type for (the vk u32 at 16 in requirements) with 1 in (@intrinsic("dereference", renderer))) as a 32 bit unsigned integer)
+        free vk block requirements
+        set depthMemory to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, renderer's device, the address of allocation, 0 as a pointer, the address of depthMemory)) doing "depth memory"
+        check vk (@intrinsic("call", "vulkan", "vkBindImageMemory", an integer, renderer's device, depthImage, depthMemory, 0 as a 64 bit unsigned integer)) doing "depth bind"
+        set renderer's depthImage to depthImage
+        set renderer's depthMemory to depthMemory
+        set depthViewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, depthImage, 1 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        set depthView to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, renderer's device, the address of depthViewInfo, 0 as a pointer, the address of depthView)) doing "depth view"
+        set renderer's depthView to depthView
+        set renderer's views to a vk block of ((count as an integer) * 8) bytes
+        set renderer's framebuffers to a vk block of ((count as an integer) * 8) bytes
+        loop index from 0 to (count as an integer):
+            set viewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, the vk u64 at (index * 8) in renderer's images, 1 as a 32 bit unsigned integer, renderer's format, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            set view to 0 as a 64 bit unsigned integer
+            check vk (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, renderer's device, the address of viewInfo, 0 as a pointer, the address of view)) doing "image view"
+            @intrinsic("store at", ((renderer's views as a pointer to a byte) + (index * 8)) as a pointer to a 64 bit unsigned integer, view)
+            set attachments to an empty list of a 64 bit unsigned integer
+            append view to attachments
+            append depthView to attachments
+            set framebufferInfo to @intrinsic("construct", a vk framebuffer create info, 37 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, renderer's renderPass, 2 as a 32 bit unsigned integer, (the data of attachments) as a pointer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            set framebuffer to 0 as a 64 bit unsigned integer
+            check vk (@intrinsic("call", "vulkan", "vkCreateFramebuffer", an integer, renderer's device, the address of framebufferInfo, 0 as a pointer, the address of framebuffer)) doing "framebuffer"
+            free attachments
+            @intrinsic("store at", ((renderer's framebuffers as a pointer to a byte) + (index * 8)) as a pointer to a 64 bit unsigned integer, framebuffer)
+
+local function destroy vk swapchain of {a pointer to a vk renderer record:renderer}:
+    execute:
+        loop index from 0 to (renderer's imageCount as an integer):
+            @intrinsic("call", "vulkan", "vkDestroyFramebuffer", nothing, renderer's device, the vk u64 at (index * 8) in renderer's framebuffers, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, renderer's device, the vk u64 at (index * 8) in renderer's views, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, renderer's device, renderer's depthView, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyImage", nothing, renderer's device, renderer's depthImage, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkFreeMemory", nothing, renderer's device, renderer's depthMemory, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroySwapchainKHR", nothing, renderer's device, renderer's swapchain, 0 as a pointer)
+        free vk block renderer's images
+        free vk block renderer's views
+        free vk block renderer's framebuffers
+
+# A renderer in a new window `width` x `height` titled `title`, drawing with the
+# SPIR-V shaders at `vertexPath` and `fragmentPath`, which read `uniformCount`
+# float uniforms at bindings 0 up.
+function a new vk renderer titled {a string:title} sized {integer:width} by {integer:height} with shaders {a string:vertexPath} and {a string:fragmentPath} reading {integer:uniformCount} uniforms synchronised {boolean:synchronised}:
+    execute:
+        if (@intrinsic("call", "glfw", "glfwInit", an integer)) = 0:
+            print "GLFW failed to initialise" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        # No client API: Vulkan presents to the window.
+        @intrinsic("call", "glfw", "glfwWindowHint", nothing, 139265, 0)
+        set window to @intrinsic("call", "glfw", "glfwCreateWindow", a pointer, width, height, the data of title, 0 as a pointer, 0 as a pointer)
+        if window = (0 as a pointer):
+            print "GLFW failed to open a window" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        set extensionCount to 0 as a 32 bit unsigned integer
+        set extensions to @intrinsic("call", "glfw", "glfwGetRequiredInstanceExtensions", a pointer, the address of extensionCount)
+        set application to @intrinsic("construct", a vk application info, 0 as a 32 bit unsigned integer, 0 as a pointer, "dynlex-gpu", 1 as a 32 bit unsigned integer, "dynlex", 1 as a 32 bit unsigned integer, 4202496 as a 32 bit unsigned integer)
+        set instanceInfo to @intrinsic("construct", a vk instance create info, 1 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, (the address of application) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, extensionCount, extensions)
+        set instance to 0 as a pointer
+        check vk (@intrinsic("call", "vulkan", "vkCreateInstance", an integer, the address of instanceInfo, 0 as a pointer, the address of instance)) doing "vkCreateInstance"
+        set surface to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "glfw", "glfwCreateWindowSurface", an integer, instance, window, 0 as a pointer, the address of surface)) doing "glfwCreateWindowSurface"
+        # The first physical device with a queue family that draws and presents.
+        set deviceCount to 0 as a 32 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkEnumeratePhysicalDevices", an integer, instance, the address of deviceCount, 0 as a pointer)) doing "device count"
+        set devices to a vk block of ((deviceCount as an integer) * 8) bytes
+        check vk (@intrinsic("call", "vulkan", "vkEnumeratePhysicalDevices", an integer, instance, the address of deviceCount, devices)) doing "devices"
+        set physical to 0 as a pointer
+        set family to -1
+        loop deviceIndex from 0 to (deviceCount as an integer):
+            if family < 0:
+                set candidate to the vk pointer at (deviceIndex * 8) in devices
+                set familyCount to 0 as a 32 bit unsigned integer
+                @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, candidate, the address of familyCount, 0 as a pointer)
+                set families to a vk block of ((familyCount as an integer) * 24) bytes
+                @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, candidate, the address of familyCount, families)
+                loop familyIndex from 0 to (familyCount as an integer):
+                    set supported to 0 as a 32 bit unsigned integer
+                    ignore @intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceSupportKHR", an integer, candidate, familyIndex as a 32 bit unsigned integer, surface, the address of supported)
+                    set graphics to the remainder of (the vk u32 at (familyIndex * 24) in families) divided by 2
+                    if ((graphics = 1) and (supported != (0 as a 32 bit unsigned integer))) and (family < 0):
+                        set family to familyIndex
+                        set physical to candidate
+                free vk block families
+        free vk block devices
+        if family < 0:
+            print "Vulkan failed: no device draws to this window" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        set properties to a vk block of 1024 bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceProperties", nothing, physical, properties)
+        print ((the string form of "GPU: ") + (the string form of (((properties as a pointer to a byte) + 20) as a C string))) as a line
+        free vk block properties
+        set priority to 1.0 as a 32 bit floating-point number
+        set queueInfo to @intrinsic("construct", a vk device queue create info, 2 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, family as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of priority) as a pointer)
+        set swapchainName to "VK_KHR_swapchain"
+        set deviceExtensions to an empty list of a C string
+        append swapchainName to deviceExtensions
+        set deviceInfo to @intrinsic("construct", a vk device create info, 3 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of queueInfo) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the data of deviceExtensions) as a pointer, 0 as a pointer)
+        set device to 0 as a pointer
+        check vk (@intrinsic("call", "vulkan", "vkCreateDevice", an integer, physical, the address of deviceInfo, 0 as a pointer, the address of device)) doing "vkCreateDevice"
+        free deviceExtensions
+        set queue to 0 as a pointer
+        @intrinsic("call", "vulkan", "vkGetDeviceQueue", nothing, device, family as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, the address of queue)
+        set memoryProperties to a vk block of 1024 bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceMemoryProperties", nothing, physical, memoryProperties)
+        # A BGRA format, sRGB-encoded when available.
+        set formatCount to 0 as a 32 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceFormatsKHR", an integer, physical, surface, the address of formatCount, 0 as a pointer)) doing "format count"
+        set formats to a vk block of ((formatCount as an integer) * 8) bytes
+        check vk (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceFormatsKHR", an integer, physical, surface, the address of formatCount, formats)) doing "formats"
+        set format to the vk u32 at 0 in formats
+        loop formatIndex from 0 to (formatCount as an integer):
+            if (the vk u32 at (formatIndex * 8) in formats) = 44:
+                set format to 44
+        free vk block formats
+        set none to @intrinsic("construct", a vk buffer record, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a pointer, 0 as a 64 bit unsigned integer)
+        set made to @intrinsic("construct", a vk renderer record, window, instance, surface, physical, device, queue, family as a 32 bit unsigned integer, memoryProperties, 0 as a 64 bit unsigned integer, format as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a pointer, 0 as a pointer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, none, uniformCount, 0 as a 64 bit unsigned integer, 0 as a pointer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, none, none, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)
+        # FIFO waits for the display; IMMEDIATE, when available, does not, so
+        # a frame's real cost can be measured.
+        if synchronised = false:
+            set modeCount to 0 as a 32 bit unsigned integer
+            ignore @intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfacePresentModesKHR", an integer, physical, surface, the address of modeCount, 0 as a pointer)
+            set modes to a vk block of ((modeCount as an integer) * 4) bytes
+            ignore @intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfacePresentModesKHR", an integer, physical, surface, the address of modeCount, modes)
+            loop modeIndex from 0 to (modeCount as an integer):
+                if (the vk u32 at (modeIndex * 4) in modes) = 0:
+                    set made's presentMode to 0 as a 32 bit unsigned integer
+            free vk block modes
+        # The render pass: clear colour and depth, keep the colour to present.
+        set attachmentList to an empty list of a vk attachment description
+        append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, format as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1000001002 as a 32 bit unsigned integer)) to attachmentList
+        append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer)) to attachmentList
+        set colourReference to @intrinsic("construct", a vk attachment reference, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)
+        set depthReference to @intrinsic("construct", a vk attachment reference, 1 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer)
+        set subpass to @intrinsic("construct", a vk subpass description, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of colourReference) as a pointer, 0 as a pointer, (the address of depthReference) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set dependency to @intrinsic("construct", a vk subpass dependency, 4294967295 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1792 as a 32 bit unsigned integer, 1792 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1280 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set passInfo to @intrinsic("construct", a vk render pass create info, 38 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, (the data of attachmentList) as a pointer, 1 as a 32 bit unsigned integer, (the address of subpass) as a pointer, 1 as a 32 bit unsigned integer, (the address of dependency) as a pointer)
+        set renderPass to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateRenderPass", an integer, device, the address of passInfo, 0 as a pointer, the address of renderPass)) doing "vkCreateRenderPass"
+        free attachmentList
+        set made's renderPass to renderPass
+        create vk swapchain for (the address of made)
+        # Parameters: the floats of one read-only storage buffer at binding 0,
+        # read by the shaders with `shader buffer read`.
+        set parameterBinding to @intrinsic("construct", a vk descriptor set layout binding, 0 as a 32 bit unsigned integer, 7 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 17 as a 32 bit unsigned integer, 0 as a pointer)
+        set layoutInfo to @intrinsic("construct", a vk descriptor set layout create info, 32 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of parameterBinding) as a pointer)
+        set setLayout to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateDescriptorSetLayout", an integer, device, the address of layoutInfo, 0 as a pointer, the address of setLayout)) doing "descriptor set layout"
+        set made's setLayout to setLayout
+        set pipelineLayoutInfo to @intrinsic("construct", a vk pipeline layout create info, 30 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of setLayout) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set pipelineLayout to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreatePipelineLayout", an integer, device, the address of pipelineLayoutInfo, 0 as a pointer, the address of pipelineLayout)) doing "pipeline layout"
+        set made's pipelineLayout to pipelineLayout
+        set poolSize to @intrinsic("construct", a vk descriptor pool size, 7 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        set poolInfo to @intrinsic("construct", a vk descriptor pool create info, 33 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of poolSize) as a pointer)
+        set descriptorPool to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateDescriptorPool", an integer, device, the address of poolInfo, 0 as a pointer, the address of descriptorPool)) doing "descriptor pool"
+        set made's descriptorPool to descriptorPool
+        set allocateInfo to @intrinsic("construct", a vk descriptor set allocate info, 34 as a 32 bit unsigned integer, 0 as a pointer, descriptorPool, 1 as a 32 bit unsigned integer, (the address of setLayout) as a pointer)
+        set descriptorSet to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkAllocateDescriptorSets", an integer, device, the address of allocateInfo, the address of descriptorSet)) doing "descriptor set"
+        set made's descriptorSet to descriptorSet
+        set parameterBytes to (the maximum of uniformCount and 1) * 4
+        set made's uniforms to a vk buffer of (parameterBytes as a 64 bit unsigned integer) for 32 in made
+        set bufferInfo to @intrinsic("construct", a vk descriptor buffer info, made's uniforms's handle, 0 as a 64 bit unsigned integer, parameterBytes as a 64 bit unsigned integer)
+        set write to @intrinsic("construct", a vk write descriptor set, 35 as a 32 bit unsigned integer, 0 as a pointer, descriptorSet, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 7 as a 32 bit unsigned integer, 0 as a pointer, (the address of bufferInfo) as a pointer, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkUpdateDescriptorSets", nothing, device, 1 as a 32 bit unsigned integer, the address of write, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        # The pipeline.
+        set vertexModule to a vk shader module from vertexPath in made
+        set fragmentModule to a vk shader module from fragmentPath in made
+        set stages to an empty list of a vk pipeline shader stage create info
+        append (@intrinsic("construct", a vk pipeline shader stage create info, 18 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, vertexModule, "main", 0 as a pointer)) to stages
+        append (@intrinsic("construct", a vk pipeline shader stage create info, 18 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer, fragmentModule, "main", 0 as a pointer)) to stages
+        set vertexBinding to @intrinsic("construct", a vk vertex input binding description, 0 as a 32 bit unsigned integer, (vk vertex size) as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set attributeList to an empty list of a vk vertex input attribute description
+        append (@intrinsic("construct", a vk vertex input attribute description, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 106 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)) to attributeList
+        append (@intrinsic("construct", a vk vertex input attribute description, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 38 as a 32 bit unsigned integer, 12 as a 32 bit unsigned integer)) to attributeList
+        append (@intrinsic("construct", a vk vertex input attribute description, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 37 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer)) to attributeList
+        set vertexInput to @intrinsic("construct", a vk pipeline vertex input state create info, 19 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of vertexBinding) as a pointer, 3 as a 32 bit unsigned integer, (the data of attributeList) as a pointer)
+        set assembly to @intrinsic("construct", a vk pipeline input assembly state create info, 20 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set viewportState to @intrinsic("construct", a vk pipeline viewport state create info, 22 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, 0 as a pointer)
+        # Faces turned away from the viewer are not drawn; counter-clockwise
+        # faces face the viewer once the y flip of Vulkan's clip space is in
+        # the matrix.
+        set raster to @intrinsic("construct", a vk pipeline rasterization state create info, 23 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set multisample to @intrinsic("construct", a vk pipeline multisample state create info, 24 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0.0 as a 32 bit floating-point number, 0 as a pointer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set zero to 0 as a 32 bit unsigned integer
+        set depthState to @intrinsic("construct", a vk pipeline depth stencil state create info, 25 as a 32 bit unsigned integer, 0 as a pointer, zero, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set blendAttachment to @intrinsic("construct", a vk pipeline color blend attachment state, zero, zero, zero, zero, zero, zero, zero, 15 as a 32 bit unsigned integer)
+        set blend to @intrinsic("construct", a vk pipeline color blend state create info, 26 as a 32 bit unsigned integer, 0 as a pointer, zero, zero, zero, 1 as a 32 bit unsigned integer, (the address of blendAttachment) as a pointer, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number)
+        set dynamicList to an empty list of a 32 bit unsigned integer
+        append zero to dynamicList
+        append (1 as a 32 bit unsigned integer) to dynamicList
+        set dynamicState to @intrinsic("construct", a vk pipeline dynamic state create info, 27 as a 32 bit unsigned integer, 0 as a pointer, zero, 2 as a 32 bit unsigned integer, (the data of dynamicList) as a pointer)
+        set pipelineInfo to @intrinsic("construct", a vk graphics pipeline create info, 28 as a 32 bit unsigned integer, 0 as a pointer, zero, 2 as a 32 bit unsigned integer, (the data of stages) as a pointer, (the address of vertexInput) as a pointer, (the address of assembly) as a pointer, 0 as a pointer, (the address of viewportState) as a pointer, (the address of raster) as a pointer, (the address of multisample) as a pointer, (the address of depthState) as a pointer, (the address of blend) as a pointer, (the address of dynamicState) as a pointer, pipelineLayout, renderPass, zero, 0 as a 64 bit unsigned integer, -1)
+        set pipeline to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateGraphicsPipelines", an integer, device, 0 as a 64 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of pipelineInfo, 0 as a pointer, the address of pipeline)) doing "vkCreateGraphicsPipelines"
+        set made's pipeline to pipeline
+        free stages
+        free attributeList
+        free dynamicList
+        @intrinsic("call", "vulkan", "vkDestroyShaderModule", nothing, device, vertexModule, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyShaderModule", nothing, device, fragmentModule, 0 as a pointer)
+        # Commands and synchronisation, one frame in flight.
+        set commandPoolInfo to @intrinsic("construct", a vk command pool create info, 39 as a 32 bit unsigned integer, 0 as a pointer, 2 as a 32 bit unsigned integer, family as a 32 bit unsigned integer)
+        set commandPool to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateCommandPool", an integer, device, the address of commandPoolInfo, 0 as a pointer, the address of commandPool)) doing "command pool"
+        set made's commandPool to commandPool
+        set commandInfo to @intrinsic("construct", a vk command buffer allocate info, 40 as a 32 bit unsigned integer, 0 as a pointer, commandPool, zero, 1 as a 32 bit unsigned integer)
+        set commands to 0 as a pointer
+        check vk (@intrinsic("call", "vulkan", "vkAllocateCommandBuffers", an integer, device, the address of commandInfo, the address of commands)) doing "command buffer"
+        set made's commands to commands
+        set semaphoreInfo to @intrinsic("construct", a vk plain create info, 9 as a 32 bit unsigned integer, 0 as a pointer, zero)
+        set imageReady to 0 as a 64 bit unsigned integer
+        set renderDone to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateSemaphore", an integer, device, the address of semaphoreInfo, 0 as a pointer, the address of imageReady)) doing "semaphore"
+        check vk (@intrinsic("call", "vulkan", "vkCreateSemaphore", an integer, device, the address of semaphoreInfo, 0 as a pointer, the address of renderDone)) doing "semaphore"
+        set fenceInfo to @intrinsic("construct", a vk plain create info, 8 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer)
+        set inFlight to 0 as a 64 bit unsigned integer
+        check vk (@intrinsic("call", "vulkan", "vkCreateFence", an integer, device, the address of fenceInfo, 0 as a pointer, the address of inFlight)) doing "fence"
+        set made's imageReady to imageReady
+        set made's renderDone to renderDone
+        set made's inFlight to inFlight
+        return made
+
+# Replaces the mesh: `vertexCount` vertices and `indexCount` indices, both
+# written afterwards through `the vk vertex data of` and `the vk index data
+# of`.
+function prepare vk mesh of {integer:vertexCount} vertices and {integer:indexCount} indices in {a pointer to a vk renderer record:renderer}:
+    execute:
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, renderer's device)
+        release vk buffer renderer's vertices in (@intrinsic("dereference", renderer))
+        release vk buffer renderer's indices in (@intrinsic("dereference", renderer))
+        set renderer's vertices to a vk buffer of (((the maximum of vertexCount and 1) * (vk vertex size)) as a 64 bit unsigned integer) for 128 in (@intrinsic("dereference", renderer))
+        set renderer's indices to a vk buffer of (((the maximum of indexCount and 1) * 4) as a 64 bit unsigned integer) for 64 in (@intrinsic("dereference", renderer))
+        set renderer's indexCount to indexCount as a 32 bit unsigned integer
+
+# Writes vertex `index`: its position, unit normal and colour (0..255).
+function put vk vertex {integer:index} at {a 32 bit floating-point number:x}, {a 32 bit floating-point number:y} and {a 32 bit floating-point number:z} facing {cad vector3:normal} coloured {integer:red}, {integer:green} and {integer:blue} in {vk renderer record:renderer}:
+    execute:
+        set base to (renderer's vertices's mapped as a pointer to a byte) + (index * (vk vertex size))
+        @intrinsic("store at", base as a pointer to a 32 bit floating-point number, x)
+        @intrinsic("store at", (base + 4) as a pointer to a 32 bit floating-point number, y)
+        @intrinsic("store at", (base + 8) as a pointer to a 32 bit floating-point number, z)
+        @intrinsic("store at", (base + 12) as a pointer to a byte, ((@intrinsic("round", normal's x * 127.0)) as an integer) as a byte)
+        @intrinsic("store at", (base + 13) as a pointer to a byte, ((@intrinsic("round", normal's y * 127.0)) as an integer) as a byte)
+        @intrinsic("store at", (base + 14) as a pointer to a byte, ((@intrinsic("round", normal's z * 127.0)) as an integer) as a byte)
+        @intrinsic("store at", (base + 15) as a pointer to a byte, 0 as a byte)
+        @intrinsic("store at", (base + 16) as a pointer to a byte, red as a byte)
+        @intrinsic("store at", (base + 17) as a pointer to a byte, green as a byte)
+        @intrinsic("store at", (base + 18) as a pointer to a byte, blue as a byte)
+        @intrinsic("store at", (base + 19) as a pointer to a byte, 255 as a byte)
+
+function put vk index {integer:slot} as {integer:vertexIndex} in {vk renderer record:renderer}:
+    execute:
+        @intrinsic("store at", ((renderer's indices's mapped as a pointer to a byte) + (slot * 4)) as a pointer to a 32 bit unsigned integer, vertexIndex as a 32 bit unsigned integer)
+
+# Sets float uniform `binding` for the next frame.
+function set vk uniform {integer:binding} to {a 64 bit floating-point number:value} in {vk renderer record:renderer}:
+    execute:
+        @intrinsic("store at", ((renderer's uniforms's mapped as a pointer to a byte) + (binding * 4)) as a pointer to a 32 bit floating-point number, value as a 32 bit floating-point number)
+
+# Waits until the previous frame is done, so uniforms may be written.
+function wait for vk frame in {vk renderer record:renderer}:
+    execute:
+        set fence to renderer's inFlight
+        ignore @intrinsic("call", "vulkan", "vkWaitForFences", an integer, renderer's device, 1 as a 32 bit unsigned integer, the address of fence, 1 as a 32 bit unsigned integer, 18446744073709551615 as a 64 bit unsigned integer)
+
+# Draws the mesh into the window and presents it, cleared to the colour given.
+# Rebuilds the swapchain when the window changed size.
+function draw vk frame cleared to {a 64 bit floating-point number:red}, {a 64 bit floating-point number:green} and {a 64 bit floating-point number:blue} in {a pointer to a vk renderer record:renderer}:
+    execute:
+        set fence to renderer's inFlight
+        ignore @intrinsic("call", "vulkan", "vkWaitForFences", an integer, renderer's device, 1 as a 32 bit unsigned integer, the address of fence, 1 as a 32 bit unsigned integer, 18446744073709551615 as a 64 bit unsigned integer)
+        set imageIndex to 0 as a 32 bit unsigned integer
+        set acquired to @intrinsic("call", "vulkan", "vkAcquireNextImageKHR", an integer, renderer's device, renderer's swapchain, 18446744073709551615 as a 64 bit unsigned integer, renderer's imageReady, 0 as a 64 bit unsigned integer, the address of imageIndex)
+        if acquired = -1000001004:
+            ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, renderer's device)
+            destroy vk swapchain of renderer
+            create vk swapchain for renderer
+            return nothing
+        ignore @intrinsic("call", "vulkan", "vkResetFences", an integer, renderer's device, 1 as a 32 bit unsigned integer, the address of fence)
+        set commands to renderer's commands
+        ignore @intrinsic("call", "vulkan", "vkResetCommandBuffer", an integer, commands, 0 as a 32 bit unsigned integer)
+        set beginInfo to @intrinsic("construct", a vk command buffer begin info, 42 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, 0 as a pointer)
+        check vk (@intrinsic("call", "vulkan", "vkBeginCommandBuffer", an integer, commands, the address of beginInfo)) doing "begin commands"
+        set clears to a vk block of 32 bytes
+        @intrinsic("store at", clears as a pointer to a 32 bit floating-point number, red as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 4) as a pointer to a 32 bit floating-point number, green as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 8) as a pointer to a 32 bit floating-point number, blue as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 12) as a pointer to a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 16) as a pointer to a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set passBegin to @intrinsic("construct", a vk render pass begin info, 43 as a 32 bit unsigned integer, 0 as a pointer, renderer's renderPass, the vk u64 at ((imageIndex as an integer) * 8) in renderer's framebuffers, 0, 0, renderer's width, renderer's height, 2 as a 32 bit unsigned integer, clears)
+        @intrinsic("call", "vulkan", "vkCmdBeginRenderPass", nothing, commands, the address of passBegin, 0 as a 32 bit unsigned integer)
+        @intrinsic("call", "vulkan", "vkCmdBindPipeline", nothing, commands, 0 as a 32 bit unsigned integer, renderer's pipeline)
+        set viewport to @intrinsic("construct", a vk viewport, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, (renderer's width as a 64 bit floating-point number) as a 32 bit floating-point number, (renderer's height as a 64 bit floating-point number) as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        @intrinsic("call", "vulkan", "vkCmdSetViewport", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of viewport)
+        set scissor to @intrinsic("construct", a vk rectangle, 0, 0, renderer's width, renderer's height)
+        @intrinsic("call", "vulkan", "vkCmdSetScissor", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of scissor)
+        if renderer's indexCount > (0 as a 32 bit unsigned integer):
+            set descriptorSet to renderer's descriptorSet
+            @intrinsic("call", "vulkan", "vkCmdBindDescriptorSets", nothing, commands, 0 as a 32 bit unsigned integer, renderer's pipelineLayout, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of descriptorSet, 0 as a 32 bit unsigned integer, 0 as a pointer)
+            set vertexBuffer to renderer's vertices's handle
+            set vertexOffset to 0 as a 64 bit unsigned integer
+            @intrinsic("call", "vulkan", "vkCmdBindVertexBuffers", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of vertexBuffer, the address of vertexOffset)
+            @intrinsic("call", "vulkan", "vkCmdBindIndexBuffer", nothing, commands, renderer's indices's handle, 0 as a 64 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            @intrinsic("call", "vulkan", "vkCmdDrawIndexed", nothing, commands, renderer's indexCount, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0, 0 as a 32 bit unsigned integer)
+        @intrinsic("call", "vulkan", "vkCmdEndRenderPass", nothing, commands)
+        check vk (@intrinsic("call", "vulkan", "vkEndCommandBuffer", an integer, commands)) doing "end commands"
+        free vk block clears
+        set waitStage to 1024 as a 32 bit unsigned integer
+        set imageReady to renderer's imageReady
+        set renderDone to renderer's renderDone
+        set submit to @intrinsic("construct", a vk submit info, 4 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of imageReady) as a pointer, (the address of waitStage) as a pointer, 1 as a 32 bit unsigned integer, (the address of commands) as a pointer, 1 as a 32 bit unsigned integer, (the address of renderDone) as a pointer)
+        check vk (@intrinsic("call", "vulkan", "vkQueueSubmit", an integer, renderer's queue, 1 as a 32 bit unsigned integer, the address of submit, fence)) doing "vkQueueSubmit"
+        set swapchain to renderer's swapchain
+        set present to @intrinsic("construct", a vk present info, 1000001001 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of renderDone) as a pointer, 1 as a 32 bit unsigned integer, (the address of swapchain) as a pointer, (the address of imageIndex) as a pointer, 0 as a pointer)
+        set presented to @intrinsic("call", "vulkan", "vkQueuePresentKHR", an integer, renderer's queue, the address of present)
+        if (presented = -1000001004) or (presented = 1000001003):
+            ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, renderer's device)
+            destroy vk swapchain of renderer
+            create vk swapchain for renderer
+
+# Waits until the GPU has finished everything submitted.
+function finish vk work in {vk renderer record:renderer}:
+    execute:
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, renderer's device)
+
+function the vk window of {vk renderer record:renderer} should close:
+    execute:
+        return (@intrinsic("call", "glfw", "glfwWindowShouldClose", an integer, renderer's window)) != 0

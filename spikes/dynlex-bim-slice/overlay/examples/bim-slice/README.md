@@ -1,0 +1,234 @@
+# BIM slice
+
+A thin vertical slice of a BIM modeller on the native DynLex port of
+`cadkernel`: semantic walls, doors, windows and slabs, geometry through the kernel, plan
+and section drawings, associative dimensions, IFC4 export and an interactive
+plan editor, with incremental re-evaluation throughout. It is the code of the
+Open BIM Studio spike `spikes/dynlex-bim-slice/`, which records the question
+and the measurements.
+
+| File | Contents |
+| --- | --- |
+| `bim_model.dl` | Levels, compound wall types, walls on centrelines, parametric window and door types, hosted openings, slabs on a level, grids and dimensions with semantic references. Stable 64-bit ids, never reused; transactions with undo and redo; a journal of the ids every edit touches. |
+| `bim_index.dl` | Spatial hash index of wall centrelines, used to find the walls that can join a wall. |
+| `bim_evaluate.dl` | Footprints with L and T joins and the incremental evaluation, which compares only the journalled elements when it can. Walls are straight or curved (a circular arc set by its bulge). Both are built directly by the fast planar kernel (`lib/fastkernel/wall.dl` and `curved_wall.dl`, with radial jambs in curved walls) when it accepts them, and otherwise by extrusion and boolean voids through the port. Slabs are prisms built by the fast kernel; they join nothing and depend only on themselves and their level. |
+| `bim_drawing.dl` | Plan and section views from the kernel's planar section (`lib/cadkernel/brep_section.dl`), with the plane slice as fallback for solids the section refuses, updated per rebuilt wall; dimensions measured between semantic features. |
+| `bim_ifc.dl` | IFC4 export: spatial structure with one storey per level, each containing its own elements, wall types with layer sets, walls, openings filled by doors and windows, and slabs, with deterministic GlobalIds. |
+| `bim_spaces.dl` | Spaces derived from the walls through the kernel's 2D arrangement, identified by their bounding walls; exported as `IfcSpace`. |
+| `bim_scene.dl` | The 3D scene: one mesh per wall or slab, cached per build, and picking of walls, slabs, openings and spaces along a ray. A space's floor is picked only when it lies clearly in front of the slab it stands on. |
+| `bim_file.dl` | The native file format: the model as text, one record per line, keeping every id and writing numbers that read back exactly; reading refuses malformed files, naming the fault. |
+| `bim_editor.dl` | Editor core driven by abstract events: tools, inference snapping, numeric input during a gesture, dragging with joins, undo. |
+| `bim_view.dl` | Categories (walls, floors, doors, windows, spaces, grids, dimensions) and view rules: per view (plan, section, 3D) each category visible or hidden, and halftone, starting from the view kind's template. |
+| `bim_hatch.dl` | Hatching of cut faces as geometry: a wall's cut divided into its type's layers (bands parallel to the wall in plan, or where a section crosses it), and per material a fill, hatch lines or a zigzag, clipped to the cut. |
+| `bim_import.dl` | Imported elements: a BIM-MESH file (written from IFC by `import/ifc_to_mesh.py`) read into read-only scene meshes in their categories, with their labels. |
+| `bim_schedule.dl` | The quantity schedule: per wall type the count, centreline length, net face area and volume; per door and window type the count and rough area; the slabs' area and volume; the spaces' area; as rows and as comma-separated text. |
+| `bim_canvas.dl` | Recorded drawings: coloured triangles and labels in pixels, and depth-tested triangles, replayed into a frame. The plan is replayed shifted while it is panned, and the 3D view is replayed until its camera, meshes, selection or rules change. |
+| `bim_text.dl` | Text through a glyph atlas: the printable characters are rendered once into one texture, and a line of text is one batch of textured triangles. |
+| `bim_ui.dl` | The application chrome after the Open BIM Studio frontend of Open CAD Studio, in Fusion Black: a top bar with quick-access buttons and ribbon tabs; ribbon groups of tool buttons that send the editor the commands its keys send (tools not available yet shown dimmed); a project explorer with the storeys, views and the selection's properties; a command line and a status bar. |
+| `main.dl` | The interactive application: explorer left, plan editor in the middle, the GPU-resident 3D view or the section right, inside the chrome. |
+
+## Running the editor
+
+From the repository root:
+
+```sh
+for pair in screen_vertex:vertex canvas_vertex:vertex flat_fragment:fragment text_fragment:fragment mesh_vertex:vertex mesh_fragment:fragment; do
+  ./build/dynlex lib/vulkan/shaders/${pair%%:*}.dl --emit-spirv --shader-stage=${pair##*:} -o build/shaders/${pair%%:*}.spv
+done
+./build/dynlex examples/bim-slice/main.dl -O2 -o build/bim-slice
+./build/bim-slice
+```
+
+The shaders need the shader-language extensions of `examples/gpu/README.md`.
+
+**Fonts and shaders.** The application loads
+`tests/games/fonts/LiberationMono-Regular.ttf` and the shaders in `build/shaders`.
+When `$BIM_SLICE_HOME` is set, it loads `$BIM_SLICE_HOME/fonts` and
+`$BIM_SLICE_HOME/shaders` instead.
+
+**Drawing.** It draws through `lib/vulkan/graphics.dl`: DynLex calling libvulkan
+and GLFW directly, with no C graphics runtime.
+- The 3D view is a persistent GPU mesh. Each element's distinct corners are
+  stored once, and the camera, the lighting and the highlight of the selection
+  are shader parameters.
+- The recorded plan is a persistent GPU buffer, drawn shifted while it is
+  panned.
+- Everything else streams through one buffer that grows as needed. `./build/bim-slice --generate 500000` builds an imaginary tower of at least that many walls (99 storeys of 50 x 50 rooms, with facade windows and a slab per storey) for testing at scale; `./build/bim-slice --example` opens an
+example house with a ground slab and a first floor; `--example X Y` places it at plan coordinates X and Y metres,
+for instance 500000 500000.
+
+### Importing IFC
+
+IFC is imported in two steps for now: IfcOpenShell triangulates the file, and the
+editor opens the result as read-only elements in their categories (3D view only;
+not yet cut in the plan or section):
+
+```sh
+python3 examples/bim-slice/import/ifc_to_mesh.py model.ifc model.bimmesh
+./build/bim-slice --import model.bimmesh
+```
+
+`ifc_to_mesh.py` needs `ifcopenshell` (0.9 was used). The 3D view streams at most
+1,050,000 vertices per frame, leaves out faces turned away from the viewer, and
+casts shadows for models of up to 150,000 triangles.
+
+### Installer
+
+```sh
+source .cache/bootstrap/env.sh
+examples/bim-slice/installer/make-installer.sh build/bim-slice ../installers/bim-slice-installer.sh
+../installers/bim-slice-installer.sh
+```
+
+A development build (unoptimised, with debug information) installs side by side as
+`bim-slice-dev`, with its own menu entry:
+
+```sh
+./build/dynlex examples/bim-slice/main.dl -O0 -g -o build/bim-slice-dev
+examples/bim-slice/installer/make-installer.sh build/bim-slice-dev ../installers/bim-slice-dev-installer.sh dev
+```
+
+`make-installer.sh` writes a self-extracting installer. It copies the binary, every
+library the binary links against from outside the system library directories (here
+GLFW and the Vulkan loader from the bootstrap toolchain), and the font with its
+licence.
+
+Running the installer:
+
+- installs into `~/.local/share/bim-slice`;
+- links `~/.local/bin/bim-slice`;
+- adds an applications-menu entry, with an action that opens the example house.
+
+The installed copy does not refer to this repository, its caches or temporary build
+files. It needs only the system's libc, X11, FreeType and a Vulkan driver. Running the
+installer again replaces it; `~/.local/share/bim-slice/uninstall` removes it.
+
+| Input | Action |
+| --- | --- |
+| W | Wall tool: click the start, click each next corner; type a length and press Enter to place the next corner along the pointer's direction |
+| O | Opening tool: click on a wall to place a window there |
+| D | Opening tool with the door type: click on a wall to place a door there |
+| B | Add a 0.25 m slab under the selected space, following its outline |
+| I | Grid tool: click the start and the end; grids running north-south are numbered 1, 2, 3..., the others lettered A, B, C... Grids show in the plan with heads at both ends, in the section where it crosses them, and in 3D as outlined planes; they export as `IfcGrid` |
+| L | Visibility panel: per category, check boxes for visibility in the plan, the section and the 3D view, and halftone in the plan. The rules are saved with the model |
+| Page Up / Page Down | Make the storey above or below active; Page Up on the top storey adds a storey on it. The plan cuts the active storey and outlines the walls of the storey below |
+| S | Select tool: drag a wall end, and the walls that share it follow; or drag a wall by its body, and the ends of the walls joined to it (at its ends and in T joins) follow; drag a selected wall's orange middle handle to bend it into an arc (at most a half circle; back onto the chord to straighten it) |
+| Delete | Delete the selected wall, opening or slab, or else the wall under the pointer; a wall goes with its openings |
+| Z / Y | Undo / redo |
+| X | Export `bim-slice.ifc` to the working directory |
+| Ctrl+S / Ctrl+O | Save the model / open it again: the file named on the command line (`./build/bim-slice model.bim`, opened at start when it exists), or `bim-slice.bim`. Opening clears the undo history |
+| Escape | Cancel what is under way (a wall chain, typed input, a grid or section being placed, the visibility panel) and clear the selection; it never closes the editor |
+| Ctrl+Q | Quit (as does the window's close button) |
+| C | Section tool: click two points; the right panel shows the section |
+| V | Switch the right panel between the 3D view and the section |
+| [ ] / ; ' | Make the window type narrower / wider, lower / higher; every window of the type follows, and a change that would not fit a wall is refused |
+| Right- or middle-drag in the plan, wheel | Pan the plan; zoom it toward the pointer |
+| Plan symbols | Doors show their leaf open into the room with its swing; windows their glass between the wall faces |
+| Plan and section | Cut walls show their type's layers, filled and hatched by material (brick diagonal, insulation zigzag, concrete crossed, sand-lime fine diagonal); slabs cut in the section are concrete |
+| 3D view | Lit by a fixed sun from the south-west; seen from above, the model stands on a ground plane with its cast shadow |
+| Drag in the 3D view (left or right button), or Shift+middle-drag | Orbit about the model's middle, also from below; Shift-drag or middle-drag pans, the wheel zooms toward the pointer |
+| K | Switch the 3D view's detail level: fine shows each wall's layers as separate solids in their materials' colours (also in reveals and wall ends), coarse each wall as one solid; models of 50,000 walls or more start coarse |
+| T | Show the quantity schedule in the right panel instead of the 3D view; E then writes it to `bim-schedule.csv` |
+| Handles in the 3D view | The ends of a selected wall and the corners of a selected slab show handles; dragging one moves it across its storey's plane, with snapping, joined walls following, and undo |
+| Left click in the section | Select the wall or slab whose cut lies under the pointer; it is drawn in the selection colour |
+| - / = | Zoom the plan |
+| F | Fit the plan and the 3D view to the model |
+| Left click in the 3D view | Select the wall, slab, door or window, or space under the pointer |
+| Left click in the plan (select tool, away from wall ends) | Select the opening, wall, slab (click its edge) or space under the pointer; Escape clears the selection |
+| Selected slab in the plan | Drag a corner handle to move it; drag an edge's middle handle to add a corner there; Delete removes the corner under the pointer. An outline that would cross itself, or keep fewer than three corners, is refused |
+
+Snapping, in priority order: wall end points, wall mid points, horizontal or
+vertical alignment with the chain start, then a 0.05 m grid. Wall points snap on
+every storey, so walls can be stacked; hovering, dragging and selecting act on the
+active storey only. Hovering a wall shows its length, measured between its start
+and finish features.
+
+The status bar shows:
+- the storey and the tool;
+- the snap;
+- the walls and slabs rebuilt by the last change, and the time it took;
+- the document revision;
+- the time the last frame took before it was presented;
+- the last message.
+
+Presenting waits for the display's refresh, so the loop runs at its rate.
+
+## Tests
+
+Headless tests print results that must equal their `.expected.txt` file:
+
+```sh
+for test in model evaluate drawing editor spaces pick file journal hatch view curved schedule; do
+  ./build/dynlex examples/bim-slice/tests/$test.dl -O0 -o build/bim-$test
+  ./build/bim-$test | diff - examples/bim-slice/tests/$test.expected.txt
+done
+```
+
+`schedule` checks a room's quantities (wall length, net face area, room area) against hand-computed values and prints the example house's schedule and its CSV.
+`curved` checks a free arc wall against the exact volume of its ring sector (within 0.05 %), a room closed by an arc
+with mitred L joins, a window in the arc against the exact radial void (within 0.1 %), both as closed polyhedra, the
+bulge kept to a half circle, the bulge surviving the file, the room's space reaching into the arc, and one hatch band
+per layer per piece of the arc.
+`view` checks the view templates, toggling a category in one view, each
+element's category, hidden categories passed over by selection, and view rules
+surviving a save and an open.
+`hatch` checks a cavity wall's layer bands in plan and in a section, a cut clipped
+to them, and hatch lines and a zigzag against their exact lengths.
+`journal` evaluates 400 random edits with undo and redo along the model's
+journal and by full comparison, and requires them to agree after every step.
+`evaluate` checks a chain of incremental evaluations, including slabs added and
+deleted, against a fresh one element by element; `drawing` checks an incrementally updated plan against a fresh cut;
+`pick` picks walls, windows, the ground slab and spaces along rays near the
+origin and 500 km away, and selects and deletes through the editor; `editor`
+also adds a slab under a selected room with B and changes storeys; `file` writes
+and reads the example house near the origin and 500 km away, compares text and
+evaluated geometry, saves and opens through the editor, and checks the refusals.
+
+`verify_ifc.py` builds `tests/ifc.dl`, exports IFC and checks it with
+IfcOpenShell, including:
+- every wall's volume, with openings subtracted by IfcOpenShell's own geometry;
+- an L-shaped slab's volume and height;
+- two storeys, each containing its own elements;
+- the grid's U and V axes and their curves.
+
+It needs `ifcopenshell` (0.9 was used).
+
+`drive_gui.py` drives the built editor with real X11 input through XTEST:
+drawing walls (one by typed length), placing windows, dragging a corner, undo,
+redo, hover, orbit and IFC export, saving a screenshot after each stage and
+checking the exported file with IfcOpenShell. Run it against a nested X
+server, never the desktop session, because XTEST moves the pointer of the
+display it is sent to:
+
+```sh
+Xephyr :97 -screen 1400x900 &
+DISPLAY=:97 python3 examples/bim-slice/tests/drive_gui.py build/bim-slice build/bim-slice-shots
+```
+
+It needs `python-xlib`, Pillow and `ifcopenshell`, and refuses to run while a
+`bim-slice.ifc` exists in the repository root.
+
+## Measurements
+
+Build these at `-O2`; they print medians and maxima in microseconds.
+
+- `large_model.dl N` generates the imaginary tower of at least N walls (500,000 by
+  default) and times the first evaluation, the ground floor's plan and spaces,
+  the scene meshes and one incremental edit, with the peak memory.
+- `drag_timing.dl` draws a room of four walls with two windows through the
+  editor and drags a corner in 200 steps, timing evaluation with the plan
+  update, and tessellation of the rebuilt walls.
+- `scale_timing.dl` builds models of separate four-wall rooms from 4 to
+  99,856 walls and moves one corner 20 times, timing the evaluation and the
+  plan update per move, and the first full evaluation and plan.
+- `fast_timing.dl` times the fast kernel against the port: a wall with one and with
+  four windows, and the tessellation of a room. `fast_differential.dl N` builds every
+  wall of N random models both ways and compares status, volume and sections.
+- `far_origin.dl` builds the example house near the origin and 500 km away,
+  turned, and prints the largest deviations between the two after moving the
+  far results back, and the evaluation times.
+- `wall_slice_workload.dl` and `wall_slice_workload.rs` time the window
+  difference (mode 0) and the plan slice (mode 1) of one wall in DynLex and in
+  the pinned Rust crate; mode 2 times the planar section, in DynLex only. Build the Rust side against a `cadkernel` library compiled at the same
+  optimisation level, as `tests/cadkernel/performance/` does, and run both
+  with `<mode> <iterations>`; their face counts must agree.

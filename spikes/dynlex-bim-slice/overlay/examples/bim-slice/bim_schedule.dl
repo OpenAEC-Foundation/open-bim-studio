@@ -1,0 +1,163 @@
+# SPDX-License-Identifier: MPL-2.0
+# A quantity schedule of the model: one row per wall type, opening type, the
+# slabs and the spaces, with the count and the quantities that apply.
+#
+# - Walls, per type: the centreline length (along the arc for a curved wall),
+#   the net area of one face (length times height less the rough openings),
+#   and the volume of the evaluated solids.
+# - Doors and windows, per type: the count and the total rough opening area.
+# - Slabs: the outline area and the evaluated volume.
+# - Spaces: the floor area.
+# - Masses (pushed sketch faces): the footprint area and the volume.
+# - Components, each: the instances placed, and the footprint area and the
+#   volume of the masses in all of them.
+#
+# A quantity that does not apply to a row is negative and shown as blank.
+import examples/bim-slice/bim_spaces.dl
+
+class:
+    patterns:
+        [a|] bim schedule row record
+    members:
+        group as a string
+        name as a string
+        count as an integer
+        length as a 64 bit floating-point number
+        area as a 64 bit floating-point number
+        volume as a 64 bit floating-point number
+
+local function a bim schedule row in {a string:group} named {a string:name}:
+    execute:
+        return @intrinsic("construct", a bim schedule row record, group, name, 0, -1.0, -1.0, -1.0)
+
+# The doubled signed area of the closed ring `points`.
+local function the bim ring area of {a pointer to a list:points}:
+    execute:
+        set total to 0.0
+        set count to the length of points
+        if count < 3:
+            return 0.0
+        set anchor to the item at 0 in points
+        loop cursor from 1 to count - 1:
+            set here to the item at cursor in points
+            set following to the item at (cursor + 1) in points
+            set total to total + (((here's x - anchor's x) * (following's y - anchor's y)) - ((following's x - anchor's x) * (here's y - anchor's y)))
+        return (the absolute value of total) * 0.5
+
+# The volume of the evaluated element `elementId`, or 0 when it has none.
+local function the bim evaluated volume of {a 64 bit integer:elementId} in {bim evaluation record:evaluation}:
+    execute:
+        loop cursor from 0 to the length of (evaluation's elements's values):
+            set geometry to the item at cursor in (evaluation's elements's values)
+            if geometry's id = elementId:
+                return the bim volume of geometry
+        return 0.0
+
+# The schedule of `modelValue`, with volumes from `evaluation` (which must
+# have evaluated it) and the spaces `spaces`.
+function the bim schedule of {bim model record:modelValue} with {bim evaluation record:evaluation} and {a pointer to a list:spaces}:
+    execute:
+        set rows to a cad topology list of a bim schedule row record
+        loop typeCursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at typeCursor in (modelValue's wallTypes's values)
+            set row to a bim schedule row in (the string form of "Walls") named wallType's name
+            set row's length to 0.0
+            set row's area to 0.0
+            set row's volume to 0.0
+            loop cursor from 0 to the length of (modelValue's walls's values):
+                set wallValue to the item at cursor in (modelValue's walls's values)
+                if wallValue's typeId = wallType's id:
+                    set run to the bim centreline length of wallValue
+                    set face to run * wallValue's height
+                    loop openingCursor from 0 to the length of (modelValue's openings's values):
+                        set openingValue to the item at openingCursor in (modelValue's openings's values)
+                        if openingValue's hostId = wallValue's id:
+                            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+                            if typeFound's valid:
+                                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                                set face to face - ((the bim rough width of openingType) * (the bim rough height of openingType))
+                    set row's count to row's count + 1
+                    set row's length to row's length + run
+                    set row's area to row's area + face
+                    set row's volume to row's volume + (the bim evaluated volume of wallValue's id in evaluation)
+            if row's count > 0:
+                append row to (rows's values)
+        loop typeCursor from 0 to the length of (modelValue's openingTypes's values):
+            set openingType to the item at typeCursor in (modelValue's openingTypes's values)
+            set group to the string form of "Windows"
+            if openingType's isDoor:
+                set group to the string form of "Doors"
+            set row to a bim schedule row in group named openingType's name
+            set row's area to 0.0
+            loop cursor from 0 to the length of (modelValue's openings's values):
+                if (the item at cursor in (modelValue's openings's values))'s typeId = openingType's id:
+                    set row's count to row's count + 1
+                    set row's area to row's area + ((the bim rough width of openingType) * (the bim rough height of openingType))
+            if row's count > 0:
+                append row to (rows's values)
+        if (the length of (modelValue's slabs's values)) > 0:
+            set row to a bim schedule row in (the string form of "Floors") named (the string form of "Slabs")
+            set row's area to 0.0
+            set row's volume to 0.0
+            loop cursor from 0 to the length of (modelValue's slabs's values):
+                set slabValue to the item at cursor in (modelValue's slabs's values)
+                set row's count to row's count + 1
+                set row's area to row's area + (the bim ring area of (slabValue's outline's values))
+                set row's volume to row's volume + (the bim evaluated volume of slabValue's id in evaluation)
+            append row to (rows's values)
+        if (the length of spaces) > 0:
+            set row to a bim schedule row in (the string form of "Spaces") named (the string form of "Rooms")
+            set row's area to 0.0
+            loop cursor from 0 to the length of spaces:
+                set row's count to row's count + 1
+                set row's area to row's area + (the item at cursor in spaces)'s area
+            append row to (rows's values)
+        set masses to a bim schedule row in (the string form of "Masses") named (the string form of "Sketch masses")
+        set masses's area to 0.0
+        set masses's volume to 0.0
+        loop cursor from 0 to the length of (modelValue's sketches's values):
+            set element to the item at cursor in (modelValue's sketches's values)
+            if (element's kind = bim face sketch) and (element's height > 0.0):
+                set footprint to the bim ring area of (element's points's values)
+                set masses's count to masses's count + 1
+                set masses's area to masses's area + footprint
+                set masses's volume to masses's volume + (footprint * element's height)
+        if masses's count > 0:
+            append masses to (rows's values)
+        loop cursor from 0 to the length of (modelValue's components's values):
+            set definition to the item at cursor in (modelValue's components's values)
+            set row to a bim schedule row in (the string form of "Components") named definition's name
+            set row's area to 0.0
+            set row's volume to 0.0
+            loop placementCursor from 0 to the length of (modelValue's instances's values):
+                if (the item at placementCursor in (modelValue's instances's values))'s componentId = definition's id:
+                    set row's count to row's count + 1
+            loop part from 0 to the length of (definition's sketches's values):
+                set element to the item at part in (definition's sketches's values)
+                if (element's kind = bim face sketch) and (element's height > 0.0):
+                    set footprint to the bim ring area of (element's points's values)
+                    set row's area to row's area + (footprint * (row's count as a 64 bit floating-point number))
+                    set row's volume to row's volume + ((footprint * element's height) * (row's count as a 64 bit floating-point number))
+            append row to (rows's values)
+        return rows
+
+# `value` with two decimals, or blank when it is negative (does not apply).
+function the bim schedule text of {a 64 bit floating-point number:value}:
+    execute:
+        if value < 0.0:
+            return the string form of ""
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
+        return the substring of buffer from 0 spanning written bytes
+
+# The schedule as comma-separated text, with a header line.
+function the bim schedule csv of {a pointer to a list:rows}:
+    execute:
+        set text to the string form of "Group,Type,Count,Length (m),Area (m2),Volume (m3)\n"
+        loop cursor from 0 to the length of rows:
+            set row to the item at cursor in rows
+            set line to ((row's group + (the string form of ",")) + row's name) + (the string form of ",")
+            set line to ((line + (the string form of row's count)) + (the string form of ",")) + (the bim schedule text of row's length)
+            set line to ((line + (the string form of ",")) + (the bim schedule text of row's area)) + (the string form of ",")
+            set text to ((text + line) + (the bim schedule text of row's volume)) + (the string form of "\n")
+        return text

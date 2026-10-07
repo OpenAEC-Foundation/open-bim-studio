@@ -1,0 +1,323 @@
+# SPDX-License-Identifier: MPL-2.0
+# Plan and section views of the BIM slice, cut from the evaluated solids with
+# the kernel's plane slice, and associative dimensions evaluated from semantic
+# references. A view holds, per wall build, the cut polygons in drawing
+# coordinates; each polygon is filled as a cut face. A view follows its
+# evaluation: after an evaluation update it re-cuts only the walls that update
+# rebuilt or removed.
+import examples/bim-slice/bim_evaluate.dl
+import lib/cadkernel/brep_slice.dl
+import lib/cadkernel/brep_section.dl
+
+class:
+    patterns:
+        [a|] bim cut polygon record
+    members:
+        elementId as a 64 bit integer
+        points as the type of (a cad topology list of a cad vector2)
+
+# The cut of one wall build: `id` is the wall's id, `serial` its build.
+class:
+    patterns:
+        [a|] bim cut source record
+    members:
+        id as a 64 bit integer
+        serial as a 64 bit integer
+        refused as a boolean
+        polygons as the type of (a cad topology list of a bim cut polygon record)
+
+# `sources` is ordered by wall id. `generation` is the generation of the
+# evaluation the view reflects; `recut` counts the walls its last update cut.
+class:
+    patterns:
+        [a|] bim view record
+    members:
+        sources as the type of (a cad topology list of a bim cut source record)
+        viewPlane as a cad plane
+        generation as a 64 bit integer
+        refused as an integer
+        recut as an integer
+
+local function an empty bim view on {cad plane:viewPlane}:
+    execute:
+        return @intrinsic("construct", a bim view record, a cad topology list of a bim cut source record, viewPlane, (-1) as a 64 bit integer, 0, 0)
+
+function an empty bim view:
+    execute:
+        return an empty bim view on (a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z 0.0), x axis (the cad x axis) and y axis (the cad y axis))
+
+local function bim vectors {cad vector3:first} and {cad vector3:second} are identical:
+    execute:
+        return ((first's x = second's x) and (first's y = second's y)) and (first's z = second's z)
+
+function bim planes {cad plane:first} and {cad plane:second} are identical:
+    execute:
+        set sameOrigin to bim vectors first's origin and second's origin are identical
+        set sameAxes to (bim vectors first's xAxis and second's xAxis are identical) and (bim vectors first's yAxis and second's yAxis are identical)
+        return sameOrigin and sameAxes
+
+local function the bim drawing point of {cad vector3:location} on {cad plane:viewPlane}:
+    execute:
+        set offset to the cad difference of location and viewPlane's origin
+        return a cad vector2 with x (the cad dot of offset and viewPlane's xAxis) and y (the cad dot of offset and viewPlane's yAxis)
+
+local function cad bim surface {cad surface:shape} lies on {cad plane:viewPlane}:
+    execute:
+        if shape's kind != 0:
+            return false
+        set facePlane to shape's plane
+        set faceNormal to the cad normal of facePlane
+        set viewNormal to the cad normal of viewPlane
+        if (faceNormal's valid and viewNormal's valid) = false:
+            return false
+        set alignment to the absolute value of (the cad dot of faceNormal's value and viewNormal's value)
+        set gap to the absolute value of (the cad dot of (the cad difference of facePlane's origin and viewPlane's origin) and viewNormal's value)
+        return (alignment >= (1.0 - 1e-9)) and (gap <= 1e-7)
+
+# Every loop of every face of `body` lying on the view plane, in drawing
+# coordinates and loop order.
+local function collect bim cut loops of {cad body:body} for {a 64 bit integer:elementId} on {cad plane:viewPlane} into {a pointer to a list:found}:
+    execute:
+        set faceKeys to the cad face keys of body
+        loop faceCursor from 0 to the length of faceKeys:
+            set faceNode to the cad node pointer for (the item at faceCursor in faceKeys) in body
+            set surfaceNode to the cad node pointer for faceNode's surface in body
+            if cad bim surface (@intrinsic("dereference", surfaceNode)) lies on viewPlane:
+                loop ringCursor from 0 to the length of (faceNode's loops's values):
+                    set ringNode to the cad node pointer for (the item at ringCursor in (faceNode's loops's values)) in body
+                    set outline to a cad topology list of a cad vector2
+                    loop useCursor from 0 to the length of (ringNode's coedges's values):
+                        set useNode to the cad node pointer for (the item at useCursor in (ringNode's coedges's values)) in body
+                        set edgeNode to the cad node pointer for useNode's edge in body
+                        set firstVertex to edgeNode's start
+                        if useNode's forward = false:
+                            set firstVertex to edgeNode's end
+                        set vertexNode to the cad node pointer for firstVertex in body
+                        append (the bim drawing point of vertexNode's point on viewPlane) to (outline's values)
+                    append (@intrinsic("construct", a bim cut polygon record, elementId, outline)) to found
+        free faceKeys
+
+# The cut of one evaluated wall: the region where the plane meets the solid,
+# which bounds the cut faces of the part looked at. The planar section
+# computes it from the faces directly, of the fast kernel's polyhedron or of
+# the port's solid. A port solid the section refuses (curved faces or edges)
+# is cut with the plane slice instead; a refused polyhedron cut is reported.
+local function the bim cut source of {bim element geometry record:geometry} on {cad plane:viewPlane}:
+    execute:
+        set result to @intrinsic("construct", a bim cut source record, geometry's id, geometry's serial, false, a cad topology list of a bim cut polygon record)
+        set sectioned to an empty cad section
+        if geometry's fast:
+            set sectioned to the fast section of geometry's shape by viewPlane
+        else:
+            set sectioned to the cad plane section of geometry's solid by viewPlane
+        if sectioned's valid:
+            loop ringCursor from 0 to the length of (sectioned's loops's values):
+                set ringPoints to (the item at ringCursor in (sectioned's loops's values))'s values
+                set outline to a cad topology list of a cad vector2
+                loop pointCursor from 0 to the length of ringPoints:
+                    append (the bim drawing point of (the item at pointCursor in ringPoints) on viewPlane) to (outline's values)
+                append (@intrinsic("construct", a bim cut polygon record, geometry's id, outline)) to (result's polygons's values)
+            return result
+        if geometry's fast:
+            set result's refused to true
+            return result
+        set sliced to the cad plane slice of geometry's solid by viewPlane
+        if sliced's valid = false:
+            set result's refused to true
+        else if sliced's divided:
+            collect bim cut loops of sliced's negative for geometry's id on viewPlane into (result's polygons's values)
+        return result
+
+local function the bim refusal count of {bim cut source record:source}:
+    execute:
+        if source's refused:
+            return 1
+        return 0
+
+# Cuts every evaluated wall with the view plane.
+function the bim view of {bim evaluation record:evaluation} cut by {cad plane:viewPlane}:
+    execute:
+        set result to an empty bim view on viewPlane
+        set result's generation to evaluation's generation
+        loop cursor from 0 to the length of (evaluation's elements's values):
+            set geometry to the item at cursor in (evaluation's elements's values)
+            if geometry's status = 0:
+                set cutResult to the bim cut source of geometry on viewPlane
+                append cutResult to (result's sources's values)
+                set result's refused to result's refused + (the bim refusal count of cutResult)
+                set result's recut to result's recut + 1
+        return result
+
+# Brings `target` up to date with `evaluation`. When `target` reflects the
+# generation before it, only the walls the last evaluation update rebuilt or
+# removed are cut again; otherwise the whole view is cut again.
+function update bim view {a pointer to a bim view record:target} from {bim evaluation record:evaluation}:
+    execute:
+        if (target's generation + (1 as a 64 bit integer)) != evaluation's generation:
+            set rebuilt to the bim view of evaluation cut by target's viewPlane
+            set target's sources to rebuilt's sources
+            set target's generation to rebuilt's generation
+            set target's refused to rebuilt's refused
+            set target's recut to rebuilt's recut
+            return nothing
+        set sources to target's sources's values
+        set target's recut to 0
+        loop cursor from 0 to the length of (evaluation's changed's values):
+            set wallId to the item at cursor in (evaluation's changed's values)
+            set slot to the bim insertion position of wallId among sources
+            set present to false
+            if slot < the length of sources:
+                set present to (the item at slot in sources)'s id = wallId
+            set cuttable to false
+            set found to the bim position of wallId among (evaluation's elements's values)
+            if found's valid:
+                set cuttable to (the item at found's position in (evaluation's elements's values))'s status = 0
+            if present:
+                set target's refused to target's refused - (the bim refusal count of (the item at slot in sources))
+            if cuttable:
+                set cutResult to the bim cut source of (the item at found's position in (evaluation's elements's values)) on target's viewPlane
+                if present:
+                    replace item at index slot in sources with cutResult
+                else:
+                    insert cutResult into sources at index slot
+                set target's refused to target's refused + (the bim refusal count of cutResult)
+                set target's recut to target's recut + 1
+            else if present:
+                remove item slot from sources
+        set target's generation to evaluation's generation
+
+# The number of cut polygons in `viewValue`.
+function the bim polygon count of {bim view record:viewValue}:
+    execute:
+        set total to 0
+        loop cursor from 0 to the length of (viewValue's sources's values):
+            set total to total + (the length of ((the item at cursor in (viewValue's sources's values))'s polygons's values))
+        return total
+
+# The plan of a level: a horizontal cut at `cutHeight` above its elevation,
+# looking down.
+function the bim plan plane at {a 64 bit floating-point number:elevation} cut at {a 64 bit floating-point number:cutHeight}:
+    execute:
+        return a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z (elevation + cutHeight)), x axis (the cad x axis) and y axis (the cad y axis)
+
+function the bim plan of {bim evaluation record:evaluation} at {a 64 bit floating-point number:elevation} cut at {a 64 bit floating-point number:cutHeight}:
+    execute:
+        return the bim view of evaluation cut by (the bim plan plane at elevation cut at cutHeight)
+
+# A section along the line from `first` to `second` in plan, looking to the
+# left of that line; drawing x runs along the line and drawing y up.
+function the bim section plane from {cad vector2:first} to {cad vector2:second}:
+    execute:
+        set run to a cad vector2 with x (second's x - first's x) and y (second's y - first's y)
+        set magnitude to the square root of ((run's x * run's x) + (run's y * run's y))
+        set across to a cad vector3 with x (run's x / magnitude), y (run's y / magnitude) and z 0.0
+        return a cad plane with origin (a cad vector3 with x first's x, y first's y and z 0.0), x axis across and y axis (the cad z axis)
+
+function the bim section of {bim evaluation record:evaluation} from {cad vector2:first} to {cad vector2:second}:
+    execute:
+        return the bim view of evaluation cut by (the bim section plane from first to second)
+
+function the bim area of {bim cut polygon record:polygon}:
+    execute:
+        set total to 0.0
+        set count to the length of (polygon's points's values)
+        loop cursor from 0 to count:
+            set here to the item at cursor in (polygon's points's values)
+            set following to the item at (the remainder of (cursor + 1) divided by count) in (polygon's points's values)
+            set total to total + ((here's x * following's y) - (following's x * here's y))
+        return total * 0.5
+
+# ---------------------------------------------------------------- dimensions
+# A reference resolves to a feature of the evaluated model: a wall side is the
+# line of that side of its footprint, a wall end is the middle of that end of
+# its footprint, and an opening edge is a point on its host's centreline.
+
+class:
+    patterns:
+        [a|] bim anchor record
+    members:
+        valid as a boolean
+        isLine as a boolean
+        origin as a cad vector2
+        direction as a cad vector2
+
+local function no bim feature:
+    execute:
+        set zero to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim anchor record, false, false, zero, zero)
+
+local function the bim midpoint of {cad vector2:first} and {cad vector2:second}:
+    execute:
+        return a cad vector2 with x ((first's x + second's x) * 0.5) and y ((first's y + second's y) * 0.5)
+
+# `index` must index the walls of `modelValue`.
+function the bim feature of {bim reference record:target} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set featureKind to target's feature
+        if featureKind <= bim wall interior feature:
+            set found to the bim wall index of target's elementId in modelValue
+            if found's valid = false:
+                return no bim feature
+            set wallValue to the item at found's position in (modelValue's walls's values)
+            set footprint to the bim footprint of wallValue in modelValue using index
+            set direction to the bim direction of wallValue
+            if featureKind = bim wall start feature:
+                return @intrinsic("construct", a bim anchor record, true, false, the bim midpoint of footprint's startExterior and footprint's startInterior, the bim tangent of wallValue at finish false)
+            if featureKind = bim wall finish feature:
+                return @intrinsic("construct", a bim anchor record, true, false, the bim midpoint of footprint's finishExterior and footprint's finishInterior, the bim tangent of wallValue at finish true)
+            if featureKind = bim wall exterior feature:
+                return @intrinsic("construct", a bim anchor record, true, true, footprint's startExterior, direction)
+            return @intrinsic("construct", a bim anchor record, true, true, footprint's startInterior, direction)
+        set openingFound to the bim opening index of target's elementId in modelValue
+        if openingFound's valid = false:
+            return no bim feature
+        set openingValue to the item at openingFound's position in (modelValue's openings's values)
+        set hostFound to the bim wall index of openingValue's hostId in modelValue
+        set typeFound to the bim opening type index of openingValue's typeId in modelValue
+        if (hostFound's valid = false) or (typeFound's valid = false):
+            return no bim feature
+        set host to the item at hostFound's position in (modelValue's walls's values)
+        set halfWidth to (the bim rough width of (the item at typeFound's position in (modelValue's openingTypes's values))) * 0.5
+        set span to the bim span of host at openingValue's offset reaching halfWidth
+        set location to span's left
+        if featureKind = bim opening right feature:
+            set location to span's right
+        return @intrinsic("construct", a bim anchor record, true, false, location, span's direction)
+
+class:
+    patterns:
+        [a|] bim measure record
+    members:
+        valid as a boolean
+        value as a 64 bit floating-point number
+
+local function the bim distance from {cad vector2:location} to the line through {cad vector2:origin} along {cad vector2:direction}:
+    execute:
+        set dx to location's x - origin's x
+        set dy to location's y - origin's y
+        return the absolute value of ((dx * direction's y) - (dy * direction's x))
+
+# Two parallel lines are measured perpendicular to them, a point and a line
+# from the point to the line, and two points point to point. References that
+# no longer resolve, and non-parallel lines, are reported as invalid.
+function the bim measure of {bim dimension record:dimension} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set first to the bim feature of dimension's first in modelValue using index
+        set second to the bim feature of dimension's second in modelValue using index
+        if (first's valid and second's valid) = false:
+            return @intrinsic("construct", a bim measure record, false, 0.0)
+        if first's isLine and second's isLine:
+            set cross to (first's direction's x * second's direction's y) - (first's direction's y * second's direction's x)
+            if (the absolute value of cross) > 1e-9:
+                return @intrinsic("construct", a bim measure record, false, 0.0)
+            return @intrinsic("construct", a bim measure record, true, the bim distance from second's origin to the line through first's origin along first's direction)
+        if first's isLine:
+            return @intrinsic("construct", a bim measure record, true, the bim distance from second's origin to the line through first's origin along first's direction)
+        if second's isLine:
+            return @intrinsic("construct", a bim measure record, true, the bim distance from first's origin to the line through second's origin along second's direction)
+        return @intrinsic("construct", a bim measure record, true, the cad distance from first's origin to second's origin)
+
+# For a single measurement; indexes the whole model first.
+function the bim measure of {bim dimension record:dimension} in {bim model record:modelValue}:
+    execute:
+        return the bim measure of dimension in modelValue using (the bim join index of modelValue)

@@ -1,0 +1,1315 @@
+# SPDX-License-Identifier: MPL-2.0
+# Geometry evaluation of the BIM slice through the native kernel. A wall becomes
+# an extruded footprint whose ends follow its junctions; every hosted opening
+# voids it. A curved wall's footprint follows its exterior and interior arcs in
+# straight pieces within half a millimetre, and its ends join along the arc's
+# tangents. The fast kernel builds straight and curved walls directly; others
+# are extruded and voided with boolean differences by the port.
+#
+# Evaluation is incremental. An evaluation keeps a snapshot of the model it
+# evaluated and a spatial index of its walls. The next evaluation compares the
+# new model with that snapshot: only the elements the model's journal lists
+# since, or record by record when the journal does not continue. That finds
+# the changed walls, wall types, levels, openings and opening types; the walls
+# that can depend on a changed wall are found through the index. Only those
+# walls are examined: each records a signature of everything its geometry
+# depends on (its footprint with its joins, its height and level, and its
+# openings), and a wall whose signature changed is rebuilt and given a new
+# serial number.
+# Views and meshes key their caches on that serial. Slabs are evaluated the
+# same way; they join no other element, so a slab depends only on itself and
+# its level.
+import examples/bim-slice/bim_model.dl
+import examples/bim-slice/bim_index.dl
+import lib/cadkernel/brep_sweep.dl
+import lib/cadkernel/brep_boolean.dl
+import lib/cadkernel/brep_mesh.dl
+import lib/fastkernel/wall.dl
+import lib/fastkernel/prism.dl
+import lib/fastkernel/curved_wall.dl
+
+class:
+    patterns:
+        [a|] bim footprint record
+    members:
+        valid as a boolean
+        startExterior as a cad vector2
+        finishExterior as a cad vector2
+        finishInterior as a cad vector2
+        startInterior as a cad vector2
+
+# The solid of one wall or slab and the inputs it was built from; `id` is the
+# element's id and `serial` numbers the build. `status` is 0 when the element
+# evaluated, 1 when its footprint or outline is degenerate, 2 when the kernel
+# refused the extrusion and 3 when an opening does not fit its host. An
+# element the fast kernel built directly holds its polyhedron in `shape` (with
+# `fast` set) and no B-rep `solid`; any other holds the port's solid.
+class:
+    patterns:
+        [a|] bim element geometry record
+    members:
+        id as a 64 bit integer
+        signature as a string
+        serial as a 64 bit integer
+        status as an integer
+        solid as the type of (an empty cad body)
+        fast as a boolean
+        shape as a fast polyhedron record
+
+# `modelValue` is a private copy of the evaluated model's levels, types, walls,
+# openings and slabs, which the next evaluation compares against; `index`
+# indexes its walls. `elements` holds the geometry of every wall and slab,
+# ordered by id. Every update advances `generation`; `changed` lists,
+# ascending, the elements that update rebuilt or removed, `examined` counts
+# the elements whose signature it computed and `rebuilt` those it rebuilt.
+# `journal` is the model journal it last followed, of which it has seen the
+# first `journalSeen` entries; a new evaluation follows a journal of its own,
+# which no model has.
+class:
+    patterns:
+        [a|] bim evaluation record
+    members:
+        modelValue as a bim model record
+        index as a bim join index record
+        elements as the type of (a cad topology list of a bim element geometry record)
+        nextSerial as a 64 bit integer
+        generation as a 64 bit integer
+        changed as the type of (a cad topology list of a 64 bit integer)
+        examined as an integer
+        rebuilt as an integer
+        journal as the type of (a cad topology list of a 64 bit integer)
+        journalSeen as an integer
+
+function an empty bim evaluation:
+    execute:
+        return @intrinsic("construct", a bim evaluation record, an empty bim model, an empty bim join index, a cad topology list of a bim element geometry record, 1 as a 64 bit integer, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 0, 0, a cad topology list of a 64 bit integer, 0)
+
+# ---------------------------------------------------------------- plan geometry
+
+function the bim direction of {bim wall record:wallValue}:
+    execute:
+        set run to a cad vector2 with x (wallValue's finish's x - wallValue's start's x) and y (wallValue's finish's y - wallValue's start's y)
+        set magnitude to the square root of ((run's x * run's x) + (run's y * run's y))
+        return a cad vector2 with x (run's x / magnitude) and y (run's y / magnitude)
+
+# The exterior side is on the right when walking from start to finish.
+function the bim exterior normal of {bim wall record:wallValue}:
+    execute:
+        set direction to the bim direction of wallValue
+        return a cad vector2 with x (direction's y) and y (0.0 - direction's x)
+
+# ---------------------------------------------------------------- arcs
+
+# The centreline arc of a wall: its centre and radius, the angle of its start
+# about the centre and its signed sweep, positive counter-clockwise. A straight
+# wall's arc is not `curved`.
+class:
+    patterns:
+        [a|] bim arc record
+    members:
+        curved as a boolean
+        centre as a cad vector2
+        radius as a 64 bit floating-point number
+        startAngle as a 64 bit floating-point number
+        sweep as a 64 bit floating-point number
+
+function the bim arc of {bim wall record:wallValue}:
+    execute:
+        set chordX to wallValue's finish's x - wallValue's start's x
+        set chordY to wallValue's finish's y - wallValue's start's y
+        set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+        set rise to wallValue's bulge
+        if ((the absolute value of rise) <= 1e-9) or (chordLength <= 1e-9):
+            return @intrinsic("construct", a bim arc record, false, wallValue's start, 0.0, 0.0, 0.0)
+        set halfChord to chordLength * 0.5
+        # The sagitta s over a chord c spans an angle of 4 atan(2 s / c).
+        set sweep to 4.0 * @intrinsic("atan2", rise, halfChord)
+        set radius to ((halfChord * halfChord) + (rise * rise)) / (2.0 * (the absolute value of rise))
+        set nx to chordY / chordLength
+        set ny to (0.0 - chordX) / chordLength
+        set side to 1.0
+        if rise < 0.0:
+            set side to -1.0
+        set apexX to ((wallValue's start's x + wallValue's finish's x) * 0.5) + (rise * nx)
+        set apexY to ((wallValue's start's y + wallValue's finish's y) * 0.5) + (rise * ny)
+        set centre to a cad vector2 with x (apexX - (side * radius * nx)) and y (apexY - (side * radius * ny))
+        set startAngle to @intrinsic("atan2", wallValue's start's y - centre's y, wallValue's start's x - centre's x)
+        return @intrinsic("construct", a bim arc record, true, centre, radius, startAngle, sweep)
+
+# The point of `arc` at the fraction `t` of its sweep, `offset` away from the
+# centreline toward the exterior side.
+function the bim point of {bim arc record:arc} at {a 64 bit floating-point number:t} offset {a 64 bit floating-point number:shift}:
+    execute:
+        set angle to arc's startAngle + (t * arc's sweep)
+        set reach to arc's radius + shift
+        if arc's sweep < 0.0:
+            set reach to arc's radius - shift
+        return a cad vector2 with x (arc's centre's x + (reach * (the cosine of angle))) and y (arc's centre's y + (reach * (the sine of angle)))
+
+# The direction of travel of `arc` at the fraction `t` of its sweep.
+function the bim tangent along {bim arc record:arc} at {a 64 bit floating-point number:t}:
+    execute:
+        set angle to arc's startAngle + (t * arc's sweep)
+        if arc's sweep < 0.0:
+            return a cad vector2 with x (the sine of angle) and y (0.0 - (the cosine of angle))
+        return a cad vector2 with x (0.0 - (the sine of angle)) and y (the cosine of angle)
+
+# The fraction of `arc`'s sweep at the angle of `location` about its centre,
+# unclamped: below 0 before the start, above 1 past the finish.
+function the bim fraction of {cad vector2:location} on {bim arc record:arc}:
+    execute:
+        set angle to @intrinsic("atan2", location's y - arc's centre's y, location's x - arc's centre's x)
+        set turned to angle - arc's startAngle
+        if arc's sweep < 0.0:
+            set turned to 0.0 - turned
+        set fullTurn to 6.283185307179586
+        loop while turned < 0.0:
+            set turned to turned + fullTurn
+        loop while turned >= fullTurn:
+            set turned to turned - fullTurn
+        set magnitude to the absolute value of arc's sweep
+        # Angles in the gap past the finish count from whichever end is nearer.
+        if turned > magnitude:
+            if (turned - magnitude) > (fullTurn - turned):
+                return (turned - fullTurn) / magnitude
+        return turned / magnitude
+
+# The length of a wall's centreline, along its arc when it is curved.
+function the bim centreline length of {bim wall record:wallValue}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved:
+            return arc's radius * (the absolute value of arc's sweep)
+        return the cad distance from wallValue's start to wallValue's finish
+
+# The direction of travel of a wall at its start or at its finish.
+function the bim tangent of {bim wall record:wallValue} at finish {boolean:atFinish}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved = false:
+            return the bim direction of wallValue
+        if atFinish:
+            return the bim tangent along arc at 1.0
+        return the bim tangent along arc at 0.0
+
+# The point of a wall's centreline at `distance` along it from its start, and
+# the direction of travel there.
+class:
+    patterns:
+        [a|] bim station record
+    members:
+        point as a cad vector2
+        direction as a cad vector2
+
+function the bim station of {bim wall record:wallValue} at {a 64 bit floating-point number:distance}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved = false:
+            set direction to the bim direction of wallValue
+            return @intrinsic("construct", a bim station record, a cad vector2 with x (wallValue's start's x + (distance * direction's x)) and y (wallValue's start's y + (distance * direction's y)), direction)
+        set t to distance / (arc's radius * (the absolute value of arc's sweep))
+        return @intrinsic("construct", a bim station record, the bim point of arc at t offset 0.0, the bim tangent along arc at t)
+
+# The point of a wall's centreline nearest to `location`, and the direction of
+# travel there.
+function the bim nearest station of {cad vector2:location} on {bim wall record:wallValue}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved = false:
+            set direction to the bim direction of wallValue
+            set along to ((location's x - wallValue's start's x) * direction's x) + ((location's y - wallValue's start's y) * direction's y)
+            set along to the maximum of 0.0 and (the minimum of along and (the cad distance from wallValue's start to wallValue's finish))
+            return @intrinsic("construct", a bim station record, a cad vector2 with x (wallValue's start's x + (along * direction's x)) and y (wallValue's start's y + (along * direction's y)), direction)
+        set t to the maximum of 0.0 and (the minimum of (the bim fraction of location on arc) and 1.0)
+        return @intrinsic("construct", a bim station record, the bim point of arc at t offset 0.0, the bim tangent along arc at t)
+
+# The distance along a wall's centreline from its start to the point nearest
+# to `location`, unclamped: negative before the start, past the length beyond
+# the finish.
+function the bim offset along {bim wall record:wallValue} nearest {cad vector2:location}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved = false:
+            set direction to the bim direction of wallValue
+            return ((location's x - wallValue's start's x) * direction's x) + ((location's y - wallValue's start's y) * direction's y)
+        return (the bim fraction of location on arc) * (arc's radius * (the absolute value of arc's sweep))
+
+# Where an opening `halfWidth` either side of `offset` along a wall lies in
+# plan: its left and right ends on the centreline, the wall's direction there
+# and its exterior normal. Along a curved wall the opening stands on the
+# tangent at its middle.
+class:
+    patterns:
+        [a|] bim span record
+    members:
+        left as a cad vector2
+        right as a cad vector2
+        direction as a cad vector2
+        normal as a cad vector2
+
+function the bim span of {bim wall record:wallValue} at {a 64 bit floating-point number:offset} reaching {a 64 bit floating-point number:halfWidth}:
+    execute:
+        set direction to the bim direction of wallValue
+        set start to wallValue's start
+        set leftAlong to offset - halfWidth
+        set rightAlong to offset + halfWidth
+        if wallValue's bulge != 0.0:
+            set station to the bim station of wallValue at offset
+            set direction to station's direction
+            set start to a cad vector2 with x (station's point's x - (offset * direction's x)) and y (station's point's y - (offset * direction's y))
+        set left to a cad vector2 with x (start's x + (leftAlong * direction's x)) and y (start's y + (leftAlong * direction's y))
+        set right to a cad vector2 with x (start's x + (rightAlong * direction's x)) and y (start's y + (rightAlong * direction's y))
+        return @intrinsic("construct", a bim span record, left, right, direction, a cad vector2 with x (direction's y) and y (0.0 - direction's x))
+
+# The middle of a wall's centreline: the chord's middle moved by the bulge.
+function the bim middle of wall {bim wall record:wallValue}:
+    execute:
+        set direction to the bim direction of wallValue
+        set rise to wallValue's bulge
+        return a cad vector2 with x (((wallValue's start's x + wallValue's finish's x) * 0.5) + (rise * direction's y)) and y (((wallValue's start's y + wallValue's finish's y) * 0.5) - (rise * direction's x))
+
+# The bulge that makes a wall's arc pass over `location`: its distance from
+# the chord's middle toward the exterior side.
+function the bim bulge of {bim wall record:wallValue} toward {cad vector2:location}:
+    execute:
+        set direction to the bim direction of wallValue
+        set dx to location's x - ((wallValue's start's x + wallValue's finish's x) * 0.5)
+        set dy to location's y - ((wallValue's start's y + wallValue's finish's y) * 0.5)
+        return (dx * direction's y) - (dy * direction's x)
+
+# The distance from `location` to a wall's centreline.
+function the bim distance from {cad vector2:location} to the centreline of {bim wall record:wallValue}:
+    execute:
+        set arc to the bim arc of wallValue
+        if arc's curved = false:
+            return the cad distance from location to the segment from wallValue's start to wallValue's finish
+        set foot to the bim nearest station of location on wallValue
+        return the cad distance from location to foot's point
+
+# The number of straight pieces that follow `arc` offset by up to `reach`
+# within half a millimetre.
+function the bim pieces of {bim arc record:arc} reaching {a 64 bit floating-point number:reach}:
+    execute:
+        set outer to arc's radius + reach
+        set step to 2.0 * (the square root of (0.001 / outer))
+        set count to (@intrinsic("ceil", (the absolute value of arc's sweep) / step)) as an integer
+        if count < 2:
+            return 2
+        if count > 256:
+            return 256
+        return count
+
+function the bim wall thickness of {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set found to the bim wall type index of wallValue's typeId in modelValue
+        if found's valid = false:
+            return 0.0
+        return the bim thickness of (the item at found's position in (modelValue's wallTypes's values))
+
+local function the bim point {cad vector2:origin} shifted {a 64 bit floating-point number:amount} along {cad vector2:direction}:
+    execute:
+        return a cad vector2 with x (origin's x + (amount * direction's x)) and y (origin's y + (amount * direction's y))
+
+class:
+    patterns:
+        [a|] bim crossing record
+    members:
+        valid as a boolean
+        point as a cad vector2
+
+# The intersection of two infinite lines given by a point and a direction.
+local function the bim crossing of {cad vector2:firstOrigin} toward {cad vector2:firstDirection} with {cad vector2:secondOrigin} toward {cad vector2:secondDirection}:
+    execute:
+        set denominator to (firstDirection's x * secondDirection's y) - (firstDirection's y * secondDirection's x)
+        if (the absolute value of denominator) <= 1e-12:
+            return @intrinsic("construct", a bim crossing record, false, firstOrigin)
+        set dx to secondOrigin's x - firstOrigin's x
+        set dy to secondOrigin's y - firstOrigin's y
+        set distanceAlong to ((dx * secondDirection's y) - (dy * secondDirection's x)) / denominator
+        return @intrinsic("construct", a bim crossing record, true, the bim point firstOrigin shifted distanceAlong along firstDirection)
+
+class:
+    patterns:
+        [a|] bim end corners record
+    members:
+        exterior as a cad vector2
+        interior as a cad vector2
+        partner as a 64 bit integer
+
+local function cad bim points {cad vector2:first} and {cad vector2:second} meet:
+    execute:
+        return (the cad distance from first to second) <= the bim join tolerance
+
+# The corners of one end of a wall. At an L join (exactly one other wall ends
+# at this point) both side lines are cut at their crossings with the partner's
+# matching side lines; at a T join (the end lies inside another wall's
+# centreline) they are cut at the partner's side facing this wall; a free end
+# or a point where more than two walls meet stays square. Candidates come from
+# `index`, which must index the walls of `modelValue`, in ascending id order.
+function the bim end corners of {bim wall record:wallValue} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        # A curved wall's sides leave its ends along the arc's tangent.
+        set direction to the bim tangent of wallValue at finish atFinish
+        set normal to a cad vector2 with x (direction's y) and y (0.0 - direction's x)
+        set half to (the bim wall thickness of wallValue in modelValue) * 0.5
+        set endPoint to wallValue's start
+        if atFinish:
+            set endPoint to wallValue's finish
+        set exteriorOrigin to the bim point endPoint shifted half along normal
+        set interiorOrigin to the bim point endPoint shifted (0.0 - half) along normal
+        set square to @intrinsic("construct", a bim end corners record, exteriorOrigin, interiorOrigin, the bim refused id)
+        set partnerCount to 0
+        set partnerIndex to -1
+        set partnerFlipped to false
+        set partnerAtFinish to false
+        set teeIndex to -1
+        set candidates to the bim walls near endPoint on level wallValue's levelId in index
+        loop candidate from 0 to the length of candidates:
+            set cursor to (the bim wall index of (the item at candidate in candidates) in modelValue)'s position
+            set other to the item at cursor in (modelValue's walls's values)
+            if (other's id != wallValue's id) and (other's levelId = wallValue's levelId):
+                set atOtherStart to cad bim points endPoint and other's start meet
+                set atOtherFinish to cad bim points endPoint and other's finish meet
+                if atOtherStart or atOtherFinish:
+                    set partnerCount to partnerCount + 1
+                    set partnerIndex to cursor
+                    # Walls running the same way meet start-to-finish; walls running
+                    # opposite ways meet start-to-start or finish-to-finish.
+                    set partnerFlipped to (atFinish = atOtherFinish)
+                    set partnerAtFinish to atOtherFinish
+                else:
+                    set gap to the bim distance from endPoint to the centreline of other
+                    if gap <= the bim join tolerance:
+                        set teeIndex to cursor
+        free candidates
+        if partnerCount = 1:
+            set partner to the item at partnerIndex in (modelValue's walls's values)
+            set partnerDirection to the bim direction of partner
+            set partnerNormal to the bim exterior normal of partner
+            set partnerHalf to (the bim wall thickness of partner in modelValue) * 0.5
+            set partnerOrigin to partner's start
+            if (the absolute value of partner's bulge) > 0.0:
+                set partnerDirection to the bim tangent of partner at finish partnerAtFinish
+                set partnerNormal to a cad vector2 with x (partnerDirection's y) and y (0.0 - partnerDirection's x)
+                set partnerOrigin to endPoint
+            set exteriorPartnerSide to partnerHalf
+            if partnerFlipped:
+                set exteriorPartnerSide to 0.0 - partnerHalf
+            set exteriorLine to the bim point partnerOrigin shifted exteriorPartnerSide along partnerNormal
+            set interiorLine to the bim point partnerOrigin shifted (0.0 - exteriorPartnerSide) along partnerNormal
+            set exteriorCrossing to the bim crossing of exteriorOrigin toward direction with exteriorLine toward partnerDirection
+            set interiorCrossing to the bim crossing of interiorOrigin toward direction with interiorLine toward partnerDirection
+            if exteriorCrossing's valid and interiorCrossing's valid:
+                return @intrinsic("construct", a bim end corners record, exteriorCrossing's point, interiorCrossing's point, partner's id)
+            return square
+        if (partnerCount = 0) and (teeIndex >= 0):
+            set host to the item at teeIndex in (modelValue's walls's values)
+            set hostDirection to the bim direction of host
+            set hostNormal to the bim exterior normal of host
+            set hostHalf to (the bim wall thickness of host in modelValue) * 0.5
+            set hostOrigin to host's start
+            # The face of the host toward this wall's body.
+            set farPoint to wallValue's finish
+            if atFinish:
+                set farPoint to wallValue's start
+            if ((the absolute value of host's bulge) > 0.0) or ((the absolute value of wallValue's bulge) > 0.0):
+                # Against a curved host the face is taken along its tangent at
+                # the foot of this end; a curved wall's body lies along its
+                # tangent from the end.
+                set foot to the bim nearest station of endPoint on host
+                set hostDirection to foot's direction
+                set hostNormal to a cad vector2 with x (hostDirection's y) and y (0.0 - hostDirection's x)
+                set hostOrigin to foot's point
+                set inward to 1.0
+                if atFinish:
+                    set inward to -1.0
+                set farPoint to a cad vector2 with x (endPoint's x + (inward * direction's x)) and y (endPoint's y + (inward * direction's y))
+            set towardBody to ((farPoint's x - hostOrigin's x) * hostNormal's x) + ((farPoint's y - hostOrigin's y) * hostNormal's y)
+            set faceOffset to hostHalf
+            if towardBody < 0.0:
+                set faceOffset to 0.0 - hostHalf
+            set faceOrigin to the bim point hostOrigin shifted faceOffset along hostNormal
+            set exteriorCrossing to the bim crossing of exteriorOrigin toward direction with faceOrigin toward hostDirection
+            set interiorCrossing to the bim crossing of interiorOrigin toward direction with faceOrigin toward hostDirection
+            if exteriorCrossing's valid and interiorCrossing's valid:
+                return @intrinsic("construct", a bim end corners record, exteriorCrossing's point, interiorCrossing's point, host's id)
+        return square
+
+function the bim footprint of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set startCorners to the bim end corners of wallValue at finish false in modelValue using index
+        set finishCorners to the bim end corners of wallValue at finish true in modelValue using index
+        set valid to (the bim wall thickness of wallValue in modelValue) > 0.0
+        return @intrinsic("construct", a bim footprint record, valid, startCorners's exterior, finishCorners's exterior, finishCorners's interior, startCorners's interior)
+
+# The plan outline of a wall `breadth` thick with `footprint`: the footprint's
+# corners, and for a curved wall the points between them that follow its
+# exterior and interior arcs within half a millimetre. It runs from the start's
+# exterior corner along the exterior side, back along the interior side.
+function the bim outline of {bim wall record:wallValue} with {bim footprint record:footprint} wide {a 64 bit floating-point number:breadth}:
+    execute:
+        set corners to an empty list of a cad vector2
+        set arc to the bim arc of wallValue
+        set half to breadth * 0.5
+        set count to 2
+        if arc's curved:
+            set count to the bim pieces of arc reaching half
+        # Points follow the arcs only between both sides' end corners, at the
+        # stations the fast kernel's curved wall uses.
+        set fromT to 0.0
+        set toT to 1.0
+        if arc's curved:
+            set fromT to the maximum of (the bim fraction of footprint's startExterior on arc) and (the bim fraction of footprint's startInterior on arc)
+            set toT to the minimum of (the bim fraction of footprint's finishExterior on arc) and (the bim fraction of footprint's finishInterior on arc)
+        append footprint's startExterior to corners
+        if arc's curved:
+            loop piece from 1 to count:
+                set t to (piece as a 64 bit floating-point number) / (count as a 64 bit floating-point number)
+                if (t > (fromT + 1e-9)) and (t < (toT - 1e-9)):
+                    append (the bim point of arc at t offset half) to corners
+        append footprint's finishExterior to corners
+        append footprint's finishInterior to corners
+        if arc's curved:
+            set piece to count - 1
+            loop while piece >= 1:
+                set t to (piece as a 64 bit floating-point number) / (count as a 64 bit floating-point number)
+                if (t > (fromT + 1e-9)) and (t < (toT - 1e-9)):
+                    append (the bim point of arc at t offset (0.0 - half)) to corners
+                set piece to piece - 1
+        append footprint's startInterior to corners
+        return corners
+
+# For a single lookup; indexes the whole model first.
+function the bim footprint of {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        return the bim footprint of wallValue in modelValue using (the bim join index of modelValue)
+
+# ---------------------------------------------------------------- hosted openings
+
+# The openings of each wall, so that a wall finds its own openings without
+# scanning every opening of the model: `heads` holds, per wall position, the
+# position of its first opening (-1 for none), and `nexts`, per opening
+# position, the next opening of the same wall. Openings of a wall come in
+# ascending id order. Its lists are reference-counted and free themselves.
+class:
+    patterns:
+        [a|] bim hosted index record
+    members:
+        heads as the type of (a cad topology list of an integer)
+        nexts as the type of (a cad topology list of an integer)
+
+function the bim hosted index of {bim model record:modelValue}:
+    execute:
+        set result to @intrinsic("construct", a bim hosted index record, a cad topology list of an integer, a cad topology list of an integer)
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            append -1 to (result's heads's values)
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            append -1 to (result's nexts's values)
+        set cursor to (the length of (modelValue's openings's values)) - 1
+        loop while cursor >= 0:
+            set host to the bim wall index of (the item at cursor in (modelValue's openings's values))'s hostId in modelValue
+            if host's valid:
+                replace item at index cursor in (result's nexts's values) with (the item at host's position in (result's heads's values))
+                replace item at index host's position in (result's heads's values) with cursor
+            set cursor to cursor - 1
+        return result
+
+# The openings hosted by `wallValue`, in ascending id order: through
+# `hostedIndex` when it indexes `modelValue`'s current walls and openings, or
+# by scanning every opening.
+function the bim openings of {bim wall record:wallValue} in {bim model record:modelValue} through {bim hosted index record:hostedIndex}:
+    execute:
+        set found to an empty list of a bim opening record
+        set indexed to ((the length of (hostedIndex's heads's values)) = (the length of (modelValue's walls's values))) and ((the length of (hostedIndex's nexts's values)) = (the length of (modelValue's openings's values)))
+        set wallFound to the bim wall index of wallValue's id in modelValue
+        if indexed and wallFound's valid:
+            set cursor to the item at wallFound's position in (hostedIndex's heads's values)
+            loop while cursor >= 0:
+                append (the item at cursor in (modelValue's openings's values)) to found
+                set cursor to the item at cursor in (hostedIndex's nexts's values)
+            return found
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            if openingValue's hostId = wallValue's id:
+                append openingValue to found
+        return found
+
+function an empty bim hosted index:
+    execute:
+        return @intrinsic("construct", a bim hosted index record, a cad topology list of an integer, a cad topology list of an integer)
+
+# ---------------------------------------------------------------- signatures
+
+local function the bim number text of {a 64 bit floating-point number:value}:
+    execute:
+        set copy to value
+        set raw to the value at ((the address of copy) as a pointer to a 64 bit unsigned integer)
+        return the string form of raw
+
+local function the bim point text of {cad vector2:location}:
+    execute:
+        return ((the bim number text of location's x) + (the string form of ",")) + (the bim number text of location's y)
+
+# Everything a wall's solid depends on, written exactly: its own values, its
+# level, its footprint (which carries the joined walls) and every hosted
+# opening with the parameters of its type.
+function the bim signature of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        return the bim signature of wallValue in modelValue using index through (an empty bim hosted index)
+
+function the bim signature of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index} through {bim hosted index record:hostedIndex}:
+    execute:
+        set footprint to the bim footprint of wallValue in modelValue using index
+        set written to the bim point text of footprint's startExterior
+        set written to (written + (the string form of ";")) + (the bim point text of footprint's finishExterior)
+        set written to (written + (the string form of ";")) + (the bim point text of footprint's finishInterior)
+        set written to (written + (the string form of ";")) + (the bim point text of footprint's startInterior)
+        set written to (written + (the string form of ";h")) + (the bim number text of wallValue's height)
+        if wallValue's bulge != 0.0:
+            set written to (written + (the string form of ";b")) + (the bim number text of wallValue's bulge)
+        set levelFound to the bim level index of wallValue's levelId in modelValue
+        if levelFound's valid:
+            set written to (written + (the string form of ";e")) + (the bim number text of (the item at levelFound's position in (modelValue's levels's values))'s elevation)
+        set hostedOpenings to the bim openings of wallValue in modelValue through hostedIndex
+        loop cursor from 0 to the length of hostedOpenings:
+            set openingValue to the item at cursor in hostedOpenings
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            set written to (written + (the string form of ";o")) + (the bim number text of openingValue's offset)
+            if typeFound's valid:
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                set written to (written + (the string form of ",")) + (the bim number text of (the bim rough width of openingType))
+                set written to (written + (the string form of ",")) + (the bim number text of (the bim rough height of openingType))
+                set written to (written + (the string form of ",")) + (the bim number text of openingType's sill)
+        free hostedOpenings
+        return written
+
+# Everything a slab's solid depends on: its outline, thickness and level.
+function the bim slab signature of {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        set written to the string form of "s"
+        loop cursor from 0 to the length of (slabValue's outline's values):
+            set written to (written + (the string form of ";")) + (the bim point text of (the item at cursor in (slabValue's outline's values)))
+        set written to (written + (the string form of ";t")) + (the bim number text of slabValue's thickness)
+        set levelFound to the bim level index of slabValue's levelId in modelValue
+        if levelFound's valid:
+            set written to (written + (the string form of ";e")) + (the bim number text of (the item at levelFound's position in (modelValue's levels's values))'s elevation)
+        return written
+
+# ---------------------------------------------------------------- solids
+
+local function the bim profile through {cad vector2:a}, {cad vector2:b}, {cad vector2:c} and {cad vector2:d}:
+    execute:
+        set pieces to an empty list of the type of (the cad curve2 of (a new cad line2))
+        append (the cad curve2 of (a cad line2 from a to b)) to pieces
+        append (the cad curve2 of (a cad line2 from b to c)) to pieces
+        append (the cad curve2 of (a cad line2 from c to d)) to pieces
+        append (the cad curve2 of (a cad line2 from d to a)) to pieces
+        return pieces
+
+# The closed profile through `points`, in order.
+local function the bim profile along {a pointer to a list:points}:
+    execute:
+        set pieces to an empty list of the type of (the cad curve2 of (a new cad line2))
+        loop cursor from 0 to the length of points:
+            set following to the remainder of (cursor + 1) divided by (the length of points)
+            append (the cad curve2 of (a cad line2 from (the item at cursor in points) to (the item at following in points))) to pieces
+        return pieces
+
+local function the bim plane at height {a 64 bit floating-point number:elevation}:
+    execute:
+        return a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z elevation), x axis (the cad x axis) and y axis (the cad y axis)
+
+class:
+    patterns:
+        [a|] bim solid record
+    members:
+        status as an integer
+        solid as the type of (an empty cad body)
+        fast as a boolean
+        shape as a fast polyhedron record
+
+local function a bim solid failure {integer:status}:
+    execute:
+        return @intrinsic("construct", a bim solid record, status, an empty cad body, false, an empty fast polyhedron)
+
+# Openings narrower than this, or placed closer than this to an end, the base,
+# the top or each other, are left to the general booleans.
+function the bim fast tolerance:
+    replacement:
+        1e-9
+
+local function bim fast opening {fast opening record:candidate} precedes {fast opening record:other}:
+    execute:
+        return candidate's along < other's along
+
+# The solid of a wall. Openings that do not fit their host are refused first,
+# as the general construction refuses them. Then, when `preferringFast`, the
+# fast kernel builds the wall directly; walls it refuses (openings touching a
+# join's end face, standing on the base or overlapping) and every wall when
+# not `preferringFast` are extruded and voided with booleans by the port.
+function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index} preferring fast {boolean:preferringFast}:
+    execute:
+        return the bim solid of wallValue in modelValue using index through (an empty bim hosted index) preferring fast preferringFast
+
+function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index} through {bim hosted index record:hostedIndex} preferring fast {boolean:preferringFast}:
+    execute:
+        set footprint to the bim footprint of wallValue in modelValue using index
+        if footprint's valid = false:
+            return a bim solid failure 1
+        set levelFound to the bim level index of wallValue's levelId in modelValue
+        if levelFound's valid = false:
+            return a bim solid failure 1
+        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set direction to the bim direction of wallValue
+        set normal to the bim exterior normal of wallValue
+        set wallLength to the bim centreline length of wallValue
+        set curved to (the absolute value of wallValue's bulge) > 0.0
+        set breadth to the bim wall thickness of wallValue in modelValue
+        if curved:
+            # The interior side must keep a positive radius.
+            set arc to the bim arc of wallValue
+            if arc's radius <= (breadth * 0.5):
+                return a bim solid failure 1
+        set hosted to an empty list of a bim opening record
+        set fastOpenings to an empty list of a fast opening record
+        set ownOpenings to the bim openings of wallValue in modelValue through hostedIndex
+        loop cursor from 0 to the length of ownOpenings:
+            set openingValue to the item at cursor in ownOpenings
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if typeFound's valid = false:
+                free hosted
+                free fastOpenings
+                free ownOpenings
+                return a bim solid failure 3
+            set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+            set halfWidth to (the bim rough width of openingType) * 0.5
+            if (((openingValue's offset - halfWidth) <= 0.0) or ((openingValue's offset + halfWidth) >= wallLength)) or ((the bim head height of openingType) >= wallValue's height):
+                free hosted
+                free fastOpenings
+                free ownOpenings
+                return a bim solid failure 3
+            append openingValue to hosted
+            append (@intrinsic("construct", a fast opening record, openingValue's offset, the bim rough width of openingType, openingType's sill, the bim rough height of openingType)) to fastOpenings
+        free ownOpenings
+        if preferringFast:
+            loop outer from 1 to the length of fastOpenings:
+                set moving to the item at outer in fastOpenings
+                set slot to outer
+                set shifting to true
+                loop while shifting:
+                    if slot = 0:
+                        set shifting to false
+                    else if bim fast opening moving precedes (the item at (slot - 1) in fastOpenings):
+                        replace item at index slot in fastOpenings with (the item at (slot - 1) in fastOpenings)
+                        set slot to slot - 1
+                    else:
+                        set shifting to false
+                replace item at index slot in fastOpenings with moving
+            set corners to an empty list of a cad vector2
+            append footprint's startExterior to corners
+            append footprint's finishExterior to corners
+            append footprint's finishInterior to corners
+            append footprint's startInterior to corners
+            # A curved wall is built along its arc, with radial jambs.
+            set direct to @intrinsic("construct", a fast wall result record, fast wall degenerate footprint, an empty fast polyhedron)
+            if curved:
+                set wallArc to the bim arc of wallValue
+                set direct to the fast curved wall on corners about wallArc's centre spanning wallArc's radius, wallArc's startAngle and wallArc's sweep wide breadth in (the bim pieces of wallArc reaching (breadth * 0.5)) pieces from elevation rising wallValue's height with fastOpenings within the bim fast tolerance
+            else:
+                set direct to the fast wall on corners from elevation rising wallValue's height along wallValue's start toward direction with fastOpenings within the bim fast tolerance
+            free corners
+            if direct's reason = fast wall built:
+                free hosted
+                free fastOpenings
+                return @intrinsic("construct", a bim solid record, 0, an empty cad body, true, direct's shape)
+        free fastOpenings
+        set outline to the bim outline of wallValue with footprint wide breadth
+        set profile to the bim profile along outline
+        free outline
+        set extruded to the cad extrusion of profile on (the bim plane at height elevation) along (a cad vector3 with x 0.0, y 0.0 and z wallValue's height)
+        free profile
+        if extruded's valid = false:
+            free hosted
+            return a bim solid failure 2
+        set body to extruded's value
+        set reach to (breadth * 0.5) + 0.01
+        loop cursor from 0 to the length of hosted:
+            set openingValue to the item at cursor in hosted
+            set openingType to the item at (the bim opening type index of openingValue's typeId in modelValue)'s position in (modelValue's openingTypes's values)
+            set halfWidth to (the bim rough width of openingType) * 0.5
+            # Along a curved wall the box stands on the tangent at the
+            # opening's middle.
+            set station to the bim station of wallValue at openingValue's offset
+            set centre to station's point
+            set run to station's direction
+            set across to a cad vector2 with x (run's y) and y (0.0 - run's x)
+            set left to the bim point centre shifted (0.0 - halfWidth) along run
+            set right to the bim point centre shifted halfWidth along run
+            # A straight box clears the arc's faces, which leave the tangent
+            # by about w^2 / 2r over a half width w.
+            set boxReach to reach
+            if curved:
+                set innerRadius to (the bim arc of wallValue)'s radius - (breadth * 0.5)
+                set boxReach to reach + ((halfWidth * halfWidth) / (2.0 * innerRadius))
+            set boxProfile to the bim profile through (the bim point left shifted boxReach along across), (the bim point right shifted boxReach along across), (the bim point right shifted (0.0 - boxReach) along across) and (the bim point left shifted (0.0 - boxReach) along across)
+            set box to the cad extrusion of boxProfile on (the bim plane at height (elevation + openingType's sill)) along (a cad vector3 with x 0.0, y 0.0 and z (the bim rough height of openingType))
+            free boxProfile
+            if box's valid = false:
+                free hosted
+                return a bim solid failure 3
+            set voided to the cad combination of body and box's value using cad difference operation within 1e-9
+            if voided's valid = false:
+                free hosted
+                return a bim solid failure 3
+            set body to voided's value
+        free hosted
+        return @intrinsic("construct", a bim solid record, 0, body, false, an empty fast polyhedron)
+
+# ---------------------------------------------------------------- layers
+
+# One layer of a wall as its own solid, for showing the layers in 3D.
+class:
+    patterns:
+        [a|] bim layer solid record
+    members:
+        material as a string
+        shape as a fast polyhedron record
+
+# The layers of a wall as separate solids, exterior first, built directly by
+# the fast kernel: each layer's footprint runs between its two offsets from
+# the centreline, with its ends on the wall's end lines (so a mitred join
+# mitres every layer), and carries the wall's openings. Empty when the fast
+# kernel refuses any layer; the caller then shows the whole wall.
+function the bim layer solids of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set layered to a cad topology list of a bim layer solid record
+        set typeFound to the bim wall type index of wallValue's typeId in modelValue
+        set levelFound to the bim level index of wallValue's levelId in modelValue
+        set footprint to the bim footprint of wallValue in modelValue using index
+        if ((typeFound's valid = false) or (levelFound's valid = false)) or (footprint's valid = false):
+            return layered
+        set wallType to the item at typeFound's position in (modelValue's wallTypes's values)
+        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set breadth to the bim thickness of wallType
+        set half to breadth * 0.5
+        set openings to an empty list of a fast opening record
+        set hostedOpenings to the bim openings of wallValue in modelValue through (an empty bim hosted index)
+        loop cursor from 0 to the length of hostedOpenings:
+            set openingValue to the item at cursor in hostedOpenings
+            set openingTypeFound to the bim opening type index of openingValue's typeId in modelValue
+            if openingTypeFound's valid:
+                set openingType to the item at openingTypeFound's position in (modelValue's openingTypes's values)
+                append (@intrinsic("construct", a fast opening record, openingValue's offset, the bim rough width of openingType, openingType's sill, the bim rough height of openingType)) to openings
+        free hostedOpenings
+        loop outer from 1 to the length of openings:
+            set moving to the item at outer in openings
+            set slot to outer
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if (the item at (slot - 1) in openings)'s along > moving's along:
+                    replace item at index slot in openings with (the item at (slot - 1) in openings)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in openings with moving
+        set arc to the bim arc of wallValue
+        set side to 1.0
+        if arc's sweep < 0.0:
+            set side to -1.0
+        set top to half
+        set failed to false
+        loop cursor from 0 to the length of (wallType's layers's values):
+            set layerValue to the item at cursor in (wallType's layers's values)
+            set bottom to top - layerValue's thickness
+            # Fractions from the exterior corner toward the interior one.
+            set nearFraction to (half - top) / breadth
+            set farFraction to (half - bottom) / breadth
+            set corners to an empty list of a cad vector2
+            append (the cad lerp from footprint's startExterior to footprint's startInterior at nearFraction) to corners
+            append (the cad lerp from footprint's finishExterior to footprint's finishInterior at nearFraction) to corners
+            append (the cad lerp from footprint's finishExterior to footprint's finishInterior at farFraction) to corners
+            append (the cad lerp from footprint's startExterior to footprint's startInterior at farFraction) to corners
+            set built to @intrinsic("construct", a fast wall result record, fast wall degenerate footprint, an empty fast polyhedron)
+            if arc's curved:
+                # The layer's own arc, with the openings at the same angles.
+                set middleOffset to (top + bottom) * 0.5
+                set layerRadius to arc's radius + (side * middleOffset)
+                set layerOpenings to an empty list of a fast opening record
+                loop openingCursor from 0 to the length of openings:
+                    set opening to the item at openingCursor in openings
+                    set ratio to layerRadius / arc's radius
+                    append (@intrinsic("construct", a fast opening record, opening's along * ratio, opening's width * ratio, opening's sill, opening's height)) to layerOpenings
+                set built to the fast curved wall on corners about arc's centre spanning layerRadius, arc's startAngle and arc's sweep wide layerValue's thickness in (the bim pieces of arc reaching half) pieces from elevation rising wallValue's height with layerOpenings within the bim fast tolerance
+                free layerOpenings
+            else:
+                set built to the fast wall on corners from elevation rising wallValue's height along wallValue's start toward (the bim direction of wallValue) with openings within the bim fast tolerance
+            free corners
+            if built's reason = fast wall built:
+                append (@intrinsic("construct", a bim layer solid record, layerValue's material, built's shape)) to (layered's values)
+            else:
+                set failed to true
+            set top to bottom
+        free openings
+        if failed:
+            return a cad topology list of a bim layer solid record
+        return layered
+
+function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        return the bim solid of wallValue in modelValue using index preferring fast true
+
+# The solid of a slab: a prism over its outline from the level's elevation
+# down by its thickness, built by the fast kernel. An outline the prism
+# refuses (fewer than three points or no area) is degenerate. The outline must
+# not cross itself; the editor makes slabs from space outlines, which do not.
+function the bim slab solid of {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        set levelFound to the bim level index of slabValue's levelId in modelValue
+        if levelFound's valid = false:
+            return a bim solid failure 1
+        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set noHoles to an empty list of the type of (an empty list of a cad vector2)
+        set built to the fast prism over (slabValue's outline's values) with holes noHoles from (elevation - slabValue's thickness) rising slabValue's thickness within the bim fast tolerance
+        free noHoles
+        if built's reason != fast prism built:
+            return a bim solid failure 1
+        return @intrinsic("construct", a bim solid record, 0, an empty cad body, true, built's shape)
+
+# ---------------------------------------------------------------- incremental evaluation
+
+local function bim walls {bim wall record:first} and {bim wall record:second} are identical:
+    execute:
+        set sameEnds to ((first's start's x = second's start's x) and (first's start's y = second's start's y)) and ((first's finish's x = second's finish's x) and (first's finish's y = second's finish's y))
+        set sameRefs to (first's typeId = second's typeId) and (first's levelId = second's levelId)
+        return (sameEnds and sameRefs) and ((first's height = second's height) and (first's bulge = second's bulge))
+
+local function bim openings {bim opening record:first} and {bim opening record:second} are identical:
+    execute:
+        return ((first's typeId = second's typeId) and (first's hostId = second's hostId)) and (first's offset = second's offset)
+
+local function bim opening types {bim opening type record:first} and {bim opening type record:second} are identical:
+    execute:
+        return ((first's width = second's width) and (first's height = second's height)) and ((first's sill = second's sill) and (first's frame = second's frame))
+
+# Appends `wallValue` and every wall registered in its cells of `index`: the
+# walls whose junctions can involve it.
+local function bim slabs {bim slab record:first} and {bim slab record:second} are identical:
+    execute:
+        if ((first's levelId != second's levelId) or (first's thickness != second's thickness)) or ((the length of (first's outline's values)) != (the length of (second's outline's values))):
+            return false
+        loop cursor from 0 to the length of (first's outline's values):
+            set firstPoint to the item at cursor in (first's outline's values)
+            set secondPoint to the item at cursor in (second's outline's values)
+            if (firstPoint's x != secondPoint's x) or (firstPoint's y != secondPoint's y):
+                return false
+        return true
+
+local function mark bim wall {bim wall record:wallValue} and its neighbours in {bim join index record:index} into {a pointer to a list:marked}:
+    execute:
+        append wallValue's id to marked
+        set nearby to the bim walls along wallValue in index
+        loop cursor from 0 to the length of nearby:
+            append (the item at cursor in nearby) to marked
+        free nearby
+
+local function mark bim host {a 64 bit integer:hostId} into {a pointer to a list:marked}:
+    execute:
+        append hostId to marked
+
+# The records of `older` that are gone or changed and the records of `newer`
+# that are new or changed, between two models; each list in ascending id order.
+class:
+    patterns:
+        [a|] bim model change record
+    members:
+        removedWalls as the type of (an empty list of a bim wall record)
+        addedWalls as the type of (an empty list of a bim wall record)
+        removedOpenings as the type of (an empty list of a bim opening record)
+        addedOpenings as the type of (an empty list of a bim opening record)
+        removedSlabs as the type of (an empty list of a bim slab record)
+        addedSlabs as the type of (an empty list of a bim slab record)
+
+local function a new bim model change:
+    execute:
+        return @intrinsic("construct", a bim model change record, an empty list of a bim wall record, an empty list of a bim wall record, an empty list of a bim opening record, an empty list of a bim opening record, an empty list of a bim slab record, an empty list of a bim slab record)
+
+local function free bim model change {bim model change record:change}:
+    execute:
+        free change's removedWalls
+        free change's addedWalls
+        free change's removedOpenings
+        free change's addedOpenings
+        free change's removedSlabs
+        free change's addedSlabs
+
+# Compares `newer` with `older` record by record, walking both id-ordered
+# lists of walls, openings and slabs at once.
+local function compare bim model {bim model record:newer} with {bim model record:older} recording {bim model change record:change}:
+    execute:
+        set olderWalls to older's walls's values
+        set newerWalls to newer's walls's values
+        set olderCursor to 0
+        set newerCursor to 0
+        loop while (olderCursor < the length of olderWalls) or (newerCursor < the length of newerWalls):
+            if newerCursor = the length of newerWalls:
+                append (the item at olderCursor in olderWalls) to change's removedWalls
+                set olderCursor to olderCursor + 1
+            else if olderCursor = the length of olderWalls:
+                append (the item at newerCursor in newerWalls) to change's addedWalls
+                set newerCursor to newerCursor + 1
+            else:
+                set olderWall to the item at olderCursor in olderWalls
+                set newerWall to the item at newerCursor in newerWalls
+                if olderWall's id < newerWall's id:
+                    append olderWall to change's removedWalls
+                    set olderCursor to olderCursor + 1
+                else if olderWall's id > newerWall's id:
+                    append newerWall to change's addedWalls
+                    set newerCursor to newerCursor + 1
+                else:
+                    if (bim walls olderWall and newerWall are identical) = false:
+                        append olderWall to change's removedWalls
+                        append newerWall to change's addedWalls
+                    set olderCursor to olderCursor + 1
+                    set newerCursor to newerCursor + 1
+        set olderOpenings to older's openings's values
+        set newerOpenings to newer's openings's values
+        set olderCursor to 0
+        set newerCursor to 0
+        loop while (olderCursor < the length of olderOpenings) or (newerCursor < the length of newerOpenings):
+            if newerCursor = the length of newerOpenings:
+                append (the item at olderCursor in olderOpenings) to change's removedOpenings
+                set olderCursor to olderCursor + 1
+            else if olderCursor = the length of olderOpenings:
+                append (the item at newerCursor in newerOpenings) to change's addedOpenings
+                set newerCursor to newerCursor + 1
+            else:
+                set olderOpening to the item at olderCursor in olderOpenings
+                set newerOpening to the item at newerCursor in newerOpenings
+                if olderOpening's id < newerOpening's id:
+                    append olderOpening to change's removedOpenings
+                    set olderCursor to olderCursor + 1
+                else if olderOpening's id > newerOpening's id:
+                    append newerOpening to change's addedOpenings
+                    set newerCursor to newerCursor + 1
+                else:
+                    if (bim openings olderOpening and newerOpening are identical) = false:
+                        append olderOpening to change's removedOpenings
+                        append newerOpening to change's addedOpenings
+                    set olderCursor to olderCursor + 1
+                    set newerCursor to newerCursor + 1
+        set olderSlabs to older's slabs's values
+        set newerSlabs to newer's slabs's values
+        set olderCursor to 0
+        set newerCursor to 0
+        loop while (olderCursor < the length of olderSlabs) or (newerCursor < the length of newerSlabs):
+            if newerCursor = the length of newerSlabs:
+                append (the item at olderCursor in olderSlabs) to change's removedSlabs
+                set olderCursor to olderCursor + 1
+            else if olderCursor = the length of olderSlabs:
+                append (the item at newerCursor in newerSlabs) to change's addedSlabs
+                set newerCursor to newerCursor + 1
+            else:
+                set olderSlab to the item at olderCursor in olderSlabs
+                set newerSlab to the item at newerCursor in newerSlabs
+                if olderSlab's id < newerSlab's id:
+                    append olderSlab to change's removedSlabs
+                    set olderCursor to olderCursor + 1
+                else if olderSlab's id > newerSlab's id:
+                    append newerSlab to change's addedSlabs
+                    set newerCursor to newerCursor + 1
+                else:
+                    if (bim slabs olderSlab and newerSlab are identical) = false:
+                        append olderSlab to change's removedSlabs
+                        append newerSlab to change's addedSlabs
+                    set olderCursor to olderCursor + 1
+                    set newerCursor to newerCursor + 1
+
+# Compares only the elements with the ids in `ids` (ascending, without
+# repeats). Ids of types, levels and dimensions are passed over here.
+local function compare bim journal {a pointer to a list:ids} of {bim model record:newer} with {bim model record:older} recording {bim model change record:change}:
+    execute:
+        loop cursor from 0 to the length of ids:
+            set elementId to the item at cursor in ids
+            set olderWall to the bim wall index of elementId in older
+            set newerWall to the bim wall index of elementId in newer
+            set olderOpening to the bim opening index of elementId in older
+            set newerOpening to the bim opening index of elementId in newer
+            set olderSlab to the bim slab index of elementId in older
+            set newerSlab to the bim slab index of elementId in newer
+            if olderWall's valid or newerWall's valid:
+                set same to false
+                if olderWall's valid and newerWall's valid:
+                    set same to bim walls (the item at olderWall's position in (older's walls's values)) and (the item at newerWall's position in (newer's walls's values)) are identical
+                if same = false:
+                    if olderWall's valid:
+                        append (the item at olderWall's position in (older's walls's values)) to change's removedWalls
+                    if newerWall's valid:
+                        append (the item at newerWall's position in (newer's walls's values)) to change's addedWalls
+            else if olderOpening's valid or newerOpening's valid:
+                set same to false
+                if olderOpening's valid and newerOpening's valid:
+                    set same to bim openings (the item at olderOpening's position in (older's openings's values)) and (the item at newerOpening's position in (newer's openings's values)) are identical
+                if same = false:
+                    if olderOpening's valid:
+                        append (the item at olderOpening's position in (older's openings's values)) to change's removedOpenings
+                    if newerOpening's valid:
+                        append (the item at newerOpening's position in (newer's openings's values)) to change's addedOpenings
+            else if olderSlab's valid or newerSlab's valid:
+                set same to false
+                if olderSlab's valid and newerSlab's valid:
+                    set same to bim slabs (the item at olderSlab's position in (older's slabs's values)) and (the item at newerSlab's position in (newer's slabs's values)) are identical
+                if same = false:
+                    if olderSlab's valid:
+                        append (the item at olderSlab's position in (older's slabs's values)) to change's removedSlabs
+                    if newerSlab's valid:
+                        append (the item at newerSlab's position in (newer's slabs's values)) to change's addedSlabs
+
+# Updates `index` from the walls of `older` to those of `newer` along `change`,
+# and appends to `marked` the id of every element whose geometry may differ:
+# changed walls with the walls that join them before and after the change,
+# hosts of changed openings, changed slabs, and, for each wall type, level or
+# opening type among `candidates` that is new or changed, the walls of that
+# type, the walls and slabs on that level, or the hosts of openings of that
+# type.
+local function mark bim change {bim model change record:difference} of {bim model record:newer} against {bim model record:older} for {a pointer to a list:candidates} updating {a pointer to a bim join index record:index} into {a pointer to a list:marked}:
+    execute:
+        set removed to difference's removedWalls
+        set added to difference's addedWalls
+        set newerWalls to newer's walls's values
+        # Neighbours before the change come from the index as it still is.
+        loop cursor from 0 to the length of removed:
+            mark bim wall (the item at cursor in removed) and its neighbours in (@intrinsic("dereference", index)) into marked
+        loop cursor from 0 to the length of removed:
+            remove bim wall (the item at cursor in removed) from index
+        loop cursor from 0 to the length of added:
+            add bim wall (the item at cursor in added) to index
+        loop cursor from 0 to the length of added:
+            mark bim wall (the item at cursor in added) and its neighbours in (@intrinsic("dereference", index)) into marked
+        loop cursor from 0 to the length of difference's removedOpenings:
+            mark bim host (the item at cursor in difference's removedOpenings)'s hostId into marked
+        loop cursor from 0 to the length of difference's addedOpenings:
+            mark bim host (the item at cursor in difference's addedOpenings)'s hostId into marked
+        loop cursor from 0 to the length of difference's removedSlabs:
+            append (the item at cursor in difference's removedSlabs)'s id to marked
+        loop cursor from 0 to the length of difference's addedSlabs:
+            append (the item at cursor in difference's addedSlabs)'s id to marked
+        loop candidateCursor from 0 to the length of candidates:
+            set candidate to the item at candidateCursor in candidates
+            # A changed wall type changes the thickness of its walls and so the
+            # junctions of their neighbours.
+            set newerTypeFound to the bim wall type index of candidate in newer
+            if newerTypeFound's valid:
+                set newerType to the item at newerTypeFound's position in (newer's wallTypes's values)
+                set olderFound to the bim wall type index of candidate in older
+                set typeChanged to true
+                if olderFound's valid:
+                    set typeChanged to (the bim thickness of newerType) != (the bim thickness of (the item at olderFound's position in (older's wallTypes's values)))
+                if typeChanged:
+                    loop cursor from 0 to the length of newerWalls:
+                        if (the item at cursor in newerWalls)'s typeId = candidate:
+                            mark bim wall (the item at cursor in newerWalls) and its neighbours in (@intrinsic("dereference", index)) into marked
+            # A changed level moves its walls and slabs.
+            set newerLevelFound to the bim level index of candidate in newer
+            if newerLevelFound's valid:
+                set newerLevel to the item at newerLevelFound's position in (newer's levels's values)
+                set olderFound to the bim level index of candidate in older
+                set levelChanged to true
+                if olderFound's valid:
+                    set levelChanged to newerLevel's elevation != (the item at olderFound's position in (older's levels's values))'s elevation
+                if levelChanged:
+                    loop cursor from 0 to the length of newerWalls:
+                        if (the item at cursor in newerWalls)'s levelId = candidate:
+                            append (the item at cursor in newerWalls)'s id to marked
+                    loop cursor from 0 to the length of (newer's slabs's values):
+                        if (the item at cursor in (newer's slabs's values))'s levelId = candidate:
+                            append (the item at cursor in (newer's slabs's values))'s id to marked
+            set newerOpeningTypeFound to the bim opening type index of candidate in newer
+            if newerOpeningTypeFound's valid:
+                set newerOpeningType to the item at newerOpeningTypeFound's position in (newer's openingTypes's values)
+                set olderFound to the bim opening type index of candidate in older
+                set typeChanged to true
+                if olderFound's valid:
+                    set typeChanged to (bim opening types newerOpeningType and (the item at olderFound's position in (older's openingTypes's values)) are identical) = false
+                if typeChanged:
+                    loop cursor from 0 to the length of (newer's openings's values):
+                        if (the item at cursor in (newer's openings's values))'s typeId = candidate:
+                            mark bim host (the item at cursor in (newer's openings's values))'s hostId into marked
+
+# Applies a record-by-record change to `records`, ordered by id: a removed
+# record whose id is not added again is deleted, and an added record replaces
+# the record with its id or is inserted at its place.
+local function apply bim removals {a pointer to a list:removedRecords} and additions {a pointer to a list:addedRecords} to {a pointer to a list:records}:
+    execute:
+        loop cursor from 0 to the length of removedRecords:
+            set gone to (the item at cursor in removedRecords)'s id
+            if (the bim position of gone among addedRecords)'s valid = false:
+                set found to the bim position of gone among records
+                if found's valid:
+                    remove item found's position from records
+        loop cursor from 0 to the length of addedRecords:
+            set arriving to the item at cursor in addedRecords
+            set slot to the bim insertion position of arriving's id among records
+            set present to false
+            if slot < the length of records:
+                set present to (the item at slot in records)'s id = arriving's id
+            if present:
+                replace item at index slot in records with arriving
+            else:
+                insert arriving into records at index slot
+
+# Counts an examined element of `target`; true when its stored signature
+# differs from `signatureText`, so it must be rebuilt.
+local function bim element {a 64 bit integer:elementId} needs signature {a string:signatureText} in {a pointer to a bim evaluation record:target}:
+    execute:
+        set target's examined to target's examined + 1
+        set slot to (the bim position of elementId among (target's elements's values))'s position
+        return (the item at slot in (target's elements's values))'s signature != signatureText
+
+# Stores a new build of an element of `target` under the next serial and
+# lists it as changed.
+local function record bim build {bim solid record:built} of {a 64 bit integer:elementId} signed {a string:signatureText} in {a pointer to a bim evaluation record:target}:
+    execute:
+        set slot to (the bim position of elementId among (target's elements's values))'s position
+        replace item at index slot in (target's elements's values) with (@intrinsic("construct", a bim element geometry record, elementId, signatureText, target's nextSerial, built's status, built's solid, built's fast, built's shape))
+        set target's nextSerial to target's nextSerial + (1 as a 64 bit integer)
+        set target's rebuilt to target's rebuilt + 1
+        append elementId to (target's changed's values)
+
+# Brings `target` up to date with `modelValue` in place, reusing every element
+# that the changes since its last model cannot have affected, and every
+# examined element whose signature is unchanged. When `modelValue`'s journal
+# continues the one `target` followed, only the elements journalled since are
+# compared, and the work is proportional to the changes; otherwise the models
+# are compared record by record. A new element starts from a placeholder whose
+# empty signature no evaluated element has, so it is always built.
+function update bim evaluation {a pointer to a bim evaluation record:target} to {bim model record:modelValue}:
+    execute:
+        set marked to an empty list of a 64 bit integer
+        set change to a new bim model change
+        set journalLength to the length of (modelValue's journal's values)
+        set candidates to an empty list of a 64 bit integer
+        set continuing to (modelValue's journal's references = target's journal's references) and (journalLength >= target's journalSeen)
+        if continuing:
+            loop cursor from (target's journalSeen) to journalLength:
+                append (the item at cursor in (modelValue's journal's values)) to candidates
+            sort and deduplicate bim ids candidates
+            compare bim journal candidates of modelValue with target's modelValue recording change
+        else:
+            compare bim model modelValue with target's modelValue recording change
+            loop cursor from 0 to the length of (modelValue's wallTypes's values):
+                append (the item at cursor in (modelValue's wallTypes's values))'s id to candidates
+            loop cursor from 0 to the length of (modelValue's levels's values):
+                append (the item at cursor in (modelValue's levels's values))'s id to candidates
+            loop cursor from 0 to the length of (modelValue's openingTypes's values):
+                append (the item at cursor in (modelValue's openingTypes's values))'s id to candidates
+        mark bim change change of modelValue against target's modelValue for candidates updating (the address of (target's index)) into marked
+        free candidates
+        set target's journal to modelValue's journal
+        set target's journalSeen to journalLength
+        sort and deduplicate bim ids marked
+        set geometries to target's elements's values
+        set target's changed to a cad topology list of a 64 bit integer
+        set goneIds to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of change's removedWalls:
+            append (the item at cursor in change's removedWalls)'s id to goneIds
+        loop cursor from 0 to the length of change's removedSlabs:
+            append (the item at cursor in change's removedSlabs)'s id to goneIds
+        loop cursor from 0 to the length of goneIds:
+            set gone to the item at cursor in goneIds
+            if ((the bim wall index of gone in modelValue)'s valid = false) and ((the bim slab index of gone in modelValue)'s valid = false):
+                set found to the bim position of gone among geometries
+                if found's valid:
+                    remove item found's position from geometries
+                    append gone to (target's changed's values)
+        free goneIds
+        set arrivingIds to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of change's addedWalls:
+            append (the item at cursor in change's addedWalls)'s id to arrivingIds
+        loop cursor from 0 to the length of change's addedSlabs:
+            append (the item at cursor in change's addedSlabs)'s id to arrivingIds
+        loop cursor from 0 to the length of arrivingIds:
+            set arriving to the item at cursor in arrivingIds
+            set slot to the bim insertion position of arriving among geometries
+            set present to false
+            if slot < the length of geometries:
+                set present to (the item at slot in geometries)'s id = arriving
+            if present = false:
+                insert (@intrinsic("construct", a bim element geometry record, arriving, the string form of "", 0 as a 64 bit integer, 1, an empty cad body, false, an empty fast polyhedron)) into geometries at index slot
+        free arrivingIds
+        set target's examined to 0
+        set target's rebuilt to 0
+        # When many walls are examined, each finds its own openings through
+        # an index; a few walls scan the openings, which costs less than
+        # indexing them all.
+        set hostedIndex to an empty bim hosted index
+        if (the length of marked) > 32:
+            set hostedIndex to the bim hosted index of modelValue
+        loop cursor from 0 to the length of marked:
+            set elementId to the item at cursor in marked
+            set found to the bim wall index of elementId in modelValue
+            set slabFound to the bim slab index of elementId in modelValue
+            if found's valid:
+                set wallValue to the item at found's position in (modelValue's walls's values)
+                set signatureText to the bim signature of wallValue in modelValue using target's index through hostedIndex
+                if bim element elementId needs signature signatureText in target:
+                    set joins to target's index
+                    record bim build (the bim solid of wallValue in modelValue using joins through hostedIndex preferring fast true) of elementId signed signatureText in target
+            else if slabFound's valid:
+                set slabValue to the item at slabFound's position in (modelValue's slabs's values)
+                set signatureText to the bim slab signature of slabValue in modelValue
+                if bim element elementId needs signature signatureText in target:
+                    record bim build (the bim slab solid of slabValue in modelValue) of elementId signed signatureText in target
+        sort and deduplicate bim ids (target's changed's values)
+        set target's generation to target's generation + (1 as a 64 bit integer)
+        apply bim removals change's removedWalls and additions change's addedWalls to (target's modelValue's walls's values)
+        apply bim removals change's removedOpenings and additions change's addedOpenings to (target's modelValue's openings's values)
+        apply bim removals change's removedSlabs and additions change's addedSlabs to (target's modelValue's slabs's values)
+        set target's modelValue's nextId to modelValue's nextId
+        set target's modelValue's levels to the cad clone of modelValue's levels
+        set target's modelValue's wallTypes to the cad clone of modelValue's wallTypes
+        set target's modelValue's openingTypes to the cad clone of modelValue's openingTypes
+        free bim model change change
+        free marked
+
+# The evaluation of `modelValue` that follows `previous`; `previous` is left
+# unchanged.
+function the bim evaluation of {bim model record:modelValue} after {bim evaluation record:previous}:
+    execute:
+        set result to @intrinsic("construct", a bim evaluation record, the bim snapshot of previous's modelValue, the bim copy of previous's index, the cad clone of previous's elements, previous's nextSerial, previous's generation, previous's changed, 0, 0, previous's journal, previous's journalSeen)
+        update bim evaluation (the address of result) to modelValue
+        return result
+
+# An element's triangles, appended to `target` in the fast kernel's mesh form,
+# from its polyhedron or from its B-rep solid.
+function append bim mesh of {bim element geometry record:geometry} to {a pointer to a fast mesh record:target}:
+    execute:
+        if geometry's status != 0:
+            return nothing
+        if geometry's fast:
+            append fast mesh of geometry's shape to target
+            return nothing
+        set tessellated to the cad mesh of geometry's solid with maximum angle 0.3 within 0.001
+        set base to the length of (target's positions's values)
+        loop cursor from 0 to the length of tessellated's positions:
+            append (the item at cursor in tessellated's positions) to (target's positions's values)
+            append (the item at cursor in tessellated's normals) to (target's normals's values)
+        loop cursor from 0 to the length of tessellated's triangles:
+            set face to the item at cursor in tessellated's triangles
+            append (base + face's first) to (target's triangles's values)
+            append (base + face's second) to (target's triangles's values)
+            append (base + face's third) to (target's triangles's values)
+
+function the bim volume of {bim element geometry record:geometry}:
+    execute:
+        if geometry's status != 0:
+            return 0.0
+        if geometry's fast:
+            return the fast volume of geometry's shape
+        set shape to the cad mesh of geometry's solid with maximum angle 0.3 within 1e-6
+        set properties to the cad mass properties of shape
+        if properties's valid = false:
+            return 0.0
+        return properties's value's volume

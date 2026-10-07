@@ -1,0 +1,351 @@
+# SPDX-License-Identifier: MPL-2.0
+# Hatching of cut faces, as geometry only. A wall's cut is divided into its
+# type's layers: each layer is a band between two lines parallel to the wall,
+# in plan, or between two vertical lines where a section crosses the wall.
+# A curved wall's layers are rings about its centre; in plan each is drawn as
+# one straight band per wedge of the wall's arc, matching the arc's pieces, and
+# a section crosses each ring in up to two intervals.
+# Each band is filled and hatched with the pattern of its material: brick
+# diagonal, insulation a zigzag, concrete crossed, sand-lime fine diagonal.
+# Hatch lines are computed in pixels, at a fixed spacing on screen, and
+# anchored to a point that moves with the drawing, so patterns stay put while
+# panning and meet across neighbouring faces.
+import examples/bim-slice/bim_scene.dl
+import lib/text.dl
+
+# The part of a cut where `low` <= dot(point, normal) <= `high`, in drawing
+# coordinates, with its layer's material.
+class:
+    patterns:
+        [a|] bim hatch band record
+    members:
+        normal as a cad vector2
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+        material as a string
+        # A wedge band is further limited to `firstNormal . p >= firstLimit`
+        # and `secondNormal . p >= secondLimit`; a zero normal sets no limit.
+        firstNormal as a cad vector2
+        firstLimit as a 64 bit floating-point number
+        secondNormal as a cad vector2
+        secondLimit as a 64 bit floating-point number
+
+# How a material is drawn: fill and line colours, the line direction in
+# degrees on screen and spacing in pixels, crossed lines, or a zigzag.
+class:
+    patterns:
+        [a|] bim hatch pattern record
+    members:
+        fillRed as an integer
+        fillGreen as an integer
+        fillBlue as an integer
+        lineRed as an integer
+        lineGreen as an integer
+        lineBlue as an integer
+        angle as a 64 bit floating-point number
+        spacing as a 64 bit floating-point number
+        crossed as a boolean
+        zigzag as a boolean
+
+local function a bim hatch pattern filled {integer:fr}, {integer:fg}, {integer:fb} lined {integer:lr}, {integer:lg}, {integer:lb} at {a 64 bit floating-point number:degrees} every {a 64 bit floating-point number:pixels} crossed {boolean:isCrossed} zigzag {boolean:isZigzag}:
+    execute:
+        return @intrinsic("construct", a bim hatch pattern record, fr, fg, fb, lr, lg, lb, degrees, pixels, isCrossed, isZigzag)
+
+# The pattern of a material, by name: brick, insulation, concrete and
+# sand-lime are recognised; anything else gets a plain diagonal hatch.
+function the bim hatch pattern of material {a string:name}:
+    execute:
+        set lowered to the lowercase form of name
+        if lowered contains "brick":
+            return a bim hatch pattern filled 232, 176, 150 lined 150, 70, 50 at 45.0 every 5.0 crossed false zigzag false
+        if lowered contains "insulation":
+            return a bim hatch pattern filled 252, 243, 190 lined 175, 140, 40 at 0.0 every 0.0 crossed false zigzag true
+        if lowered contains "concrete":
+            return a bim hatch pattern filled 214, 214, 214 lined 105, 105, 105 at 45.0 every 7.0 crossed true zigzag false
+        if lowered contains "sand-lime":
+            return a bim hatch pattern filled 236, 231, 222 lined 125, 115, 100 at 45.0 every 3.5 crossed false zigzag false
+        return a bim hatch pattern filled 214, 219, 228 lined 90, 96, 112 at 45.0 every 6.0 crossed false zigzag false
+
+local function a bim hatch band along {cad vector2:normal} from {a 64 bit floating-point number:low} to {a 64 bit floating-point number:high} of {a string:material}:
+    execute:
+        set none to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim hatch band record, normal, the minimum of low and high, the maximum of low and high, material, none, 0.0, none, 0.0)
+
+# One band over the whole cut, for elements without layers.
+function the bim whole hatch band of {a string:material}:
+    execute:
+        return a bim hatch band along (a cad vector2 with x 1.0 and y 0.0) from (0.0 - (1.0 / 0.0)) to (1.0 / 0.0) of material
+
+# Appends the layers of `wallValue`'s type, from the exterior face inward, as
+# offsets from the centreline along the exterior normal: an (inner, outer)
+# pair per layer in `offsets` and its material in `materials`.
+local function collect bim layer offsets of {bim wall record:wallValue} in {bim model record:modelValue} into {a pointer to a list:offsets} naming {a pointer to a list:materials}:
+    execute:
+        set found to the bim wall type index of wallValue's typeId in modelValue
+        if found's valid = false:
+            return nothing
+        set wallType to the item at found's position in (modelValue's wallTypes's values)
+        set outer to (the bim thickness of wallType) * 0.5
+        loop cursor from 0 to the length of (wallType's layers's values):
+            set layerValue to the item at cursor in (wallType's layers's values)
+            append (outer - layerValue's thickness) to offsets
+            append outer to offsets
+            append layerValue's material to materials
+            set outer to outer - layerValue's thickness
+
+# Appends the plan bands of a curved wall's layers: per wedge of its arc, as
+# many as its outline has pieces, one band per layer between the chords of the
+# layer's rings over that wedge. The first and last wedges reach past the
+# arc's ends, where joins may extend the wall.
+local function append bim wedge bands of {bim wall record:wallValue} along {bim arc record:arc} with {a pointer to a list:offsets} naming {a pointer to a list:materials} wide {a 64 bit floating-point number:breadth} into {a pointer to a list:bands}:
+    execute:
+        # The same pieces as the wall's outline (`the bim outline of`).
+        set count to the bim pieces of arc reaching (breadth * 0.5)
+        set side to 1.0
+        if arc's sweep < 0.0:
+            set side to -1.0
+        set angleStep to arc's sweep / (count as a 64 bit floating-point number)
+        set shrink to the cosine of (angleStep * 0.5)
+        set none to a cad vector2 with x 0.0 and y 0.0
+        loop piece from 0 to count:
+            set fromAngle to arc's startAngle + ((piece as a 64 bit floating-point number) * angleStep)
+            set toAngle to fromAngle + angleStep
+            set middleAngle to fromAngle + (angleStep * 0.5)
+            set radial to a cad vector2 with x (the cosine of middleAngle) and y (the sine of middleAngle)
+            set centreValue to (arc's centre's x * radial's x) + (arc's centre's y * radial's y)
+            # Keep the side of each angleStep edge toward the angleStep.
+            set firstNormal to none
+            set firstLimit to 0.0
+            if piece > 0:
+                set firstNormal to a cad vector2 with x (side * (0.0 - (the sine of fromAngle))) and y (side * (the cosine of fromAngle))
+                set firstLimit to (arc's centre's x * firstNormal's x) + (arc's centre's y * firstNormal's y)
+            set secondNormal to none
+            set secondLimit to 0.0
+            if piece < (count - 1):
+                set secondNormal to a cad vector2 with x (side * (the sine of toAngle)) and y (side * (0.0 - (the cosine of toAngle)))
+                set secondLimit to (arc's centre's x * secondNormal's x) + (arc's centre's y * secondNormal's y)
+            loop cursor from 0 to the length of materials:
+                set nearRadius to arc's radius + (side * (the item at (cursor * 2) in offsets))
+                set farRadius to arc's radius + (side * (the item at ((cursor * 2) + 1) in offsets))
+                set low to centreValue + ((the minimum of nearRadius and farRadius) * shrink)
+                set high to centreValue + ((the maximum of nearRadius and farRadius) * shrink)
+                append (@intrinsic("construct", a bim hatch band record, radial, low, high, the item at cursor in materials, firstNormal, firstLimit, secondNormal, secondLimit)) to bands
+
+# The layer bands of `wallValue` in plan drawing coordinates (model x and y).
+function the bim plan hatch bands of {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set found to a cad topology list of a bim hatch band record
+        set offsets to an empty list of a 64 bit floating-point number
+        set materials to an empty list of a string
+        collect bim layer offsets of wallValue in modelValue into offsets naming materials
+        set arc to the bim arc of wallValue
+        if arc's curved:
+            append bim wedge bands of wallValue along arc with offsets naming materials wide (the bim wall thickness of wallValue in modelValue) into (found's values)
+            free offsets
+            free materials
+            return found
+        set normal to the bim exterior normal of wallValue
+        set base to (wallValue's start's x * normal's x) + (wallValue's start's y * normal's y)
+        loop cursor from 0 to the length of materials:
+            append (a bim hatch band along normal from (base + (the item at (cursor * 2) in offsets)) to (base + (the item at ((cursor * 2) + 1) in offsets)) of (the item at cursor in materials)) to (found's values)
+        free offsets
+        free materials
+        return found
+
+# The layer bands of `wallValue` in the drawing coordinates of the section
+# from `first` to `second` (x along the section line from `first`): vertical
+# bands where the section line crosses the layers. A section running along
+# the wall lies in one layer, which then covers the whole cut.
+function the bim section hatch bands of {bim wall record:wallValue} in {bim model record:modelValue} from {cad vector2:first} to {cad vector2:second}:
+    execute:
+        set found to a cad topology list of a bim hatch band record
+        set offsets to an empty list of a 64 bit floating-point number
+        set materials to an empty list of a string
+        collect bim layer offsets of wallValue in modelValue into offsets naming materials
+        set run to the cad distance from first to second
+        set arc to the bim arc of wallValue
+        if arc's curved:
+            # A ring of radii a to b crosses the line at the foot f, a distance
+            # d from the centre, over f +- [sqrt(a^2 - d^2), sqrt(b^2 - d^2)].
+            set ux to (second's x - first's x) / run
+            set uy to (second's y - first's y) / run
+            set foot to ((arc's centre's x - first's x) * ux) + ((arc's centre's y - first's y) * uy)
+            set gap to (((arc's centre's x - first's x) * uy) - ((arc's centre's y - first's y) * ux))
+            set horizontal to a cad vector2 with x 1.0 and y 0.0
+            set side to 1.0
+            if arc's sweep < 0.0:
+                set side to -1.0
+            loop cursor from 0 to the length of materials:
+                set nearRadius to arc's radius + (side * (the item at (cursor * 2) in offsets))
+                set farRadius to arc's radius + (side * (the item at ((cursor * 2) + 1) in offsets))
+                set smaller to the minimum of nearRadius and farRadius
+                set larger to the maximum of nearRadius and farRadius
+                if larger > (the absolute value of gap):
+                    set outerReach to the square root of ((larger * larger) - (gap * gap))
+                    set innerReach to 0.0
+                    if smaller > (the absolute value of gap):
+                        set innerReach to the square root of ((smaller * smaller) - (gap * gap))
+                    append (a bim hatch band along horizontal from (foot - outerReach) to (foot - innerReach) of (the item at cursor in materials)) to (found's values)
+                    append (a bim hatch band along horizontal from (foot + innerReach) to (foot + outerReach) of (the item at cursor in materials)) to (found's values)
+            free offsets
+            free materials
+            return found
+        set normal to the bim exterior normal of wallValue
+        set dx to (second's x - first's x) / run
+        set dy to (second's y - first's y) / run
+        set startOffset to ((first's x - wallValue's start's x) * normal's x) + ((first's y - wallValue's start's y) * normal's y)
+        set rate to (dx * normal's x) + (dy * normal's y)
+        set across to a cad vector2 with x 1.0 and y 0.0
+        loop cursor from 0 to the length of materials:
+            set inner to the item at (cursor * 2) in offsets
+            set outer to the item at ((cursor * 2) + 1) in offsets
+            set material to the item at cursor in materials
+            if (the absolute value of rate) > 1e-9:
+                append (a bim hatch band along across from ((inner - startOffset) / rate) to ((outer - startOffset) / rate) of material) to (found's values)
+            else if (startOffset >= inner) and (startOffset <= outer):
+                append (the bim whole hatch band of material) to (found's values)
+        free offsets
+        free materials
+        return found
+
+local function the bim ring {a pointer to a list:corners} kept where dot along {cad vector2:direction} is at least {a 64 bit floating-point number:limit}:
+    execute:
+        set survivors to an empty list of a cad vector2
+        set count to the length of corners
+        loop cursor from 0 to count:
+            set here to the item at cursor in corners
+            set following to the item at (the remainder of (cursor + 1) divided by count) in corners
+            set hereValue to (here's x * direction's x) + (here's y * direction's y)
+            set followingValue to (following's x * direction's x) + (following's y * direction's y)
+            if hereValue >= limit:
+                append here to survivors
+            if (hereValue >= limit) != (followingValue >= limit):
+                set fraction to (limit - hereValue) / (followingValue - hereValue)
+                append (a cad vector2 with x (here's x + (fraction * (following's x - here's x))) and y (here's y + (fraction * (following's y - here's y)))) to survivors
+        return survivors
+
+# The part of the closed ring `corners` inside `band`; empty when none.
+function the bim ring {a pointer to a list:corners} within {bim hatch band record:band}:
+    execute:
+        set lowerKept to the bim ring corners kept where dot along band's normal is at least band's low
+        set opposite to a cad vector2 with x (0.0 - band's normal's x) and y (0.0 - band's normal's y)
+        set result to the bim ring lowerKept kept where dot along opposite is at least (0.0 - band's high)
+        free lowerKept
+        if ((band's firstNormal's x) != 0.0) or ((band's firstNormal's y) != 0.0):
+            set limited to the bim ring result kept where dot along band's firstNormal is at least band's firstLimit
+            free result
+            set result to limited
+        if ((band's secondNormal's x) != 0.0) or ((band's secondNormal's y) != 0.0):
+            set limited to the bim ring result kept where dot along band's secondNormal is at least band's secondLimit
+            free result
+            set result to limited
+        if (the length of result) < 3:
+            clear result
+        return result
+
+# Appends to `segments`, as pairs of points, the pieces of the line from `a`
+# to `b` that lie inside the closed ring `corners` (all in pixels).
+function append bim segment {cad vector2:a} to {cad vector2:b} inside {a pointer to a list:corners} into {a pointer to a list:segments}:
+    execute:
+        set cuts to an empty list of a 64 bit floating-point number
+        append 0.0 to cuts
+        append 1.0 to cuts
+        set count to the length of corners
+        set ex to b's x - a's x
+        set ey to b's y - a's y
+        loop cursor from 0 to count:
+            set here to the item at cursor in corners
+            set following to the item at (the remainder of (cursor + 1) divided by count) in corners
+            set fx to following's x - here's x
+            set fy to following's y - here's y
+            set denominator to (ex * fy) - (ey * fx)
+            if (the absolute value of denominator) > 1e-12:
+                set gx to here's x - a's x
+                set gy to here's y - a's y
+                set along to ((gx * fy) - (gy * fx)) / denominator
+                set onEdge to ((gx * ey) - (gy * ex)) / denominator
+                if ((along > 0.0) and (along < 1.0)) and ((onEdge >= 0.0) and (onEdge <= 1.0)):
+                    append along to cuts
+        # Insertion sort; a ring crosses a line only a few times.
+        loop outerCursor from 1 to the length of cuts:
+            set moving to the item at outerCursor in cuts
+            set slot to outerCursor
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if (the item at (slot - 1) in cuts) > moving:
+                    replace item at index slot in cuts with (the item at (slot - 1) in cuts)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in cuts with moving
+        loop cursor from 1 to the length of cuts:
+            set startT to the item at (cursor - 1) in cuts
+            set endT to the item at cursor in cuts
+            if endT > startT:
+                set middle to (startT + endT) * 0.5
+                set probe to a cad vector2 with x (a's x + (middle * ex)) and y (a's y + (middle * ey))
+                if bim flat point probe lies in corners:
+                    append (a cad vector2 with x (a's x + (startT * ex)) and y (a's y + (startT * ey))) to segments
+                    append (a cad vector2 with x (a's x + (endT * ex)) and y (a's y + (endT * ey))) to segments
+        free cuts
+
+# Appends the hatch lines of the pixel ring `corners` at `degrees`, every
+# `spacing` pixels counted from `anchor`.
+function append bim hatch lines of {a pointer to a list:corners} at {a 64 bit floating-point number:degrees} every {a 64 bit floating-point number:spacing} from {cad vector2:anchor} into {a pointer to a list:segments}:
+    execute:
+        set radians to (degrees * 3.141592653589793) / 180.0
+        set direction to a cad vector2 with x (the cosine of radians) and y (0.0 - (the sine of radians))
+        set across to a cad vector2 with x (0.0 - direction's y) and y direction's x
+        set lowest to 1.0 / 0.0
+        set highest to 0.0 - lowest
+        set first to lowest
+        set last to highest
+        loop cursor from 0 to the length of corners:
+            set point to the item at cursor in corners
+            set acrossValue to ((point's x - anchor's x) * across's x) + ((point's y - anchor's y) * across's y)
+            set alongValue to ((point's x - anchor's x) * direction's x) + ((point's y - anchor's y) * direction's y)
+            set lowest to the minimum of lowest and acrossValue
+            set highest to the maximum of highest and acrossValue
+            set first to the minimum of first and alongValue
+            set last to the maximum of last and alongValue
+        set step to (the ceiling of (lowest / spacing)) * spacing
+        loop while step <= highest:
+            set lineX to anchor's x + (across's x * step)
+            set lineY to anchor's y + (across's y * step)
+            set a to a cad vector2 with x (lineX + (direction's x * (first - 1.0))) and y (lineY + (direction's y * (first - 1.0)))
+            set b to a cad vector2 with x (lineX + (direction's x * (last + 1.0))) and y (lineY + (direction's y * (last + 1.0)))
+            append bim segment a to b inside corners into segments
+            set step to step + spacing
+
+# Appends a zigzag across the pixel band between `nearSide` and `farSide`
+# along `direction` (all pixel lines given by a point and the band's unit
+# normal), clipped to the pixel ring `corners`: insulation.
+function append bim zigzag of {a pointer to a list:corners} across {cad vector2:nearSide} to {cad vector2:farSide} along {cad vector2:direction} into {a pointer to a list:segments}:
+    execute:
+        set width to the cad distance from nearSide to farSide
+        if width < 2.0:
+            return nothing
+        set first to 1.0 / 0.0
+        set last to 0.0 - first
+        loop cursor from 0 to the length of corners:
+            set point to the item at cursor in corners
+            set alongValue to ((point's x - nearSide's x) * direction's x) + ((point's y - nearSide's y) * direction's y)
+            set first to the minimum of first and alongValue
+            set last to the maximum of last and alongValue
+        set halfPeriod to width * 0.5
+        set step to (the floor of (first / halfPeriod)) * halfPeriod
+        set parity to (the floor of (first / halfPeriod)) as an integer
+        set onNear to (the remainder of (parity + 1000000) divided by 2) = 0
+        loop while step < last:
+            set fromSide to farSide
+            set toSide to nearSide
+            if onNear:
+                set fromSide to nearSide
+                set toSide to farSide
+            set a to a cad vector2 with x (fromSide's x + (direction's x * step)) and y (fromSide's y + (direction's y * step))
+            set b to a cad vector2 with x (toSide's x + (direction's x * (step + halfPeriod))) and y (toSide's y + (direction's y * (step + halfPeriod)))
+            append bim segment a to b inside corners into segments
+            set onNear to onNear = false
+            set step to step + halfPeriod
