@@ -1089,6 +1089,9 @@ literal values. The editor now follows them:
   It is LGPL-3.0 with the GPL font exception and kept with its licence note
   in `examples/bim-slice/fonts`; grid names are centred in their heads.
   Snap labels use the 11 px face.
+- **Grid lines.** Grid lines are black 1 px hairlines in Open 2D Studio's
+  dash-dot (0.5 m dash, 0.1 m dot, 0.15 m gaps, scaled with the drawing),
+  with black heads; halftone grey where the view rules say so.
 
 The UI chrome keeps Open BIM Studio's own look.
 
