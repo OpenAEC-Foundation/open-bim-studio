@@ -567,6 +567,16 @@ function the bim signature of {bim wall record:wallValue} in {bim model record:m
         set written to (written + (the string form of ";h")) + (the bim number text of wallValue's height)
         if wallValue's bulge != 0.0:
             set written to (written + (the string form of ";b")) + (the bim number text of wallValue's bulge)
+        if (wallValue's lean != 0.0) or (wallValue's rise != 0.0):
+            set written to (written + (the string form of ";l")) + ((the bim number text of wallValue's lean) + ((the string form of ";r") + (the bim number text of wallValue's rise)))
+        # A joined end follows its partner's shape.
+        loop endCursor from 0 to 2:
+            set endPartner to (the bim end corners of wallValue at finish (endCursor = 1) in modelValue using index)'s partner
+            set partnerFound to the bim wall index of endPartner in modelValue
+            if partnerFound's valid:
+                set partnerWall to the item at partnerFound's position in (modelValue's walls's values)
+                if (partnerWall's lean != 0.0) or (partnerWall's rise != 0.0):
+                    set written to (written + (the string form of ";p")) + ((the bim number text of partnerWall's lean) + ((the string form of ",") + (the bim number text of partnerWall's rise)))
         set levelFound to the bim level index of wallValue's levelId in modelValue
         if levelFound's valid:
             set written to (written + (the string form of ";e")) + (the bim number text of (the item at levelFound's position in (modelValue's levels's values))'s elevation)
@@ -718,6 +728,15 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
             else:
                 set direct to the fast wall on corners from elevation rising wallValue's height along wallValue's start toward direction with fastOpenings within the bim fast tolerance
             free corners
+            # A wall leaning or round in section, or joined to one, is the
+            # upright wall shaped.
+            set shaping to the bim shaping of wallValue from elevation in modelValue using index
+            if (direct's reason = fast wall built) and (bim shaping shaping moves):
+                set direct to the bim polyhedron direct's shape shaped by shaping
+                if direct's reason != fast wall built:
+                    free hosted
+                    free fastOpenings
+                    return a bim solid failure 2
             if direct's reason = fast wall built:
                 free hosted
                 free fastOpenings
@@ -764,6 +783,405 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
             set body to voided's value
         free hosted
         return @intrinsic("construct", a bim solid record, 0, body, false, an empty fast polyhedron)
+
+# ---------------------------------------------------------------- shaped walls
+
+# How a wall is shaped over its height (`lean` and `rise` of `bim wall
+# record`): a point at height z shifts sideways by lean * t + rise * 4t(1 - t),
+# with t = (z - base) / height, along the wall's exterior `normal`, or, for a
+# wall round in plan, along the radial from `centre` (outward times `sign`).
+class:
+    patterns:
+        [a|] bim wall shaping record
+    members:
+        base as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+        lean as a 64 bit floating-point number
+        rise as a 64 bit floating-point number
+        curved as a boolean
+        centre as a cad vector2
+        sign as a 64 bit floating-point number
+        normal as a cad vector2
+        # A straight wall's ends joined to another straight wall also slide
+        # along the wall (`direction`), so that the end stays on the partner
+        # as both shift: by startLean * t + startRise * 4t(1 - t) at the
+        # start (at `startAlong` along `direction`), likewise at the finish,
+        # and in proportion between.
+        direction as a cad vector2
+        startAlong as a 64 bit floating-point number
+        finishAlong as a 64 bit floating-point number
+        startLean as a 64 bit floating-point number
+        startRise as a 64 bit floating-point number
+        finishLean as a 64 bit floating-point number
+        finishRise as a 64 bit floating-point number
+
+# The slide (per unit of lean, per unit of rise) that keeps the end of a
+# straight wall leaning `ownLean` and bowing `ownRise` along `normal` on a
+# straight partner leaning `partnerLean` and bowing `partnerRise` along
+# `partnerNormal`: the shift d = D * normal + s * direction must also shift
+# the partner's face by the partner's own D, so d . partnerNormal = D'.
+local function the bim end slide of {cad vector2:normal} along {cad vector2:direction} leaning {a 64 bit floating-point number:ownLean} rising {a 64 bit floating-point number:ownRise} against {cad vector2:partnerNormal} leaning {a 64 bit floating-point number:partnerLean} rising {a 64 bit floating-point number:partnerRise}:
+    execute:
+        set facing to (direction's x * partnerNormal's x) + (direction's y * partnerNormal's y)
+        if (the absolute value of facing) < 1e-6:
+            return a cad vector2 with x 0.0 and y 0.0
+        set cosine to (normal's x * partnerNormal's x) + (normal's y * partnerNormal's y)
+        return a cad vector2 with x ((partnerLean - (ownLean * cosine)) / facing) and y ((partnerRise - (ownRise * cosine)) / facing)
+
+# The slide of the end of `wallValue` at its finish (or start) toward its
+# partner there, when both are straight; none otherwise.
+local function the bim end slide of {bim wall record:wallValue} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set none to a cad vector2 with x 0.0 and y 0.0
+        if wallValue's bulge != 0.0:
+            return none
+        set corners to the bim end corners of wallValue at finish atFinish in modelValue using index
+        if corners's partner = the bim refused id:
+            return none
+        set partnerFound to the bim wall index of corners's partner in modelValue
+        if partnerFound's valid = false:
+            return none
+        set partner to the item at partnerFound's position in (modelValue's walls's values)
+        if partner's bulge != 0.0:
+            return none
+        return the bim end slide of (the bim exterior normal of wallValue) along (the bim direction of wallValue) leaning wallValue's lean rising wallValue's rise against (the bim exterior normal of partner) leaning partner's lean rising partner's rise
+
+function the bim shaping of {bim wall record:wallValue} from {a 64 bit floating-point number:elevation} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set normal to the bim exterior normal of wallValue
+        set curved to (the absolute value of wallValue's bulge) > 0.0
+        set centre to a cad vector2 with x 0.0 and y 0.0
+        set sign to 1.0
+        if curved:
+            set arc to the bim arc of wallValue
+            set centre to arc's centre
+            set middle to the bim middle of wall wallValue
+            set outward to a cad vector2 with x (middle's x - centre's x) and y (middle's y - centre's y)
+            if ((outward's x * normal's x) + (outward's y * normal's y)) < 0.0:
+                set sign to -1.0
+        set direction to the bim direction of wallValue
+        set startSlide to the bim end slide of wallValue at finish false in modelValue using index
+        set finishSlide to the bim end slide of wallValue at finish true in modelValue using index
+        # The slide is whole over each end's corners (a mitred end too), and
+        # in proportion only between the ends.
+        set startAlong to (wallValue's start's x * direction's x) + (wallValue's start's y * direction's y)
+        set finishAlong to (wallValue's finish's x * direction's x) + (wallValue's finish's y * direction's y)
+        set footprint to the bim footprint of wallValue in modelValue using index
+        if footprint's valid:
+            set startOuter to (footprint's startExterior's x * direction's x) + (footprint's startExterior's y * direction's y)
+            set startInner to (footprint's startInterior's x * direction's x) + (footprint's startInterior's y * direction's y)
+            set finishOuter to (footprint's finishExterior's x * direction's x) + (footprint's finishExterior's y * direction's y)
+            set finishInner to (footprint's finishInterior's x * direction's x) + (footprint's finishInterior's y * direction's y)
+            set startReach to the maximum of startOuter and startInner
+            set finishReach to the minimum of finishOuter and finishInner
+            if finishReach > (startReach + 1e-9):
+                set startAlong to startReach
+                set finishAlong to finishReach
+        return @intrinsic("construct", a bim wall shaping record, elevation, wallValue's height, wallValue's lean, wallValue's rise, curved, centre, sign, normal, direction, startAlong, finishAlong, startSlide's x, startSlide's y, finishSlide's x, finishSlide's y)
+
+# Whether `shaping` moves any point: the wall itself or a joined end.
+function bim shaping {bim wall shaping record:shaping} moves:
+    execute:
+        set own to (shaping's lean != 0.0) or (shaping's rise != 0.0)
+        set ends to ((shaping's startLean != 0.0) or (shaping's startRise != 0.0)) or ((shaping's finishLean != 0.0) or (shaping's finishRise != 0.0))
+        return own or ends
+
+# Whether `shaping` bends over the height (a rise of its own or of an end).
+local function bim shaping {bim wall shaping record:shaping} bows:
+    execute:
+        return ((shaping's rise != 0.0) or (shaping's startRise != 0.0)) or (shaping's finishRise != 0.0)
+
+# The sideways shift at height `level`.
+function the bim shift at height {a 64 bit floating-point number:level} of {bim wall shaping record:shaping}:
+    execute:
+        set t to (level - shaping's base) / shaping's height
+        set t to the maximum of 0.0 and (the minimum of 1.0 and t)
+        return (shaping's lean * t) + (shaping's rise * ((4.0 * t) * (1.0 - t)))
+
+local function the bim shaped place of {cad vector3:spot} by {bim wall shaping record:shaping}:
+    execute:
+        set shift to the bim shift at height spot's z of shaping
+        set dx to shaping's normal's x
+        set dy to shaping's normal's y
+        if shaping's curved = false:
+            # The slide along the wall, from the start's to the finish's.
+            set t to (spot's z - shaping's base) / shaping's height
+            set t to the maximum of 0.0 and (the minimum of 1.0 and t)
+            set bow to (4.0 * t) * (1.0 - t)
+            set startSlide to (shaping's startLean * t) + (shaping's startRise * bow)
+            set finishSlide to (shaping's finishLean * t) + (shaping's finishRise * bow)
+            set run to shaping's finishAlong - shaping's startAlong
+            set fraction to 0.0
+            if (the absolute value of run) > 1e-12:
+                set fraction to ((((spot's x * shaping's direction's x) + (spot's y * shaping's direction's y)) - shaping's startAlong) / run)
+                set fraction to the maximum of 0.0 and (the minimum of 1.0 and fraction)
+            set slide to startSlide + ((finishSlide - startSlide) * fraction)
+            return a cad vector3 with x ((spot's x + (dx * shift)) + (shaping's direction's x * slide)), y ((spot's y + (dy * shift)) + (shaping's direction's y * slide)) and z spot's z
+        if shaping's curved:
+            set rx to spot's x - shaping's centre's x
+            set ry to spot's y - shaping's centre's y
+            set reach to the square root of ((rx * rx) + (ry * ry))
+            if reach > 1e-12:
+                set dx to (rx / reach) * shaping's sign
+                set dy to (ry / reach) * shaping's sign
+        return a cad vector3 with x (spot's x + (dx * shift)), y (spot's y + (dy * shift)) and z spot's z
+
+# The index of `spot` among `spots`, added when it is not there yet.
+local function the bim shaped index of {cad vector3:spot} among {a pointer to a list:spots}:
+    execute:
+        loop cursor from 0 to the length of spots:
+            set other to the item at cursor in spots
+            if (((the absolute value of (other's x - spot's x)) <= 1e-9) and ((the absolute value of (other's y - spot's y)) <= 1e-9)) and ((the absolute value of (other's z - spot's z)) <= 1e-9):
+                return cursor
+        append spot to spots
+        return (the length of spots) - 1
+
+# Sorts `values` ascending and drops those within 1e-9 of the one before.
+local function sort bim levels {a pointer to a list:values}:
+    execute:
+        loop outer from 1 to the length of values:
+            set moving to the item at outer in values
+            set slot to outer
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if (the item at (slot - 1) in values) > moving:
+                    replace item at index slot in values with (the item at (slot - 1) in values)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in values with moving
+        set kept to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of values:
+            set level to the item at cursor in values
+            set fresh to true
+            if (the length of kept) > 0:
+                set fresh to level > ((the item at ((the length of kept) - 1) in kept) + 1e-9)
+            if fresh:
+                append level to kept
+        clear values
+        loop cursor from 0 to the length of kept:
+            append (the item at cursor in kept) to values
+        free kept
+
+# Faces being gathered for the shaped polyhedron, as the polyhedron keeps
+# them: loops of point numbers, and per face its first loop, its loop count
+# and its normal.
+class:
+    patterns:
+        [a|] bim shaped faces record
+    members:
+        indices as the type of (a cad topology list of an integer)
+        loopStarts as the type of (a cad topology list of an integer)
+        faceFirsts as the type of (a cad topology list of an integer)
+        faceCounts as the type of (a cad topology list of an integer)
+        faceNormals as the type of (a cad topology list of a cad vector3)
+
+local function end bim shaped loop in {a pointer to a bim shaped faces record:gathered}:
+    execute:
+        append (the length of (gathered's indices's values)) to (gathered's loopStarts's values)
+
+# `shape` (a wall's planar polyhedron) shaped by `shaping`: every face that
+# is not horizontal is cut into bands at every point's height (and, for a
+# rise, at sixteen even heights), a band of a face with holes into its pieces
+# between the holes, so that every piece stays flat when its points shift;
+# points lying on another piece's edge are put into that edge, so that the
+# polyhedron stays closed. Refused (degenerate) when a face is neither
+# horizontal nor vertical, or a vertical face has an edge neither level nor
+# upright: the walls built here have none.
+function the bim polyhedron {fast polyhedron record:shape} shaped by {bim wall shaping record:shaping}:
+    execute:
+        set points to shape's positions's values
+        set refused to @intrinsic("construct", a fast wall result record, fast wall degenerate footprint, an empty fast polyhedron)
+        set levels to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of points:
+            append (the item at cursor in points)'s z to levels
+        if bim shaping shaping bows:
+            loop band from 1 to 16:
+                append (shaping's base + ((shaping's height * (band as a 64 bit floating-point number)) / 16.0)) to levels
+        sort bim levels levels
+        set spots to an empty list of a cad vector3
+        set gatheredValue to @intrinsic("construct", a bim shaped faces record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a cad vector3)
+        set gathered to the address of gatheredValue
+        append 0 to (gathered's loopStarts's values)
+        set failed to false
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set normal to face's normal
+            if (the absolute value of normal's z) > 0.999999:
+                # Level: kept whole, its loops as they are.
+                append ((the length of (gathered's loopStarts's values)) - 1) to (gathered's faceFirsts's values)
+                append face's loopCount to (gathered's faceCounts's values)
+                append normal to (gathered's faceNormals's values)
+                loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                    set first to the item at ringCursor in (shape's loopStarts's values)
+                    set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                    loop cursor from first to past:
+                        append (the bim shaped index of (the item at (the item at cursor in (shape's indices's values)) in points) among spots) to (gathered's indices's values)
+                    end bim shaped loop in gathered
+            else if (the absolute value of normal's z) < 1e-9:
+                # Upright: in its own coordinates u (level, along the face)
+                # and z, its upright edges bound pieces of each band.
+                set across to the square root of ((normal's x * normal's x) + (normal's y * normal's y))
+                set ux to (0.0 - normal's y) / across
+                set uy to normal's x / across
+                set reference to the item at (the item at (the item at face's firstLoop in (shape's loopStarts's values)) in (shape's indices's values)) in points
+                set referenceU to (reference's x * ux) + (reference's y * uy)
+                set edgeUs to an empty list of a 64 bit floating-point number
+                set edgeLows to an empty list of a 64 bit floating-point number
+                set edgeHighs to an empty list of a 64 bit floating-point number
+                set faceLow to 1.0 / 0.0
+                set faceHigh to 0.0 - (1.0 / 0.0)
+                loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                    set first to the item at ringCursor in (shape's loopStarts's values)
+                    set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                    loop cursor from first to past:
+                        set following to cursor + 1
+                        if following = past:
+                            set following to first
+                        set here to the item at (the item at cursor in (shape's indices's values)) in points
+                        set there to the item at (the item at following in (shape's indices's values)) in points
+                        set faceLow to the minimum of faceLow and here's z
+                        set faceHigh to the maximum of faceHigh and here's z
+                        set hereU to (here's x * ux) + (here's y * uy)
+                        set thereU to (there's x * ux) + (there's y * uy)
+                        set rising to the absolute value of (there's z - here's z)
+                        set running to the absolute value of (thereU - hereU)
+                        if (rising > 1e-9) and (running > 1e-9):
+                            set failed to true
+                        else if rising > 1e-9:
+                            append hereU to edgeUs
+                            append (the minimum of here's z and there's z) to edgeLows
+                            append (the maximum of here's z and there's z) to edgeHighs
+                loop levelCursor from 0 to ((the length of levels) - 1):
+                    set bottom to the item at levelCursor in levels
+                    set top to the item at (levelCursor + 1) in levels
+                    if ((bottom >= (faceLow - 1e-9)) and (top <= (faceHigh + 1e-9))) and ((top - bottom) > 1e-9):
+                        set middle to (bottom + top) * 0.5
+                        set crossings to an empty list of a 64 bit floating-point number
+                        loop edgeCursor from 0 to the length of edgeUs:
+                            if ((the item at edgeCursor in edgeLows) < middle) and ((the item at edgeCursor in edgeHighs) > middle):
+                                append (the item at edgeCursor in edgeUs) to crossings
+                        sort bim levels crossings
+                        set pairCursor to 0
+                        loop while (pairCursor + 1) < the length of crossings:
+                            set fromU to the item at pairCursor in crossings
+                            set toU to the item at (pairCursor + 1) in crossings
+                            set fromX to reference's x + ((fromU - referenceU) * ux)
+                            set fromY to reference's y + ((fromU - referenceU) * uy)
+                            set toX to reference's x + ((toU - referenceU) * ux)
+                            set toY to reference's y + ((toU - referenceU) * uy)
+                            append ((the length of (gathered's loopStarts's values)) - 1) to (gathered's faceFirsts's values)
+                            append 1 to (gathered's faceCounts's values)
+                            append normal to (gathered's faceNormals's values)
+                            append (the bim shaped index of (a cad vector3 with x fromX, y fromY and z bottom) among spots) to (gathered's indices's values)
+                            append (the bim shaped index of (a cad vector3 with x toX, y toY and z bottom) among spots) to (gathered's indices's values)
+                            append (the bim shaped index of (a cad vector3 with x toX, y toY and z top) among spots) to (gathered's indices's values)
+                            append (the bim shaped index of (a cad vector3 with x fromX, y fromY and z top) among spots) to (gathered's indices's values)
+                            end bim shaped loop in gathered
+                            set pairCursor to pairCursor + 2
+                        free crossings
+                free edgeUs
+                free edgeLows
+                free edgeHighs
+            else:
+                set failed to true
+        free levels
+        if failed:
+            free spots
+            return refused
+        # Points on another loop's edge go into that edge.
+        set closedIndices to an empty list of an integer
+        set closedStarts to an empty list of an integer
+        append 0 to closedStarts
+        loop ringCursor from 0 to ((the length of (gathered's loopStarts's values)) - 1):
+            set first to the item at ringCursor in (gathered's loopStarts's values)
+            set past to the item at (ringCursor + 1) in (gathered's loopStarts's values)
+            loop cursor from first to past:
+                set following to cursor + 1
+                if following = past:
+                    set following to first
+                set hereIndex to the item at cursor in (gathered's indices's values)
+                set thereIndex to the item at following in (gathered's indices's values)
+                append hereIndex to closedIndices
+                set here to the item at hereIndex in spots
+                set there to the item at thereIndex in spots
+                set run to the cad difference of there and here
+                set runSquared to the cad dot of run and run
+                set onEdge to an empty list of an integer
+                set onEdgeAt to an empty list of a 64 bit floating-point number
+                if runSquared > 1e-18:
+                    loop spotCursor from 0 to the length of spots:
+                        if (spotCursor != hereIndex) and (spotCursor != thereIndex):
+                            set candidate to the item at spotCursor in spots
+                            set lowZ to (the minimum of here's z and there's z) - 1e-9
+                            set highZ to (the maximum of here's z and there's z) + 1e-9
+                            if (candidate's z >= lowZ) and (candidate's z <= highZ):
+                                set along to (the cad dot of (the cad difference of candidate and here) and run) / runSquared
+                                if (along > 1e-9) and (along < (1.0 - 1e-9)):
+                                    set foot to the cad sum of here and (run scaled by along)
+                                    if (the cad length of (the cad difference of candidate and foot)) <= 1e-7:
+                                        # Kept in order along the edge.
+                                        set slot to the length of onEdgeAt
+                                        set seeking to slot > 0
+                                        loop while seeking:
+                                            if (the item at (slot - 1) in onEdgeAt) > along:
+                                                set slot to slot - 1
+                                                set seeking to slot > 0
+                                            else:
+                                                set seeking to false
+                                        insert along into onEdgeAt at index slot
+                                        insert spotCursor into onEdge at index slot
+                loop insertCursor from 0 to the length of onEdge:
+                    append (the item at insertCursor in onEdge) to closedIndices
+                free onEdge
+                free onEdgeAt
+            append (the length of closedIndices) to closedStarts
+        # The shifted polyhedron, each face on the plane of its shifted points.
+        set result to an empty fast polyhedron
+        loop cursor from 0 to the length of spots:
+            ignore add fast position (the bim shaped place of (the item at cursor in spots) by shaping) to (the address of result)
+        set placed to result's positions's values
+        loop faceCursor from 0 to the length of (gathered's faceFirsts's values):
+            set firstRing to the item at faceCursor in (gathered's faceFirsts's values)
+            set ringCount to the item at faceCursor in (gathered's faceCounts's values)
+            set outer to an empty list of an integer
+            set holes to an empty list of the type of (an empty list of an integer)
+            loop ringCursor from firstRing to (firstRing + ringCount):
+                set ring to an empty list of an integer
+                loop cursor from (the item at ringCursor in closedStarts) to (the item at (ringCursor + 1) in closedStarts):
+                    append (the item at cursor in closedIndices) to ring
+                if ringCursor = firstRing:
+                    loop cursor from 0 to the length of ring:
+                        append (the item at cursor in ring) to outer
+                    free ring
+                else:
+                    append ring to holes
+            # Newell's normal of the shifted outer loop, turned as before.
+            set nx to 0.0
+            set ny to 0.0
+            set nz to 0.0
+            loop corner from 0 to the length of outer:
+                set here to the item at (the item at corner in outer) in placed
+                set there to the item at (the item at (the remainder of (corner + 1) divided by (the length of outer)) in outer) in placed
+                set nx to nx + ((here's y - there's y) * (here's z + there's z))
+                set ny to ny + ((here's z - there's z) * (here's x + there's x))
+                set nz to nz + ((here's x - there's x) * (here's y + there's y))
+            set size to the square root of (((nx * nx) + (ny * ny)) + (nz * nz))
+            set faceNormal to the item at faceCursor in (gathered's faceNormals's values)
+            if size > 1e-15:
+                set shifted to a cad vector3 with x (nx / size), y (ny / size) and z (nz / size)
+                if (the cad dot of shifted and faceNormal) < 0.0:
+                    set shifted to shifted scaled by -1.0
+                set faceNormal to shifted
+            add fast face outer with holes holes facing faceNormal to (the address of result)
+            free outer
+            free holes
+        free closedIndices
+        free closedStarts
+        free spots
+        return @intrinsic("construct", a fast wall result record, fast wall built, result)
 
 # ---------------------------------------------------------------- layers
 
@@ -846,6 +1264,9 @@ function the bim layer solids of {bim wall record:wallValue} in {bim model recor
             else:
                 set built to the fast wall on corners from elevation rising wallValue's height along wallValue's start toward (the bim direction of wallValue) with openings within the bim fast tolerance
             free corners
+            set layerShaping to the bim shaping of wallValue from elevation in modelValue using index
+            if (built's reason = fast wall built) and (bim shaping layerShaping moves):
+                set built to the bim polyhedron built's shape shaped by layerShaping
             # A cavity (air) takes its place in the wall but is not a solid.
             if built's reason = fast wall built:
                 if layerValue's material != (the string form of "air"):
@@ -885,7 +1306,8 @@ local function bim walls {bim wall record:first} and {bim wall record:second} ar
     execute:
         set sameEnds to ((first's start's x = second's start's x) and (first's start's y = second's start's y)) and ((first's finish's x = second's finish's x) and (first's finish's y = second's finish's y))
         set sameRefs to (first's typeId = second's typeId) and (first's levelId = second's levelId)
-        return (sameEnds and sameRefs) and ((first's height = second's height) and (first's bulge = second's bulge))
+        set sameShape to (first's lean = second's lean) and (first's rise = second's rise)
+        return ((sameEnds and sameRefs) and sameShape) and ((first's height = second's height) and (first's bulge = second's bulge))
 
 local function bim openings {bim opening record:first} and {bim opening record:second} are identical:
     execute:

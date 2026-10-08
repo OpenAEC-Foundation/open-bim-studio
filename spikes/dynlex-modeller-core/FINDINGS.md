@@ -1029,3 +1029,103 @@ off it falling to the grid, and a second line drawn parallel to the first.
 - the IFC header and project.
 
 The spike keeps its working name in its paths.
+
+## Drawing quality after Open 2D Studio; walls leaning and round in section (maintainer requests, 2026-10-08)
+
+**Drawing quality.** The maintainer asked for drawing quality close to Open 2D
+Studio's, pixel for pixel, not its layout. Its canvas renderer
+(`src/engine/renderer`) and the AEC extension's renderers were read for their
+literal values. The editor now follows them:
+
+- **Anti-aliasing.** The Vulkan layer draws with multisampling:
+  - 4 samples where the device's framebuffers take 4 for colour and depth,
+    else 2 or 1 (`VkPhysicalDeviceLimits`, read at its byte offsets);
+  - a transient multisampled colour image, resolved into the swapchain image
+    in the render pass;
+  - every pipeline at that sample count.
+
+  Lines, hatching, text and the 3D view lose their staircase edges, as on a
+  browser canvas.
+- **Canvas.** The background is white. The grid is off by default (F7 shows
+  it) and adaptive:
+  - minor lines every 0.1 m, coarsened ×5 below 10 px and refined below
+    100 px;
+  - every fifth line major;
+  - minor `#d0d0d0` at 0.5 px, major `#b0b0b0` at 1 px.
+- **Elements.** Cut outlines are 1 px black hairlines. Hatch lines are 0.5 px.
+  Hatching follows NEN 47 in Open 2D Studio's colours:
+  - masonry `#D4908F` with black lines;
+  - calcium silicate `#C8C0B0` / `#A8A090`;
+  - timber `#F0DCB9`;
+  - insulation `#FFFDE0` with a zigzag;
+  - concrete solid `#C0C0C0`;
+  - steel solid black.
+
+  The line spacing is on the model (80 mm masonry, 75 mm timber), so a
+  hatch scales with the drawing; below 2.5 px only the background shows.
+- **Selection.** The selection is green `#00B400` and hover is `#00bfff`.
+  Grips are 6 px green squares with a white border.
+- **Selection boxes.** The window is filled `rgba(0,120,215,.15)` with an 80 %
+  border. The crossing is filled green with a 6/3 px dashed border, 1 px.
+- **Snap markers.** Markers are 12 px, drawn three times: a dark halo
+  (5.5 px, 35 %), a black outline (3.5 px), then the colour (1.8 px).
+  - end point: green square;
+  - mid point: cyan triangle;
+  - intersection: yellow cross;
+  - perpendicular: orange foot;
+  - parallel: orange bars;
+  - nearest: pink diamond;
+  - tracking: a cyan cross and ring.
+
+  The name sits in a dark box at (+12, −12), in the snap's colour. Tracking,
+  extension and parallel lines are 1 px dashed 6/4, coloured by kind, with a
+  ring at their origin.
+- **Pointer.** The system pointer is used, as in Open 2D Studio: a crosshair
+  while a tool draws, else the arrow. The plan-wide crosshair and pick box
+  are gone.
+
+The UI chrome keeps Open BIM Studio's own look.
+
+**Walls leaning and round in section.** A wall carries `lean` (its top
+shifted along the exterior normal) and `rise` (its middle height bowed out).
+A point at height z shifts sideways by lean·t + rise·4t(1−t), with
+t = z/H: along the exterior normal for a straight wall, radially for a wall
+round in plan.
+
+The evaluated solid is the upright wall shaped:
+- **Bands.** Every face that is not level is cut into bands at every point's
+  height (16 more for a rise). A band of a face with holes is cut into its
+  pieces between the holes, so each piece stays flat.
+- **Closed.** Points on another piece's edge are put into that edge, so the
+  polyhedron stays closed.
+- **Shift.** Then every point shifts.
+
+Plan cuts, sections, 3D, the layers at fine detail and IFC all show the
+shaped wall, with its openings. Both values are typed in the properties
+window ("Lean (top)", "Bow (section)", negative inward). They are stored at
+the end of the `.bim` wall line and in `openbim::wall`.
+
+Checked in `tests/shaped_wall.dl`:
+- a 4 m wall leaning 0.6 m and bowed 0.3 m, each a closed polyhedron of
+  exactly the upright volume (2.4 m³), shifted where expected;
+- with a window;
+- round in plan and in section;
+- a lean as high as the wall refused;
+- `.bim` and `.ifcx` round trips.
+
+**Joins.** A straight wall's end joined to another straight wall also slides
+along the wall, so that the end stays on its partner as both shift. The shift
+d = D·n + s·u must also shift the partner's face by the partner's own D'
+(d·n' = D'), which gives s = (D' − D·(n·n')) / (u·n').
+- The slide is whole over an end's corners, a mitred end too, and in
+  proportion between the ends. A shift along the wall keeps every side face
+  flat.
+- An upright wall joined to a leaning one is shaped by its end alone, and a
+  partner's shape is part of a wall's signature.
+
+Checked: an L corner keeps its two joint corners shared at the top, upright,
+with both walls leaning, with one leaning, and at half height with one bowed;
+every solid is closed.
+
+**Not yet.** Joins with walls round in plan keep their ends unslid. The plan's
+door swings stay at the foot.
