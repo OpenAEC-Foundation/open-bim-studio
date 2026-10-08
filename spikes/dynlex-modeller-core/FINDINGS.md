@@ -662,3 +662,70 @@ It agrees on the buildingSMART examples, among them:
 **Where the code is.** The editor now lives in
 `spikes/dynlex-bim-slice/overlay/` and builds with `spikes/dynlex-bim-slice/build.sh`
 against a DynLex checkout.
+
+## C, first step: snapping and tracking as in Open 2D Studio (2026-10-08)
+
+**Snap kinds.** Snapping follows the Open 2D Studio rules recorded in
+`open-2d-studio-survey.md`:
+- **Sources:** end points and middles of wall centrelines, sketch lines, face
+  edges and grid lines.
+- **Intersections** of those pieces.
+- **Perpendicular:** the foot from the point being drawn from.
+- **Nearest:** a point on an edge, offered only when no other snap is near.
+
+**Which snap wins.** The nearest candidate within the tolerance (8 pixels)
+wins. Within a tenth of the tolerance, the lower kind wins, in this order:
+end, mid, intersection, perpendicular.
+
+**Tracking.** Without an object snap, the pointer tracks from the last point
+of the gesture under way:
+- the point tracked from is the last point of a wall chain, a line chain, a
+  rectangle, a grid line, a move, a copy, a rotation or a mirror;
+- horizontal and vertical rays always;
+- polar rays every 45° (F10);
+- ortho (F8) constrains to the nearer axis;
+- lengths along a ray are rounded to 5 cm, as the grid is.
+
+F3 turns snapping off. The status bar shows ortho and polar.
+
+**Glyphs.** Each kind has the glyph and colour Open 2D Studio uses:
+- end: a green square;
+- mid: a cyan triangle;
+- intersection: a yellow cross;
+- perpendicular: an orange foot;
+- nearest: a pink diamond;
+- tracking: a dashed ray from the point tracked from.
+
+**Checked.** `tests/snapping.dl` checks each kind, the tracking rays, ortho and
+snapping off at exact coordinates.
+
+**Not yet:**
+- tangent and parallel snaps;
+- extension rays from nearby end points;
+- crossings between two tracking rays;
+- the X and Y constraints of a move.
+
+## Wall type library (part G, 2026-10-08)
+
+The Open 2D Studio wall types are in the editor, with their Dutch names and
+layer build-ups:
+- **Layered:** Spouwmuur 360 and 300, HSB Buitenwand, Metal Stud Binnenwand
+  and Massieve Binnenwand.
+- **Single material:** concrete, calcium silicate, masonry, timber frame,
+  steel and insulation.
+
+How they behave:
+- **Cavities.** A cavity is an air layer: it takes its place in the wall but is
+  not hatched and is no solid in 3D.
+- **Materials.** Timber, steel and gypsum have NEN 47 style hatching and
+  colours.
+- **In the explorer.** The project explorer lists the types. A click makes one
+  current for new walls, or gives it to the selected wall, as an edit that
+  can be undone.
+
+`tests/types.dl` checks the library, the cavity and a change of type.
+
+**Not yet:**
+- the floor types;
+- the "aligned on the exterior" reference line of the layered types;
+- grouped layers with their own gaps beyond one cavity.

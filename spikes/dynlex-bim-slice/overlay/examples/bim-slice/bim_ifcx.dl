@@ -20,6 +20,7 @@
 # share a path. The file id in the header names this one export.
 import examples/bim-slice/bim_ifc.dl
 import examples/bim-slice/bim_scene.dl
+import examples/bim-slice/bim_file.dl
 
 # One JSON text being written, kept as pieces and joined once.
 class:
@@ -283,6 +284,10 @@ local function write bim ifcx sketch {bim sketch record:sketchValue} at {a strin
         set pairs to an empty list of a string
         set attributes to an empty list of a string
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        # Free sketch elements carry their record; a component's parts are in
+        # the component's.
+        if sketchValue's levelId != (0 as a 64 bit integer):
+            append (the bim openbim sketch of sketchValue) to attributes
         if sketchValue's kind = bim face sketch:
             set triangles to the bim sketch mesh of sketchValue at elevation
             append (the string form of "Body") to pairs
@@ -319,6 +324,7 @@ local function write bim ifcx built element {a 64 bit integer:elementId} of {bim
         set attributes to an empty list of a string
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
         set path to the bim ifcx uuid of kind bim ifcx element kind for elementId serial 0 in writer
+        set typeLink to an empty list of a string
         set bodies to an empty list of an integer
         loop cursor from 0 to the length of sceneMeshes:
             if (the item at cursor in sceneMeshes)'s elementId = elementId:
@@ -360,6 +366,10 @@ local function write bim ifcx built element {a 64 bit integer:elementId} of {bim
             append (the bim ifcx property (the string form of "Width") as (the bim json number of thickness)) to attributes
             append (the bim ifcx property (the string form of "Length") as (the bim json number of (the bim centreline length of wallValue))) to attributes
             append (the bim ifcx property (the string form of "Volume") as (the bim json number of enclosed)) to attributes
+            append (the bim openbim wall of wallValue) to attributes
+            # A wall inherits its type, as an opening inherits its own.
+            append (the string form of "type") to typeLink
+            append (the bim ifcx uuid of kind bim ifcx element kind for wallValue's typeId serial 0 in writer) to typeLink
         else:
             set slabFound to the bim slab index of elementId in modelValue
             append (the string form of "Body") to pairs
@@ -369,8 +379,10 @@ local function write bim ifcx built element {a 64 bit integer:elementId} of {bim
                 set slabValue to the item at slabFound's position in (modelValue's slabs's values)
                 append (the bim ifcx property (the string form of "Depth") as (the bim json number of slabValue's thickness)) to attributes
                 append (the bim ifcx property (the string form of "NetArea") as (the bim json number of (the absolute value of (the cad signed area of (slabValue's outline's values))))) to attributes
+                append (the bim openbim slab of slabValue) to attributes
             append (the bim ifcx property (the string form of "Volume") as (the bim json number of enclosed)) to attributes
-        write bim ifcx node path with children pairs inheriting noPairs and attributes to writer
+        write bim ifcx node path with children pairs inheriting typeLink and attributes to writer
+        free typeLink
         clear attributes
         # The bodies: one per layer in its material, or one in its colour.
         loop cursor from 0 to the length of bodies:
@@ -395,6 +407,7 @@ local function write bim ifcx built element {a 64 bit integer:elementId} of {bim
                     else:
                         append (the bim ifcx class (the string form of "IfcWindow")) to attributes
                     append (the bim ifcx property (the string form of "Station") as (the bim json number of openingValue's offset)) to attributes
+                    append (the bim openbim opening of openingValue) to attributes
                     write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for openingValue's id serial 0 in writer) with children noPairs inheriting inheritPairs and attributes to writer
                     clear attributes
                     free inheritPairs
@@ -404,10 +417,226 @@ local function write bim ifcx built element {a 64 bit integer:elementId} of {bim
         free pairs
         free attributes
 
+# ---------------------------------------------------------------- the editor's own records
+
+# Every element also carries its parameters in the `openbim::` namespace,
+# declared in the file's schemas, with the numbers written exactly (17
+# significant digits), so that the model reads back from the file as it was:
+# IFC gives the classes, the structure, the geometry and the quantities; the
+# namespace gives what IFC has no parametric attribute for.
+
+local function the bim ifcx exact {a 64 bit floating-point number:value}:
+    execute:
+        return the bim exact text of value
+
+local function the bim ifcx pair of {cad vector2:point}:
+    execute:
+        return (((the string form of "[") + (the bim ifcx exact point's x)) + (the string form of ",")) + ((the bim ifcx exact point's y) + (the string form of "]"))
+
+local function the bim ifcx ring of {a pointer to a list:points}:
+    execute:
+        set texts to an empty list of a string
+        loop cursor from 0 to the length of points:
+            append (the bim ifcx pair of (the item at cursor in points)) to texts
+        set text to ((the string form of "[") + (texts joined with ",")) + (the string form of "]")
+        free texts
+        return text
+
+local function the bim ifcx field {a string:name} as {a string:jsonValue}:
+    execute:
+        return ((the string form of "\"") + name) + ((the string form of "\": ") + jsonValue)
+
+# The `openbim::` attribute `name` with `fields` (ready `"key": value` texts).
+local function the bim openbim attribute {a string:name} of {a pointer to a list:fields}:
+    execute:
+        set text to (((the string form of "\"openbim::") + name) + (the string form of "\": {")) + ((fields joined with ", ") + (the string form of "}"))
+        clear fields
+        return text
+
+function the bim openbim level of {bim level record:levelValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of levelValue's id)) to fields
+        append (the bim ifcx field (the string form of "elevation") as (the bim ifcx exact levelValue's elevation)) to fields
+        append (the bim ifcx field (the string form of "height") as (the bim ifcx exact levelValue's height)) to fields
+        append (the bim ifcx field (the string form of "name") as (the bim json string of levelValue's name)) to fields
+        set text to the bim openbim attribute (the string form of "level") of fields
+        free fields
+        return text
+
+function the bim openbim wall type of {bim wall type record:wallType}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of wallType's id)) to fields
+        append (the bim ifcx field (the string form of "name") as (the bim json string of wallType's name)) to fields
+        set layers to an empty list of a string
+        loop cursor from 0 to the length of (wallType's layers's values):
+            set layer to the item at cursor in (wallType's layers's values)
+            append (((the string form of "[") + (the bim json string of layer's material)) + ((the string form of ",") + ((the bim ifcx exact layer's thickness) + (the string form of "]")))) to layers
+        append (the bim ifcx field (the string form of "layers") as (((the string form of "[") + (layers joined with ",")) + (the string form of "]"))) to fields
+        free layers
+        set text to the bim openbim attribute (the string form of "walltype") of fields
+        free fields
+        return text
+
+function the bim openbim wall of {bim wall record:wallValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of wallValue's id)) to fields
+        append (the bim ifcx field (the string form of "type") as (the string form of wallValue's typeId)) to fields
+        append (the bim ifcx field (the string form of "level") as (the string form of wallValue's levelId)) to fields
+        append (the bim ifcx field (the string form of "start") as (the bim ifcx pair of wallValue's start)) to fields
+        append (the bim ifcx field (the string form of "finish") as (the bim ifcx pair of wallValue's finish)) to fields
+        append (the bim ifcx field (the string form of "height") as (the bim ifcx exact wallValue's height)) to fields
+        append (the bim ifcx field (the string form of "bulge") as (the bim ifcx exact wallValue's bulge)) to fields
+        set text to the bim openbim attribute (the string form of "wall") of fields
+        free fields
+        return text
+
+function the bim openbim opening type of {bim opening type record:openingType}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of openingType's id)) to fields
+        append (the bim ifcx field (the string form of "name") as (the bim json string of openingType's name)) to fields
+        append (the bim ifcx field (the string form of "width") as (the bim ifcx exact openingType's width)) to fields
+        append (the bim ifcx field (the string form of "height") as (the bim ifcx exact openingType's height)) to fields
+        append (the bim ifcx field (the string form of "sill") as (the bim ifcx exact openingType's sill)) to fields
+        append (the bim ifcx field (the string form of "frame") as (the bim ifcx exact openingType's frame)) to fields
+        set doorText to the string form of "false"
+        if openingType's isDoor:
+            set doorText to the string form of "true"
+        append (the bim ifcx field (the string form of "door") as doorText) to fields
+        set text to the bim openbim attribute (the string form of "openingtype") of fields
+        free fields
+        return text
+
+function the bim openbim opening of {bim opening record:openingValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of openingValue's id)) to fields
+        append (the bim ifcx field (the string form of "type") as (the string form of openingValue's typeId)) to fields
+        append (the bim ifcx field (the string form of "host") as (the string form of openingValue's hostId)) to fields
+        append (the bim ifcx field (the string form of "offset") as (the bim ifcx exact openingValue's offset)) to fields
+        set text to the bim openbim attribute (the string form of "opening") of fields
+        free fields
+        return text
+
+function the bim openbim slab of {bim slab record:slabValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of slabValue's id)) to fields
+        append (the bim ifcx field (the string form of "level") as (the string form of slabValue's levelId)) to fields
+        append (the bim ifcx field (the string form of "thickness") as (the bim ifcx exact slabValue's thickness)) to fields
+        append (the bim ifcx field (the string form of "outline") as (the bim ifcx ring of (slabValue's outline's values))) to fields
+        set text to the bim openbim attribute (the string form of "slab") of fields
+        free fields
+        return text
+
+function the bim openbim grid of {bim grid record:gridValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of gridValue's id)) to fields
+        append (the bim ifcx field (the string form of "name") as (the bim json string of gridValue's name)) to fields
+        append (the bim ifcx field (the string form of "start") as (the bim ifcx pair of gridValue's start)) to fields
+        append (the bim ifcx field (the string form of "finish") as (the bim ifcx pair of gridValue's finish)) to fields
+        append (the bim ifcx field (the string form of "low") as (the bim ifcx exact gridValue's low)) to fields
+        append (the bim ifcx field (the string form of "high") as (the bim ifcx exact gridValue's high)) to fields
+        set text to the bim openbim attribute (the string form of "grid") of fields
+        free fields
+        return text
+
+# A sketch element's fields (also a component's part).
+local function append bim openbim sketch fields of {bim sketch record:element} to {a pointer to a list:fields}:
+    execute:
+        append (the bim ifcx field (the string form of "id") as (the string form of element's id)) to fields
+        append (the bim ifcx field (the string form of "level") as (the string form of element's levelId)) to fields
+        append (the bim ifcx field (the string form of "kind") as (the string form of element's kind)) to fields
+        append (the bim ifcx field (the string form of "height") as (the bim ifcx exact element's height)) to fields
+        append (the bim ifcx field (the string form of "points") as (the bim ifcx ring of (element's points's values))) to fields
+        append (the bim ifcx field (the string form of "text") as (the bim json string of element's content)) to fields
+
+function the bim openbim sketch of {bim sketch record:element}:
+    execute:
+        set fields to an empty list of a string
+        append bim openbim sketch fields of element to fields
+        set text to the bim openbim attribute (the string form of "sketch") of fields
+        free fields
+        return text
+
+function the bim openbim component of {bim component record:definition}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of definition's id)) to fields
+        append (the bim ifcx field (the string form of "name") as (the bim json string of definition's name)) to fields
+        set parts to an empty list of a string
+        set partFields to an empty list of a string
+        loop cursor from 0 to the length of (definition's sketches's values):
+            append bim openbim sketch fields of (the item at cursor in (definition's sketches's values)) to partFields
+            append (((the string form of "{") + (partFields joined with ", ")) + (the string form of "}")) to parts
+            clear partFields
+        free partFields
+        append (the bim ifcx field (the string form of "parts") as (((the string form of "[") + (parts joined with ",")) + (the string form of "]"))) to fields
+        free parts
+        set text to the bim openbim attribute (the string form of "component") of fields
+        free fields
+        return text
+
+function the bim openbim instance of {bim instance record:placement}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of placement's id)) to fields
+        append (the bim ifcx field (the string form of "component") as (the string form of placement's componentId)) to fields
+        append (the bim ifcx field (the string form of "level") as (the string form of placement's levelId)) to fields
+        append (the bim ifcx field (the string form of "origin") as (the bim ifcx pair of placement's origin)) to fields
+        append (the bim ifcx field (the string form of "angle") as (the bim ifcx exact placement's angle)) to fields
+        set text to the bim openbim attribute (the string form of "instance") of fields
+        free fields
+        return text
+
+function the bim openbim dimension of {bim dimension record:dimensionValue}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim ifcx field (the string form of "id") as (the string form of dimensionValue's id)) to fields
+        append (the bim ifcx field (the string form of "first") as ((((the string form of "[") + (the string form of dimensionValue's first's elementId)) + (the string form of ",")) + ((the string form of dimensionValue's first's feature) + (the string form of "]")))) to fields
+        append (the bim ifcx field (the string form of "second") as ((((the string form of "[") + (the string form of dimensionValue's second's elementId)) + (the string form of ",")) + ((the string form of dimensionValue's second's feature) + (the string form of "]")))) to fields
+        set text to the bim openbim attribute (the string form of "dimension") of fields
+        free fields
+        return text
+
+# The schemas of the `openbim::` namespace, for the file's "schemas".
+function the bim openbim schemas:
+    execute:
+        set names to an empty list of a string
+        append (the string form of "project") to names
+        append (the string form of "level") to names
+        append (the string form of "walltype") to names
+        append (the string form of "wall") to names
+        append (the string form of "openingtype") to names
+        append (the string form of "opening") to names
+        append (the string form of "dimension") to names
+        append (the string form of "slab") to names
+        append (the string form of "grid") to names
+        append (the string form of "sketch") to names
+        append (the string form of "component") to names
+        append (the string form of "instance") to names
+        set entries to an empty list of a string
+        loop cursor from 0 to the length of names:
+            append (((the string form of "    \"openbim::") + (the item at cursor in names)) + (the string form of "\": {\"value\": {\"dataType\": \"Object\"}}")) to entries
+        set text to entries joined with ",\n"
+        free entries
+        free names
+        return text
+
 # The IfcX text of `modelValue`, with the file id `fileId` and the paths of
 # project `projectKey`, written by `author` at `timestamp` (ISO 8601). Walls
 # are written in their layers.
 function the bim ifcx text of {bim model record:modelValue} identified as {a string:fileId} for project {a string:projectKey} by {a string:author} at {a string:timestamp}:
+    execute:
+        return the bim ifcx text of modelValue identified as fileId for project projectKey by author at timestamp with settings (the string form of "")
+
+# The same, with `settings` (ready `"key": value` fields: the units and the
+# view rules) on the project's `openbim::project`.
+function the bim ifcx text of {bim model record:modelValue} identified as {a string:fileId} for project {a string:projectKey} by {a string:author} at {a string:timestamp} with settings {a string:settings}:
     execute:
         set evaluation to the bim evaluation of modelValue after (an empty bim evaluation)
         set noMeshes to a cad topology list of a bim scene mesh record
@@ -425,7 +654,9 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
         write bim ifcx (((the string form of "    \"timestamp\": ") + (the bim json string of timestamp)) + (the string form of "\n  },\n")) to writer
         write bim ifcx (the string form of "  \"imports\": [\n    { \"uri\": \"https://ifcx.dev/@standards.buildingsmart.org/ifc/core/ifc@v5a.ifcx\" },\n") to writer
         write bim ifcx (the string form of "    { \"uri\": \"https://ifcx.dev/@standards.buildingsmart.org/ifc/core/prop@v5a.ifcx\" },\n") to writer
-        write bim ifcx (the string form of "    { \"uri\": \"https://ifcx.dev/@openusd.org/usd@v1.ifcx\" }\n  ],\n  \"schemas\": {},\n  \"data\": [\n") to writer
+        write bim ifcx (the string form of "    { \"uri\": \"https://ifcx.dev/@openusd.org/usd@v1.ifcx\" }\n  ],\n  \"schemas\": {\n") to writer
+        write bim ifcx (the bim openbim schemas) to writer
+        write bim ifcx (the string form of "\n  },\n  \"data\": [\n") to writer
         set zero to 0 as a 64 bit integer
         set rootPath to the bim ifcx uuid of kind bim ifcx root kind for zero serial 0 in writer
         set projectPath to the bim ifcx uuid of kind bim ifcx project kind for zero serial 0 in writer
@@ -433,12 +664,29 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
         set buildingPath to the bim ifcx uuid of kind bim ifcx building kind for zero serial 0 in writer
         append (the string form of "Project") to pairs
         append projectPath to pairs
+        # The types hang under the root, so that the file has one root.
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            append ((the string form of "WallType_") + (the string form of wallType's id)) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for wallType's id serial 0 in writer) to pairs
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            set openingType to the item at cursor in (modelValue's openingTypes's values)
+            append ((the string form of "OpeningType_") + (the string form of openingType's id)) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for openingType's id serial 0 in writer) to pairs
+        loop cursor from 0 to the length of (modelValue's components's values):
+            set definition to the item at cursor in (modelValue's components's values)
+            append ((the string form of "Component_") + (the string form of definition's id)) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for definition's id serial 0 in writer) to pairs
         write bim ifcx node rootPath with children pairs inheriting noPairs and noPairs to writer
         clear pairs
         append (the string form of "Site") to pairs
         append sitePath to pairs
         append (the bim ifcx class (the string form of "IfcProject")) to attributes
         append (the bim ifcx property (the string form of "Name") as (the bim json string of (the string form of "Open BIM Studio project"))) to attributes
+        set projectFields to (the string form of "\"openbim::project\": {\"next\": ") + (the string form of modelValue's nextId)
+        if (the length of settings) > 0:
+            set projectFields to (projectFields + (the string form of ", ")) + settings
+        append (projectFields + (the string form of "}")) to attributes
         write bim ifcx node projectPath with children pairs inheriting noPairs and attributes to writer
         clear pairs
         clear attributes
@@ -457,6 +705,10 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
             set gridValue to the item at cursor in (modelValue's grids's values)
             append ((the string form of "Grid_") + (the bim ifcx child name of gridValue's name)) to pairs
             append (the bim ifcx uuid of kind bim ifcx element kind for gridValue's id serial 0 in writer) to pairs
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set dimensionValue to the item at cursor in (modelValue's dimensions's values)
+            append ((the string form of "Dimension_") + (the string form of dimensionValue's id)) to pairs
+            append (the bim ifcx uuid of kind bim ifcx element kind for dimensionValue's id serial 0 in writer) to pairs
         append (the bim ifcx class (the string form of "IfcBuilding")) to attributes
         append (the bim ifcx property (the string form of "NumberOfStoreys") as (the string form of (the length of (modelValue's levels's values)))) to attributes
         write bim ifcx node buildingPath with children pairs inheriting noPairs and attributes to writer
@@ -470,9 +722,26 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
             append (the bim ifcx class (the string form of "IfcGridAxis")) to attributes
             append (the bim ifcx property (the string form of "Name") as (the bim json string of gridValue's name)) to attributes
             append (the bim ifcx curve through ends at gridValue's low closed false) to attributes
+            append (the bim openbim grid of gridValue) to attributes
             write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for gridValue's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
             clear attributes
             free ends
+        # Associative dimensions: annotations carrying their two references.
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set dimensionValue to the item at cursor in (modelValue's dimensions's values)
+            append (the bim ifcx class (the string form of "IfcAnnotation")) to attributes
+            append (the bim openbim dimension of dimensionValue) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for dimensionValue's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
+            clear attributes
+        # Wall types: their layers as the editor keeps them; walls inherit them.
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            append (the bim ifcx class (the string form of "IfcWallType")) to attributes
+            append (the bim ifcx property (the string form of "Name") as (the bim json string of wallType's name)) to attributes
+            append (the bim ifcx property (the string form of "Width") as (the bim json number of (the bim thickness of wallType))) to attributes
+            append (the bim openbim wall type of wallType) to attributes
+            write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for wallType's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
+            clear attributes
         # Opening types: the door and window type nodes their openings inherit.
         loop cursor from 0 to the length of (modelValue's openingTypes's values):
             set openingType to the item at cursor in (modelValue's openingTypes's values)
@@ -483,6 +752,7 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
             append (the bim ifcx property (the string form of "Name") as (the bim json string of openingType's name)) to attributes
             append (the bim ifcx property (the string form of "Width") as (the bim json number of openingType's width)) to attributes
             append (the bim ifcx property (the string form of "Height") as (the bim json number of openingType's height)) to attributes
+            append (the bim openbim opening type of openingType) to attributes
             write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for openingType's id serial 0 in writer) with children noPairs inheriting noPairs and attributes to writer
             clear attributes
         # Components: a type node holding its parts in its own coordinates.
@@ -493,6 +763,7 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
                 append (the bim ifcx uuid of kind bim ifcx part kind for (the bim ifcx number of item partIndex within definition's id) serial 0 in writer) to pairs
             append (the bim ifcx class (the string form of "IfcBuildingElementProxyType")) to attributes
             append (the bim ifcx property (the string form of "Name") as (the bim json string of definition's name)) to attributes
+            append (the bim openbim component of definition) to attributes
             write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for definition's id serial 0 in writer) with children pairs inheriting noPairs and attributes to writer
             clear pairs
             clear attributes
@@ -533,6 +804,7 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
             append (the bim ifcx property (the string form of "Name") as (the bim json string of levelValue's name)) to attributes
             append (the bim ifcx property (the string form of "Height") as (the bim json number of levelValue's height)) to attributes
             append (the bim ifcx property (the string form of "RefElevation") as (the bim json number of levelValue's elevation)) to attributes
+            append (the bim openbim level of levelValue) to attributes
             write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for levelValue's id serial 0 in writer) with children pairs inheriting noPairs and attributes to writer
             clear pairs
             clear attributes
@@ -557,6 +829,7 @@ function the bim ifcx text of {bim model record:modelValue} identified as {a str
                     set matrix to matrix + ((the bim json number of placement's origin's x) + ((the string form of ",") + ((the bim json number of placement's origin's y) + ((the string form of ",") + ((the bim json number of levelValue's elevation) + (the string form of ",1]]}"))))))
                     append (the bim ifcx class (the string form of "IfcBuildingElementProxy")) to attributes
                     append matrix to attributes
+                    append (the bim openbim instance of placement) to attributes
                     write bim ifcx node (the bim ifcx uuid of kind bim ifcx element kind for placement's id serial 0 in writer) with children noPairs inheriting inheritPairs and attributes to writer
                     clear attributes
                     free inheritPairs

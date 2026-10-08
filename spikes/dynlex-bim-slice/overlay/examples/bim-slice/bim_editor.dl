@@ -184,6 +184,9 @@ class:
         textBuffer as a string
         moveStage as an integer
         moveBase as a cad vector2
+        snapOff as a boolean
+        orthoOn as a boolean
+        polarOn as a boolean
         extending as a boolean
         chosenSketches as the type of (a cad topology list of a 64 bit integer)
         placeComponentId as a 64 bit integer
@@ -193,7 +196,9 @@ class:
         editingAngle as a 64 bit floating-point number
         editingFirstId as a 64 bit integer
         editingParts as the type of (a cad topology list of a 64 bit integer)
+        floorTypeIndex as an integer
         pendingLetter as an integer
+        lengthUnit as an integer
         pendingAt as a 64 bit integer
         turnStart as a 64 bit floating-point number
         boundaryId as a 64 bit integer
@@ -235,7 +240,7 @@ function a new bim editor:
         commit bim transaction in (the address of documentValue)
         set origin to a cad vector2 with x 0.0 and y 0.0
         set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "")
-        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 0, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0)
+        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0)
 
 # ---------------------------------------------------------------- snapping
 
@@ -253,47 +258,190 @@ local function the bim grid point near {cad vector2:location} step {a 64 bit flo
 # horizontal or vertical alignment with the chain start, then the 0.05 m grid.
 # Wall points snap on every storey, so walls can be stacked over the storey
 # below. `tolerance` is the pick radius in model units.
-function the bim snap of {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+# A snap candidate: its point, its kind, its priority (lower wins a near
+# tie) and its distance from the pointer.
+class:
+    patterns:
+        [a|] bim snap candidate record
+    members:
+        point as a cad vector2
+        label as a string
+        rank as an integer
+        gap as a 64 bit floating-point number
+        found as a boolean
+
+# Offers `point` as a snap of kind `label`: the nearest candidate within
+# `tolerance` wins; within a tenth of the tolerance the lower rank wins.
+local function offer bim snap {cad vector2:point} labelled {a string:label} ranked {integer:rank} near {cad vector2:location} within {a 64 bit floating-point number:tolerance} to {a pointer to a bim snap candidate record:best}:
     execute:
-        # Only the walls of the active storey near the pointer are candidates,
-        # found through the evaluation's spatial index.
+        set gap to the cad distance from location to point
+        if gap > tolerance:
+            return nothing
+        set tie to 0.1 * tolerance
+        set better to (best's found = false) or (gap < (best's gap - tie))
+        if (better = false) and ((the absolute value of (gap - best's gap)) <= tie):
+            set better to rank < best's rank
+        if better:
+            set best's point to point
+            set best's label to label
+            set best's rank to rank
+            set best's gap to gap
+            set best's found to true
+
+# The straight pieces near `location` that can be snapped to, as pairs of
+# points: wall centrelines (straight walls), sketch lines and face edges of
+# the active storey, and grid lines.
+local function the bim snap segments near {cad vector2:location} within {a 64 bit floating-point number:tolerance} for {bim editor record:editor}:
+    execute:
         set modelValue to editor's documentValue's current
+        set result to an empty list of a cad vector2
         set candidates to the bim walls within tolerance of location for editor
-        set bestDistance to tolerance
-        set found to false
-        set best to location
         loop cursor from 0 to the length of candidates:
             set wallFound to the bim wall index of (the item at cursor in candidates) in modelValue
             if wallFound's valid:
                 set wallValue to the item at wallFound's position in (modelValue's walls's values)
-                if (the cad distance from location to wallValue's start) <= bestDistance:
-                    set bestDistance to the cad distance from location to wallValue's start
-                    set best to wallValue's start
-                    set found to true
-                if (the cad distance from location to wallValue's finish) <= bestDistance:
-                    set bestDistance to the cad distance from location to wallValue's finish
-                    set best to wallValue's finish
-                    set found to true
-        if found:
-            free candidates
-            return the bim snap best labelled "End point"
+                if wallValue's bulge = 0.0:
+                    append wallValue's start to result
+                    append wallValue's finish to result
+        free candidates
+        loop cursor from 0 to the length of (modelValue's sketches's values):
+            set element to the item at cursor in (modelValue's sketches's values)
+            if (element's levelId = editor's levelId) and (element's kind != bim text sketch):
+                set ring to element's points's values
+                set count to the length of ring
+                set edgeCount to count
+                if element's kind = bim line sketch:
+                    set edgeCount to 1
+                loop corner from 0 to edgeCount:
+                    set here to the item at corner in ring
+                    set following to the item at (the remainder of (corner + 1) divided by count) in ring
+                    if (the cad distance from location to the segment from here to following) <= tolerance:
+                        append here to result
+                        append following to result
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            if (the cad distance from location to the segment from gridValue's start to gridValue's finish) <= tolerance:
+                append gridValue's start to result
+                append gridValue's finish to result
+        return result
+
+# The point drawing tracks from: the last point of the chain, rectangle,
+# grid or move under way; `found` is false when there is none.
+function the bim tracking origin of {bim editor record:editor}:
+    execute:
+        set none to @intrinsic("construct", a bim snap candidate record, editor's pointerLocation, the string form of "", 0, 0.0, false)
+        if (editor's tool = bim wall tool) and editor's chainActive:
+            return @intrinsic("construct", a bim snap candidate record, editor's chainStart, the string form of "", 0, 0.0, true)
+        set chain to editor's sketchChain's values
+        if ((editor's tool = bim line tool) or (editor's tool = bim rectangle tool)) and ((the length of chain) > 0):
+            return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true)
+        if (editor's tool = bim grid tool) and editor's gridActive:
+            return @intrinsic("construct", a bim snap candidate record, editor's gridStart, the string form of "", 0, 0.0, true)
+        set moving to ((editor's tool = bim move tool) or (editor's tool = bim copy tool)) or ((editor's tool = bim rotate tool) or (editor's tool = bim mirror tool))
+        if moving and (editor's moveStage >= 2):
+            return @intrinsic("construct", a bim snap candidate record, editor's moveBase, the string form of "", 0, 0.0, true)
+        return none
+
+# The snapped point of `location`, as in Open 2D Studio: object snaps (end
+# point, mid point, intersection, perpendicular from the tracking origin),
+# then nearest on an edge, then tracking from the origin (horizontal and
+# vertical, polar rays every 45 degrees, or ortho), then the grid. F3 turns
+# snapping off.
+function the bim snap of {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        if editor's snapOff:
+            return the bim snap location labelled "Free"
+        set modelValue to editor's documentValue's current
+        set bestValue to @intrinsic("construct", a bim snap candidate record, location, the string form of "", 99, 0.0, false)
+        set best to the address of bestValue
+        # Wall ends and middles, through the evaluation's spatial index.
+        set candidates to the bim walls within tolerance of location for editor
         loop cursor from 0 to the length of candidates:
             set wallFound to the bim wall index of (the item at cursor in candidates) in modelValue
             if wallFound's valid:
-                set middle to the bim middle of wall (the item at wallFound's position in (modelValue's walls's values))
-                if (the cad distance from location to middle) <= bestDistance:
-                    set bestDistance to the cad distance from location to middle
-                    set best to middle
-                    set found to true
+                set wallValue to the item at wallFound's position in (modelValue's walls's values)
+                offer bim snap wallValue's start labelled (the string form of "End point") ranked 0 near location within tolerance to best
+                offer bim snap wallValue's finish labelled (the string form of "End point") ranked 0 near location within tolerance to best
+                offer bim snap (the bim middle of wall wallValue) labelled (the string form of "Mid point") ranked 1 near location within tolerance to best
         free candidates
-        if found:
-            return the bim snap best labelled "Mid point"
-        if editor's chainActive:
-            set gridded to the bim grid point near location step 0.05
-            if (the absolute value of (location's y - editor's chainStart's y)) <= tolerance:
-                return the bim snap (a cad vector2 with x gridded's x and y editor's chainStart's y) labelled "Horizontal"
-            if (the absolute value of (location's x - editor's chainStart's x)) <= tolerance:
-                return the bim snap (a cad vector2 with x editor's chainStart's x and y gridded's y) labelled "Vertical"
+        set segments to the bim snap segments near location within tolerance for editor
+        set tracker to the bim tracking origin of editor
+        set cursor to 0
+        loop while (cursor + 1) < the length of segments:
+            set first to the item at cursor in segments
+            set second to the item at (cursor + 1) in segments
+            offer bim snap first labelled (the string form of "End point") ranked 0 near location within tolerance to best
+            offer bim snap second labelled (the string form of "End point") ranked 0 near location within tolerance to best
+            offer bim snap (a cad vector2 with x ((first's x + second's x) * 0.5) and y ((first's y + second's y) * 0.5)) labelled (the string form of "Mid point") ranked 1 near location within tolerance to best
+            # Crossings with the other pieces.
+            set other to cursor + 2
+            loop while (other + 1) < the length of segments:
+                set third to the item at other in segments
+                set fourth to the item at (other + 1) in segments
+                set ax to second's x - first's x
+                set ay to second's y - first's y
+                set cx to fourth's x - third's x
+                set cy to fourth's y - third's y
+                set denominator to (ax * cy) - (ay * cx)
+                if (the absolute value of denominator) > 1e-12:
+                    set t to (((third's x - first's x) * cy) - ((third's y - first's y) * cx)) / denominator
+                    set u to (((third's x - first's x) * ay) - ((third's y - first's y) * ax)) / denominator
+                    if ((t >= -1e-9) and (t <= 1.000000001)) and ((u >= -1e-9) and (u <= 1.000000001)):
+                        offer bim snap (a cad vector2 with x (first's x + (t * ax)) and y (first's y + (t * ay))) labelled (the string form of "Intersection") ranked 2 near location within tolerance to best
+                set other to other + 2
+            # The foot of the perpendicular from the tracking origin.
+            if tracker's found:
+                set run to ((second's x - first's x) * (second's x - first's x)) + ((second's y - first's y) * (second's y - first's y))
+                if run > 1e-18:
+                    set t to (((tracker's point's x - first's x) * (second's x - first's x)) + ((tracker's point's y - first's y) * (second's y - first's y))) / run
+                    if (t > 0.0) and (t < 1.0):
+                        offer bim snap (a cad vector2 with x (first's x + (t * (second's x - first's x))) and y (first's y + (t * (second's y - first's y)))) labelled (the string form of "Perpendicular") ranked 3 near location within tolerance to best
+            set cursor to cursor + 2
+        if bestValue's found:
+            free segments
+            return the bim snap bestValue's point labelled bestValue's label
+        # Nearest on an edge.
+        set cursor to 0
+        loop while (cursor + 1) < the length of segments:
+            set first to the item at cursor in segments
+            set second to the item at (cursor + 1) in segments
+            set run to ((second's x - first's x) * (second's x - first's x)) + ((second's y - first's y) * (second's y - first's y))
+            if run > 1e-18:
+                set t to (((location's x - first's x) * (second's x - first's x)) + ((location's y - first's y) * (second's y - first's y))) / run
+                set t to the maximum of 0.0 and (the minimum of 1.0 and t)
+                offer bim snap (a cad vector2 with x (first's x + (t * (second's x - first's x))) and y (first's y + (t * (second's y - first's y)))) labelled (the string form of "Nearest") ranked 4 near location within tolerance to best
+            set cursor to cursor + 2
+        free segments
+        if bestValue's found:
+            return the bim snap bestValue's point labelled bestValue's label
+        # Tracking from the origin: ortho, or the 45 degree polar rays.
+        if tracker's found:
+            set dx to location's x - tracker's point's x
+            set dy to location's y - tracker's point's y
+            set reach to the square root of ((dx * dx) + (dy * dy))
+            if editor's orthoOn and (reach > 1e-9):
+                set gridded to the bim grid point near location step 0.05
+                if (the absolute value of dx) >= (the absolute value of dy):
+                    return the bim snap (a cad vector2 with x gridded's x and y tracker's point's y) labelled "Horizontal"
+                return the bim snap (a cad vector2 with x tracker's point's x and y gridded's y) labelled "Vertical"
+            if reach > 1e-9:
+                set angle to @intrinsic("atan2", dy, dx)
+                set step to 3.141592653589793 / 4.0
+                set ray to (the floor of ((angle / step) + 0.5)) * step
+                set ux to the cosine of ray
+                set uy to the sine of ray
+                set along to (dx * ux) + (dy * uy)
+                set across to the absolute value of ((dx * uy) - (dy * ux))
+                if (across <= tolerance) and (along > 0.0):
+                    # Lengths along a ray are rounded to 5 cm, as the grid.
+                    set rounded to (the floor of ((along / 0.05) + 0.5)) * 0.05
+                    set onRay to a cad vector2 with x (tracker's point's x + (rounded * ux)) and y (tracker's point's y + (rounded * uy))
+                    if (the absolute value of uy) < 1e-9:
+                        return the bim snap (a cad vector2 with x onRay's x and y tracker's point's y) labelled "Horizontal"
+                    if (the absolute value of ux) < 1e-9:
+                        return the bim snap (a cad vector2 with x tracker's point's x and y onRay's y) labelled "Vertical"
+                    if editor's polarOn:
+                        return the bim snap onRay labelled "Polar 45"
         return the bim snap (the bim grid point near location step 0.05) labelled "Grid"
 
 # The ids of the walls of the active storey that can pass within `tolerance`
@@ -897,7 +1045,7 @@ local function finish bim editor push in {a pointer to a bim editor record:edito
         commit bim transaction in (the address of (editor's documentValue))
         if found's valid:
             set rise to (the item at found's position in (editor's documentValue's current's sketches's values))'s height
-            set editor's message to ((the string form of "Push/pull to ") + (the bim metres text of rise)) + (the string form of " m")
+            set editor's message to (the string form of "Push/pull to ") + (the bim length rise in units editor's lengthUnit)
         set editor's pushId to the bim refused id
         set editor's numeric to the string form of ""
 
@@ -1171,6 +1319,60 @@ local function the bim metres text of {a 64 bit floating-point number:value}:
         set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
         return the substring of buffer from 0 spanning written bytes
 
+# ---------------------------------------------------------------- units
+
+# `value` (metres) as a number in the units `unitCode`, without the unit.
+function the bim number {a 64 bit floating-point number:value} in units {integer:unitCode}:
+    execute:
+        set text to the bim length value in units unitCode
+        set space to the index of " " in text
+        if space < 0:
+            return text
+        return the substring of text from 0 spanning space bytes
+
+# The project's length units: millimetres, centimetres or metres. Lengths are
+# kept in metres; the unit is how they are shown and how typed lengths are
+# read. Areas are always shown in square metres.
+function bim millimetre unit:
+    replacement:
+        0
+function bim centimetre unit:
+    replacement:
+        1
+function bim metre unit:
+    replacement:
+        2
+
+function the bim metres per {integer:unitCode}:
+    execute:
+        if unitCode = bim millimetre unit:
+            return 0.001
+        if unitCode = bim centimetre unit:
+            return 0.01
+        return 1.0
+
+function the bim name of unit {integer:unitCode}:
+    execute:
+        if unitCode = bim millimetre unit:
+            return the string form of "mm"
+        if unitCode = bim centimetre unit:
+            return the string form of "cm"
+        return the string form of "m"
+
+# `value` (metres) in the units `unitCode`, with its unit: whole millimetres,
+# centimetres to one decimal, or metres to two.
+function the bim length {a 64 bit floating-point number:value} in units {integer:unitCode}:
+    execute:
+        set buffer to a new string buffer containing 40 bytes
+        set written to 0
+        if unitCode = bim millimetre unit:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.0f mm", value * 1000.0)
+        else if unitCode = bim centimetre unit:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.1f cm", value * 100.0)
+        else:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.2f m", value)
+        return the substring of buffer from 0 spanning written bytes
+
 # A one-line description of the selection; empty when nothing (still) exists.
 function the bim selection description of {bim editor record:editor}:
     execute:
@@ -1193,12 +1395,12 @@ function the bim selection description of {bim editor record:editor}:
             set sketch to the item at sketchFound's position in (modelValue's sketches's values)
             set label to (the string form of " ") + ((the string form of sketch's id) + (the string form of ": "))
             if sketch's kind = bim line sketch:
-                return ((the string form of "Line") + label) + ((the string form of "length ") + ((the bim metres text of (the cad distance from (the item at 0 in (sketch's points's values)) to (the item at 1 in (sketch's points's values)))) + (the string form of " m")))
+                return ((the string form of "Line") + label) + ((the string form of "length ") + (the bim length (the cad distance from (the item at 0 in (sketch's points's values)) to (the item at 1 in (sketch's points's values))) in units editor's lengthUnit))
             if sketch's kind = bim text sketch:
                 return ((the string form of "Text") + label) + sketch's content
             set area to the absolute value of (the cad signed area of (sketch's points's values))
             if sketch's height > 0.0:
-                return ((the string form of "Mass") + label) + ((the string form of "area ") + ((the bim metres text of area) + ((the string form of " m2, height ") + ((the bim metres text of sketch's height) + (the string form of " m")))))
+                return ((the string form of "Mass") + label) + ((the string form of "area ") + ((the bim metres text of area) + ((the string form of " m2, height ") + (the bim length sketch's height in units editor's lengthUnit))))
             return ((the string form of "Face") + label) + ((the string form of "area ") + ((the bim metres text of area) + (the string form of " m2 (P: push/pull)")))
         if editor's selectionKind = bim wall picked:
             set found to the bim wall index of editor's selectionId in modelValue
@@ -1214,12 +1416,12 @@ function the bim selection description of {bim editor record:editor}:
                 if (the item at cursor in (modelValue's openings's values))'s hostId = wallValue's id:
                     set hostedCount to hostedCount + 1
             set text to ((the string form of "Wall ") + (the string form of wallValue's id)) + (the string form of ": ")
-            set text to ((text + typeName) + (the string form of " ")) + (the bim metres text of (the bim wall thickness of wallValue in modelValue))
-            set text to ((text + (the string form of " m, length ")) + (the bim metres text of (the bim centreline length of wallValue))) + (the string form of " m, height ")
-            set text to ((text + (the bim metres text of wallValue's height)) + (the string form of " m, openings ")) + (the string form of hostedCount)
+            set text to ((text + typeName) + (the string form of " ")) + (the bim length (the bim wall thickness of wallValue in modelValue) in units editor's lengthUnit)
+            set text to ((text + (the string form of ", length ")) + (the bim length (the bim centreline length of wallValue) in units editor's lengthUnit)) + (the string form of ", height ")
+            set text to ((text + (the bim length wallValue's height in units editor's lengthUnit)) + (the string form of ", openings ")) + (the string form of hostedCount)
             set wallArc to the bim arc of wallValue
             if wallArc's curved:
-                set text to ((text + (the string form of ", radius ")) + (the bim metres text of wallArc's radius)) + (the string form of " m")
+                set text to (text + (the string form of ", radius ")) + (the bim length wallArc's radius in units editor's lengthUnit)
             return text
         if editor's selectionKind = bim opening picked:
             set found to the bim opening index of editor's selectionId in modelValue
@@ -1230,11 +1432,11 @@ function the bim selection description of {bim editor record:editor}:
             set text to ((the string form of "Opening ") + (the string form of openingValue's id)) + (the string form of ": ")
             if typeFound's valid:
                 set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
-                set text to ((text + openingType's name) + (the string form of " ")) + (the bim metres text of openingType's width)
-                set text to ((text + (the string form of " x ")) + (the bim metres text of openingType's height)) + (the string form of " m, sill ")
-                set text to (text + (the bim metres text of openingType's sill)) + (the string form of " m, ")
+                set text to ((text + openingType's name) + (the string form of " ")) + (the bim number openingType's width in units editor's lengthUnit)
+                set text to ((text + (the string form of " x ")) + (the bim length openingType's height in units editor's lengthUnit)) + (the string form of ", sill ")
+                set text to (text + (the bim length openingType's sill in units editor's lengthUnit)) + (the string form of ", ")
             set text to ((text + (the string form of "in wall ")) + (the string form of openingValue's hostId)) + (the string form of " at ")
-            return (text + (the bim metres text of openingValue's offset)) + (the string form of " m")
+            return text + (the bim length openingValue's offset in units editor's lengthUnit)
         if editor's selectionKind = bim space picked:
             set chosen to the bim selected space of editor
             if chosen's valid = false:
@@ -1247,14 +1449,14 @@ function the bim selection description of {bim editor record:editor}:
                 return the string form of ""
             set gridValue to the item at found's position in (modelValue's grids's values)
             set text to ((the string form of "Grid ") + gridValue's name) + (the string form of ": length ")
-            return (text + (the bim metres text of (the cad distance from gridValue's start to gridValue's finish))) + (the string form of " m")
+            return text + (the bim length (the cad distance from gridValue's start to gridValue's finish) in units editor's lengthUnit)
         if editor's selectionKind = bim slab picked:
             set found to the bim slab index of editor's selectionId in modelValue
             if found's valid = false:
                 return the string form of ""
             set slabValue to the item at found's position in (modelValue's slabs's values)
             set text to ((the string form of "Slab ") + (the string form of slabValue's id)) + (the string form of ": thickness ")
-            set text to ((text + (the bim metres text of slabValue's thickness)) + (the string form of " m, area ")) + (the bim metres text of (the bim slab area of slabValue))
+            set text to ((text + (the bim length slabValue's thickness in units editor's lengthUnit)) + (the string form of ", area ")) + (the bim metres text of (the bim slab area of slabValue))
             return (text + (the string form of " m2, corners ")) + (the string form of (the length of (slabValue's outline's values)))
         return the string form of ""
 
@@ -1267,7 +1469,8 @@ function add bim editor slab under the selection in {a pointer to a bim editor r
             set editor's message to the string form of "Select a space first"
             return nothing
         begin bim transaction in (the address of (editor's documentValue))
-        set fresh to add bim slab on chosen's space's levelId around (chosen's space's outline's values) thick the bim slab thickness to (the address of (editor's documentValue's current))
+        set floorType to the item at editor's floorTypeIndex in (the bim floor types)
+        set fresh to add bim slab on chosen's space's levelId around (chosen's space's outline's values) thick floorType's thickness to (the address of (editor's documentValue's current))
         if fresh = the bim refused id:
             roll back bim transaction in (the address of (editor's documentValue))
             set editor's message to the string form of "Refused: the space has no valid outline"
@@ -1342,6 +1545,7 @@ function save bim editor to {a string:path} in {a pointer to a bim editor record
         set written to written + (the bim view rule lines of editor's planRules)
         set written to written + (the bim view rule lines of editor's sectionRules)
         set written to written + (the bim view rule lines of editor's modelRules)
+        set written to ((written + (the string form of "units ")) + (the bim name of unit editor's lengthUnit)) + (the string form of "\n")
         if write bim text written to file path:
             set editor's message to (the string form of "Saved ") + path
         else:
@@ -1408,6 +1612,8 @@ function open bim editor from {a string:path} in {a pointer to a bim editor reco
                 replace item at index entry's category in (editor's sectionRules's rules's values) with rule
             else:
                 replace item at index entry's category in (editor's modelRules's rules's values) with rule
+        if parsed's unitCode >= 0:
+            set editor's lengthUnit to parsed's unitCode
         set editor's viewsDirty to true
         set editor's message to (the string form of "Opened ") + path
 
@@ -1612,7 +1818,7 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                     set editor's message to the string form of "Offset: click a straight wall or a line"
                     return nothing
                 set editor's moveStage to 1
-                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: click the side")
+                set editor's message to ((the string form of "Offset ") + (the bim length editor's offsetDistance in units editor's lengthUnit)) + (the string form of ": click the side")
                 return nothing
             set piece to the bim segment of editor's selectionId in editor's documentValue's current
             set run to the cad distance from piece's start to piece's finish
@@ -1624,7 +1830,7 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                     set nx to 0.0 - nx
                     set ny to 0.0 - ny
                 ignore copy bim editor selection changed by (the bim shift transform by (a cad vector2 with x (nx * editor's offsetDistance) and y (ny * editor's offsetDistance))) in editor
-                set editor's message to (the string form of "Offset ") + ((the bim metres text of editor's offsetDistance) + (the string form of " m; click the next, or type a distance"))
+                set editor's message to (the string form of "Offset ") + ((the bim length editor's offsetDistance in units editor's lengthUnit) + (the string form of "; click the next, or type a distance"))
             set editor's moveStage to 0
             return nothing
         if (editor's tool = bim trim tool) or (editor's tool = bim extend tool):
@@ -1929,6 +2135,47 @@ function choose bim editor wall type {a 64 bit integer:typeId} in {a pointer to 
                 roll back bim transaction in (the address of (editor's documentValue))
             return nothing
         set editor's message to (the string form of "New walls: ") + chosenName
+
+# A floor type of Open 2D Studio: its name and thickness.
+class:
+    patterns:
+        [a|] bim floor type record
+    members:
+        name as a string
+        thickness as a 64 bit floating-point number
+
+# The floor types of Open 2D Studio, thinnest concrete first.
+function the bim floor types:
+    execute:
+        set result to an empty list of a bim floor type record
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 150", 0.15)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 200", 0.2)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 250", 0.25)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 300", 0.3)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 200", 0.2)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 260", 0.26)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 320", 0.32)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer hout 200", 0.2)) to result
+        return result
+
+# Makes floor type `index` the one new floors get; a selected slab takes its
+# thickness.
+function choose bim editor floor type {integer:index} in {a pointer to a bim editor record:editor}:
+    execute:
+        set floorTypes to the bim floor types
+        if (index < 0) or (index >= the length of floorTypes):
+            return nothing
+        set editor's floorTypeIndex to index
+        set floorType to the item at index in floorTypes
+        if editor's selectionKind = bim slab picked:
+            begin bim transaction in (the address of (editor's documentValue))
+            if set bim slab editor's selectionId thickness to floorType's thickness in (the address of (editor's documentValue's current)):
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's message to ((the string form of "Slab ") + (the string form of editor's selectionId)) + ((the string form of " is now ") + floorType's name)
+            else:
+                roll back bim transaction in (the address of (editor's documentValue))
+            return nothing
+        set editor's message to (the string form of "New floors: ") + floorType's name
 
 # ---------------------------------------------------------------- bending with joins
 
@@ -2566,7 +2813,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set digit to a new string buffer containing 1 bytes
                 store (code as a byte) into the data of digit at 0
                 set editor's numeric to editor's numeric + digit
-                set rise to the bim numeric value of editor's numeric
+                set rise to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
                 if set bim face editor's pushId height to rise in (the address of (editor's documentValue's current)):
                     show bim editor preview in editor
                 return nothing
@@ -2600,15 +2847,15 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's message to (the string form of "Rotated ") + ((the bim metres text of degrees) + (the string form of " degrees"))
                 return nothing
             if (editor's tool = bim offset tool) and ((the length of editor's numeric) > 0):
-                set distance to the bim numeric value of editor's numeric
+                set distance to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
                 if distance > 0.0:
                     set editor's offsetDistance to distance
                 set editor's numeric to the string form of ""
-                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: click a wall or a line")
+                set editor's message to ((the string form of "Offset ") + (the bim length editor's offsetDistance in units editor's lengthUnit)) + (the string form of ": click a wall or a line")
                 return nothing
             # A typed length places the next wall along the location's direction.
             if ((editor's tool = bim wall tool) and editor's chainActive) and ((the length of editor's numeric) > 0):
-                set amount to the bim numeric value of editor's numeric
+                set amount to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
                 set dx to editor's snap's point's x - editor's chainStart's x
                 set dy to editor's snap's point's y - editor's chainStart's y
                 set magnitude to the square root of ((dx * dx) + (dy * dy))
@@ -2700,10 +2947,38 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's message to the string form of "Extend: click the boundary (wall, line or grid)"
             if code = 2014:
                 set editor's tool to bim offset tool
-                set editor's message to ((the string form of "Offset ") + (the bim metres text of editor's offsetDistance)) + (the string form of " m: type a distance, or click a wall or a line")
+                set editor's message to ((the string form of "Offset ") + (the bim length editor's offsetDistance in units editor's lengthUnit)) + (the string form of ": type a distance, or click a wall or a line")
+            return nothing
+        # The project's length units (Manage tab).
+        if (code >= 2050) and (code <= 2052):
+            set editor's lengthUnit to code - 2050
+            set editor's message to (the string form of "Units: ") + (the bim name of unit editor's lengthUnit)
             return nothing
         if (code >= 2015) and (code < 2100):
             set editor's message to (the bim name of command code) + (the string form of ": not in the modeller yet")
+            return nothing
+        # F3, F8 and F10, as in Open 2D Studio: snapping, ortho and polar
+        # tracking on and off.
+        if code = 292:
+            set editor's snapOff to editor's snapOff = false
+            if editor's snapOff:
+                set editor's message to the string form of "Snap off (F3)"
+            else:
+                set editor's message to the string form of "Snap on (F3)"
+            return nothing
+        if code = 297:
+            set editor's orthoOn to editor's orthoOn = false
+            if editor's orthoOn:
+                set editor's message to the string form of "Ortho on (F8)"
+            else:
+                set editor's message to the string form of "Ortho off (F8)"
+            return nothing
+        if code = 299:
+            set editor's polarOn to editor's polarOn = false
+            if editor's polarOn:
+                set editor's message to the string form of "Polar tracking on (F10)"
+            else:
+                set editor's message to the string form of "Polar tracking off (F10)"
             return nothing
         # G moves the selection, as in Blender and Open 2D Studio.
         if code = 71:
