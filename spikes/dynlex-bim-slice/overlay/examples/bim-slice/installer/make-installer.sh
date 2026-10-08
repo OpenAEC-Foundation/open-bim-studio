@@ -43,6 +43,9 @@ cp "$binary" "$stage/payload/bin/open-bim-studio"
 cp "$font" "$licence" "$stage/payload/fonts/"
 cp "$noto/NotoSans-Regular.ttf" "$noto/NotoSans-Bold.ttf" "$stage/payload/fonts/"
 cp /usr/share/doc/fonts-noto-core/copyright "$stage/payload/fonts/LICENSE-NotoSans"
+# The drawing font, osifont (LGPL-3.0 with the GPL font exception).
+cp "$root/examples/bim-slice/fonts/osifont.ttf" "$stage/payload/fonts/"
+cp "$root/examples/bim-slice/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
 
 # Bundle every resolved library outside the system directories; refuse when
 # one does not resolve at all.

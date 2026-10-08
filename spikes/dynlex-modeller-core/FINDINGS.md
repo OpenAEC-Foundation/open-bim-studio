@@ -1084,6 +1084,12 @@ literal values. The editor now follows them:
   while a tool draws, else the arrow. The plan-wide crosshair and pick box
   are gone.
 
+- **Fonts.** Text in the drawing (grid names, area labels, sketch text,
+  level labels) is lettered in osifont, Open 2D Studio's ISO 3098 CAD font.
+  It is LGPL-3.0 with the GPL font exception and kept with its licence note
+  in `examples/bim-slice/fonts`; grid names are centred in their heads.
+  Snap labels use the 11 px face.
+
 The UI chrome keeps Open BIM Studio's own look.
 
 **Walls leaning and round in section.** A wall carries `lean` (its top
