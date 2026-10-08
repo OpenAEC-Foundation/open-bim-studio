@@ -2249,6 +2249,7 @@ set browserClosed to an empty list of a boolean
 loop browserGroup from 0 to the bim browser group count:
     append false to browserClosed
 set browserScroll to 0.0
+set typeSelectorOpen to false
 # Millimetres, as Dutch building drawings use; a file keeps its own units.
 set editor's lengthUnit to bim millimetre unit
 # Ctrl+S saves to and Ctrl+O opens `filePath`: the file named on the command
@@ -2317,6 +2318,7 @@ set camera to @intrinsic("construct", a bim camera record, a cad vector2 with x 
 set viewPressActive to false
 set pushPixel to a cad vector2 with x 0.0 and y 0.0
 set pushInView to false
+set pushPlaneZ to 0.0
 set viewDragged to false
 set viewPressPixel to a cad vector2 with x 0.0 and y 0.0
 set previousMiddle to false
@@ -2393,7 +2395,12 @@ loop while window remains open:
     set drawingInView to (overView and (showSchedule = false)) and ((bim tool editor's tool draws in 3D) or editor's editMode)
     if drawingInView and ((viewPressActive = false) and (viewGripActive = false)):
         set ray to the bim view ray through pixel in layout with camera
-        if (editor's tool = bim push tool) and (editor's pushId != the bim refused id):
+        if ((editor's tool = bim push tool) and (editor's pushId != the bim refused id)) and (editor's pushEdge >= 0):
+            # A side follows the pointer across the level of the click.
+            if pushInView and ((the absolute value of ray's direction's z) > 1e-9):
+                set reach to (pushPlaneZ - ray's origin's z) / ray's direction's z
+                move bim editor pointer to (a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))) within 0.0001 in (the address of editor)
+        else if (editor's tool = bim push tool) and (editor's pushId != the bim refused id):
             if pushInView:
                 set axesNow to the bim view axes of camera
                 set lift to (pushPixel's y - pixel's y) / (camera's viewScale * (the maximum of 0.2 and axesNow's up's z))
@@ -2406,6 +2413,11 @@ loop while window remains open:
         else if (the absolute value of ray's direction's z) > 1e-9:
             set reach to ((the bim storey elevation of editor) - ray's origin's z) / ray's direction's z
             set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
+            # Over a face or mass, the pointer lies on it, so that a line
+            # snaps to the face's points and edges where the face is seen.
+            set underPointer to the bim pick along ray among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
+            if underPointer's kind = bim sketch picked:
+                set onPlane to a cad vector2 with x (ray's origin's x + (underPointer's distance * ray's direction's x)) and y (ray's origin's y + (underPointer's distance * ray's direction's y))
             move bim editor pointer to onPlane within (8.0 / camera's viewScale) in (the address of editor)
     set panelClicked to false
     if (leftDown and (previousLeft = false)) and uiHit's inChrome:
@@ -2416,6 +2428,8 @@ loop while window remains open:
             set ribbonTab to uiHit's tab
         # The project browser: groups open and close, views open, a door or
         # window type starts placing it, a component starts placing it.
+        if uiHit's action = bim browser property:
+            start bim editor property (uiHit's actionId as an integer) in (the address of editor)
         if uiHit's action = bim browser toggle:
             set groupIndex to uiHit's actionId as an integer
             replace item at index groupIndex in browserClosed with ((the item at groupIndex in browserClosed) = false)
@@ -2431,7 +2445,20 @@ loop while window remains open:
         if uiHit's action = bim browser schedule view:
             set showSchedule to true
             set showSection to false
-        if uiHit's action = bim browser opening type:
+        # The type selector opens and closes; choosing from it closes it.
+        set wasOpen to typeSelectorOpen
+        set typeSelectorOpen to false
+        if uiHit's action = bim browser type selector:
+            set typeSelectorOpen to wasOpen = false
+        if (uiHit's action = bim browser opening type) and (editor's selectionKind = bim opening picked):
+            begin bim transaction in (the address of (editor's documentValue))
+            if set bim opening editor's selectionId type to uiHit's actionId in (the address of (editor's documentValue's current)):
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's openingTypeId to uiHit's actionId
+                set editor's message to (the string form of "Opening ") + ((the string form of editor's selectionId) + (the string form of ": type changed"))
+            else:
+                roll back bim transaction in (the address of (editor's documentValue))
+        else if uiHit's action = bim browser opening type:
             set editor's openingTypeId to uiHit's actionId
             set editor's tool to bim opening tool
             set editor's chainActive to false
@@ -2457,6 +2484,31 @@ loop while window remains open:
     if ((leftDown and (previousLeft = false)) and drawingInView) and (panelClicked = false):
         set pushInView to editor's tool = bim push tool
         set pushPixel to pixel
+        # A push/pull that starts on a mass's side pushes that side, as in
+        # SketchUp: the outline edge nearest where the ray met the side.
+        if (editor's tool = bim push tool) and (editor's pushId = the bim refused id):
+            set editor's pushEdge to -1
+            set sideRay to the bim view ray through pixel in layout with camera
+            set sideHit to the bim pick along sideRay among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
+            if sideHit's kind = bim sketch picked:
+                set hitZ to sideRay's origin's z + (sideHit's distance * sideRay's direction's z)
+                set hitPoint to a cad vector2 with x (sideRay's origin's x + (sideHit's distance * sideRay's direction's x)) and y (sideRay's origin's y + (sideHit's distance * sideRay's direction's y))
+                set massFound to the bim sketch index of sideHit's id in editor's documentValue's current
+                if massFound's valid:
+                    set massElement to the item at massFound's position in (editor's documentValue's current's sketches's values)
+                    set floorZ to the bim storey elevation of editor
+                    if ((massElement's height > 0.0) and (hitZ > (floorZ + 0.001))) and (hitZ < ((floorZ + massElement's height) - 0.001)):
+                        set ring to massElement's points's values
+                        set nearestEdge to 0
+                        set nearestGap to 1.0 / 0.0
+                        loop edgeCursor from 0 to the length of ring:
+                            set gap to the cad distance from hitPoint to the segment from (the item at edgeCursor in ring) to (the item at (the remainder of (edgeCursor + 1) divided by (the length of ring)) in ring)
+                            if gap < nearestGap:
+                                set nearestGap to gap
+                                set nearestEdge to edgeCursor
+                        set editor's pushEdge to nearestEdge
+                        set pushPlaneZ to hitZ
+                        move bim editor pointer to hitPoint within 0.0001 in (the address of editor)
         press bim editor pointer in (the address of editor)
     set overSection to ((pixel's x > layout's planRight) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))) and (showSection and editor's hasSection)
     if ((leftDown and (previousLeft = false)) and overSection) and (panelClicked = false):
@@ -2583,7 +2635,7 @@ loop while window remains open:
             open bim editor from filePath in (the address of editor)
             add bim type library to (the address of editor)
             set fitting to true
-        else if (code = 45) and (editor's grabbing = false):
+        else if (code = 45) and ((editor's grabbing = false) and (editor's propertyCode < 0)):
             set camera's scale to camera's scale / 1.2
         else if code = 61:
             set camera's scale to camera's scale * 1.2
@@ -2771,7 +2823,7 @@ loop while window remains open:
         set prompt to (the string form of "Length: ") + editor's numeric
     set uiHit to draw bim ribbon of tab ribbonTab for editor pointing at pixel's x and pixel's y across layout's width using typeface in frame
     draw bim document bar named filePath across layout's width using typeface in frame
-    set explorerHit to draw bim explorer of editor closing browserClosed scrolled browserScroll pointing at pixel's x and pixel's y down to layout's bottom using typeface in frame
+    set explorerHit to draw bim explorer of editor closing browserClosed scrolled browserScroll choosing typeSelectorOpen pointing at pixel's x and pixel's y down to layout's bottom using typeface in frame
     if explorerHit's inChrome:
         set uiHit to explorerHit
     draw bim command line saying prompt and status uiStatus in layout's width by layout's height using typeface in frame

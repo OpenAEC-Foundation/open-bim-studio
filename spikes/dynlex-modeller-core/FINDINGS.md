@@ -819,3 +819,48 @@ the storey's plane.
 **Not yet.** Sketch elements are still flat outlines with a height, not general
 meshes: points move in plan and the top moves as a whole. Free 3D vertices,
 extruding faces from a mesh, and loop cuts need a general mesh element.
+
+## Properties window, type selector, pushing sides (maintainer requests, 2026-10-08)
+
+**Properties window.** The left panel is split, as in Revit: the project
+browser above, the properties below.
+- **Type selector.** The window opens with a type selector: the type of the
+  selection, or of what the active tool draws next. A click opens the list of
+  that category's types, which are wall, door and window, floor or component
+  types. Choosing one gives it to the selected element, or makes it current.
+- **Rows.** Under the selector, the selection's properties are shown in the
+  project's units, and those that can change sit in fields:
+
+  | Selection | Rows | Can be typed |
+  |---|---|---|
+  | Wall | height, curvature, length, width, storey | height, curvature |
+  | Opening | offset, type's width, height and sill | all four |
+  | Slab | thickness, area | thickness |
+  | Face or mass | height, area | height |
+  | Instance | angle | angle |
+  | Grid | name, length | none |
+  | Nothing | the active storey | elevation, height |
+
+- **Typing a value.** A click on a field begins typing; Enter applies it as
+  one edit that can be undone; a value the model refuses leaves it unchanged.
+
+**Pushing a side.** Push/pull that starts on a mass's side in the 3D panel
+pushes that side, as in SketchUp:
+- the side's two corners are joined to their moved copies, and points left
+  on a straight line or doubling back are taken out, so a rectangle grows or
+  shrinks and an L-shape gains a step;
+- the pointer follows across the level of the click;
+- a typed distance (negative pulls in) places it exactly;
+- a side pulled in past the far side, or a crossing face, is refused.
+
+**Lines on faces.** In the 3D panel the pointer lies on the face or mass under
+it, so lines snap to the points and edges of faces where they are seen.
+
+**Checked:**
+- `tests/properties.dl` covers the rows of a storey, a wall and an opening,
+  typed values in millimetres, and a refused value.
+- `tests/side_push.dl` covers a side pushed out 1 m and in 0.5 m, and a
+  refused pull.
+
+**Not yet.** Lines on a mass's top or side stay on the storey's plane; sketch
+geometry is not a general 3D mesh (see edit mode above).
