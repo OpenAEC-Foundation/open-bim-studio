@@ -52,6 +52,18 @@ scale (R-12, R-20), GPU instancing.
   had changed since. They are DynLex's own sources (LGPL-3.0, as DynLex), kept here so the
   build is reproducible from a clean checkout of that commit.
 
+**The compiler.** The editor was built with a DynLex compiler from commit `bc653ad`
+with `patches/dynlex-compiler-local.patch` applied (numeric literal parsing and function
+inference changes made locally on top of that commit). Build the compiler from a clean
+checkout as DynLex's own README describes, after:
+
+```
+git -C $DYNLEX_ROOT checkout bc653ad
+git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-compiler-local.patch
+```
+
+`patches/dynlex-shader-extensions.patch` is needed only to rebuild the shaders.
+
 **How to run.** Set `DYNLEX_ROOT` to a DynLex checkout at commit `bc653ad`, with its
 compiler built at `build/dynlex`, then:
 
