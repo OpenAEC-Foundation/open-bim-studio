@@ -729,3 +729,56 @@ How they behave:
 - the floor types;
 - the "aligned on the exterior" reference line of the layered types;
 - grouped layers with their own gaps beyond one cavity.
+
+## IFC5 (IfcX) as the editor's own file (maintainer request, 2026-10-08)
+
+The maintainer asked for everything to be saved in `.ifcx`: JSON, with IFC 4.3
+classes where they exist and extensions where needed. The editor now saves
+and opens `.ifcx` as its own file.
+
+**IFC gives** the classes and the spatial structure, the type nodes elements
+inherit, materials, geometry and quantities:
+- `IfcProject`, `IfcSite`, `IfcBuilding` and `IfcBuildingStorey`;
+- `IfcWallType` with `IfcWall` inheriting it;
+- `IfcWindowType` and `IfcDoorType` with `IfcWindow` and `IfcDoor` inheriting
+  them;
+- `IfcSlab`, `IfcSpace`, `IfcGridAxis` and `IfcAnnotation`;
+- `IfcBuildingElementProxyType` with `IfcBuildingElementProxy` for components
+  and their instances;
+- `bsi::ifc::prop` quantities, `bsi::ifc::material` with colours, and
+  `usd::usdgeom` meshes and curves.
+
+**The extension.** An `openbim::` namespace, declared in the file's
+`schemas`, carries what IFC has no parametric attribute for:
+
+| Record | What it holds |
+|---|---|
+| project | next id, length units, the views' rules |
+| level | elevation, height |
+| walltype | layers: material and thickness |
+| wall | centreline, height, bulge, type, storey |
+| openingtype | width, height, sill, frame, door or window |
+| opening | type, host wall, offset along it |
+| slab | outline, thickness |
+| grid | ends, low, high |
+| sketch | kind, points, height, words |
+| component | its parts |
+| instance | component, origin, angle |
+| dimension | its two semantic references |
+
+Numbers are written with 17 significant digits.
+
+**Reading.** The reader rebuilds the native text from these records and reads
+it as any saved model is read, with the same checks.
+
+**Saving.**
+- Ctrl+S now saves `.ifcx`.
+- A native `.bim` file still opens, and is then saved next to itself as
+  `.ifcx`.
+
+**Checked.** `tests/ifcx_native.dl` saves an example building with a
+component, sketch elements, a bent wall, the wall type library, millimetre
+units and a changed view rule, then opens it in a new editor. The model comes
+back identical, compared as native text, and so do the units and the rule.
+`verify_ifcx.py` composes the file independently: one root, 109 nodes, and
+every reference resolves.
