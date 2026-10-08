@@ -1190,6 +1190,139 @@ function push bim mesh {a 64 bit integer:meshId} face {integer:start} of {bim me
         free faceList
         return done
 
+# The faces `entries` with point `fresh` put between `first` and `second`
+# wherever they follow each other in a face, either way round, so that the
+# faces on both sides of that edge keep sharing it.
+function the bim mesh faces {a pointer to a list:entries} with {integer:fresh} between {integer:first} and {integer:second}:
+    execute:
+        set result to an empty list of an integer
+        set start to 0
+        loop while start < the length of entries:
+            set count to the item at start in entries
+            set grown to 0
+            loop corner from 0 to count:
+                set here to the item at ((start + 1) + corner) in entries
+                set following to the item at ((start + 1) + (the remainder of (corner + 1) divided by count)) in entries
+                if ((here = first) and (following = second)) or ((here = second) and (following = first)):
+                    set grown to grown + 1
+            append (count + grown) to result
+            loop corner from 0 to count:
+                set here to the item at ((start + 1) + corner) in entries
+                set following to the item at ((start + 1) + (the remainder of (corner + 1) divided by count)) in entries
+                append here to result
+                if ((here = first) and (following = second)) or ((here = second) and (following = first)):
+                    append fresh to result
+            set start to start + (count + 1)
+        return result
+
+# Where the loop of face number `ordinal` (counting from 0) starts in
+# `entries`; -1 when there is no such face.
+function the bim start of mesh face number {integer:ordinal} in {a pointer to a list:entries}:
+    execute:
+        set start to 0
+        set seen to 0
+        loop while start < the length of entries:
+            if seen = ordinal:
+                return start
+            set seen to seen + 1
+            set start to start + ((the item at start in entries) + 1)
+        return -1
+
+# The point of the loop of face `start` at `spot` (within `tolerance`), as a
+# point number, after putting it on the edge it lies on when it is not a
+# corner yet. `pointList` and the faces `entries` grow as needed; -1 when
+# `spot` is not on the face's outline.
+function the bim mesh point at {cad vector3:spot} on face {integer:start} within {a 64 bit floating-point number:tolerance} adding to {a pointer to a list:pointList} and {a pointer to a list:entries}:
+    execute:
+        set count to the item at start in entries
+        loop corner from 0 to count:
+            set here to the item at ((start + 1) + corner) in entries
+            if (the cad distance from spot to (the item at here in pointList)) <= tolerance:
+                return here
+        loop corner from 0 to count:
+            set here to the item at ((start + 1) + corner) in entries
+            set following to the item at ((start + 1) + (the remainder of (corner + 1) divided by count)) in entries
+            set edgeStart to the item at here in pointList
+            set run to the cad difference of (the item at following in pointList) and edgeStart
+            set runLength to the cad dot of run and run
+            if runLength > 1e-18:
+                set along to (the cad dot of (the cad difference of spot and edgeStart) and run) / runLength
+                if (along > 0.0) and (along < 1.0):
+                    set foot to the cad sum of edgeStart and (run scaled by along)
+                    if (the cad distance from spot to foot) <= tolerance:
+                        set fresh to the length of pointList
+                        append foot to pointList
+                        set widened to the bim mesh faces entries with fresh between here and following
+                        clear entries
+                        loop cursor from 0 to the length of widened:
+                            append (the item at cursor in widened) to entries
+                        free widened
+                        return fresh
+        return -1
+
+# Mesh `meshId` with face `start` cut in two along the straight line from
+# `fromSpot` to `toSpot`, both on its outline (corners or points on edges, in
+# the mesh's coordinates), as a line drawn across a face does in SketchUp.
+# Refused when a point is off the outline or both lie on one edge.
+function split bim mesh {a 64 bit integer:meshId} face {integer:start} from {cad vector3:fromSpot} to {cad vector3:toSpot} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim mesh index of meshId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set meshValue to the item at found's position in (target's meshes's values)
+        if (start < 0) or (start >= the length of (meshValue's faces's values)):
+            return false
+        set ordinal to 0
+        set walker to 0
+        loop while walker < start:
+            set ordinal to ordinal + 1
+            set walker to walker + ((the item at walker in (meshValue's faces's values)) + 1)
+        if walker != start:
+            return false
+        set pointList to an empty list of a cad vector3
+        loop cursor from 0 to the length of (meshValue's vertices's values):
+            append (the item at cursor in (meshValue's vertices's values)) to pointList
+        set entries to an empty list of an integer
+        loop cursor from 0 to the length of (meshValue's faces's values):
+            append (the item at cursor in (meshValue's faces's values)) to entries
+        set firstPoint to the bim mesh point at fromSpot on face start within 1e-4 adding to pointList and entries
+        set faceStart to the bim start of mesh face number ordinal in entries
+        set secondPoint to -1
+        if firstPoint >= 0:
+            set secondPoint to the bim mesh point at toSpot on face faceStart within 1e-4 adding to pointList and entries
+        set faceStart to the bim start of mesh face number ordinal in entries
+        set done to false
+        if (firstPoint >= 0) and ((secondPoint >= 0) and (firstPoint != secondPoint)):
+            set count to the item at faceStart in entries
+            set firstAt to -1
+            set secondAt to -1
+            loop corner from 0 to count:
+                if (the item at ((faceStart + 1) + corner) in entries) = firstPoint:
+                    set firstAt to corner
+                if (the item at ((faceStart + 1) + corner) in entries) = secondPoint:
+                    set secondAt to corner
+            set gap to the remainder of ((secondAt - firstAt) + count) divided by count
+            # Neighbours on the loop would cut nothing off.
+            if ((firstAt >= 0) and (secondAt >= 0)) and ((gap >= 2) and (gap <= (count - 2))):
+                set faceList to an empty list of an integer
+                loop cursor from 0 to faceStart:
+                    append (the item at cursor in entries) to faceList
+                # This face keeps the run from the first point to the second;
+                # the rest of the loop becomes a new face at the end.
+                append (gap + 1) to faceList
+                loop step from 0 to (gap + 1):
+                    append (the item at ((faceStart + 1) + (the remainder of (firstAt + step) divided by count)) in entries) to faceList
+                loop cursor from ((faceStart + 1) + count) to the length of entries:
+                    append (the item at cursor in entries) to faceList
+                append ((count - gap) + 1) to faceList
+                loop step from 0 to ((count - gap) + 1):
+                    append (the item at ((faceStart + 1) + (the remainder of (secondAt + step) divided by count)) in entries) to faceList
+                set done to set bim mesh meshId to pointList and faceList in target
+                free faceList
+        free pointList
+        free entries
+        return done
+
 # The mass (a face raised `height`) `sketchId` becomes a free mesh: its foot
 # and top faces and a side for each edge, the outline turning anticlockwise
 # seen from above. Returns the mesh, or the refused id.

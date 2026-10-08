@@ -755,7 +755,7 @@ function select bim editor {integer:kindCode} numbered {a 64 bit integer:element
             set chosenKind to bim instance picked
         # Shift adds sketch elements and instances to the selection; any
         # other pick starts it afresh.
-        set gathering to (chosenKind = bim sketch picked) or (chosenKind = bim instance picked)
+        set gathering to ((chosenKind = bim sketch picked) or (chosenKind = bim instance picked)) or (chosenKind = bim mesh picked)
         if (editor's extending = false) or (gathering = false):
             set editor's chosenSketches to a cad topology list of a 64 bit integer
         if gathering:
@@ -1084,9 +1084,31 @@ local function show bim editor preview in {a pointer to a bim editor record:edit
     execute:
         set editor's documentValue's revision to editor's documentValue's revision + (1 as a 64 bit integer)
 
+# Whether mesh `meshId` is still sound compared with the snapshot of the
+# open transaction (see `bim mesh stays sound after`).
+function bim editor mesh {a 64 bit integer:meshId} stays sound in {bim editor record:editor}:
+    execute:
+        set stack to editor's documentValue's undoStack's values
+        set nowFound to the bim mesh index of meshId in editor's documentValue's current
+        if ((the length of stack) = 0) or (nowFound's valid = false):
+            return true
+        set original to the item at ((the length of stack) - 1) in stack
+        set beforeFound to the bim mesh index of meshId in original
+        if beforeFound's valid = false:
+            return true
+        return bim mesh (the item at nowFound's position in (editor's documentValue's current's meshes's values)) stays sound after (the item at beforeFound's position in (original's meshes's values))
+
 local function finish bim editor push in {a pointer to a bim editor record:editor}:
     execute:
         if editor's pushFace >= 0:
+            # Pushed through the far side, or turned inside out: refused.
+            if (bim editor mesh editor's pushId stays sound in (@intrinsic("dereference", editor))) = false:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Refused: the face would pass through the mesh"
+                set editor's pushId to the bim refused id
+                set editor's pushFace to -1
+                set editor's numeric to the string form of ""
+                return nothing
             commit bim transaction in (the address of (editor's documentValue))
             set editor's message to the string form of "Pushed the face"
             set editor's pushId to the bim refused id
@@ -2523,13 +2545,42 @@ function the bim corners {a pointer to a list:points} under {bim transform recor
             append (the bim point (the item at slot in points) under change) to result
         return result
 
+# The points of `meshValue` after `change`, each keeping its height.
+function the bim mesh points of {bim mesh record:meshValue} under {bim transform record:change}:
+    execute:
+        set result to an empty list of a cad vector3
+        loop cursor from 0 to the length of (meshValue's vertices's values):
+            set spot to the item at cursor in (meshValue's vertices's values)
+            set flat to the bim point (a cad vector2 with x spot's x and y spot's y) under change
+            append (a cad vector3 with x flat's x, y flat's y and z spot's z) to result
+        return result
+
+# The faces of `meshValue` after `change`: each loop turned round when it
+# mirrors (from the same first point, so that a face not quite flat is
+# triangulated alike), so that the faces keep facing out.
+function the bim mesh faces of {bim mesh record:meshValue} under {bim transform record:change}:
+    execute:
+        set result to an empty list of an integer
+        set entries to meshValue's faces's values
+        set start to 0
+        loop while start < the length of entries:
+            set count to the item at start in entries
+            append count to result
+            loop corner from 0 to count:
+                set slot to corner
+                if (change's kind = bim mirror transform kind) and (corner > 0):
+                    set slot to count - corner
+                append (the item at ((start + 1) + slot) in entries) to result
+            set start to start + (count + 1)
+        return result
+
 # The ids the selection covers: the selected element, and with sketch
 # elements or instances every chosen one.
 function the bim selection members of {bim editor record:editor}:
     execute:
         set ids to an empty list of a 64 bit integer
         append editor's selectionId to ids
-        if (editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked):
+        if ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)) or (editor's selectionKind = bim mesh picked):
             loop cursor from 0 to the length of (editor's chosenSketches's values):
                 set chosen to the item at cursor in (editor's chosenSketches's values)
                 if chosen != editor's selectionId:
@@ -2554,6 +2605,14 @@ function reposition bim editor selection by {bim transform record:change} in {a 
             set slabFound to the bim slab index of elementId in original
             set instanceFound to the bim instance index of elementId in original
             set sketchFound to the bim sketch index of elementId in original
+            set meshFound to the bim mesh index of elementId in original
+            if meshFound's valid:
+                set meshValue to the item at meshFound's position in (original's meshes's values)
+                set placedPoints to the bim mesh points of meshValue under change
+                set placedFaces to the bim mesh faces of meshValue under change
+                ignore set bim mesh elementId to placedPoints and placedFaces in target
+                free placedPoints
+                free placedFaces
             if wallFound's valid:
                 set wallValue to the item at wallFound's position in (original's walls's values)
                 set newStart to the bim point wallValue's start under change
@@ -2602,6 +2661,15 @@ function copy bim editor selection changed by {bim transform record:change} in {
             set gridFound to the bim grid index of elementId in (@intrinsic("dereference", target))
             set sketchFound to the bim sketch index of elementId in (@intrinsic("dereference", target))
             set instanceFound to the bim instance index of elementId in (@intrinsic("dereference", target))
+            set meshFound to the bim mesh index of elementId in (@intrinsic("dereference", target))
+            if meshFound's valid:
+                set meshValue to the item at meshFound's position in (target's meshes's values)
+                set placedPoints to the bim mesh points of meshValue under change
+                set placedFaces to the bim mesh faces of meshValue under change
+                if (add bim mesh on meshValue's levelId with placedPoints and placedFaces to target) != the bim refused id:
+                    set made to made + 1
+                free placedPoints
+                free placedFaces
             if wallFound's valid:
                 set wallValue to the item at wallFound's position in (target's walls's values)
                 set newStart to the bim point wallValue's start under change
@@ -2787,6 +2855,20 @@ function push bim editor mesh face by {a 64 bit floating-point number:distance} 
         if push bim mesh editor's pushId face editor's pushFace of (the item at found's position in (original's meshes's values)) by distance in (the address of (editor's documentValue's current)):
             show bim editor preview in editor
             set editor's message to (the string form of "Push/pull the face: ") + (the bim length distance in units editor's lengthUnit)
+
+# A line drawn across face `start` of mesh `meshId` from `fromSpot` to
+# `toSpot` (on its outline, in the mesh's coordinates) cuts it in two, as
+# one edit; the two faces can then be pushed apart.
+function split bim editor mesh {a 64 bit integer:meshId} face {integer:start} from {cad vector3:fromSpot} to {cad vector3:toSpot} in {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        if split bim mesh meshId face start from fromSpot to toSpot in (the address of (editor's documentValue's current)):
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Split the face"
+            return true
+        roll back bim transaction in (the address of (editor's documentValue))
+        set editor's message to the string form of "Line on a face: click two points on its edges, not on one edge"
+        return false
 
 # ---------------------------------------------------------------- push/pull of a side
 
@@ -3122,6 +3204,10 @@ function finish bim editor grab in {a pointer to a bim editor record:editor}:
     execute:
         set editor's grabbing to false
         set editor's numeric to the string form of ""
+        if editor's editMesh and ((bim editor mesh editor's editSketchId stays sound in (@intrinsic("dereference", editor))) = false):
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: the mesh would turn inside out"
+            return nothing
         set found to the bim edited sketch of (@intrinsic("dereference", editor))
         if found's valid and (editor's editMesh = false):
             set element to the item at found's position in (editor's documentValue's current's sketches's values)

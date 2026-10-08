@@ -916,8 +916,37 @@ works on the mesh:
 - a corner raised, then the top extruded (12 points, 10 faces);
 - deletion.
 
+**Modify, refusal, lines on faces.**
+- **Modify tools.** Move, copy, rotate and mirror work on meshes, with Shift
+  adding meshes to the selection. A mirror turns every face loop round, from
+  the same first point, so the faces keep facing out. The triangulation of a
+  face that is not quite flat stays the same, so the volume is kept exactly.
+- **Refusals.** A push or a grab is refused when afterwards the mesh would
+  enclose no volume, or a face would turn round. This covers pushing a face
+  through the far side of the mesh.
+- **Lines on faces.** With the line tool in the 3D panel, the pointer over a
+  mesh face snaps to its outline: corners, then edge middles, then any point
+  on an edge.
+  - The first click starts a line across that face, and a click on the same
+    face's outline cuts the face in two along it.
+  - A point on an edge becomes a new point of the mesh, in the face on the
+    other side of that edge as well, so the mesh stays closed.
+  - Each half can then be pushed on its own. Its other half does not run
+    along the push, so the pushed half is extruded and a step appears, as in
+    SketchUp.
+  - A cut along a single edge is refused.
+
+**Checked further** in `tests/mesh.dl`:
+- a push through the floor refused;
+- a mirrored copy keeping its volume (84.3 m³);
+- the copy moved 2 m;
+- a 4 × 3 × 3 m block's top cut in two from edge middle to edge middle
+  (10 points, 7 faces);
+- a cut along one edge refused;
+- one half pushed up 1 m (14 points, 11 faces, 42 m³).
+
 **Not yet:**
-- Pushing a face through the far side of the mesh is not refused.
 - There are no loop cuts and no merging of points.
-- Meshes cannot be moved, copied or put in components.
-- Lines drawn on a mesh face do not split it.
+- Meshes cannot be put in components.
+- A line on a face must run from outline to outline; a line ending inside a
+  face, or crossing several faces, does not cut.
