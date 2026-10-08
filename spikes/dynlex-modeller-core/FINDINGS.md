@@ -782,3 +782,40 @@ units and a changed view rule, then opens it in a new editor. The model comes
 back identical, compared as native text, and so do the units and the rule.
 `verify_ifcx.py` composes the file independently: one root, 109 nodes, and
 every reference resolves.
+
+## Edit mode: Blender's grab with SketchUp's picking (maintainer request, 2026-10-08)
+
+The maintainer asked for sketch geometry that combines Blender and SketchUp:
+Tab into the mesh, and points moved with G along X, Y or Z.
+
+**Entering.** Tab on a selected line, face or mass enters edit mode. The
+element's points are shown in the plan and in the 3D panel; a mass shows them
+at its foot and its top. The points are picked as in SketchUp:
+- a click near a point picks it;
+- a click on an edge picks its two ends;
+- a click inside a face picks all of it;
+- Shift adds to what is picked, and A picks all.
+
+**Grabbing.** G grabs the picked points, as in Blender:
+- they follow the pointer, with snapping;
+- X, Y and Z constrain the move to an axis (pressing the same key again frees
+  it);
+- a typed distance in the project's units (with - for the other way) places
+  them exactly;
+- Z on a face or mass changes its height;
+- a click or Enter places them, and Esc cancels.
+
+A grab that would make a face cross itself is refused. Tab or Esc returns to
+object mode. It works in the 3D panel as well, where the pointer runs over
+the storey's plane.
+
+**Checked.** `tests/edit_mode.dl`:
+- a corner moved 1 m along X;
+- an edge moved -0.5 m along Y;
+- the whole face raised 2.5 m along Z into a mass;
+- a crossing grab refused;
+- Esc and undo.
+
+**Not yet.** Sketch elements are still flat outlines with a height, not general
+meshes: points move in plan and the top moves as a whole. Free 3D vertices,
+extruding faces from a mesh, and loop cuts need a general mesh element.
