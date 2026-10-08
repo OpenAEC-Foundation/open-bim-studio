@@ -45,8 +45,15 @@ scale (R-12, R-20), GPU instancing.
   (vertex attributes, sampling). Applied to a compiler checkout, they let the
   shaders be rebuilt. `shaders/` holds the SPIR-V they compile to, so the editor
   builds without them.
+- `overlay/lib/cadkernel/` — the kernel modules the slice uses that differ from DynLex
+  commit `bc653ad` (OpenAEC-Foundation/dynlex): the plane section and its loops, the
+  constrained triangulation, robust predicates, reference-counted topology lists and
+  operation tolerances, which that commit lacks, and the modules the native kernel port
+  had changed since. They are DynLex's own sources (LGPL-3.0, as DynLex), kept here so the
+  build is reproducible from a clean checkout of that commit.
 
-**How to run.** Set `DYNLEX_ROOT` to the DynLex checkout, then:
+**How to run.** Set `DYNLEX_ROOT` to a DynLex checkout at commit `bc653ad`, with its
+compiler built at `build/dynlex`, then:
 
 ```
 ./build.sh app             # the editor, optimised, in build/bim-slice

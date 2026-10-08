@@ -7,6 +7,9 @@
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
 #   DYNLEX_ROOT=... ./build.sh installer OUT.sh                  self-contained installer
 #
+# BIM_BUILD_DIR (default build/) is where the tree and the outputs go, so two
+# builds can run side by side.
+#
 # DYNLEX_ROOT is a DynLex checkout with a built compiler at build/dynlex (the
 # cadkernel fork). The tree is assembled in build/tree: the checkout's lib/,
 # this overlay, the public JSON parse patch and the prebuilt shaders. Nothing
@@ -14,7 +17,8 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=${DYNLEX_ROOT:?set DYNLEX_ROOT to a DynLex checkout with a built compiler}
-tree=$here/build/tree
+out=${BIM_BUILD_DIR:-$here/build}
+tree=$out/tree
 mkdir -p "$tree/build/shaders"
 rsync -a --delete "$root/lib/" "$tree/lib/"
 rsync -a "$here/overlay/" "$tree/"
@@ -40,13 +44,13 @@ command=${1:-app}
 shift || true
 case "$command" in
     app)
-        build/dynlex examples/bim-slice/main.dl -O2 -o "$here/build/bim-slice"
-        echo "built $here/build/bim-slice" ;;
+        build/dynlex examples/bim-slice/main.dl -O2 -o "$out/bim-slice"
+        echo "built $out/bim-slice" ;;
     dev)
-        build/dynlex examples/bim-slice/main.dl -O0 -g -o "$here/build/bim-slice-dev"
-        echo "built $here/build/bim-slice-dev" ;;
+        build/dynlex examples/bim-slice/main.dl -O0 -g -o "$out/bim-slice-dev"
+        echo "built $out/bim-slice-dev" ;;
     run)
-        exec "$here/build/bim-slice" "$@" ;;
+        exec "$out/bim-slice" "$@" ;;
     test)
         names=("$@")
         if [ ${#names[@]} -eq 0 ]; then
@@ -54,22 +58,22 @@ case "$command" in
                 names+=("$(basename "$expected" .expected.txt)")
             done
         fi
-        mkdir -p "$here/build/tests"
+        mkdir -p "$out/tests"
         status=0
         for name in "${names[@]}"; do
-            if ! build/dynlex "examples/bim-slice/tests/$name.dl" -O0 -o "$here/build/tests/$name" > "$here/build/tests/$name.diag" 2>&1 || [ -s "$here/build/tests/$name.diag" ]; then
-                echo "$name DIAG"; head -5 "$here/build/tests/$name.diag"; status=1; continue
+            if ! build/dynlex "examples/bim-slice/tests/$name.dl" -O0 -o "$out/tests/$name" > "$out/tests/$name.diag" 2>&1 || [ -s "$out/tests/$name.diag" ]; then
+                echo "$name DIAG"; head -5 "$out/tests/$name.diag"; status=1; continue
             fi
-            "$here/build/tests/$name" > "$here/build/tests/$name.out" 2>&1 || true
-            if diff -q "$here/build/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" > /dev/null; then
+            "$out/tests/$name" > "$out/tests/$name.out" 2>&1 || true
+            if diff -q "$out/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" > /dev/null; then
                 echo "$name PASS"
             else
-                echo "$name FAIL"; diff "$here/build/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" | head -10; status=1
+                echo "$name FAIL"; diff "$out/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" | head -10; status=1
             fi
         done
         exit $status ;;
     installer)
-        bash examples/bim-slice/installer/make-installer.sh "$here/build/bim-slice" "${1:?installer output path}" ;;
+        bash examples/bim-slice/installer/make-installer.sh "$out/bim-slice" "${1:?installer output path}" ;;
     *)
         echo "unknown command $command" >&2; exit 2 ;;
 esac

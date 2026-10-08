@@ -1,0 +1,727 @@
+# SPDX-License-Identifier: MPL-2.0
+# Port of cadkernel src/brep/boolean.rs at
+# 953d546b68aef4b6692566a1a9b077fc5bd9fb4f.
+# Inputs are cloned before imprinting. Selected faces are copied into a new,
+# stitched shell; unsupported classification or stitching is an explicit snag.
+import lib/cadkernel/brep_classify.dl
+import lib/cadkernel/brep_imprint.dl
+import lib/cadkernel/brep_append.dl
+import lib/cadkernel/brep_mesh.dl
+import lib/cadkernel/nurbs_builder.dl
+
+function cad union operation:
+    replacement:
+        0
+function cad intersection operation:
+    replacement:
+        1
+function cad difference operation:
+    replacement:
+        2
+
+class:
+    patterns:
+        [a|] cad boolean result
+    members:
+        valid as a boolean
+        snag as an integer
+        value as a cad body
+class:
+    patterns:
+        [a|] cad boolean vertex result
+    members:
+        valid as a boolean
+        value as a cad vertex key
+class:
+    patterns:
+        [a|] cad boolean edge result
+    members:
+        valid as a boolean
+        value as a cad edge key
+class:
+    patterns:
+        [a|] cad boolean face result
+    members:
+        valid as a boolean
+        value as a cad face key
+class:
+    patterns:
+        [a|] cad boolean point result
+    members:
+        valid as a boolean
+        value as a cad vector3
+class:
+    patterns:
+        [a|] cad boolean reversed pcurve
+    members:
+        valid as a boolean
+        value as a cad pcurve result
+class:
+    patterns:
+        [a|] cad boolean selection result
+    members:
+        valid as a boolean
+        snag as an integer
+        count as an integer
+class:
+    patterns:
+        [a|] cad boolean adjacency
+    members:
+        one as a cad face key
+        other as a cad face key
+        differ as a boolean
+class:
+    patterns:
+        [a|] cad boolean face flip
+    members:
+        face as a cad face key
+        flipped as a boolean
+class:
+    patterns:
+        [a|] cad boolean piece
+    members:
+        valid as a boolean
+        pieceBody as a cad body
+        volume as a 64 bit floating-point number
+
+local function cad boolean success {cad body:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean result, true, 0, value)
+local function cad boolean failure {integer:snag}:
+    execute:
+        return @intrinsic("construct", a cad boolean result, false, snag, an empty cad body)
+local function no cad boolean vertex:
+    execute:
+        return @intrinsic("construct", a cad boolean vertex result, false, a new cad vertex key)
+local function the cad boolean vertex {cad vertex key:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean vertex result, true, value)
+local function no cad boolean edge:
+    execute:
+        return @intrinsic("construct", a cad boolean edge result, false, a new cad edge key)
+local function the cad boolean edge {cad edge key:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean edge result, true, value)
+local function no cad boolean face:
+    execute:
+        return @intrinsic("construct", a cad boolean face result, false, a new cad face key)
+local function the cad boolean face {cad face key:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean face result, true, value)
+local function no cad boolean point:
+    execute:
+        return @intrinsic("construct", a cad boolean point result, false, the cad zero vector3)
+local function the cad boolean point {cad vector3:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean point result, true, value)
+local function no cad boolean reversed pcurve:
+    execute:
+        return @intrinsic("construct", a cad boolean reversed pcurve, false, no cad pcurve)
+local function the cad boolean reversed pcurve {cad pcurve result:value}:
+    execute:
+        return @intrinsic("construct", a cad boolean reversed pcurve, true, value)
+local function cad boolean selection failure {integer:snag}:
+    execute:
+        return @intrinsic("construct", a cad boolean selection result, false, snag, 0)
+local function cad boolean selection success {integer:count}:
+    execute:
+        return @intrinsic("construct", a cad boolean selection result, true, 0, count)
+local function no cad boolean piece:
+    execute:
+        return @intrinsic("construct", a cad boolean piece, false, an empty cad body, 0.0)
+
+local function reverse cad boolean coedges {cad coedge adjacency:keys}:
+    execute:
+        set count to the length of (keys's values)
+        loop cursor from 0 to (count / 2):
+            set opposite to (count - 1) - cursor
+            set saved to the item at cursor in (keys's values)
+            replace item at index cursor in (keys's values) with (the item at opposite in (keys's values))
+            replace item at index opposite in (keys's values) with saved
+
+local function the cad boolean reverse of {cad pcurve result:source}:
+    execute:
+        if source's valid = false:
+            return the cad boolean reversed pcurve (no cad pcurve)
+        set curveValue to the cad pcurve value of source
+        if curveValue's kind = cad line curve2 kind:
+            set reversedLine to a cad line2 from curveValue's line's end to curveValue's line's start
+            return the cad boolean reversed pcurve (the cad pcurve of (the cad curve2 of reversedLine))
+        if curveValue's kind = cad nurbs curve2 kind:
+            set built to the cad rational builder of curveValue
+            if built's valid = false:
+                return no cad boolean reversed pcurve
+            set reversed to the cad reverse of built's value
+            set made to the cad curve of reversed
+            if made's valid = false:
+                return no cad boolean reversed pcurve
+            return the cad boolean reversed pcurve (the cad pcurve of (the cad curve2 of made's value))
+        return no cad boolean reversed pcurve
+
+local function the cad boolean copied vertex {cad vertex key:sourceKey} from {cad body:sourceBody} into {cad body:resultBody} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set sourceNode to the cad node pointer for sourceKey in sourceBody
+        if sourceNode = (0 as the type of sourceNode):
+            return no cad boolean vertex
+        set keys to the cad vertex keys of resultBody
+        loop cursor from 0 to the length of keys:
+            set key to the item at cursor in keys
+            set node to the cad node pointer for key in resultBody
+            if (node != (0 as the type of node)) and ((the cad distance from node's point to sourceNode's point) <= tolerance):
+                free keys
+                return the cad boolean vertex key
+        free keys
+        set inserted to the cad body key after inserting (a cad vertex at sourceNode's point with provenance (the synthesized cad provenance)) into resultBody
+        return the cad boolean vertex inserted
+
+local function the cad boolean existing edge in {cad body:resultBody} from {cad vertex key:startKey} to {cad vertex key:endKey} through {cad vector3:middlePoint} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set keys to the cad edge keys of resultBody
+        loop cursor from 0 to the length of keys:
+            set key to the item at cursor in keys
+            set edgeNode to the cad node pointer for key in resultBody
+            if edgeNode != (0 as the type of edgeNode):
+                set endsMatch to ((edgeNode's start = startKey) and (edgeNode's end = endKey)) or ((edgeNode's start = endKey) and (edgeNode's end = startKey))
+                if endsMatch:
+                    set curveNode to the cad node pointer for edgeNode's curve in resultBody
+                    if curveNode != (0 as the type of curveNode):
+                        set located to the cad point on (@intrinsic("dereference", curveNode)) at (0.5 * (edgeNode's startParameter + edgeNode's endParameter))
+                        if (the cad distance from located to middlePoint) <= tolerance:
+                            free keys
+                            return the cad boolean edge key
+        free keys
+        return no cad boolean edge
+
+function copy cad boolean face {cad face key:faceKey} from {cad body:sourceBody} into {cad body:resultBody} owned by {cad shell key:shellKey} flipped {boolean:flip} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set sourceFace to the cad node pointer for faceKey in sourceBody
+        if sourceFace = (0 as the type of sourceFace):
+            return false
+        set sourceSurface to the cad node pointer for sourceFace's surface in sourceBody
+        if sourceSurface = (0 as the type of sourceSurface):
+            return false
+        set surfaceKey to the cad body key after inserting (the cad clone of (@intrinsic("dereference", sourceSurface))) into resultBody
+        set newFace to the cad body key after inserting (a cad face on surfaceKey forward (sourceFace's forward != flip) owned by shellKey with provenance (the synthesized cad provenance)) into resultBody
+        set rings to a fresh cad face loop adjacency
+        loop ringCursor from 0 to the length of (sourceFace's loops's values):
+            set sourceRing to the cad node pointer for (the item at ringCursor in (sourceFace's loops's values)) in sourceBody
+            if sourceRing = (0 as the type of sourceRing):
+                return false
+            set newRing to the cad body key after inserting (a cad loop owned by newFace with provenance (the synthesized cad provenance)) into resultBody
+            set copiedUses to a fresh cad coedge adjacency
+            loop useCursor from 0 to the length of (sourceRing's coedges's values):
+                set sourceUse to the cad node pointer for (the item at useCursor in (sourceRing's coedges's values)) in sourceBody
+                if sourceUse = (0 as the type of sourceUse):
+                    return false
+                set sourceEdge to the cad node pointer for sourceUse's edge in sourceBody
+                if sourceEdge = (0 as the type of sourceEdge):
+                    return false
+                set sourceCurve to the cad node pointer for sourceEdge's curve in sourceBody
+                if sourceCurve = (0 as the type of sourceCurve):
+                    return false
+                set copiedStart to the cad boolean copied vertex sourceEdge's start from sourceBody into resultBody within tolerance
+                set copiedEnd to the cad boolean copied vertex sourceEdge's end from sourceBody into resultBody within tolerance
+                if (copiedStart's valid = false) or (copiedEnd's valid = false):
+                    return false
+                set collapsedLine to ((copiedStart's value = copiedEnd's value) and (sourceCurve's kind = 0))
+                if collapsedLine = false:
+                    set middlePoint to the cad point on (@intrinsic("dereference", sourceCurve)) at (0.5 * (sourceEdge's startParameter + sourceEdge's endParameter))
+                    set foundEdge to the cad boolean existing edge in resultBody from copiedStart's value to copiedEnd's value through middlePoint within tolerance
+                    set copiedEdge to a new cad edge key
+                    if foundEdge's valid:
+                        set copiedEdge to foundEdge's value
+                    else:
+                        set curveKey to the cad body key after inserting (the cad clone of (@intrinsic("dereference", sourceCurve))) into resultBody
+                        set copiedEdge to the cad body key after inserting (a cad edge on curveKey from sourceEdge's startParameter to sourceEdge's endParameter between copiedStart's value and copiedEnd's value with provenance (the synthesized cad provenance)) into resultBody
+                    set resultEdge to the cad node pointer for copiedEdge in resultBody
+                    if resultEdge = (0 as the type of resultEdge):
+                        return false
+                    set reusedReversed to resultEdge's start != copiedStart's value
+                    set reversePcurve to flip != reusedReversed
+                    set copiedPcurve to no cad pcurve
+                    if sourceUse's pcurve's valid:
+                        if reversePcurve:
+                            set reversedPcurve to the cad boolean reverse of sourceUse's pcurve
+                            if reversedPcurve's valid = false:
+                                return false
+                            set copiedPcurve to reversedPcurve's value
+                        else:
+                            set copiedPcurve to the cad clone of sourceUse's pcurve
+                    set forward to ((sourceUse's forward != flip) != reusedReversed)
+                    set newUse to the cad body key after inserting (a cad coedge on copiedEdge forward forward with pcurve copiedPcurve owned by newRing with provenance (the synthesized cad provenance)) into resultBody
+                    append newUse to (resultEdge's coedges's values)
+                    append newUse to (copiedUses's values)
+            if flip:
+                reverse cad boolean coedges copiedUses
+            set newRingNode to the cad node pointer for newRing in resultBody
+            set newRingNode's coedges to copiedUses
+            append newRing to (rings's values)
+        set newFaceNode to the cad node pointer for newFace in resultBody
+        set newFaceNode's loops to rings
+        set shellNode to the cad node pointer for shellKey in resultBody
+        if shellNode = (0 as the type of shellNode):
+            return false
+        append newFace to (shellNode's faces's values)
+        return true
+
+# boolean.rs::copy_face: the stitching tolerance spans the result so far and
+# the source.
+function copy cad boolean face {cad face key:faceKey} from {cad body:sourceBody} into {cad body:resultBody} owned by {cad shell key:shellKey} flipped {boolean:flip}:
+    execute:
+        set toleranceBodies to a list containing resultBody
+        append sourceBody to toleranceBodies
+        set tolerance to the cad operation tolerance of toleranceBodies
+        free toleranceBodies
+        return copy cad boolean face faceKey from sourceBody into resultBody owned by shellKey flipped flip within tolerance
+
+local function cad boolean parameter point {cad vector2:candidate} is usable in {a pointer to a list:boundary} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        loop cursor from 0 to the length of boundary:
+            if (the cad distance to (the item at cursor in boundary) from candidate) <= tolerance:
+                return false
+        return cad boundary boundary contains candidate within (a cad tolerance of tolerance)
+
+function the cad interior point of {cad face key:faceKey} in {cad body:body} within {a number:givenTolerance}:
+    execute:
+        set tolerance to givenTolerance as a 64 bit floating-point number
+        set faceNode to the cad node pointer for faceKey in body
+        if faceNode = (0 as the type of faceNode):
+            return no cad boolean point
+        set surfaceNode to the cad node pointer for faceNode's surface in body
+        if surfaceNode = (0 as the type of surfaceNode):
+            return no cad boolean point
+        # A sphere cap bounded by one closed circle has no parameter-space
+        # interior that avoids its pole; its middle is the pole on the cap's side.
+        if (surfaceNode's kind = 3) and ((the length of (faceNode's loops's values)) = 1):
+            set capRing to the cad node pointer for (the item at 0 in (faceNode's loops's values)) in body
+            if capRing = (0 as the type of capRing):
+                return no cad boolean point
+            if (the length of (capRing's coedges's values)) = 1:
+                set capUse to the cad node pointer for (the item at 0 in (capRing's coedges's values)) in body
+                if capUse = (0 as the type of capUse):
+                    return no cad boolean point
+                set capEdge to the cad node pointer for capUse's edge in body
+                if capEdge = (0 as the type of capEdge):
+                    return no cad boolean point
+                if capEdge's start = capEdge's end:
+                    set capCurve to the cad node pointer for capEdge's curve in body
+                    if (capCurve != (0 as the type of capCurve)) and (capCurve's kind = 1):
+                        set capNormal to the cad normal of capCurve's frame
+                        if capNormal's valid = false:
+                            return no cad boolean point
+                        set capSign to -1.0
+                        if capUse's forward = faceNode's forward:
+                            set capSign to 1.0
+                        set capOffset to (capNormal's value scaled by surfaceNode's primary) scaled by capSign
+                        return the cad boolean point (the cad sum of surfaceNode's frame's origin and capOffset)
+        set boundaryResult to the cad boundary of faceKey in body within tolerance
+        if boundaryResult's valid = false:
+            return no cad boolean point
+        set samples to a cad topology list of a cad vector2
+        loop curveCursor from 0 to the length of (boundaryResult's curves's values):
+            set curveValue to the item at curveCursor in (boundaryResult's curves's values)
+            loop step from 0 to 4:
+                append (the cad point on curveValue at ((step as a 64 bit floating-point number) / 4.0)) to (samples's values)
+        if (the length of (samples's values)) = 0:
+            return no cad boolean point
+        set total to the cad zero vector2
+        loop sampleCursor from 0 to the length of (samples's values):
+            set total to the cad sum of total and (the item at sampleCursor in (samples's values))
+        set centre to total cad divided by ((the length of (samples's values)) as a 64 bit floating-point number)
+        if cad boolean parameter point centre is usable in (boundaryResult's curves's values) within tolerance:
+            return the cad boolean point (the cad point on (@intrinsic("dereference", surfaceNode)) at parameters centre's x and centre's y)
+        set weights to [0.5,0.75,0.875,0.9375,0.25,0.125]
+        loop sampleCursor from 0 to the length of (samples's values):
+            set sample to the item at sampleCursor in (samples's values)
+            loop weightCursor from 0 to the length of weights:
+                set candidate to the cad lerp from centre to sample at (the item at weightCursor in weights)
+                if cad boolean parameter point candidate is usable in (boundaryResult's curves's values) within tolerance:
+                    return the cad boolean point (the cad point on (@intrinsic("dereference", surfaceNode)) at parameters candidate's x and candidate's y)
+        set bandPoint to the cad periodic band point on (@intrinsic("dereference", surfaceNode)) bounded by (boundaryResult's curves's values) within tolerance
+        if bandPoint's valid:
+            return the cad boolean point bandPoint's value
+        return no cad boolean point
+
+function the cad side of {cad face key:faceKey} in {cad body:body} against {cad body:otherBody} within {a number:givenTolerance}:
+    execute:
+        set cache to a new cad classify boundaries
+        return the cad side of faceKey in body against otherBody within givenTolerance using (the address of cache)
+
+# `cache` must hold boundaries of the unchanged `otherBody` at this tolerance.
+function the cad side of {cad face key:faceKey} in {cad body:body} against {cad body:otherBody} within {a number:givenTolerance} using {a pointer to a cad classify boundaries:cache}:
+    execute:
+        set point to the cad interior point of faceKey in body within givenTolerance
+        if point's valid = false:
+            return the unknown cad containment
+        return the cad containment of point's value in otherBody within (givenTolerance as a 64 bit floating-point number) using cache
+
+local function cad boolean surfaces {cad surface:one} and {cad surface:other} are the same within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set meeting to the cad meeting of one and other within tolerance
+        if meeting's kind = 3:
+            return true
+        if (one's kind != 0) or (other's kind != 0):
+            return false
+        set firstNormal to the cad normal of one's plane
+        set secondNormal to the cad normal of other's plane
+        if (firstNormal's valid and secondNormal's valid) = false:
+            return false
+        set parallel to cad firstNormal's value is parallel to secondNormal's value within tolerance
+        return (parallel and ((the absolute value of (the cad distance from one to other's plane's origin)) <= tolerance)) and ((the absolute value of (the cad distance from other to one's plane's origin)) <= tolerance)
+
+local function the cad boolean coincident twin of {cad face key:faceKey} in {cad body:body} from {cad body:otherBody} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set faceNode to the cad node pointer for faceKey in body
+        if faceNode = (0 as the type of faceNode):
+            return no cad boolean face
+        set surfaceNode to the cad node pointer for faceNode's surface in body
+        if surfaceNode = (0 as the type of surfaceNode):
+            return no cad boolean face
+        set faces to the cad face keys of otherBody
+        loop cursor from 0 to the length of faces:
+            set otherKey to the item at cursor in faces
+            set otherFace to the cad node pointer for otherKey in otherBody
+            if otherFace != (0 as the type of otherFace):
+                set otherSurface to the cad node pointer for otherFace's surface in otherBody
+                if otherSurface != (0 as the type of otherSurface):
+                    # `and` evaluates both sides; the ground test only runs
+                    # for a matching surface, as the source's `&&` does.
+                    if cad boolean surfaces (@intrinsic("dereference", surfaceNode)) and (@intrinsic("dereference", otherSurface)) are the same within tolerance:
+                        if cad face faceKey in body and face otherKey in otherBody have the same ground within tolerance:
+                            free faces
+                            return the cad boolean face otherKey
+        free faces
+        return no cad boolean face
+
+local function the cad boolean outward normal of {cad face key:faceKey} in {cad body:body} at {cad vector3:point} flipped {boolean:flipped}:
+    execute:
+        set absent to @intrinsic("construct", a cad normalization3, false, the cad zero vector3)
+        set faceNode to the cad node pointer for faceKey in body
+        if faceNode = (0 as the type of faceNode):
+            return absent
+        set surfaceNode to the cad node pointer for faceNode's surface in body
+        if surfaceNode = (0 as the type of surfaceNode):
+            return absent
+        set coordinates to the cad parameters on (@intrinsic("dereference", surfaceNode)) nearest point
+        if coordinates's valid = false:
+            return absent
+        set surfaceNormal to the cad normal of (@intrinsic("dereference", surfaceNode)) at parameters coordinates's value's x and coordinates's value's y
+        if surfaceNormal's valid = false:
+            return absent
+        if faceNode's forward != flipped:
+            return surfaceNormal
+        return @intrinsic("construct", a cad normalization3, true, surfaceNormal's value scaled by -1.0)
+
+local function keep cad boolean shared wall {cad face key:faceKey} in {cad body:body} with {cad face key:twinKey} in {cad body:otherBody} flipping second {boolean:flipSecond} first {boolean:isFirst}:
+    execute:
+        set interior to the cad interior point of faceKey in body within 1e-9
+        if interior's valid = false:
+            return false
+        set mine to the cad boolean outward normal of faceKey in body at interior's value flipped (flipSecond and (isFirst = false))
+        set theirs to the cad boolean outward normal of twinKey in otherBody at interior's value flipped (flipSecond and isFirst)
+        if (mine's valid and theirs's valid) = false:
+            return false
+        return ((the cad dot of mine's value and theirs's value) > 0.0) and isFirst
+
+local function the cad boolean flip location of {cad face key:faceKey} in {cad topology list:flips}:
+    execute:
+        loop cursor from 0 to the length of (flips's values):
+            if (the item at cursor in (flips's values))'s face = faceKey:
+                return cursor
+        return -1
+
+function orient cad boolean shell {cad body:body}:
+    execute:
+        set links to a cad topology list of a cad boolean adjacency
+        set edgeKeys to the cad edge keys of body
+        loop edgeCursor from 0 to the length of edgeKeys:
+            set edgeNode to the cad node pointer for (the item at edgeCursor in edgeKeys) in body
+            if (edgeNode != (0 as the type of edgeNode)) and ((the length of (edgeNode's coedges's values)) = 2):
+                set firstUse to the cad node pointer for (the item at 0 in (edgeNode's coedges's values)) in body
+                set secondUse to the cad node pointer for (the item at 1 in (edgeNode's coedges's values)) in body
+                if (firstUse = (0 as the type of firstUse)) or (secondUse = (0 as the type of secondUse)):
+                    free edgeKeys
+                    return false
+                set firstRing to the cad node pointer for firstUse's owner in body
+                set secondRing to the cad node pointer for secondUse's owner in body
+                if (firstRing = (0 as the type of firstRing)) or (secondRing = (0 as the type of secondRing)):
+                    free edgeKeys
+                    return false
+                if firstRing's owner = secondRing's owner:
+                    if firstUse's forward = secondUse's forward:
+                        free edgeKeys
+                        return false
+                else:
+                    append (@intrinsic("construct", a cad boolean adjacency, firstRing's owner, secondRing's owner, firstUse's forward = secondUse's forward)) to (links's values)
+        free edgeKeys
+
+        set flips to a cad topology list of a cad boolean face flip
+        set faceKeys to the cad face keys of body
+        loop faceCursor from 0 to the length of faceKeys:
+            set seed to the item at faceCursor in faceKeys
+            if (the cad boolean flip location of seed in flips) < 0:
+                append (@intrinsic("construct", a cad boolean face flip, seed, false)) to (flips's values)
+                set pending to a list containing seed
+                loop while (the length of pending) > 0:
+                    remove the last item from pending and set current to it
+                    set currentLocation to the cad boolean flip location of current in flips
+                    set currentFlip to (the item at currentLocation in (flips's values))'s flipped
+                    loop linkCursor from 0 to the length of (links's values):
+                        set link to the item at linkCursor in (links's values)
+                        set touches to false
+                        set neighbour to a new cad face key
+                        if link's one = current:
+                            set touches to true
+                            set neighbour to link's other
+                        else if link's other = current:
+                            set touches to true
+                            set neighbour to link's one
+                        if touches:
+                            set wanted to currentFlip != link's differ
+                            set location to the cad boolean flip location of neighbour in flips
+                            if location >= 0:
+                                if (the item at location in (flips's values))'s flipped != wanted:
+                                    free pending
+                                    free faceKeys
+                                    return false
+                            else:
+                                append (@intrinsic("construct", a cad boolean face flip, neighbour, wanted)) to (flips's values)
+                                append neighbour to pending
+                free pending
+        free faceKeys
+
+        loop flipCursor from 0 to the length of (flips's values):
+            set faceFlip to the item at flipCursor in (flips's values)
+            if faceFlip's flipped:
+                set faceNode to the cad node pointer for faceFlip's face in body
+                if faceNode = (0 as the type of faceNode):
+                    return false
+                loop ringCursor from 0 to the length of (faceNode's loops's values):
+                    set ringNode to the cad node pointer for (the item at ringCursor in (faceNode's loops's values)) in body
+                    if ringNode = (0 as the type of ringNode):
+                        return false
+                    loop useCursor from 0 to the length of (ringNode's coedges's values):
+                        set useNode to the cad node pointer for (the item at useCursor in (ringNode's coedges's values)) in body
+                        if useNode = (0 as the type of useNode):
+                            return false
+                        set useNode's forward to useNode's forward = false
+                        if useNode's pcurve's valid:
+                            set reversedPcurve to the cad boolean reverse of useNode's pcurve
+                            if reversedPcurve's valid = false:
+                                return false
+                            set useNode's pcurve to reversedPcurve's value
+                    reverse cad boolean coedges ringNode's coedges
+        return true
+
+# boolean.rs::regroup_shells: one connected component of the provisional
+# shell, copied into a body of its own and measured by its tessellation.
+local function the cad boolean piece of {cad topology list:faces} from {cad body:body} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set pieceBody to an empty cad body
+        set pieceLump to the cad body key after inserting (a cad lump with provenance (the synthesized cad provenance)) into pieceBody
+        set pieceShell to the cad body key after inserting (a cad shell owned by pieceLump with provenance (the synthesized cad provenance)) into pieceBody
+        set pieceLumpNode to the cad node pointer for pieceLump in pieceBody
+        append pieceShell to (pieceLumpNode's shells's values)
+        append pieceLump to pieceBody's roots
+        loop faceCursor from 0 to the length of (faces's values):
+            if (copy cad boolean face (the item at faceCursor in (faces's values)) from body into pieceBody owned by pieceShell flipped false within tolerance) = false:
+                return no cad boolean piece
+        set tessellated to the cad tessellation of pieceBody with tolerance (a cad tessellation tolerance with maximum angle 0.3 within tolerance)
+        if ((the length of tessellated's missingFaces) > 0) or (cad (tessellated's mesh) is empty):
+            free cad body mesh tessellated
+            return no cad boolean piece
+        set positions to tessellated's mesh's positions
+        set triangles to tessellated's mesh's triangles
+        set pivot to the item at 0 in positions
+        set volume to 0.0
+        loop triangleCursor from 0 to the length of triangles:
+            set triangle to the item at triangleCursor in triangles
+            set firstOffset to the cad difference of (the item at triangle's first in positions) and pivot
+            set secondOffset to the cad difference of (the item at triangle's second in positions) and pivot
+            set thirdOffset to the cad difference of (the item at triangle's third in positions) and pivot
+            set volume to volume + ((the cad dot of firstOffset and (the cad cross of secondOffset and thirdOffset)) / 6.0)
+        free cad body mesh tessellated
+        if ((the absolute value of volume) <= 1.7976931348623157e308) = false:
+            return no cad boolean piece
+        if (the absolute value of volume) <= ((tolerance * tolerance) * tolerance):
+            return no cad boolean piece
+        return @intrinsic("construct", a cad boolean piece, true, pieceBody, volume)
+
+# Restores connected shells and attaches each inward-facing cavity shell to
+# the smallest exterior piece containing it, exteriors first.
+function regroup cad boolean shells in {cad body:body} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set faceKeys to the cad face keys of body
+        set faces to a cad topology list of a cad face key
+        loop faceCursor from 0 to the length of faceKeys:
+            append (the item at faceCursor in faceKeys) to (faces's values)
+        free faceKeys
+        set components to the cad face components of faces in body
+        # An empty component list for faces means the body is inconsistent.
+        if ((the length of (components's values)) = 0) and ((the length of (faces's values)) > 0):
+            return false
+        if (the length of (components's values)) <= 1:
+            return true
+        set measuredPieces to an empty list of a cad boolean piece
+        loop componentCursor from 0 to the length of (components's values):
+            set measured to the cad boolean piece of (the item at componentCursor in (components's values)) from body within tolerance
+            append measured to measuredPieces
+            if measured's valid = false:
+                free measuredPieces
+                return false
+        set owners to an empty list of an integer
+        loop pieceCursor from 0 to the length of measuredPieces:
+            if (the item at pieceCursor in measuredPieces)'s volume > 0.0:
+                append pieceCursor to owners
+            else:
+                set sampleFace to the item at 0 in ((the item at pieceCursor in (components's values))'s values)
+                set interior to the cad interior point of sampleFace in body within tolerance
+                if interior's valid = false:
+                    free owners
+                    free measuredPieces
+                    return false
+                set ownerIndex to -1
+                set ownerVolume to 0.0
+                loop candidateCursor from 0 to the length of measuredPieces:
+                    set candidate to the item at candidateCursor in measuredPieces
+                    if candidate's volume > 0.0:
+                        if (the cad containment of interior's value in candidate's pieceBody within tolerance)'s kind = 0:
+                            if (ownerIndex < 0) or (candidate's volume < ownerVolume):
+                                set ownerIndex to candidateCursor
+                                set ownerVolume to candidate's volume
+                if ownerIndex < 0:
+                    free owners
+                    free measuredPieces
+                    return false
+                append ownerIndex to owners
+        set shellKeys to the cad keys of body's shells
+        loop shellCursor from 0 to the length of shellKeys:
+            set removedShell to the cad removal of (the item at shellCursor in shellKeys) from body's shells
+        free shellKeys
+        set lumpKeys to the cad keys of body's lumps
+        loop lumpCursor from 0 to the length of lumpKeys:
+            set removedLump to the cad removal of (the item at lumpCursor in lumpKeys) from body's lumps
+        free lumpKeys
+        clear body's roots
+        # One lump per exterior piece; cavities keep a placeholder slot.
+        set pieceLumps to a cad topology list of a cad lump key
+        loop pieceCursor from 0 to the length of measuredPieces:
+            set pieceLump to a new cad lump key
+            if (the item at pieceCursor in measuredPieces)'s volume > 0.0:
+                set pieceLump to the cad body key after inserting (a cad lump with provenance (the synthesized cad provenance)) into body
+                append pieceLump to body's roots
+            append pieceLump to (pieceLumps's values)
+        loop pass from 0 to 2:
+            set exterior to pass = 0
+            loop pieceCursor from 0 to the length of measuredPieces:
+                set pieceFaces to the item at pieceCursor in (components's values)
+                if ((the item at pieceCursor in measuredPieces)'s volume > 0.0) = exterior:
+                    set ownerLump to the item at (the item at pieceCursor in owners) in (pieceLumps's values)
+                    set shellKey to the cad body key after inserting (a cad shell owned by ownerLump with provenance (the synthesized cad provenance)) into body
+                    set shellNode to the cad node pointer for shellKey in body
+                    set shellNode's faces to the cad clone of pieceFaces
+                    set lumpNode to the cad node pointer for ownerLump in body
+                    if lumpNode = (0 as the type of lumpNode):
+                        free owners
+                        free measuredPieces
+                        return false
+                    append shellKey to (lumpNode's shells's values)
+                    loop faceCursor from 0 to the length of (pieceFaces's values):
+                        set faceNode to the cad node pointer for (the item at faceCursor in (pieceFaces's values)) in body
+                        if faceNode = (0 as the type of faceNode):
+                            free owners
+                            free measuredPieces
+                            return false
+                        set faceNode's owner to shellKey
+        free owners
+        free measuredPieces
+        set flaws to the cad flaws of body
+        set validBody to (the length of flaws) = 0
+        free flaws
+        return validBody
+
+local function select cad boolean faces from {cad body:sourceBody} against {cad body:otherBody} classified by {cad body:classifierBody} wanting {integer:wantedKind} flipped {boolean:flip} second [flip] {boolean:flipSecond} first {boolean:isFirst} into {cad body:resultBody} shell {cad shell key:shellKey} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set kept to 0
+        # The classifier body is not changed while faces are selected.
+        set classifierBoundaries to a new cad classify boundaries
+        set faceKeys to the cad face keys of sourceBody
+        loop cursor from 0 to the length of faceKeys:
+            set faceKey to the item at cursor in faceKeys
+            set copyThis to false
+            set twin to the cad boolean coincident twin of faceKey in sourceBody from otherBody within tolerance
+            if twin's valid:
+                set copyThis to keep cad boolean shared wall faceKey in sourceBody with twin's value in otherBody flipping second flipSecond first isFirst
+            else:
+                set side to the cad side of faceKey in sourceBody against classifierBody within tolerance using (the address of classifierBoundaries)
+                if side's kind = 2:
+                    free faceKeys
+                    return cad boolean selection failure cad imprint coincident snag
+                if side's kind = 3:
+                    free faceKeys
+                    return cad boolean selection failure cad imprint cut refused snag
+                if side's kind = wantedKind:
+                    set copyThis to true
+            if copyThis:
+                if (copy cad boolean face faceKey from sourceBody into resultBody owned by shellKey flipped flip within tolerance) = false:
+                    free faceKeys
+                    return cad boolean selection failure cad imprint cut refused snag
+                increment kept
+        free faceKeys
+        return cad boolean selection success kept
+
+function the cad combination of {cad body:firstBody} and {cad body:secondBody} using {integer:operation} within {a number:givenTolerance}:
+    execute:
+        set tolerance to givenTolerance as a 64 bit floating-point number
+        set firstWork to the cad clone of firstBody
+        set secondWork to the cad clone of secondBody
+        set imprinted to the cad imprint of firstWork and secondWork within tolerance
+        if imprinted's valid = false:
+            return cad boolean failure imprinted's snag
+
+        set keepFirst to 1
+        set keepSecond to 1
+        set flipSecond to false
+        if operation = cad intersection operation:
+            set keepFirst to 0
+            set keepSecond to 0
+        else if operation = cad difference operation:
+            set keepFirst to 1
+            set keepSecond to 0
+            set flipSecond to true
+        else if operation != cad union operation:
+            return cad boolean failure cad imprint cut refused snag
+
+        set resultBody to an empty cad body
+        set lumpKey to the cad body key after inserting (a cad lump with provenance (the synthesized cad provenance)) into resultBody
+        set shellKey to the cad body key after inserting (a cad shell owned by lumpKey with provenance (the synthesized cad provenance)) into resultBody
+        set lumpNode to the cad node pointer for lumpKey in resultBody
+        append shellKey to (lumpNode's shells's values)
+        append lumpKey to resultBody's roots
+
+        set firstSelection to select cad boolean faces from firstWork against secondWork classified by secondBody wanting keepFirst flipped false second flip flipSecond first true into resultBody shell shellKey within tolerance
+        if firstSelection's valid = false:
+            return cad boolean failure firstSelection's snag
+        set secondSelection to select cad boolean faces from secondWork against firstWork classified by firstBody wanting keepSecond flipped flipSecond second flip flipSecond first false into resultBody shell shellKey within tolerance
+        if secondSelection's valid = false:
+            return cad boolean failure secondSelection's snag
+        set kept to firstSelection's count + secondSelection's count
+        if kept = 0:
+            return cad boolean success (an empty cad body)
+        if (orient cad boolean shell resultBody) = false:
+            return cad boolean failure cad imprint cut refused snag
+        set edges to the cad edge keys of resultBody
+        loop cursor from 0 to the length of edges:
+            set edgeNode to the cad node pointer for (the item at cursor in edges) in resultBody
+            if (edgeNode = (0 as the type of edgeNode)) or ((the length of (edgeNode's coedges's values)) != 2):
+                free edges
+                return cad boolean failure cad imprint cut refused snag
+        free edges
+        set flaws to the cad flaws of resultBody
+        set validBody to (the length of flaws) = 0
+        free flaws
+        if validBody = false:
+            return cad boolean failure cad imprint cut refused snag
+        if (regroup cad boolean shells in resultBody within tolerance) = false:
+            return cad boolean failure cad imprint cut refused snag
+        return cad boolean success resultBody

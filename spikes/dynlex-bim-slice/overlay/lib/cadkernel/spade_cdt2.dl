@@ -1,0 +1,1322 @@
+# SPDX-License-Identifier: MPL-2.0
+# Port of the constrained Delaunay triangulation subset of spade 2.15.1 used by
+# cadkernel geom2d/constrained.rs at 953d546b68aef4b6692566a1a9b077fc5bd9fb4f:
+# ConstrainedDelaunayTriangulation with LastUsedVertexHintGenerator, insert,
+# try_add_constraint, add_constraint_and_split, inner faces and their edges.
+# The doubly connected edge list keeps spade's storage order: directed edge
+# 2k is the normalized half of undirected edge k, face 0 is the outer face and
+# new vertices, edges and faces are appended. Predicates use robust 1.2.0.
+# Each vertex carries a binary64 payload pair; a split vertex receives
+# origin + position * scale, the vertex constructor used by constrained.rs.
+# The triangulation is plain shared storage owned by its embedding value.
+import lib/cadkernel/robust2.dl
+
+class:
+    patterns:
+        [a|] cad spade triangulation2
+    members:
+        positions
+        payloads
+        outEdges
+        edgeNext
+        edgePrev
+        edgeFace
+        edgeOrigin
+        constraints
+        faceEdges
+        hint as an integer
+        constraintCount as an integer
+
+class:
+    patterns:
+        [a|] cad spade insertion2
+    members:
+        valid as a boolean
+        vertex as an integer
+
+# kind: 0 on vertex, 1 on edge, 2 on face, 3 outside of the convex hull,
+# 4 no triangulation.
+class:
+    patterns:
+        [a|] cad spade location2
+    members:
+        kind as an integer
+        handle as an integer
+
+# kind: 0 finished, 1 edge intersection, 2 vertex intersection, 3 edge overlap.
+class:
+    patterns:
+        [a|] cad spade intersection2
+    members:
+        kind as an integer
+        handle as an integer
+        lineFrom as a cad vector2
+        lineTo as a cad vector2
+
+# endKind: 0 an existing vertex, 1 an overlapped edge.
+class:
+    patterns:
+        [a|] cad spade conflict region2
+    members:
+        regionEdges
+        endKind as an integer
+        endHandle as an integer
+
+function an empty cad spade triangulation:
+    execute:
+        set storedPositions to an empty list of a cad vector2
+        set storedPayloads to an empty list of a cad vector2
+        set storedOutEdges to an empty list of an integer
+        set storedNext to an empty list of an integer
+        set storedPrev to an empty list of an integer
+        set storedFace to an empty list of an integer
+        set storedOrigin to an empty list of an integer
+        set storedConstraints to an empty list of a boolean
+        set storedFaces to an empty list of an integer
+        append (-1) to storedFaces
+        return @intrinsic("construct", a cad spade triangulation2, storedPositions, storedPayloads, storedOutEdges, storedNext, storedPrev, storedFace, storedOrigin, storedConstraints, storedFaces, 0, 0)
+
+function free cad spade triangulation storage {cad spade triangulation2:cdt}:
+    execute:
+        free cdt's positions
+        free cdt's payloads
+        free cdt's outEdges
+        free cdt's edgeNext
+        free cdt's edgePrev
+        free cdt's edgeFace
+        free cdt's edgeOrigin
+        free cdt's constraints
+        free cdt's faceEdges
+
+# --- Handles -----------------------------------------------------------------
+
+function the cad spade vertex count of {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the length of the positions of cdt
+
+function the cad spade face count of {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the length of the faceEdges of cdt
+
+local function the cad spade directed edge count of {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the length of the edgeNext of cdt
+
+function the cad spade reverse of {integer:edgeHandle}:
+    execute:
+        if (the remainder of edgeHandle divided by 2) = 0:
+            return edgeHandle + 1
+        return edgeHandle - 1
+
+function the cad spade undirected handle of {integer:edgeHandle}:
+    execute:
+        return edgeHandle / 2
+
+function the cad spade next of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at edgeHandle in (the edgeNext of cdt)
+
+function the cad spade previous of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at edgeHandle in (the edgePrev of cdt)
+
+function the cad spade face of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at edgeHandle in (the edgeFace of cdt)
+
+function the cad spade origin of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at edgeHandle in (the edgeOrigin of cdt)
+
+function the cad spade target of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the cad spade origin of (the cad spade reverse of edgeHandle) in cdt
+
+local function the cad spade clockwise of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the cad spade next of (the cad spade reverse of edgeHandle) in cdt
+
+local function the cad spade counterclockwise of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the cad spade reverse of (the cad spade previous of edgeHandle in cdt)
+
+local function cad spade edge {integer:edgeHandle} is outer in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return (the cad spade face of edgeHandle in cdt) = 0
+
+local function cad spade edge {integer:edgeHandle} is on the convex hull in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set forwardOuter to cad spade edge edgeHandle is outer in cdt
+        set backwardOuter to cad spade edge (the cad spade reverse of edgeHandle) is outer in cdt
+        return forwardOuter or backwardOuter
+
+# The opposite vertex of an inner edge, or -1 for an outer edge.
+local function the cad spade opposite vertex of {integer:edgeHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if cad spade edge edgeHandle is outer in cdt:
+            return -1
+        return the cad spade origin of (the cad spade previous of edgeHandle in cdt) in cdt
+
+function the cad spade adjacent edge of face {integer:faceHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at faceHandle in (the faceEdges of cdt)
+
+function the cad spade position of vertex {integer:vertexHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at vertexHandle in (the positions of cdt)
+
+function the cad spade payload of vertex {integer:vertexHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at vertexHandle in (the payloads of cdt)
+
+local function the cad spade out edge of {integer:vertexHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at vertexHandle in (the outEdges of cdt)
+
+function cad spade edge {integer:edgeHandle} is a constraint in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at (the cad spade undirected handle of edgeHandle) in (the constraints of cdt)
+
+local function cad spade undirected edge {integer:undirectedHandle} is a constraint in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        return the item at undirectedHandle in (the constraints of cdt)
+
+local function set cad spade constraint flag of undirected edge {integer:undirectedHandle} to {boolean:flagValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index undirectedHandle in (the constraints of cdt) with flagValue
+
+local function set cad spade next of {integer:edgeHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index edgeHandle in (the edgeNext of cdt) with handleValue
+
+local function set cad spade previous of {integer:edgeHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index edgeHandle in (the edgePrev of cdt) with handleValue
+
+local function set cad spade face of {integer:edgeHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index edgeHandle in (the edgeFace of cdt) with handleValue
+
+local function set cad spade origin of {integer:edgeHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index edgeHandle in (the edgeOrigin of cdt) with handleValue
+
+local function set cad spade out edge of vertex {integer:vertexHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index vertexHandle in (the outEdges of cdt) with handleValue
+
+local function set cad spade adjacent edge of face {integer:faceHandle} to {integer:handleValue} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        replace item at index faceHandle in (the faceEdges of cdt) with handleValue
+
+local function append cad spade half edge with next {integer:nextHandle}, previous {integer:previousHandle}, face {integer:faceHandle} and origin {integer:originHandle} to {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        append nextHandle to (the edgeNext of cdt)
+        append previousHandle to (the edgePrev of cdt)
+        append faceHandle to (the edgeFace of cdt)
+        append originHandle to (the edgeOrigin of cdt)
+
+# EdgeEntry::new(normalized, not_normalized) with an unconstrained edge.
+local function append cad spade edge from next {integer:firstNext}, previous {integer:firstPrevious}, face {integer:firstFace}, origin {integer:firstOrigin} and next {integer:secondNext}, previous {integer:secondPrevious}, face {integer:secondFace}, origin {integer:secondOrigin} to {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        append cad spade half edge with next firstNext, previous firstPrevious, face firstFace and origin firstOrigin to cdt
+        append cad spade half edge with next secondNext, previous secondPrevious, face secondFace and origin secondOrigin to cdt
+        append false to (the constraints of cdt)
+
+local function append cad spade face with adjacent edge {integer:edgeHandle} to {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        append edgeHandle to (the faceEdges of cdt)
+
+local function abort cad spade triangulation:
+    execute:
+        @intrinsic("call", "libc", "abort", nothing)
+
+# --- Geometric predicates (delaunay_core/math.rs) ------------------------------
+
+local function cad spade positions {cad vector2:left} and {cad vector2:right} are equal:
+    execute:
+        return ((the x of left) = (the x of right)) and ((the y of left) = (the y of right))
+
+# Point2's derived PartialOrd: x first, then y.
+local function cad spade position {cad vector2:left} precedes {cad vector2:right}:
+    execute:
+        if (the x of left) < (the x of right):
+            return true
+        if (the x of left) = (the x of right):
+            return (the y of left) < (the y of right)
+        return false
+
+local function the cad spade squared distance from {cad vector2:left} to {cad vector2:right}:
+    execute:
+        set deltaX to (the x of left) - (the x of right)
+        set deltaY to (the y of left) - (the y of right)
+        return (deltaX * deltaX) + (deltaY * deltaY)
+
+local function the cad spade line side of {cad vector2:lineStart}, {cad vector2:lineEnd} toward {cad vector2:query}:
+    execute:
+        return the cad robust orientation of lineStart, lineEnd and query
+
+local function the cad spade side of edge {integer:edgeHandle} toward {cad vector2:query} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set startPosition to the cad spade position of vertex (the cad spade origin of edgeHandle in cdt) in cdt
+        set endPosition to the cad spade position of vertex (the cad spade target of edgeHandle in cdt) in cdt
+        return the cad spade line side of startPosition, endPosition toward query
+
+# LineSideInfo equality: both on the line, or both off it on the same side.
+local function cad spade sides {a 64 bit floating-point number:left} and {a 64 bit floating-point number:right} agree:
+    execute:
+        set leftOnLine to (the absolute value of left) = 0.0
+        set rightOnLine to (the absolute value of right) = 0.0
+        if leftOnLine or rightOnLine:
+            return leftOnLine and rightOnLine
+        return (left < 0.0) = (right < 0.0)
+
+# robust::incircle(v3, v2, v1, p) < 0 for counterclockwise v1, v2, v3.
+local function cad spade {cad vector2:query} lies in the circumference of {cad vector2:firstPoint}, {cad vector2:secondPoint} and {cad vector2:thirdPoint}:
+    execute:
+        return (the cad robust incircle of thirdPoint, secondPoint, firstPoint and query) < 0.0
+
+local function cad spade {cad vector2:query} is ordered counterclockwise after {cad vector2:firstPoint} and {cad vector2:secondPoint}:
+    execute:
+        return (the cad spade line side of firstPoint, secondPoint toward query) >= 0.0
+
+# project_point(...).is_before_edge() and is_on_edge().
+local function the cad spade projection factor of {cad vector2:query} on {cad vector2:lineStart} to {cad vector2:lineEnd}:
+    execute:
+        set directionX to (the x of lineEnd) - (the x of lineStart)
+        set directionY to (the y of lineEnd) - (the y of lineStart)
+        return (((the x of query) - (the x of lineStart)) * directionX) + (((the y of query) - (the y of lineStart)) * directionY)
+
+local function the cad spade projection length of {cad vector2:lineStart} to {cad vector2:lineEnd}:
+    execute:
+        set directionX to (the x of lineEnd) - (the x of lineStart)
+        set directionY to (the y of lineEnd) - (the y of lineStart)
+        return (directionX * directionX) + (directionY * directionY)
+
+local function cad spade {cad vector2:query} projects before {cad vector2:lineStart} to {cad vector2:lineEnd}:
+    execute:
+        return (the cad spade projection factor of query on lineStart to lineEnd) < 0.0
+
+local function cad spade {cad vector2:query} projects onto {cad vector2:lineStart} to {cad vector2:lineEnd}:
+    execute:
+        set factorValue to the cad spade projection factor of query on lineStart to lineEnd
+        set lengthValue to the cad spade projection length of lineStart to lineEnd
+        return ((factorValue < 0.0) = false) and ((factorValue > lengthValue) = false)
+
+local function cad spade edge {integer:edgeHandle} intersects {cad vector2:lineStart} to {cad vector2:lineEnd} without collinearity in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set edgeStart to the cad spade position of vertex (the cad spade origin of edgeHandle in cdt) in cdt
+        set edgeEnd to the cad spade position of vertex (the cad spade target of edgeHandle in cdt) in cdt
+        set otherFromQuery to the cad spade line side of edgeStart, edgeEnd toward lineStart
+        set otherToQuery to the cad spade line side of edgeStart, edgeEnd toward lineEnd
+        set selfFromQuery to the cad spade line side of lineStart, lineEnd toward edgeStart
+        set selfToQuery to the cad spade line side of lineStart, lineEnd toward edgeEnd
+        set firstPairOnLine to ((the absolute value of otherFromQuery) = 0.0) and ((the absolute value of otherToQuery) = 0.0)
+        set secondPairOnLine to ((the absolute value of selfFromQuery) = 0.0) and ((the absolute value of selfToQuery) = 0.0)
+        if firstPairOnLine and secondPairOnLine:
+            abort cad spade triangulation
+        set otherSplit to (cad spade sides otherFromQuery and otherToQuery agree) = false
+        set selfSplit to (cad spade sides selfFromQuery and selfToQuery agree) = false
+        return otherSplit and selfSplit
+
+local function the cad spade validation of coordinate {a 64 bit floating-point number:coordinate}:
+    execute:
+        if coordinate != coordinate:
+            return false
+        if ((the absolute value of coordinate) < 1.793662034335766e-43) and (coordinate != 0.0):
+            return false
+        if (the absolute value of coordinate) > 3.2138760885179806e60:
+            return false
+        return true
+
+local function the cad spade underflow mitigation of {a 64 bit floating-point number:coordinate}:
+    execute:
+        if (coordinate != 0.0) and ((the absolute value of coordinate) < 1.793662034335766e-43):
+            return 0.0
+        return coordinate
+
+# cdt.rs get_edge_intersections in binary64.
+local function the cad spade intersection of {cad vector2:p1} to {cad vector2:p2} with {cad vector2:p3} to {cad vector2:p4}:
+    execute:
+        set a1 to (the y of p2) - (the y of p1)
+        set b1 to (the x of p1) - (the x of p2)
+        set c1 to (a1 * (the x of p1)) + (b1 * (the y of p1))
+        set a2 to (the y of p4) - (the y of p3)
+        set b2 to (the x of p3) - (the x of p4)
+        set c2 to (a2 * (the x of p3)) + (b2 * (the y of p3))
+        set determinant to (a1 * b2) - (a2 * b1)
+        if determinant = 0.0:
+            return a cad vector2 with x (1.0 / 0.0) and y (1.0 / 0.0)
+        set crossingX to ((b2 * c1) - (b1 * c2)) / determinant
+        set crossingY to ((a1 * c2) - (a2 * c1)) / determinant
+        return a cad vector2 with x crossingX and y crossingY
+
+# --- DCEL operations (delaunay_core/dcel_operations.rs) ---------------------
+
+local function the new cad spade vertex at {cad vector2:vertexPosition} with payload {cad vector2:vertexPayload} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexHandle to the length of the positions of cdt
+        append vertexPosition to (the positions of cdt)
+        append vertexPayload to (the payloads of cdt)
+        append (-1) to (the outEdges of cdt)
+        return vertexHandle
+
+local function set up cad spade vertices {integer:firstVertex} and {integer:secondVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        append cad spade edge from next 1, previous 1, face 0, origin firstVertex and next 0, previous 0, face 0, origin secondVertex to cdt
+        set cad spade out edge of vertex firstVertex to 0 in cdt
+        set cad spade out edge of vertex secondVertex to 1 in cdt
+        set cad spade adjacent edge of face 0 to 0 in cdt
+
+local function the cad spade line extension from {integer:endVertex} to {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set outEdge to the cad spade out edge of endVertex in cdt
+        set inEdge to the cad spade reverse of outEdge
+        set newEdge to the cad spade directed edge count of cdt
+        set newEdgeReverse to the cad spade reverse of newEdge
+        set faceHandle to the cad spade face of outEdge in cdt
+        set cad spade previous of outEdge to newEdge in cdt
+        set cad spade next of inEdge to newEdgeReverse in cdt
+        append cad spade edge from next outEdge, previous newEdgeReverse, face faceHandle, origin newVertex and next newEdge, previous inEdge, face faceHandle, origin endVertex to cdt
+        set cad spade out edge of vertex newVertex to newEdge in cdt
+        return newVertex
+
+local function the cad spade collinear split of {integer:edgeHandle} at {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set reverseEdge to the cad spade reverse of edgeHandle
+        if (the cad spade face of edgeHandle in cdt) != (the cad spade face of reverseEdge in cdt):
+            abort cad spade triangulation
+        set newEdge to the cad spade directed edge count of cdt
+        set newEdgeReverse to the cad spade reverse of newEdge
+        set followingEdge to the cad spade next of edgeHandle in cdt
+        set reversePrevious to the cad spade previous of reverseEdge in cdt
+        set endVertex to the cad spade target of edgeHandle in cdt
+        set faceHandle to the cad spade face of edgeHandle in cdt
+        set isolated to followingEdge = reverseEdge
+        set cad spade next of edgeHandle to newEdge in cdt
+        set cad spade previous of reverseEdge to newEdgeReverse in cdt
+        set cad spade origin of reverseEdge to newVertex in cdt
+        set cad spade out edge of vertex endVertex to newEdgeReverse in cdt
+        set newEdgeNext to newEdgeReverse
+        set newReversePrevious to newEdge
+        if isolated = false:
+            set cad spade previous of followingEdge to newEdge in cdt
+            set cad spade next of reversePrevious to newEdgeReverse in cdt
+            set newEdgeNext to followingEdge
+            set newReversePrevious to reversePrevious
+        append cad spade edge from next newEdgeNext, previous edgeHandle, face faceHandle, origin newVertex and next reverseEdge, previous newReversePrevious, face faceHandle, origin endVertex to cdt
+        set cad spade out edge of vertex newVertex to newEdge in cdt
+        set result to an empty list of an integer
+        append edgeHandle to result
+        append newEdge to result
+        return result
+
+local function the cad spade single face between {integer:edgeHandle} and its next in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set followingEdge to the cad spade next of edgeHandle in cdt
+        set precedingEdge to the cad spade previous of edgeHandle in cdt
+        set startOrigin to the cad spade origin of edgeHandle in cdt
+        set nextNext to the cad spade next of followingEdge in cdt
+        set nextTarget to the cad spade target of followingEdge in cdt
+        set newFace to the cad spade face count of cdt
+        set newInner to the cad spade directed edge count of cdt
+        set newOuter to the cad spade reverse of newInner
+        append cad spade edge from next edgeHandle, previous followingEdge, face newFace, origin nextTarget and next nextNext, previous precedingEdge, face 0, origin startOrigin to cdt
+        set cad spade next of precedingEdge to newOuter in cdt
+        set cad spade previous of edgeHandle to newInner in cdt
+        set cad spade next of followingEdge to newInner in cdt
+        set cad spade previous of nextNext to newOuter in cdt
+        set cad spade face of edgeHandle to newFace in cdt
+        set cad spade face of followingEdge to newFace in cdt
+        set cad spade adjacent edge of face 0 to newOuter in cdt
+        append cad spade face with adjacent edge newInner to cdt
+        return newOuter
+
+local function create cad spade face adjacent to {integer:edgeHandle} at {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set followingEdge to the cad spade next of edgeHandle in cdt
+        set precedingEdge to the cad spade previous of edgeHandle in cdt
+        set sideFace to the cad spade face of edgeHandle in cdt
+        set edgeStart to the cad spade origin of edgeHandle in cdt
+        set edgeEnd to the cad spade target of edgeHandle in cdt
+        set newNext to the cad spade directed edge count of cdt
+        set newPrevious to newNext + 2
+        set newFace to the cad spade face count of cdt
+        append cad spade edge from next newPrevious, previous edgeHandle, face newFace, origin edgeEnd and next followingEdge, previous (newPrevious + 1), face sideFace, origin newVertex to cdt
+        append cad spade edge from next edgeHandle, previous newNext, face newFace, origin newVertex and next (newNext + 1), previous precedingEdge, face sideFace, origin edgeStart to cdt
+        append cad spade face with adjacent edge edgeHandle to cdt
+        set cad spade out edge of vertex newVertex to newPrevious in cdt
+        set cad spade previous of edgeHandle to newPrevious in cdt
+        set cad spade next of edgeHandle to newNext in cdt
+        set cad spade face of edgeHandle to newFace in cdt
+        set cad spade adjacent edge of face sideFace to (newPrevious + 1) in cdt
+        set cad spade previous of followingEdge to (newNext + 1) in cdt
+        set cad spade next of precedingEdge to (newPrevious + 1) in cdt
+
+local function the cad spade half edge split of {integer:edgeHandle} at {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set followingEdge to the cad spade next of edgeHandle in cdt
+        set precedingEdge to the cad spade previous of edgeHandle in cdt
+        set oppositeVertex to the cad spade origin of precedingEdge in cdt
+        set endVertex to the cad spade target of edgeHandle in cdt
+        set edgeTwin to the cad spade reverse of edgeHandle
+        set twinPrevious to the cad spade previous of edgeTwin in cdt
+        set twinFace to the cad spade face of edgeTwin in cdt
+        set firstFace to the cad spade face of edgeHandle in cdt
+        set newFace to the cad spade face count of cdt
+        set e1 to the cad spade directed edge count of cdt
+        set t1 to e1 + 1
+        set e2 to e1 + 2
+        set t2 to e1 + 3
+        append cad spade edge from next e2, previous followingEdge, face newFace, origin oppositeVertex and next precedingEdge, previous edgeHandle, face firstFace, origin newVertex to cdt
+        append cad spade edge from next followingEdge, previous e1, face newFace, origin newVertex and next edgeTwin, previous twinPrevious, face twinFace, origin endVertex to cdt
+        append cad spade face with adjacent edge e2 to cdt
+        set cad spade out edge of vertex newVertex to e2 in cdt
+        set cad spade next of twinPrevious to t2 in cdt
+        set cad spade previous of followingEdge to e2 in cdt
+        set cad spade previous of precedingEdge to t1 in cdt
+        set cad spade previous of edgeTwin to t2 in cdt
+        set cad spade next of followingEdge to e1 in cdt
+        set cad spade next of edgeHandle to t1 in cdt
+        set cad spade face of followingEdge to newFace in cdt
+        set cad spade origin of edgeTwin to newVertex in cdt
+        set cad spade out edge of vertex endVertex to t2 in cdt
+        set cad spade adjacent edge of face firstFace to edgeHandle in cdt
+        set result to an empty list of an integer
+        append edgeHandle to result
+        append e2 to result
+        return result
+
+local function the cad spade inner edge split of {integer:edgeHandle} at {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set t0 to the cad spade reverse of edgeHandle
+        set f0 to the cad spade face of edgeHandle in cdt
+        set f1 to the cad spade face of t0 in cdt
+        set f2 to the cad spade face count of cdt
+        set f3 to f2 + 1
+        set e1 to the cad spade directed edge count of cdt
+        set t1 to e1 + 1
+        set e2 to e1 + 2
+        set t2 to e1 + 3
+        set e3 to e1 + 4
+        set t3 to e1 + 5
+        set ep to the cad spade previous of edgeHandle in cdt
+        set en to the cad spade next of edgeHandle in cdt
+        set tn to the cad spade next of t0 in cdt
+        set tp to the cad spade previous of t0 in cdt
+        set v1 to the cad spade origin of edgeHandle in cdt
+        set v2 to the cad spade origin of tp in cdt
+        set v3 to the cad spade origin of t0 in cdt
+        set v4 to the cad spade origin of ep in cdt
+        set cad spade next of edgeHandle to t3 in cdt
+        set cad spade previous of edgeHandle to ep in cdt
+        set cad spade origin of edgeHandle to v1 in cdt
+        set cad spade face of edgeHandle to f0 in cdt
+        set cad spade next of t0 to tn in cdt
+        set cad spade previous of t0 to e1 in cdt
+        set cad spade origin of t0 to newVertex in cdt
+        set cad spade face of t0 to f1 in cdt
+        append cad spade edge from next t0, previous tn, face f1, origin v2 and next tp, previous e2, face f2, origin newVertex to cdt
+        append cad spade edge from next t1, previous tp, face f2, origin v3 and next en, previous e3, face f3, origin newVertex to cdt
+        append cad spade edge from next t2, previous en, face f3, origin v4 and next ep, previous edgeHandle, face f0, origin newVertex to cdt
+        set cad spade next of en to e3 in cdt
+        set cad spade previous of en to t2 in cdt
+        set cad spade face of en to f3 in cdt
+        set cad spade next of tp to e2 in cdt
+        set cad spade previous of tp to t1 in cdt
+        set cad spade face of tp to f2 in cdt
+        set cad spade next of tn to e1 in cdt
+        set cad spade previous of ep to t3 in cdt
+        set cad spade out edge of vertex newVertex to t0 in cdt
+        set cad spade out edge of vertex v3 to e2 in cdt
+        set cad spade adjacent edge of face f0 to edgeHandle in cdt
+        set cad spade adjacent edge of face f1 to e1 in cdt
+        append cad spade face with adjacent edge e2 to cdt
+        append cad spade face with adjacent edge e3 to cdt
+        set result to an empty list of an integer
+        append edgeHandle to result
+        append t2 to result
+        return result
+
+local function insert cad spade vertex {integer:newVertex} into face {integer:f0} of {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set e0 to the cad spade adjacent edge of face f0 in cdt
+        set e1 to the cad spade next of e0 in cdt
+        set e2 to the cad spade next of e1 in cdt
+        set e3 to the cad spade directed edge count of cdt
+        set e4 to e3 + 1
+        set e5 to e3 + 2
+        set e6 to e3 + 3
+        set e7 to e3 + 4
+        set e8 to e3 + 5
+        set v0 to the cad spade origin of e0 in cdt
+        set v1 to the cad spade origin of e1 in cdt
+        set v2 to the cad spade origin of e2 in cdt
+        set f1 to the cad spade face count of cdt
+        set f2 to f1 + 1
+        append cad spade face with adjacent edge e1 to cdt
+        append cad spade face with adjacent edge e2 to cdt
+        set cad spade out edge of vertex newVertex to e4 in cdt
+        set cad spade previous of e0 to e8 in cdt
+        set cad spade next of e0 to e3 in cdt
+        set cad spade previous of e1 to e4 in cdt
+        set cad spade next of e1 to e5 in cdt
+        set cad spade face of e1 to f1 in cdt
+        set cad spade previous of e2 to e6 in cdt
+        set cad spade next of e2 to e7 in cdt
+        set cad spade face of e2 to f2 in cdt
+        append cad spade edge from next e8, previous e0, face f0, origin v1 and next e1, previous e5, face f1, origin newVertex to cdt
+        append cad spade edge from next e4, previous e1, face f1, origin v2 and next e2, previous e7, face f2, origin newVertex to cdt
+        append cad spade edge from next e6, previous e2, face f2, origin v0 and next e0, previous e3, face f0, origin newVertex to cdt
+
+local function flip cad spade edge {integer:undirectedHandle} clockwise in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set e to 2 * undirectedHandle
+        set en to the cad spade next of e in cdt
+        set ep to the cad spade previous of e in cdt
+        set eFace to the cad spade face of e in cdt
+        set eOrigin to the cad spade origin of e in cdt
+        set t to e + 1
+        set tn to the cad spade next of t in cdt
+        set tp to the cad spade previous of t in cdt
+        set tFace to the cad spade face of t in cdt
+        set tOrigin to the cad spade origin of t in cdt
+        set cad spade next of en to e in cdt
+        set cad spade previous of en to tp in cdt
+        set cad spade next of e to tp in cdt
+        set cad spade previous of e to en in cdt
+        set cad spade origin of e to (the cad spade origin of ep in cdt) in cdt
+        set cad spade next of tp to en in cdt
+        set cad spade previous of tp to e in cdt
+        set cad spade face of tp to eFace in cdt
+        set cad spade next of tn to t in cdt
+        set cad spade previous of tn to ep in cdt
+        set cad spade next of t to ep in cdt
+        set cad spade previous of t to tn in cdt
+        set cad spade origin of t to (the cad spade origin of tp in cdt) in cdt
+        set cad spade next of ep to tn in cdt
+        set cad spade previous of ep to t in cdt
+        set cad spade face of ep to tFace in cdt
+        set cad spade out edge of vertex eOrigin to tn in cdt
+        set cad spade out edge of vertex tOrigin to en in cdt
+        set cad spade adjacent edge of face eFace to e in cdt
+        set cad spade adjacent edge of face tFace to t in cdt
+
+# --- Triangulation (triangulation_ext.rs) ------------------------------------
+
+local function the cad spade out edges of {integer:vertexHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set result to an empty list of an integer
+        set startEdge to the cad spade out edge of vertexHandle in cdt
+        if startEdge >= 0:
+            set currentEdge to startEdge
+            set circling to true
+            loop while circling:
+                append currentEdge to result
+                set currentEdge to the cad spade counterclockwise of currentEdge in cdt
+                set circling to currentEdge != startEdge
+        return result
+
+local function the cad spade edge from {integer:fromVertex} to {integer:toVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexOutEdges to the cad spade out edges of fromVertex in cdt
+        set found to -1
+        loop edgeIndex from 0 to the length of vertexOutEdges:
+            set candidate to the item at edgeIndex in vertexOutEdges
+            if found < 0:
+                if (the cad spade target of candidate in cdt) = toVertex:
+                    set found to candidate
+        free vertexOutEdges
+        return found
+
+local function mark cad spade constraint edge {integer:undirectedHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if cad spade undirected edge undirectedHandle is a constraint in cdt:
+            abort cad spade triangulation
+        set cad spade constraint flag of undirected edge undirectedHandle to true in cdt
+
+local function unmark cad spade constraint edge {integer:undirectedHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if (cad spade undirected edge undirectedHandle is a constraint in cdt) = false:
+            abort cad spade triangulation
+        set cad spade constraint flag of undirected edge undirectedHandle to false in cdt
+
+# ConstrainedDelaunayTriangulation::make_constraint_edge.
+local function make cad spade constraint edge {integer:undirectedHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if cad spade undirected edge undirectedHandle is a constraint in cdt:
+            return false
+        mark cad spade constraint edge undirectedHandle in cdt
+        set the constraintCount of cdt to (the constraintCount of cdt) + 1
+        return true
+
+local function handle cad spade legal split {a pointer to a list:splitEdges} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set the constraintCount of cdt to (the constraintCount of cdt) + 1
+        loop edgeIndex from 0 to the length of splitEdges:
+            set undirectedHandle to the cad spade undirected handle of (the item at edgeIndex in splitEdges)
+            if (cad spade undirected edge undirectedHandle is a constraint in cdt) = false:
+                mark cad spade constraint edge undirectedHandle in cdt
+
+local function legalize cad spade edge {integer:edgeHandle} fully {boolean:fullyLegalize} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set pending to an empty list of an integer
+        append edgeHandle to pending
+        loop while (the length of pending) > 0:
+            set e to the last item of pending
+            remove the last item from pending
+            if (cad spade edge e is a constraint in cdt) = false:
+                set leftVertex to the cad spade opposite vertex of (the cad spade reverse of e) in cdt
+                set rightVertex to the cad spade opposite vertex of e in cdt
+                if (leftVertex >= 0) and (rightVertex >= 0):
+                    set v0 to the cad spade position of vertex (the cad spade origin of e in cdt) in cdt
+                    set v1 to the cad spade position of vertex (the cad spade target of e in cdt) in cdt
+                    set v2 to the cad spade position of vertex leftVertex in cdt
+                    set v3 to the cad spade position of vertex rightVertex in cdt
+                    if cad spade v3 lies in the circumference of v2, v1 and v0:
+                        set reverseEdge to the cad spade reverse of e
+                        append (the cad spade next of reverseEdge in cdt) to pending
+                        append (the cad spade previous of reverseEdge in cdt) to pending
+                        if fullyLegalize:
+                            append (the cad spade next of e in cdt) to pending
+                            append (the cad spade previous of e in cdt) to pending
+                        flip cad spade edge (the cad spade undirected handle of e) clockwise in cdt
+        free pending
+
+local function legalize cad spade vertex {integer:vertexHandle} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexOutEdges to the cad spade out edges of vertexHandle in cdt
+        set candidates to an empty list of an integer
+        loop edgeIndex from 0 to the length of vertexOutEdges:
+            set outEdge to the item at edgeIndex in vertexOutEdges
+            if (cad spade edge outEdge is outer in cdt) = false:
+                append (the cad spade next of outEdge in cdt) to candidates
+        free vertexOutEdges
+        loop edgeIndex from 0 to the length of candidates:
+            legalize cad spade edge (the item at edgeIndex in candidates) fully false in cdt
+        free candidates
+
+# Consumes the undirected edge stack, as legalize_edges_after_removal.
+local function legalize cad spade edges after removal {a pointer to a list:pending} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        loop while (the length of pending) > 0:
+            set undirectedHandle to the last item of pending
+            remove the last item from pending
+            if (cad spade undirected edge undirectedHandle is a constraint in cdt) = false:
+                set e to 2 * undirectedHandle
+                set reverseEdge to e + 1
+                set e2 to the cad spade previous of e in cdt
+                set e4 to the cad spade previous of reverseEdge in cdt
+                set fromPosition to the cad spade position of vertex (the cad spade origin of e in cdt) in cdt
+                set toPosition to the cad spade position of vertex (the cad spade target of e in cdt) in cdt
+                set leftVertex to the cad spade opposite vertex of e in cdt
+                set rightVertex to the cad spade opposite vertex of reverseEdge in cdt
+                set shouldFlip to false
+                if (leftVertex >= 0) and (rightVertex >= 0):
+                    set shouldFlip to cad spade (the cad spade position of vertex rightVertex in cdt) lies in the circumference of fromPosition, toPosition and (the cad spade position of vertex leftVertex in cdt)
+                else if rightVertex >= 0:
+                    set shouldFlip to cad spade toPosition is ordered counterclockwise after (the cad spade position of vertex rightVertex in cdt) and fromPosition
+                else if leftVertex >= 0:
+                    set shouldFlip to cad spade fromPosition is ordered counterclockwise after (the cad spade position of vertex leftVertex in cdt) and toPosition
+                else:
+                    abort cad spade triangulation
+                if shouldFlip:
+                    set e1 to the cad spade next of e in cdt
+                    set e3 to the cad spade next of reverseEdge in cdt
+                    set neighbours to an empty list of an integer
+                    append e1 to neighbours
+                    append e2 to neighbours
+                    append e3 to neighbours
+                    append e4 to neighbours
+                    loop neighbourIndex from 0 to 4:
+                        set neighbour to the cad spade undirected handle of (the item at neighbourIndex in neighbours)
+                        if pending does not contain neighbour:
+                            append neighbour to pending
+                    free neighbours
+                    flip cad spade edge undirectedHandle clockwise in cdt
+
+local function the cad spade location with kind {integer:kindValue} and handle {integer:handleValue}:
+    execute:
+        return @intrinsic("construct", a cad spade location2, kindValue, handleValue)
+
+local function the cad spade location of {cad vector2:vertexPosition} when all vertices are on a line in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set query to the cad spade side of edge 0 toward vertexPosition in cdt
+        if query > 0.0:
+            return the cad spade location with kind 3 and handle 0
+        if query < 0.0:
+            return the cad spade location with kind 3 and handle 1
+        set sorted to an empty list of an integer
+        loop vertexHandle from 0 to the cad spade vertex count of cdt:
+            if (the cad spade out edge of vertexHandle in cdt) >= 0:
+                set candidatePosition to the cad spade position of vertex vertexHandle in cdt
+                set insertAt to the length of sorted
+                set searching to true
+                loop while searching and (insertAt > 0):
+                    set previousPosition to the cad spade position of vertex (the item at (insertAt - 1) in sorted) in cdt
+                    if cad spade position candidatePosition precedes previousPosition:
+                        set insertAt to insertAt - 1
+                    else:
+                        set searching to false
+                insert vertexHandle into sorted at index insertAt
+        set lowIndex to 0
+        set highIndex to the length of sorted
+        set found to -1
+        loop while (lowIndex < highIndex) and (found < 0):
+            set middle to lowIndex + ((highIndex - lowIndex) / 2)
+            set middlePosition to the cad spade position of vertex (the item at middle in sorted) in cdt
+            if cad spade positions middlePosition and vertexPosition are equal:
+                set found to the item at middle in sorted
+            else if cad spade position middlePosition precedes vertexPosition:
+                set lowIndex to middle + 1
+            else:
+                set highIndex to middle
+        if found >= 0:
+            free sorted
+            return the cad spade location with kind 0 and handle found
+        set insertIndex to lowIndex
+        if insertIndex = 0:
+            set extending to the item at 0 in sorted
+            free sorted
+            return the cad spade location with kind 5 and handle extending
+        if insertIndex = (the length of sorted):
+            set extending to the last item of sorted
+            free sorted
+            return the cad spade location with kind 5 and handle extending
+        set upperVertex to the item at insertIndex in sorted
+        set lowerVertex to the item at (insertIndex - 1) in sorted
+        free sorted
+        set lineEdge to the cad spade edge from upperVertex to lowerVertex in cdt
+        if lineEdge < 0:
+            abort cad spade triangulation
+        return the cad spade location with kind 1 and handle lineEdge
+
+local function the cad spade nearest neighbour walk from {integer:startVertex} to {cad vector2:vertexPosition} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set startPosition to the cad spade position of vertex startVertex in cdt
+        if cad spade positions startPosition and vertexPosition are equal:
+            return startVertex
+        set minimalDistance to the cad spade squared distance from vertexPosition to startPosition
+        set minimalVertex to startVertex
+        set walking to true
+        loop while walking:
+            set vertexOutEdges to the cad spade out edges of minimalVertex in cdt
+            set nextVertex to -1
+            set nextDistance to minimalDistance
+            loop edgeIndex from 0 to the length of vertexOutEdges:
+                if nextVertex < 0:
+                    set candidate to the cad spade target of (the item at edgeIndex in vertexOutEdges) in cdt
+                    set candidateDistance to the cad spade squared distance from (the cad spade position of vertex candidate in cdt) to vertexPosition
+                    if candidateDistance < minimalDistance:
+                        set nextVertex to candidate
+                        set nextDistance to candidateDistance
+            free vertexOutEdges
+            if nextVertex < 0:
+                set walking to false
+            else:
+                set minimalDistance to nextDistance
+                set minimalVertex to nextVertex
+        return minimalVertex
+
+local function the cad spade location of {cad vector2:targetPosition} from hint {integer:startVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexCount to the cad spade vertex count of cdt
+        if vertexCount < 2:
+            if vertexCount = 1:
+                if cad spade positions (the cad spade position of vertex 0 in cdt) and targetPosition are equal:
+                    return the cad spade location with kind 0 and handle 0
+            return the cad spade location with kind 4 and handle -1
+        if (the cad spade face count of cdt) = 1:
+            set lineLocation to the cad spade location of targetPosition when all vertices are on a line in cdt
+            if (the kind of lineLocation) = 5:
+                set extensionEdge to the cad spade out edge of (the handle of lineLocation) in cdt
+                if extensionEdge < 0:
+                    abort cad spade triangulation
+                return the cad spade location with kind 3 and handle extensionEdge
+            return lineLocation
+        set validStart to 0
+        if startVertex < vertexCount:
+            set validStart to startVertex
+        set closestVertex to the cad spade nearest neighbour walk from validStart to targetPosition in cdt
+        set e0 to the cad spade out edge of closestVertex in cdt
+        if e0 < 0:
+            abort cad spade triangulation
+        set e0Query to the cad spade side of edge e0 toward targetPosition in cdt
+        set rotateCounterclockwise to e0Query >= 0.0
+        set loopCounter to the cad spade directed edge count of cdt
+        loop while true:
+            if loopCounter = 0:
+                abort cad spade triangulation
+            set loopCounter to loopCounter - 1
+            set fromVertex to the cad spade origin of e0 in cdt
+            set toVertex to the cad spade target of e0 in cdt
+            if cad spade positions (the cad spade position of vertex fromVertex in cdt) and targetPosition are equal:
+                set the hint of cdt to fromVertex
+                return the cad spade location with kind 0 and handle fromVertex
+            if cad spade positions (the cad spade position of vertex toVertex in cdt) and targetPosition are equal:
+                set the hint of cdt to toVertex
+                return the cad spade location with kind 0 and handle toVertex
+            if (the absolute value of e0Query) = 0.0:
+                if cad spade edge e0 is outer in cdt:
+                    set e0 to the cad spade reverse of e0
+                set e0 to the cad spade previous of e0 in cdt
+                set e0Query to the cad spade side of edge e0 toward targetPosition in cdt
+                set rotateCounterclockwise to e0Query >= 0.0
+            else:
+                set e1 to e0
+                if rotateCounterclockwise = false:
+                    set e1 to the cad spade reverse of e0
+                set faceHandle to the cad spade face of e1 in cdt
+                if faceHandle = 0:
+                    set the hint of cdt to (the cad spade origin of e1 in cdt)
+                    return the cad spade location with kind 3 and handle e1
+                set rotated to the cad spade clockwise of e0 in cdt
+                if rotateCounterclockwise:
+                    set rotated to the cad spade counterclockwise of e0 in cdt
+                set rotatedQuery to the cad spade side of edge rotated toward targetPosition in cdt
+                if ((the absolute value of rotatedQuery) = 0.0) or ((rotatedQuery > 0.0) = rotateCounterclockwise):
+                    set e0 to rotated
+                    set e0Query to rotatedQuery
+                else:
+                    set e2 to the cad spade previous of e1 in cdt
+                    if rotateCounterclockwise:
+                        set e2 to the cad spade next of e1 in cdt
+                    set e2Query to the cad spade side of edge e2 toward targetPosition in cdt
+                    if (the absolute value of e2Query) = 0.0:
+                        set the hint of cdt to (the cad spade target of e2 in cdt)
+                        return the cad spade location with kind 1 and handle e2
+                    if e2Query > 0.0:
+                        set the hint of cdt to (the cad spade target of e2 in cdt)
+                        return the cad spade location with kind 2 and handle faceHandle
+                    set e0 to the cad spade reverse of e2
+                    set e0Query to (-e2Query)
+                    if (cad spade edge e0 is outer in cdt) = false:
+                        set e0 to the cad spade previous of e0 in cdt
+                        set e0Query to the cad spade side of edge e0 toward targetPosition in cdt
+                    set rotateCounterclockwise to e0Query >= 0.0
+        return the cad spade location with kind 4 and handle -1
+
+local function insert cad spade vertex {integer:newVertex} outside the convex hull at {integer:hullEdge} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexPosition to the cad spade position of vertex newVertex in cdt
+        if (the cad spade side of edge hullEdge toward vertexPosition in cdt) <= 0.0:
+            abort cad spade triangulation
+        create cad spade face adjacent to hullEdge at newVertex in cdt
+        set counterclockwiseStart to the cad spade reverse of (the cad spade previous of hullEdge in cdt)
+        set clockwiseStart to the cad spade reverse of (the cad spade next of hullEdge in cdt)
+        legalize cad spade edge hullEdge fully false in cdt
+        set currentEdge to counterclockwiseStart
+        set walking to true
+        loop while walking:
+            set previousEdge to the cad spade previous of currentEdge in cdt
+            set currentEdge to previousEdge
+            if (the cad spade side of edge previousEdge toward vertexPosition in cdt) > 0.0:
+                set newEdge to the cad spade single face between currentEdge and its next in cdt
+                legalize cad spade edge currentEdge fully false in cdt
+                set currentEdge to newEdge
+            else:
+                set walking to false
+        set currentEdge to clockwiseStart
+        set walking to true
+        loop while walking:
+            set nextEdge to the cad spade next of currentEdge in cdt
+            if (the cad spade side of edge nextEdge toward vertexPosition in cdt) > 0.0:
+                set newEdge to the cad spade single face between currentEdge and its next in cdt
+                legalize cad spade edge nextEdge fully false in cdt
+                set currentEdge to newEdge
+            else:
+                set walking to false
+        return newVertex
+
+local function the cad spade split of {integer:edgeHandle} at {integer:newVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if cad spade edge edgeHandle is outer in cdt:
+            set halves to the cad spade half edge split of (the cad spade reverse of edgeHandle) at newVertex in cdt
+            set result to an empty list of an integer
+            append (the cad spade reverse of (the item at 1 in halves)) to result
+            append (the cad spade reverse of (the item at 0 in halves)) to result
+            free halves
+            return result
+        if cad spade edge (the cad spade reverse of edgeHandle) is outer in cdt:
+            return the cad spade half edge split of edgeHandle at newVertex in cdt
+        return the cad spade inner edge split of edgeHandle at newVertex in cdt
+
+local function insert cad spade vertex at {cad vector2:vertexPosition} with payload {cad vector2:vertexPayload} into {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set vertexCount to the cad spade vertex count of cdt
+        if vertexCount = 0:
+            return the new cad spade vertex at vertexPosition with payload vertexPayload in cdt
+        if vertexCount = 1:
+            if cad spade positions (the cad spade position of vertex 0 in cdt) and vertexPosition are equal:
+                replace item at index 0 in (the positions of cdt) with vertexPosition
+                replace item at index 0 in (the payloads of cdt) with vertexPayload
+                return 0
+            set secondVertex to the new cad spade vertex at vertexPosition with payload vertexPayload in cdt
+            set up cad spade vertices 0 and secondVertex in cdt
+            return secondVertex
+        if (the cad spade face count of cdt) = 1:
+            set lineLocation to the cad spade location of vertexPosition when all vertices are on a line in cdt
+            if (the kind of lineLocation) = 0:
+                return the handle of lineLocation
+            set newVertex to the new cad spade vertex at vertexPosition with payload vertexPayload in cdt
+            if (the kind of lineLocation) = 1:
+                set isConstraint to cad spade edge (the handle of lineLocation) is a constraint in cdt
+                set newEdges to the cad spade collinear split of (the handle of lineLocation) at newVertex in cdt
+                if isConstraint:
+                    handle cad spade legal split newEdges in cdt
+                free newEdges
+                return newVertex
+            if (the kind of lineLocation) = 3:
+                return insert cad spade vertex newVertex outside the convex hull at (the handle of lineLocation) in cdt
+            return the cad spade line extension from (the handle of lineLocation) to newVertex in cdt
+        set foundLocation to the cad spade location of vertexPosition from hint (the hint of cdt) in cdt
+        if (the kind of foundLocation) = 0:
+            replace item at index (the handle of foundLocation) in (the positions of cdt) with vertexPosition
+            replace item at index (the handle of foundLocation) in (the payloads of cdt) with vertexPayload
+            return the handle of foundLocation
+        if (the kind of foundLocation) = 4:
+            abort cad spade triangulation
+        set newVertex to the new cad spade vertex at vertexPosition with payload vertexPayload in cdt
+        if (the kind of foundLocation) = 3:
+            return insert cad spade vertex newVertex outside the convex hull at (the handle of foundLocation) in cdt
+        if (the kind of foundLocation) = 2:
+            insert cad spade vertex newVertex into face (the handle of foundLocation) of cdt
+            legalize cad spade vertex newVertex in cdt
+            return newVertex
+        set splitParts to the cad spade split of (the handle of foundLocation) at newVertex in cdt
+        if cad spade edge (the handle of foundLocation) is a constraint in cdt:
+            handle cad spade legal split splitParts in cdt
+        free splitParts
+        legalize cad spade vertex newVertex in cdt
+        return newVertex
+
+function the cad spade insertion of {cad vector2:vertexPosition} with payload {cad vector2:vertexPayload} into {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set xValid to the cad spade validation of coordinate (the x of vertexPosition)
+        set yValid to the cad spade validation of coordinate (the y of vertexPosition)
+        if (xValid and yValid) = false:
+            return @intrinsic("construct", a cad spade insertion2, false, -1)
+        set vertexHandle to insert cad spade vertex at vertexPosition with payload vertexPayload into cdt
+        set the hint of cdt to vertexHandle
+        return @intrinsic("construct", a cad spade insertion2, true, vertexHandle)
+
+# --- Line intersections (intersection_iterator.rs) ------------------------------
+
+local function the cad spade intersection with kind {integer:kindValue}, handle {integer:handleValue} from {cad vector2:lineStart} to {cad vector2:lineEnd}:
+    execute:
+        return @intrinsic("construct", a cad spade intersection2, kindValue, handleValue, lineStart, lineEnd)
+
+local function the cad spade intersections from vertex {integer:fromVertex} to vertex {integer:toVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set lineStart to the cad spade position of vertex fromVertex in cdt
+        set lineEnd to the cad spade position of vertex toVertex in cdt
+        return the cad spade intersection with kind 2, handle fromVertex from lineStart to lineEnd
+
+# trace_direction_out_of_vertex; kind 0 convex hull, 1 edge intersection, 3 overlap.
+local function the cad spade direction out of vertex {integer:vertexHandle} toward {cad vector2:lineEnd} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set currentEdge to the cad spade out edge of vertexHandle in cdt
+        if currentEdge < 0:
+            return the cad spade location with kind 0 and handle -1
+        set currentQuery to the cad spade side of edge currentEdge toward lineEnd in cdt
+        set iterateCounterclockwise to currentQuery > 0.0
+        loop while true:
+            set currentStart to the cad spade position of vertex (the cad spade origin of currentEdge in cdt) in cdt
+            set currentEnd to the cad spade position of vertex (the cad spade target of currentEdge in cdt) in cdt
+            if ((the absolute value of currentQuery) = 0.0) and ((cad spade lineEnd projects before currentStart to currentEnd) = false):
+                return the cad spade location with kind 3 and handle currentEdge
+            set nextEdge to the cad spade clockwise of currentEdge in cdt
+            if iterateCounterclockwise:
+                set nextEdge to the cad spade counterclockwise of currentEdge in cdt
+            set nextQuery to the cad spade side of edge nextEdge toward lineEnd in cdt
+            set nextStart to the cad spade position of vertex (the cad spade origin of nextEdge in cdt) in cdt
+            set nextEnd to the cad spade position of vertex (the cad spade target of nextEdge in cdt) in cdt
+            if ((the absolute value of nextQuery) = 0.0) and ((cad spade lineEnd projects before nextStart to nextEnd) = false):
+                return the cad spade location with kind 3 and handle nextEdge
+            set betweenFace to the cad spade face of nextEdge in cdt
+            if iterateCounterclockwise:
+                set betweenFace to the cad spade face of currentEdge in cdt
+            if betweenFace = 0:
+                return the cad spade location with kind 0 and handle -1
+            if iterateCounterclockwise = (nextQuery < 0.0):
+                set segmentEdge to the cad spade previous of (the cad spade reverse of currentEdge) in cdt
+                if iterateCounterclockwise:
+                    set segmentEdge to the cad spade next of currentEdge in cdt
+                return the cad spade location with kind 1 and handle (the cad spade reverse of segmentEdge)
+            set currentQuery to nextQuery
+            set currentEdge to nextEdge
+        return the cad spade location with kind 0 and handle -1
+
+# trace_direction_out_of_edge; kind 0 convex hull or no intersection,
+# 1 edge intersection, 2 vertex intersection.
+local function the cad spade direction out of edge {integer:edgeHandle} from {cad vector2:lineStart} to {cad vector2:lineEnd} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if cad spade edge edgeHandle is outer in cdt:
+            return the cad spade location with kind 0 and handle -1
+        set previousEdge to the cad spade previous of edgeHandle in cdt
+        set nextEdge to the cad spade next of edgeHandle in cdt
+        set previousCrosses to cad spade edge previousEdge intersects lineStart to lineEnd without collinearity in cdt
+        set nextCrosses to cad spade edge nextEdge intersects lineStart to lineEnd without collinearity in cdt
+        if previousCrosses and nextCrosses:
+            return the cad spade location with kind 2 and handle (the cad spade origin of previousEdge in cdt)
+        if previousCrosses:
+            return the cad spade location with kind 1 and handle (the cad spade reverse of previousEdge)
+        if nextCrosses:
+            return the cad spade location with kind 1 and handle (the cad spade reverse of nextEdge)
+        return the cad spade location with kind 0 and handle -1
+
+# LineIntersectionIterator::next's successor computation.
+local function the cad spade intersection after {cad spade intersection2:current} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set lineStart to the lineFrom of current
+        set lineEnd to the lineTo of current
+        if (the kind of current) = 1:
+            set outward to the cad spade direction out of edge (the handle of current) from lineStart to lineEnd in cdt
+            return the cad spade intersection with kind (the kind of outward), handle (the handle of outward) from lineStart to lineEnd
+        if (the kind of current) = 2:
+            if cad spade positions (the cad spade position of vertex (the handle of current) in cdt) and lineEnd are equal:
+                return the cad spade intersection with kind 0, handle -1 from lineStart to lineEnd
+            set outward to the cad spade direction out of vertex (the handle of current) toward lineEnd in cdt
+            if (the kind of outward) = 1:
+                if (the cad spade side of edge (the handle of outward) toward lineEnd in cdt) < 0.0:
+                    return the cad spade intersection with kind 0, handle -1 from lineStart to lineEnd
+            return the cad spade intersection with kind (the kind of outward), handle (the handle of outward) from lineStart to lineEnd
+        if (the kind of current) = 3:
+            if cad spade positions lineStart and lineEnd are equal:
+                return the cad spade intersection with kind 0, handle -1 from lineStart to lineEnd
+            set overlapEnd to the cad spade target of (the handle of current) in cdt
+            if cad spade (the cad spade position of vertex overlapEnd in cdt) projects onto lineStart to lineEnd:
+                return the cad spade intersection with kind 2, handle overlapEnd from lineStart to lineEnd
+            return the cad spade intersection with kind 0, handle -1 from lineStart to lineEnd
+        return current
+
+# --- Constraints (cdt.rs) -----------------------------------------------------
+
+local function free cad spade conflict regions {a pointer to a list:regionList}:
+    execute:
+        loop regionIndex from 0 to the length of regionList:
+            free (the regionEdges of (the item at regionIndex in regionList))
+        free regionList
+
+local function the cad spade conflict regions from {integer:fromVertex} to {integer:toVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set regionList to an empty list of a cad spade conflict region2
+        set currentGroup to an empty list of an integer
+        set ignoreNextVertex to false
+        set blocked to false
+        set pendingIntersection to the cad spade intersections from vertex fromVertex to vertex toVertex in cdt
+        loop while ((the kind of pendingIntersection) != 0) and (blocked = false):
+            set current to pendingIntersection
+            set pendingIntersection to the cad spade intersection after current in cdt
+            if (the kind of current) = 1:
+                if cad spade edge (the handle of current) is a constraint in cdt:
+                    set blocked to true
+                else:
+                    append (the handle of current) to currentGroup
+            else if (the kind of current) = 2:
+                if ignoreNextVertex:
+                    set ignoreNextVertex to false
+                else:
+                    append (@intrinsic("construct", a cad spade conflict region2, currentGroup, 0, the handle of current)) to regionList
+                    set currentGroup to an empty list of an integer
+            else:
+                append (@intrinsic("construct", a cad spade conflict region2, an empty list of an integer, 1, the handle of current)) to regionList
+                set ignoreNextVertex to true
+        free currentGroup
+        if blocked:
+            free cad spade conflict regions regionList
+            return an empty list of a cad spade conflict region2
+        return regionList
+
+# Consumes conflictEdges; returns the created constraint edge or -1.
+local function the cad spade resolution of conflict edges {a pointer to a list:conflictEdges} toward {integer:targetVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        if (the length of conflictEdges) = 0:
+            free conflictEdges
+            return -1
+        set firstEdge to the item at 0 in conflictEdges
+        set firstBorder to the cad spade previous of (the cad spade reverse of firstEdge) in cdt
+        set lastBorder to the cad spade next of (the cad spade reverse of firstEdge) in cdt
+        loop edgeIndex from 0 to the length of conflictEdges:
+            flip cad spade edge (the cad spade undirected handle of (the item at edgeIndex in conflictEdges)) clockwise in cdt
+        set temporaryEdges to an empty list of an integer
+        set borderEdges to an empty list of an integer
+        append (the cad spade undirected handle of firstBorder) to borderEdges
+        append (the cad spade undirected handle of lastBorder) to borderEdges
+        set currentEdge to firstBorder
+        set result to -1
+        set walkEnd to the cad spade reverse of lastBorder
+        loop borderIndex from 0 to 2:
+            set borderEdge to the item at borderIndex in borderEdges
+            if (cad spade undirected edge borderEdge is a constraint in cdt) = false:
+                append borderEdge to temporaryEdges
+                mark cad spade constraint edge borderEdge in cdt
+        free borderEdges
+        loop while currentEdge != walkEnd:
+            set fixedEdge to currentEdge
+            set nextUndirected to the cad spade undirected handle of (the cad spade next of currentEdge in cdt)
+            set currentEdge to the cad spade counterclockwise of currentEdge in cdt
+            if targetVertex = (the cad spade target of fixedEdge in cdt):
+                ignore make cad spade constraint edge (the cad spade undirected handle of fixedEdge) in cdt
+                set result to fixedEdge
+            if (cad spade undirected edge nextUndirected is a constraint in cdt) = false:
+                append nextUndirected to temporaryEdges
+                mark cad spade constraint edge nextUndirected in cdt
+        set pending to an empty list of an integer
+        loop edgeIndex from 0 to the length of conflictEdges:
+            append (the cad spade undirected handle of (the item at edgeIndex in conflictEdges)) to pending
+        free conflictEdges
+        legalize cad spade edges after removal pending in cdt
+        free pending
+        loop edgeIndex from 0 to the length of temporaryEdges:
+            set cad spade constraint flag of undirected edge (the item at edgeIndex in temporaryEdges) to false in cdt
+        free temporaryEdges
+        return result
+
+# Consumes the regions.
+local function the cad spade resolution of conflict regions {a pointer to a list:regionList} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set constraintEdges to an empty list of an integer
+        loop regionIndex from 0 to the length of regionList:
+            set region to the item at regionIndex in regionList
+            if (the endKind of region) = 1:
+                free (the regionEdges of region)
+                append (the endHandle of region) to constraintEdges
+            else:
+                set resolved to the cad spade resolution of conflict edges (the regionEdges of region) toward (the endHandle of region) in cdt
+                if resolved >= 0:
+                    append resolved to constraintEdges
+        free regionList
+        loop edgeIndex from 0 to the length of constraintEdges:
+            ignore make cad spade constraint edge (the cad spade undirected handle of (the item at edgeIndex in constraintEdges)) in cdt
+        return constraintEdges
+
+# ConstrainedDelaunayTriangulation::try_add_constraint: the constraint edges,
+# or an empty list when an existing constraint crosses the segment.
+function the cad spade constraint edges from {integer:fromVertex} to {integer:toVertex} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set regionList to the cad spade conflict regions from fromVertex to toVertex in cdt
+        return the cad spade resolution of conflict regions regionList in cdt
+
+# validate_split_position: -1 when the split position is valid, otherwise
+# the alternative vertex; endVertex reports whether it is an edge end.
+local function the cad spade alternative split vertex for {integer:conflictEdge} at {cad vector2:splitPosition} in {a pointer to a cad spade triangulation2:cdt} reporting end in {a pointer to a boolean:endVertex}:
+    execute:
+        set foundLocation to the cad spade location of splitPosition from hint (the cad spade origin of conflictEdge in cdt) in cdt
+        set reverseEdge to the cad spade reverse of conflictEdge
+        set isValid to false
+        if (the kind of foundLocation) = 1:
+            set isValid to (the cad spade undirected handle of (the handle of foundLocation)) = (the cad spade undirected handle of conflictEdge)
+        else if (the kind of foundLocation) = 2:
+            set isValid to ((the handle of foundLocation) = (the cad spade face of conflictEdge in cdt)) or ((the handle of foundLocation) = (the cad spade face of reverseEdge in cdt))
+        else if (the kind of foundLocation) = 3:
+            set isValid to cad spade edge conflictEdge is on the convex hull in cdt
+        else if (the kind of foundLocation) = 4:
+            abort cad spade triangulation
+        if isValid:
+            return -1
+        set fromVertex to the cad spade origin of conflictEdge in cdt
+        set toVertex to the cad spade target of conflictEdge in cdt
+        set fromDistance to the cad spade squared distance from (the cad spade position of vertex fromVertex in cdt) to splitPosition
+        set toDistance to the cad spade squared distance from (the cad spade position of vertex toVertex in cdt) to splitPosition
+        set minimalDistance to fromDistance
+        set minimalVertex to fromVertex
+        store true at endVertex
+        if toDistance < minimalDistance:
+            set minimalDistance to toDistance
+            set minimalVertex to toVertex
+        set leftOpposite to the cad spade opposite vertex of conflictEdge in cdt
+        if leftOpposite >= 0:
+            set leftDistance to the cad spade squared distance from (the cad spade position of vertex leftOpposite in cdt) to splitPosition
+            if leftDistance < minimalDistance:
+                set minimalDistance to leftDistance
+                set minimalVertex to the cad spade target of (the cad spade next of conflictEdge in cdt) in cdt
+                store false at endVertex
+        set rightOpposite to the cad spade opposite vertex of reverseEdge in cdt
+        if rightOpposite >= 0:
+            set rightDistance to the cad spade squared distance from (the cad spade position of vertex rightOpposite in cdt) to splitPosition
+            if rightDistance < minimalDistance:
+                set minimalVertex to the cad spade target of (the cad spade next of reverseEdge in cdt) in cdt
+                store false at endVertex
+        return minimalVertex
+
+local function append cad spade edges {a pointer to a list:source} to {a pointer to a list:destination}:
+    execute:
+        loop edgeIndex from 0 to the length of source:
+            append (the item at edgeIndex in source) to destination
+
+# resolve_splitting_constraint_request with constrained.rs's vertex
+# constructor: a split vertex has payload origin + position * scale.
+function the cad spade split constraint edges from {integer:startVertex} to {integer:toVertex} with payload origin {cad vector2:payloadOrigin} and scale {cad vector2:payloadScale} in {a pointer to a cad spade triangulation2:cdt}:
+    execute:
+        set fromVertex to startVertex
+        set result to an empty list of an integer
+        set conflictEdges to an empty list of an integer
+        set iterator to the cad spade intersections from vertex fromVertex to vertex toVertex in cdt
+        set iterator to the cad spade intersection after iterator in cdt
+        loop while (the kind of iterator) != 0:
+            set current to iterator
+            set iterator to the cad spade intersection after current in cdt
+            if (the kind of current) = 3:
+                append (the handle of current) to result
+                set fromVertex to the cad spade target of (the handle of current) in cdt
+            else if (the kind of current) = 1:
+                set crossedEdge to the handle of current
+                if (cad spade edge crossedEdge is a constraint in cdt) = false:
+                    append crossedEdge to conflictEdges
+                else:
+                    set p0 to the cad spade position of vertex (the cad spade origin of crossedEdge in cdt) in cdt
+                    set p1 to the cad spade position of vertex (the cad spade target of crossedEdge in cdt) in cdt
+                    set fromPosition to the cad spade position of vertex fromVertex in cdt
+                    set toPosition to the cad spade position of vertex toVertex in cdt
+                    set crossing to the cad spade intersection of p0 to p1 with fromPosition to toPosition
+                    set crossing to a cad vector2 with x (the cad spade underflow mitigation of (the x of crossing)) and y (the cad spade underflow mitigation of (the y of crossing))
+                    set payloadX to (the x of payloadOrigin) + ((the x of crossing) * (the x of payloadScale))
+                    set payloadY to (the y of payloadOrigin) + ((the y of crossing) * (the y of payloadScale))
+                    set vertexPayload to a cad vector2 with x payloadX and y payloadY
+                    set isEndVertex to true
+                    set alternative to the cad spade alternative split vertex for crossedEdge at crossing in cdt reporting end in (the address of isEndVertex)
+                    set finalVertex to alternative
+                    if alternative >= 0:
+                        if isEndVertex = false:
+                            set oppositeVertex to the cad spade opposite vertex of crossedEdge in cdt
+                            if oppositeVertex != alternative:
+                                set crossedEdge to the cad spade reverse of crossedEdge
+                            set previousEdge to the cad spade previous of crossedEdge in cdt
+                            set nextEdge to the cad spade next of crossedEdge in cdt
+                            unmark cad spade constraint edge (the cad spade undirected handle of crossedEdge) in cdt
+                            set the constraintCount of cdt to (the constraintCount of cdt) - 1
+                            ignore make cad spade constraint edge (the cad spade undirected handle of previousEdge) in cdt
+                            ignore make cad spade constraint edge (the cad spade undirected handle of nextEdge) in cdt
+                            set legalizeBuffer to an empty list of an integer
+                            append (the cad spade undirected handle of crossedEdge) to legalizeBuffer
+                            legalize cad spade edges after removal legalizeBuffer in cdt
+                            free legalizeBuffer
+                    else:
+                        set finalVertex to the new cad spade vertex at crossing with payload vertexPayload in cdt
+                        set splitParts to the cad spade split of crossedEdge at finalVertex in cdt
+                        handle cad spade legal split splitParts in cdt
+                        free splitParts
+                        legalize cad spade vertex finalVertex in cdt
+                    set previousRegion to the cad spade constraint edges from fromVertex to finalVertex in cdt
+                    if ((the length of previousRegion) = 0) and (fromVertex != finalVertex):
+                        abort cad spade triangulation
+                    append cad spade edges previousRegion to result
+                    free previousRegion
+                    clear conflictEdges
+                    set fromVertex to finalVertex
+                    set iterator to the cad spade intersections from vertex fromVertex to vertex toVertex in cdt
+                    set iterator to the cad spade intersection after iterator in cdt
+            else:
+                set reachedVertex to the handle of current
+                set resolved to the cad spade resolution of conflict edges conflictEdges toward reachedVertex in cdt
+                set conflictEdges to an empty list of an integer
+                if resolved >= 0:
+                    append resolved to result
+                set iterator to the cad spade intersections from vertex reachedVertex to vertex toVertex in cdt
+                set iterator to the cad spade intersection after iterator in cdt
+                set fromVertex to reachedVertex
+        free conflictEdges
+        loop edgeIndex from 0 to the length of result:
+            ignore make cad spade constraint edge (the cad spade undirected handle of (the item at edgeIndex in result)) in cdt
+        return result

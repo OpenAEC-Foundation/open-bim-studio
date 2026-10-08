@@ -1,0 +1,317 @@
+# SPDX-License-Identifier: MPL-2.0
+# The representation-independent part of a planar section: given the edge
+# crossings of every face, sort and pair them per face, link the pieces into
+# closed loops through their shared edges, drop loops where a body only
+# touches the plane, and orient the loops by nesting. `brep_section.dl` feeds
+# it from a B-rep body and `lib/fastkernel/polyhedron.dl` from an indexed
+# polyhedron; the method is described in `brep_section.dl`.
+#
+# This is a native DynLex extension of the port; the pinned Rust source has no
+# counterpart. Areas and inside tests are computed relative to a loop's first
+# point, so they keep their precision far from the coordinate origin.
+import lib/cadkernel/plane.dl
+import lib/cadkernel/topology_list.dl
+import lib/sort.dl
+
+function cad section unsupported surface snag:
+    replacement:
+        1
+function cad section unsupported curve snag:
+    replacement:
+        2
+function cad section parallel face snag:
+    replacement:
+        3
+function cad section odd crossing snag:
+    replacement:
+        4
+function cad section open boundary snag:
+    replacement:
+        5
+function cad section invalid plane snag:
+    replacement:
+        6
+
+# `crossing` is false when the plane misses or only touches the body. `loops`
+# holds world points; the last point of a loop connects back to its first.
+class:
+    patterns:
+        [a|] cad section result
+    members:
+        valid as a boolean
+        snag as an integer
+        crossing as a boolean
+        loops as the type of (a cad topology list of the type of (a cad topology list of a cad vector3))
+
+function a cad section refusal {integer:code}:
+    execute:
+        return @intrinsic("construct", a cad section result, false, code, false, a cad topology list of the type of (a cad topology list of a cad vector3))
+
+function an empty cad section:
+    execute:
+        return @intrinsic("construct", a cad section result, true, 0, false, a cad topology list of the type of (a cad topology list of a cad vector3))
+
+# One crossing of an edge with the plane on one face. `along` orders it on the
+# face's line of intersection; `tieBreak` orders crossings at the same vertex
+# as the infinitesimally moved plane would.
+class:
+    patterns:
+        [a|] cad section crossing record
+    members:
+        edgeCode as a 64 bit integer
+        point as a cad vector3
+        along as a 64 bit floating-point number
+        tieBreak as a 64 bit floating-point number
+
+# An end of a section piece, for linking pieces through their shared edges.
+class:
+    patterns:
+        [a|] cad section piece end record
+    members:
+        edgeCode as a 64 bit integer
+        slot as a 64 bit integer
+
+local function cad section crossing {cad section crossing record:first} precedes {cad section crossing record:second}:
+    execute:
+        if first's along < second's along:
+            return true
+        if first's along > second's along:
+            return false
+        return first's tieBreak < second's tieBreak
+
+local function cad section piece end ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to the value at (left as a pointer to a cad section piece end record)
+        set second to the value at (right as a pointer to a cad section piece end record)
+        if first's edgeCode < second's edgeCode:
+            return -1
+        if first's edgeCode > second's edgeCode:
+            return 1
+        if first's slot < second's slot:
+            return -1
+        if first's slot > second's slot:
+            return 1
+        return 0
+
+# Twice the signed area of `outline` about `unitNormal`, and whether a point
+# lies inside it, both in the frame of `framePlane`.
+local function the cad section doubled area of {a pointer to a list:outline} about {cad vector3:unitNormal}:
+    execute:
+        set total to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set count to the length of outline
+        set anchor to the item at 0 in outline
+        loop cursor from 1 to count - 1:
+            set here to the cad difference of (the item at cursor in outline) and anchor
+            set following to the cad difference of (the item at (cursor + 1) in outline) and anchor
+            set total to the cad sum of total and (the cad cross of here and following)
+        return the cad dot of total and unitNormal
+
+local function cad section point {cad vector3:location} lies inside {a pointer to a list:outline} on {cad plane:framePlane}:
+    execute:
+        set probeX to the cad dot of (the cad difference of location and framePlane's origin) and framePlane's xAxis
+        set probeY to the cad dot of (the cad difference of location and framePlane's origin) and framePlane's yAxis
+        set enclosed to false
+        set count to the length of outline
+        loop cursor from 0 to count:
+            set here to the cad difference of (the item at cursor in outline) and framePlane's origin
+            set following to the cad difference of (the item at (the remainder of (cursor + 1) divided by count) in outline) and framePlane's origin
+            set hereX to the cad dot of here and framePlane's xAxis
+            set hereY to the cad dot of here and framePlane's yAxis
+            set followingX to the cad dot of following and framePlane's xAxis
+            set followingY to the cad dot of following and framePlane's yAxis
+            if (hereY > probeY) != (followingY > probeY):
+                set crossingX to hereX + (((probeY - hereY) / (followingY - hereY)) * (followingX - hereX))
+                if probeX < crossingX:
+                    set enclosed to (enclosed = false)
+        return enclosed
+
+local function the cad section perimeter of {a pointer to a list:outline}:
+    execute:
+        set total to 0.0
+        set count to the length of outline
+        loop cursor from 0 to count:
+            set total to total + (the cad distance from (the item at cursor in outline) to (the item at (the remainder of (cursor + 1) divided by count) in outline))
+        return total
+
+
+# The orthonormal frame of a section plane; invalid for a degenerate plane.
+class:
+    patterns:
+        [a|] cad section frame record
+    members:
+        valid as a boolean
+        framePlane as a cad plane
+        unitNormal as a cad vector3
+
+function the cad section frame of {cad plane:givenPlane}:
+    execute:
+        set refused to @intrinsic("construct", a cad section frame record, false, givenPlane, the cad zero vector3)
+        set initialNormal to the cad normal of givenPlane
+        if initialNormal's valid = false:
+            return refused
+        set framed to the cad orthonormal plane with origin givenPlane's origin, x axis givenPlane's xAxis and normal initialNormal's value
+        if framed's valid = false:
+            return refused
+        set framePlane to framed's value
+        return @intrinsic("construct", a cad section frame record, true, framePlane, the cad cross of framePlane's xAxis and framePlane's yAxis)
+
+# Appends the crossing of the edge from `startPoint` to `endPoint` with the
+# plane to `faceCrossings`, when its ends lie on different sides. Heights are
+# signed distances to the plane; a vertex within `tolerance` counts as lying
+# on the positive side. The point is computed from the edge's own start and
+# end, so both faces using the edge get the same value.
+function add cad section crossing of edge {a 64 bit integer:edgeCode} from {cad vector3:startPoint} at {a 64 bit floating-point number:startHeight} to {cad vector3:endPoint} at {a 64 bit floating-point number:endHeight} along {cad vector3:lineDirection} within {a 64 bit floating-point number:tolerance} into {a pointer to a list:faceCrossings}:
+    execute:
+        set startBelow to startHeight < (-tolerance)
+        set endBelow to endHeight < (-tolerance)
+        if startBelow = endBelow:
+            return nothing
+        # The vertex on the non-negative side, and the other one.
+        set upper to startPoint
+        set upperHeight to startHeight
+        set lower to endPoint
+        set lowerHeight to endHeight
+        if startBelow:
+            set upper to endPoint
+            set upperHeight to endHeight
+            set lower to startPoint
+            set lowerHeight to startHeight
+        set crossingPoint to upper
+        set tieBreak to 0.0
+        if upperHeight <= tolerance:
+            set tieBreak to (the cad dot of (the cad difference of lower and upper) and lineDirection) / (0.0 - lowerHeight)
+        else:
+            set fraction to startHeight / (startHeight - endHeight)
+            set crossingPoint to the cad sum of startPoint and ((the cad difference of endPoint and startPoint) scaled by fraction)
+        append (@intrinsic("construct", a cad section crossing record, edgeCode, crossingPoint, the cad dot of crossingPoint and lineDirection, tieBreak)) to faceCrossings
+
+# Sorts one face's crossings along its line and appends them to `crossings`.
+# Returns 0, or the snag that refuses the face.
+function close cad section face {a pointer to a list:faceCrossings} along {cad vector3:lineDirection} into {a pointer to a list:crossings}:
+    execute:
+        set crossingCount to the length of faceCrossings
+        if crossingCount = 0:
+            return 0
+        if (the cad length of lineDirection) <= 1e-12:
+            return cad section parallel face snag
+        if (the remainder of crossingCount divided by 2) != 0:
+            return cad section odd crossing snag
+        loop outer from 1 to crossingCount:
+            set moving to the item at outer in faceCrossings
+            set slot to outer
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if cad section crossing moving precedes (the item at (slot - 1) in faceCrossings):
+                    replace item at index slot in faceCrossings with (the item at (slot - 1) in faceCrossings)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in faceCrossings with moving
+        loop cursor from 0 to crossingCount:
+            append (the item at cursor in faceCrossings) to crossings
+        return 0
+
+# Links the paired crossings of every face into closed, oriented loops. Piece
+# p runs from crossing 2p to crossing 2p + 1. Frees `crossings`.
+function the cad section loops of {a pointer to a list:crossings} on {cad section frame record:frame} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set framePlane to frame's framePlane
+        set unitNormal to frame's unitNormal
+        # Each crossing edge must be met by exactly two piece ends.
+        set ends to an empty list of a cad section piece end record
+        ensure enough capacity in ends for (the length of crossings) items
+        loop cursor from 0 to the length of crossings:
+            append (@intrinsic("construct", a cad section piece end record, (the item at cursor in crossings)'s edgeCode, cursor as a 64 bit integer)) to ends
+        set comparator to the function named "cad section piece end ordering $ and $"
+        sort native array at ((the data of ends) as a pointer) with ((the length of ends) as a word sized unsigned integer) items of ((the size of a cad section piece end record) as a word sized unsigned integer) bytes using comparator
+        set partners to an empty list of an integer
+        ensure enough capacity in partners for (the length of crossings) items
+        loop cursor from 0 to the length of crossings:
+            append (-1) to partners
+        set closed to true
+        set cursor to 0
+        loop while cursor < the length of ends:
+            set runEnd to cursor + 1
+            set scanning to true
+            loop while scanning:
+                if runEnd = the length of ends:
+                    set scanning to false
+                else if (the item at runEnd in ends)'s edgeCode = (the item at cursor in ends)'s edgeCode:
+                    set runEnd to runEnd + 1
+                else:
+                    set scanning to false
+            if (runEnd - cursor) = 2:
+                set firstSlot to (the item at cursor in ends)'s slot as an integer
+                set secondSlot to (the item at (cursor + 1) in ends)'s slot as an integer
+                replace item at index firstSlot in partners with secondSlot
+                replace item at index secondSlot in partners with firstSlot
+            else:
+                set closed to false
+            set cursor to runEnd
+        free ends
+        if closed = false:
+            free partners
+            free crossings
+            return a cad section refusal cad section open boundary snag
+        set result to an empty cad section
+        set result's crossing to true
+        set pieceCount to (the length of crossings) / 2
+        set visited to an empty list of a boolean
+        loop pieceCursor from 0 to pieceCount:
+            append false to visited
+        loop firstPiece from 0 to pieceCount:
+            if (the item at firstPiece in visited) = false:
+                set outline to a cad topology list of a cad vector3
+                set entry to firstPiece * 2
+                set walking to true
+                loop while walking:
+                    set piece to entry / 2
+                    replace item at index piece in visited with true
+                    set location to (the item at entry in crossings)'s point
+                    set fresh to true
+                    if (the length of (outline's values)) > 0:
+                        set previousPoint to the last item of (outline's values)
+                        set fresh to (((previousPoint's x != location's x) or (previousPoint's y != location's y)) or (previousPoint's z != location's z))
+                    if fresh:
+                        append location to (outline's values)
+                    # Leave the piece at its other end and enter the piece
+                    # sharing that end's edge.
+                    set exitSlot to (piece * 2) + (1 - (the remainder of entry divided by 2))
+                    set entry to the item at exitSlot in partners
+                    if (entry / 2) = firstPiece:
+                        set walking to false
+                set points to outline's values
+                if (the length of points) > 1:
+                    set closingPoint to the item at 0 in points
+                    set lastPoint to the last item of points
+                    if ((closingPoint's x = lastPoint's x) and (closingPoint's y = lastPoint's y)) and (closingPoint's z = lastPoint's z):
+                        remove the last item from points
+                # Loops thinner than the tolerance are where the body only
+                # touches the plane.
+                if (the length of points) >= 3:
+                    set doubledArea to the cad section doubled area of points about unitNormal
+                    if (the absolute value of doubledArea) > ((2.0 * tolerance) * (the cad section perimeter of points)):
+                        append outline to (result's loops's values)
+        free visited
+        free partners
+        free crossings
+        # Orient by nesting depth: even depth counter-clockwise, odd clockwise.
+        set loopCount to the length of (result's loops's values)
+        loop loopCursor from 0 to loopCount:
+            set points to (the item at loopCursor in (result's loops's values))'s values
+            set depth to 0
+            loop otherCursor from 0 to loopCount:
+                if otherCursor != loopCursor:
+                    if cad section point (the item at 0 in points) lies inside ((the item at otherCursor in (result's loops's values))'s values) on framePlane:
+                        set depth to depth + 1
+            set counterClockwise to (the cad section doubled area of points about unitNormal) > 0.0
+            if counterClockwise = ((the remainder of depth divided by 2) = 1):
+                set reversed to a cad topology list of a cad vector3
+                set back to (the length of points) - 1
+                loop while back >= 0:
+                    append (the item at back in points) to (reversed's values)
+                    set back to back - 1
+                replace item at index loopCursor in (result's loops's values) with reversed
+        return result

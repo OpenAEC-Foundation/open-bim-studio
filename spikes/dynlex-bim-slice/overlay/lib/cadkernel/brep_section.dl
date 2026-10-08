@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: MPL-2.0
+# Planar section of a closed B-rep body: the closed loops in which an infinite
+# plane meets the body's boundary, computed from the faces and edges directly
+# instead of splitting the body.
+#
+# This is a native DynLex extension of the port; the pinned Rust source has no
+# counterpart. It follows the source's plane slice in what it reports: a plane
+# that misses or only touches the body (every vertex within the operation
+# tolerance on one side) has no section. Where the slice divides a body of
+# planar faces bounded by line edges, the loops here bound the faces the slice
+# caps it with.
+#
+# Method. Every vertex is classified by its signed distance to the plane; a
+# vertex within the operation tolerance counts as lying on the positive side,
+# as if the plane were moved an infinitesimal distance towards the negative
+# side. An edge whose ends lie on different sides crosses the plane once; the
+# crossing is computed from the edge's own start and end, so both faces that
+# use the edge get the identical point. On each face the crossings are sorted
+# along the face's line of intersection with the plane and paired in turn,
+# which bounds the parts of that line inside the face, holes included. The
+# pieces meet at shared edges, which link them into closed loops without any
+# distance matching. Outer loops run counter-clockwise about the plane normal
+# and holes clockwise.
+#
+# Refused, with a snag code, are faces that are not planar, edges that are not
+# lines, a crossing face parallel to the plane, a face with an odd number of
+# crossings, and a boundary that does not close (an open or non-manifold body).
+# The pairing, linking and orientation live in `section_loops.dl`, shared with
+# the fast kernel's polyhedra.
+import lib/cadkernel/brep_bounds.dl
+import lib/cadkernel/section_loops.dl
+
+local function the cad section code of {cad edge key:edgeKey}:
+    execute:
+        set high to (edgeKey's index as a 64 bit integer) * ((65536 as a 64 bit integer) * (65536 as a 64 bit integer))
+        return high + (edgeKey's generation as a 64 bit integer)
+
+function the cad plane section of {cad body:sourceBody} by {cad plane:givenPlane}:
+    execute:
+        if (the cad count of sourceBody's faces) = 0:
+            return an empty cad section
+        set frame to the cad section frame of givenPlane
+        if frame's valid = false:
+            return a cad section refusal cad section invalid plane snag
+        set framePlane to frame's framePlane
+        set unitNormal to frame's unitNormal
+        set toleranceBodies to a list containing sourceBody
+        set tolerance to the cad operation tolerance of toleranceBodies
+        free toleranceBodies
+        # A plane that every vertex lies on one side of, within tolerance, does
+        # not divide the body.
+        set lowest to 1.0 / 0.0
+        set highest to 0.0 - (1.0 / 0.0)
+        set vertexKeys to the cad keys of (sourceBody's vertices)
+        loop vertexCursor from 0 to the length of vertexKeys:
+            set vertexNode to the cad node pointer for (the item at vertexCursor in vertexKeys) in (sourceBody's vertices)
+            set height to the cad dot of (the cad difference of vertexNode's point and framePlane's origin) and unitNormal
+            set lowest to the minimum of lowest and height
+            set highest to the maximum of highest and height
+        free vertexKeys
+        if (lowest >= (-tolerance)) or (highest <= tolerance):
+            return an empty cad section
+        set crossings to an empty list of a cad section crossing record
+        set faceKeys to the cad face keys of sourceBody
+        loop faceCursor from 0 to the length of faceKeys:
+            set faceNode to the cad node pointer for (the item at faceCursor in faceKeys) in sourceBody
+            set surfaceNode to the cad node pointer for faceNode's surface in sourceBody
+            set faceSurface to @intrinsic("dereference", surfaceNode)
+            if faceSurface's kind != 0:
+                free faceKeys
+                free crossings
+                return a cad section refusal cad section unsupported surface snag
+            set faceNormal to the cad normal of faceSurface's plane
+            if faceNormal's valid = false:
+                free faceKeys
+                free crossings
+                return a cad section refusal cad section unsupported surface snag
+            set lineDirection to the cad cross of unitNormal and faceNormal's value
+            set faceCrossings to an empty list of a cad section crossing record
+            loop ringCursor from 0 to the length of (faceNode's loops's values):
+                set ringNode to the cad node pointer for (the item at ringCursor in (faceNode's loops's values)) in sourceBody
+                loop useCursor from 0 to the length of (ringNode's coedges's values):
+                    set useNode to the cad node pointer for (the item at useCursor in (ringNode's coedges's values)) in sourceBody
+                    set edgeNode to the cad node pointer for useNode's edge in sourceBody
+                    set curveNode to the cad node pointer for edgeNode's curve in sourceBody
+                    if curveNode's kind != 0:
+                        free faceCrossings
+                        free faceKeys
+                        free crossings
+                        return a cad section refusal cad section unsupported curve snag
+                    set startPoint to (the cad node pointer for edgeNode's start in sourceBody)'s point
+                    set endPoint to (the cad node pointer for edgeNode's end in sourceBody)'s point
+                    set startHeight to the cad dot of (the cad difference of startPoint and framePlane's origin) and unitNormal
+                    set endHeight to the cad dot of (the cad difference of endPoint and framePlane's origin) and unitNormal
+                    add cad section crossing of edge (the cad section code of useNode's edge) from startPoint at startHeight to endPoint at endHeight along lineDirection within tolerance into faceCrossings
+            set snag to close cad section face faceCrossings along lineDirection into crossings
+            free faceCrossings
+            if snag != 0:
+                free faceKeys
+                free crossings
+                return a cad section refusal snag
+        free faceKeys
+        return the cad section loops of crossings on frame within tolerance
