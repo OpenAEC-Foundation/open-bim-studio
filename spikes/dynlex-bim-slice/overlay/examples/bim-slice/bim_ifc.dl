@@ -4,7 +4,10 @@
 # carry material layer sets; walls are extrusions of their junction-resolved
 # footprints with their type and material layer set usage; openings are
 # opening elements voiding their host and filled by a door or window; slabs
-# are extrusions of their outline down from their level. GlobalIds are
+# are extrusions of their outline down from their level. Linear members are
+# beams, columns and members (braces) and end plates are plates, each a
+# faceted B-rep of its evaluated solid, so that mitres and butt cuts come out
+# exactly; each member is associated with its type's material. GlobalIds are
 # derived from the stable element ids, so an unchanged element keeps its
 # GlobalId across exports.
 import examples/bim-slice/bim_evaluate.dl
@@ -15,20 +18,21 @@ class:
     patterns:
         [a|] bim step writer record
     members:
-        text as a string
+        # One line per entity, joined once at the end: appending to one
+        # growing string copied the whole file for every entity.
+        entityLines as the type of (a cad topology list of a string)
         nextEntity as an integer
 
 local function a new bim step writer:
     execute:
-        return @intrinsic("construct", a bim step writer record, the string form of "", 1)
+        return @intrinsic("construct", a bim step writer record, a cad topology list of a string, 1)
 
 # Appends one entity and returns its instance number.
 local function write bim entity {a string:body} to {a pointer to a bim step writer record:writer}:
     execute:
         set number to writer's nextEntity
         set writer's nextEntity to number + 1
-        set writer's text to (((writer's text + (the string form of "#")) + (the string form of number)) + (the string form of "=")) + body
-        set writer's text to writer's text + (the string form of ";\n")
+        append ((((the string form of "#") + (the string form of number)) + (the string form of "=")) + (body + (the string form of ";\n"))) to (writer's entityLines's values)
         return number
 
 local function the bim reference text of {integer:number}:
@@ -137,6 +141,71 @@ local function the bim ifc extrusion through {a pointer to a list:corners} depth
         set representationBody to ((representationBody + (the string form of ",'Body','SweptSolid',(")) + (the bim reference text of solid)) + (the string form of "))")
         set representation to write bim entity representationBody to writer
         return write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of representation)) + (the string form of "))")) to writer
+
+# A body representation: `shape` as a faceted B-rep, its loops as poly
+# loops (the first of each face its outer bound).
+local function the bim ifc brep of {fast polyhedron record:shape} in context {integer:context} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set pointNumbers to an empty list of an integer
+        loop cursor from 0 to the length of (shape's positions's values):
+            set location to the item at cursor in (shape's positions's values)
+            append (the bim ifc point location's x, location's y and location's z in writer) to pointNumbers
+        set faceList to the string form of ""
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set boundList to the string form of ""
+            loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                set first to the item at ringCursor in (shape's loopStarts's values)
+                set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                set loopText to the string form of ""
+                loop cursor from first to past:
+                    if cursor > first:
+                        set loopText to loopText + (the string form of ",")
+                    set loopText to loopText + (the bim reference text of (the item at (the item at cursor in (shape's indices's values)) in pointNumbers))
+                set polyLoop to write bim entity (((the string form of "IFCPOLYLOOP((") + loopText) + (the string form of "))")) to writer
+                set boundKind to the string form of "IFCFACEBOUND("
+                if ringCursor = face's firstLoop:
+                    set boundKind to the string form of "IFCFACEOUTERBOUND("
+                set bound to write bim entity ((boundKind + (the bim reference text of polyLoop)) + (the string form of ",.T.)")) to writer
+                if ringCursor > face's firstLoop:
+                    set boundList to boundList + (the string form of ",")
+                set boundList to boundList + (the bim reference text of bound)
+            set faceNumber to write bim entity (((the string form of "IFCFACE((") + boundList) + (the string form of "))")) to writer
+            if faceCursor > 0:
+                set faceList to faceList + (the string form of ",")
+            set faceList to faceList + (the bim reference text of faceNumber)
+        free pointNumbers
+        set shell to write bim entity (((the string form of "IFCCLOSEDSHELL((") + faceList) + (the string form of "))")) to writer
+        set facetedBrep to write bim entity (((the string form of "IFCFACETEDBREP(") + (the bim reference text of shell)) + (the string form of ")")) to writer
+        set representationBody to (the string form of "IFCSHAPEREPRESENTATION(") + (the bim reference text of context)
+        set representation to write bim entity (((representationBody + (the string form of ",'Body','Brep',(")) + (the bim reference text of facetedBrep)) + (the string form of "))")) to writer
+        return write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of representation)) + (the string form of "))")) to writer
+
+# The polyhedron of `solid`'s triangles, for writing a B-rep member (one cut
+# by its joints) as a faceted B-rep.
+local function the bim triangle polyhedron of {cad body:solid}:
+    execute:
+        set tessellated to the cad mesh of solid with maximum angle 0.3 within 0.001
+        set shape to an empty fast polyhedron
+        set target to the address of shape
+        loop cursor from 0 to the length of tessellated's positions:
+            ignore add fast position (the item at cursor in tessellated's positions) to target
+        set noHoles to an empty list of the type of (an empty list of an integer)
+        loop cursor from 0 to the length of tessellated's triangles:
+            set face to the item at cursor in tessellated's triangles
+            set a to the item at face's first in tessellated's positions
+            set b to the item at face's second in tessellated's positions
+            set c to the item at face's third in tessellated's positions
+            set normal to the cad normalization of (the cad cross of (the cad difference of b and a) and (the cad difference of c and a))
+            if normal's valid:
+                set ring to an empty list of an integer
+                append face's first to ring
+                append face's second to ring
+                append face's third to ring
+                add fast face ring with holes noHoles facing normal's value to target
+                free ring
+        free noHoles
+        return shape
 
 local function the bim ifc list of {a pointer to a list:numbers}:
     execute:
@@ -339,6 +408,81 @@ function the bim ifc text of {bim model record:modelValue}:
                 set slabBody to (((slabBody + (the bim label text of ((the string form of "Slab ") + (the string form of slabValue's id)))) + (the string form of ",$,$,")) + (the bim reference text of slabLocal)) + (the string form of ",")
                 append (write bim entity ((slabBody + (the bim reference text of slabShape)) + (the string form of ",$,.FLOOR.)")) to w) to containedNumbers
                 append levelFound's position to containedStoreys
+        # Linear members and their end plates, placed at the storey's origin
+        # with their solids in world coordinates; members of one material
+        # share one IfcMaterial.
+        set materialNames to an empty list of a string
+        set materialNumbers to an empty list of an integer
+        set materialMembers to an empty list of the type of (an empty list of an integer)
+        set jointIndex to the bim joint index of modelValue
+        loop cursor from 0 to the length of (modelValue's members's values):
+            set memberValue to the item at cursor in (modelValue's members's values)
+            set levelFound to the bim level index of (memberValue's levelId) in modelValue
+            set built to the bim member solid of (memberValue's id) in modelValue through jointIndex
+            if levelFound's valid and ((built's status = 0) or (built's status = 5)):
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                set faceted to built's shape
+                if built's fast = false:
+                    set faceted to the bim triangle polyhedron of (built's solid)
+                set memberShape to the bim ifc brep of faceted in context bodyContext with w
+                set memberLocal to the bim ifc placement at height (0.0 - elevation) relative to (the item at levelFound's position in storeyPlacements) in w
+                set memberType to the item at (the bim member type index of (memberValue's typeId) in modelValue)'s position in (modelValue's memberTypes's values)
+                set entityName to the string form of "IFCBEAM("
+                set predefined to the string form of ",$,.BEAM.)"
+                set noun to the string form of "Beam "
+                if memberValue's role = bim column role:
+                    set entityName to the string form of "IFCCOLUMN("
+                    set predefined to the string form of ",$,.COLUMN.)"
+                    set noun to the string form of "Column "
+                if memberValue's role = bim brace role:
+                    set entityName to the string form of "IFCMEMBER("
+                    set predefined to the string form of ",$,.BRACE.)"
+                    set noun to the string form of "Brace "
+                set memberBody to (entityName + (the bim global id for kind 12 of (memberValue's id))) + (the string form of ",$,")
+                set memberBody to (((memberBody + (the bim label text of (noun + (the string form of (memberValue's id))))) + (the string form of ",$,")) + (the bim label text of (memberType's profile's name))) + (the string form of ",")
+                set memberBody to (((memberBody + (the bim reference text of memberLocal)) + (the string form of ",")) + (the bim reference text of memberShape)) + predefined
+                set memberNumber to write bim entity memberBody to w
+                append memberNumber to containedNumbers
+                append levelFound's position to containedStoreys
+                set slot to -1
+                loop materialCursor from 0 to the length of materialNames:
+                    if (the item at materialCursor in materialNames) = memberType's material:
+                        set slot to materialCursor
+                if slot < 0:
+                    append memberType's material to materialNames
+                    set materialCategory to the string form of "'Steel'"
+                    set drawingMaterial to the bim drawing material of (memberValue's id) in modelValue
+                    if drawingMaterial = (the string form of "timber"):
+                        set materialCategory to the string form of "'Wood'"
+                    if drawingMaterial = (the string form of "concrete"):
+                        set materialCategory to the string form of "'Concrete'"
+                    append (write bim entity ((((the string form of "IFCMATERIAL(") + (the bim label text of (memberType's material))) + (the string form of ",$,")) + (materialCategory + (the string form of ")"))) to w) to materialNumbers
+                    append (an empty list of an integer) to materialMembers
+                    set slot to (the length of materialNames) - 1
+                append memberNumber to (the item at slot in materialMembers)
+        # Each joint with parts of its own as an element assembly of them.
+        loop cursor from 0 to the length of (modelValue's joints's values):
+            set jointValue to the item at cursor in (modelValue's joints's values)
+            set built to the bim joint solid of jointValue in modelValue through jointIndex
+            set anchor to the bim member choice of (the item at 0 in (jointValue's members's values)) in modelValue
+            if (built's status = 0) and anchor's valid:
+                set levelFound to the bim level index of (anchor's member's levelId) in modelValue
+                set partShape to the bim ifc brep of (built's shape) in context bodyContext with w
+                set partLocal to the bim ifc placement at height (0.0 - anchor's elevation) relative to (the item at levelFound's position in storeyPlacements) in w
+                set connectionName to (the item at (the bim connection type index of (jointValue's typeId) in modelValue)'s position in (modelValue's connectionTypes's values))'s name
+                set assemblyBody to ((the string form of "IFCELEMENTASSEMBLY(") + (the bim global id for kind 13 of (jointValue's id))) + (the string form of ",$,")
+                set assemblyBody to (((assemblyBody + (the bim label text of ((the string form of "Connection ") + (the string form of (jointValue's id))))) + (the string form of ",$,")) + (the bim label text of connectionName)) + (the string form of ",")
+                set assemblyBody to (((assemblyBody + (the bim reference text of partLocal)) + (the string form of ",")) + (the bim reference text of partShape)) + (the string form of ",$,.NOTDEFINED.,.USERDEFINED.)")
+                append (write bim entity assemblyBody to w) to containedNumbers
+                append levelFound's position to containedStoreys
+        loop materialCursor from 0 to the length of materialNames:
+            set associatesBody to (the string form of "IFCRELASSOCIATESMATERIAL(") + (the bim global id for kind 30 of ((w's nextEntity) as a 64 bit integer))
+            set associatesBody to ((associatesBody + (the string form of ",$,$,$,")) + (the bim ifc list of (the item at materialCursor in materialMembers))) + (the string form of ",")
+            ignore write bim entity ((associatesBody + (the bim reference text of (the item at materialCursor in materialNumbers))) + (the string form of ")")) to w
+            free (the item at materialCursor in materialMembers)
+        free materialNames
+        free materialNumbers
+        free materialMembers
         # Grids: one IfcGrid of all grid lines, lettered lines as U axes and
         # numbered lines as V axes, contained in the lowest storey. IFC4 needs
         # both, so a model with grids in one direction only writes none.
@@ -405,4 +549,5 @@ function the bim ifc text of {bim model record:modelValue}:
         free layerSetNumbers
         set header to the string form of "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');\n"
         set header to header + (the string form of "FILE_NAME('bim-slice.ifc','',(''),(''),'DynLex BIM slice','DynLex BIM slice','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n")
-        return (header + writer's text) + (the string form of "ENDSEC;\nEND-ISO-10303-21;\n")
+        set entities to (writer's entityLines's values) joined with ""
+        return (header + entities) + (the string form of "ENDSEC;\nEND-ISO-10303-21;\n")

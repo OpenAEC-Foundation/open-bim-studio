@@ -25,7 +25,8 @@
 #
 # Started with --example [X Y], it opens with an example building, its plan
 # coordinates moved by X and Y metres; with --generate N, with an imaginary
-# tower of at least N walls.
+# tower of at least N walls; with --steel-example [BAYS ROWS STOREYS], with a
+# steel frame building.
 import examples/bim-slice/bim_editor.dl
 import lib/vulkan/graphics.dl
 import examples/bim-slice/bim_ifcx_read.dl
@@ -202,6 +203,8 @@ local function the bim hatch bands of {bim cut source record:source} for {bim ed
         set single to a cad topology list of a bim hatch band record
         if (the bim slab index of source's id in modelValue)'s valid:
             append (the bim whole hatch band of (the string form of "concrete")) to (single's values)
+        else if ((the bim member index of source's id in modelValue)'s valid) or ((the bim joint index of source's id in modelValue)'s valid):
+            append (the bim whole hatch band of (the bim drawing material of (source's id) in modelValue)) to (single's values)
         else:
             append (the bim whole hatch band of (the string form of "")) to (single's values)
         return single
@@ -490,6 +493,43 @@ local function append bim circle at {cad vector2:centre} radius {a 64 bit floati
             append (a cad vector2 with x (centre's x + (circleRadius * (the cosine of toAngle))) and y (centre's y + (circleRadius * (the sine of toAngle)))) to pairs
 
 # A grid head: a circle with the grid's name, at `centre` in pixels.
+# The active storey's beams and braces as seen from above, dashed (they lie
+# over the plan's cut): the two edges of each one's section either side of
+# its axis, and the axis itself. Columns show by their cut.
+local function draw bim members in plan of {bim editor record:editor} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set segments to an empty list of a cad vector2
+        loop cursor from 0 to the length of (modelValue's members's values):
+            set memberValue to the item at cursor in (modelValue's members's values)
+            set category to the bim category of element memberValue's id in modelValue
+            if (memberValue's levelId = editor's levelId) and (bim category category is visible in editor's planRules):
+                set choice to the bim member choice of memberValue's id in modelValue
+                set first to a cad vector2 with x memberValue's start's x and y memberValue's start's y
+                set second to a cad vector2 with x memberValue's finish's x and y memberValue's finish's y
+                set run to the cad distance from first to second
+                if choice's valid and (run > 1e-6):
+                    set alongX to (second's x - first's x) / run
+                    set alongY to (second's y - first's y) / run
+                    set half to choice's profile's width * 0.5
+                    loop side from 0 to 3:
+                        set shift to 0.0
+                        if side = 1:
+                            set shift to half
+                        if side = 2:
+                            set shift to 0.0 - half
+                        set offsetX to (0.0 - alongY) * shift
+                        set offsetY to alongX * shift
+                        # Dashes 0.15 long with 0.1 gaps.
+                        set position to 0.0
+                        loop while position < run:
+                            set dashEnd to the minimum of run and (position + 0.15)
+                            append (the bim pixel of (a cad vector2 with x ((first's x + (alongX * position)) + offsetX) and y ((first's y + (alongY * position)) + offsetY)) through transform) to segments
+                            append (the bim pixel of (a cad vector2 with x ((first's x + (alongX * dashEnd)) + offsetX) and y ((first's y + (alongY * dashEnd)) + offsetY)) through transform) to segments
+                            set position to position + 0.25
+        record bim strokes segments coloured 70, 78 and 92 wide 1.0 on canvas
+        free segments
+
 local function draw bim grid head {a string:name} at {cad vector2:centre} faint {boolean:faded} on {a pointer to a bim canvas record:canvas}:
     execute:
         set ring to an empty list of a cad vector2
@@ -751,6 +791,19 @@ local function draw bim selection in plan of {bim editor record:editor} through 
             use vertex color red 36, green 120 and blue 220 in frame
             add bim stroke from (the bim pixel of leftPoint through transform) to (the bim pixel of rightPoint through transform) wide 6.0 in frame
             finish triangles in frame
+        if editor's selectionKind = bim member picked:
+            set found to the bim member index of editor's selectionId in modelValue
+            if found's valid = false:
+                return nothing
+            set memberValue to the item at found's position in (modelValue's members's values)
+            set startPixel to the bim pixel of (a cad vector2 with x memberValue's start's x and y memberValue's start's y) through transform
+            set finishPixel to the bim pixel of (a cad vector2 with x memberValue's finish's x and y memberValue's finish's y) through transform
+            start triangles in frame
+            use vertex color red 36, green 120 and blue 220 in frame
+            add bim stroke from startPixel to finishPixel wide 4.0 in frame
+            add bim square at startPixel sized 9.0 in frame
+            add bim square at finishPixel sized 9.0 in frame
+            finish triangles in frame
         if editor's selectionKind = bim space picked:
             set chosen to the bim selected space of editor
             if chosen's valid = false:
@@ -999,6 +1052,9 @@ local function draw bim gesture of {bim editor record:editor} in {bim screen lay
         if (editor's tool = bim wall tool) and editor's chainActive:
             use vertex color red 220, green 120 and blue 36 in frame
             add bim stroke from (the bim plan pixel of editor's chainStart in layout with camera) to snapPixel wide 2.0 in frame
+        if ((editor's tool = bim beam tool) or (editor's tool = bim brace tool)) and editor's memberActive:
+            use vertex color red 220, green 120 and blue 36 in frame
+            add bim stroke from (the bim plan pixel of editor's memberStart in layout with camera) to snapPixel wide 2.0 in frame
         # The sketch tools' rubber bands: the line chain, the rectangle, and a
         # move from its base point.
         set chain to editor's sketchChain's values
@@ -2236,6 +2292,28 @@ else if (arguments' length > 1) and ((the argument at 0 in arguments) = (the str
     set wantedWalls to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at 1 in arguments))
     ignore add bim generated tower of wantedWalls walls with 50 rooms a side to (the address of editor)
     set fitting to true
+else if (arguments' length > 0) and ((the argument at 0 in arguments) = (the string form of "--connections-example")):
+    # The steel connection templates on a small structure (see
+    # `add bim connection showcase`).
+    ignore add bim connection showcase to (the address of editor)
+    set fitting to true
+else if (arguments' length > 0) and ((the argument at 0 in arguments) = (the string form of "--timber-concrete-example")):
+    # A concrete storey with a timber storey on it (see
+    # `add bim timber and concrete example`).
+    ignore add bim timber and concrete example to (the address of editor)
+    set fitting to true
+else if (arguments' length > 0) and ((the argument at 0 in arguments) = (the string form of "--steel-example")):
+    # --steel-example [BAYS ROWS STOREYS] builds a steel frame building
+    # (see `add bim steel example`), 12 x 10 bays over 4 storeys by default.
+    set bayCount to 12
+    set rowCount to 10
+    set storeyCount to 4
+    if arguments' length > 3:
+        set bayCount to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at 1 in arguments))
+        set rowCount to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at 2 in arguments))
+        set storeyCount to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at 3 in arguments))
+    ignore add bim steel example of bayCount by rowCount bays over storeyCount storeys to (the address of editor)
+    set fitting to true
 else if arguments' length > 0:
     if (the argument at 0 in arguments) != (the string form of "--example"):
         set filePath to the argument at 0 in arguments
@@ -2377,6 +2455,19 @@ loop while window remains open:
             set editor's tool to bim opening tool
             set editor's chainActive to false
             set editor's message to the string form of "Opening: click a wall"
+        if uiHit's action = bim browser profile family:
+            set families to the bim profile families of editor
+            set familyIndex to uiHit's actionId as an integer
+            if (familyIndex >= 0) and (familyIndex < the length of families):
+                toggle bim editor profile family (the item at familyIndex in families) in (the address of editor)
+            free families
+        if uiHit's action = bim browser profile:
+            choose bim editor profile (uiHit's actionId as an integer) in (the address of editor)
+        if uiHit's action = bim browser connection:
+            choose bim editor connection (uiHit's actionId as an integer) in (the address of editor)
+        if uiHit's action = bim browser parameter:
+            set parameterCode to uiHit's actionId as an integer
+            step bim editor parameter (parameterCode / 2) up ((the remainder of parameterCode divided by 2) = 1) in (the address of editor)
         if uiHit's action = bim browser component:
             set editor's placeComponentId to uiHit's actionId
             set editor's tool to bim place tool
@@ -2606,6 +2697,7 @@ loop while window remains open:
         if bim category bim wall category is visible in editor's planRules:
             draw bim storey below of editor through planTransform on (the address of planCanvas)
         draw bim hatched cut faces of editor's plan for editor through planTransform as section false following editor's planRules on (the address of planCanvas)
+        draw bim members in plan of editor through planTransform on (the address of planCanvas)
         draw bim openings in plan of editor through planTransform on (the address of planCanvas)
         draw bim grids in plan of editor through planTransform on (the address of planCanvas)
         draw bim sketches of editor through planTransform on (the address of planCanvas) using typeface
@@ -2655,6 +2747,8 @@ loop while window remains open:
         replay bim depth recording viewRecording flat in frame
         set selectedForGpu to the bim refused id
         if (((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim imported picked)) or ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)):
+            set selectedForGpu to editor's selectionId
+        if (editor's selectionKind = bim member picked) or (editor's selectionKind = bim joint picked):
             set selectedForGpu to editor's selectionId
         set bim gpu camera camera in layout for gpuScene selecting selectedForGpu on window
         if viewMode != bim wireframe view mode:

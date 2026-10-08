@@ -21,9 +21,13 @@ references and undo, and is a change re-evaluated fast enough to follow a gestur
 | Associative dimension | references to semantic features (a wall side, an opening edge), never to derived topology |
 | IFC export | IFC4: spatial structure, wall/opening types and occurrences, voids, extruded bodies |
 | Snapping | end point, mid point, horizontal/vertical alignment and grid inference in the plan editor |
+| Linear members | beams, columns and braces with a profile from a 1236-profile library (688 steel profiles with root and toe radii and tapered flanges; timber and concrete sections from size series), swept along their axis |
+| Member joints | butt (primary member through), mitre, and a parametric end plate (plate size and bolt holes from formulas over the secondary profile); which ends meet follows from the members' positions; incremental re-evaluation through the joints |
 
 **Not in scope**: other element kinds, multiple storeys, IFC import, sheets,
-scale (R-12, R-20), GPU instancing.
+scale (R-12, R-20), GPU instancing; for members: curved members, cope cuts
+and notches, welds, and joints of more than two members at one point (the
+first joint at an end decides its cut).
 
 **Layout.** The DynLex code is kept here as an overlay on a DynLex checkout (the
 `cadkernel` fork with a built compiler):
@@ -63,6 +67,23 @@ git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-compiler-local.patch
 ```
 
 `patches/dynlex-shader-extensions.patch` is needed only to rebuild the shaders.
+
+`patches/dynlex-pattern-family-cache.patch` makes the compiler compute each
+pattern family once while it resolves precedence, instead of once per
+precedence edge (and the lower family once per member of the higher one).
+The output is unchanged; without it the editor's compile time grows
+quadratically with the number of records sharing member names, and with the
+framing records added it did not finish within ten minutes on a laptop
+(measured: with the patch, 231 s at -O0, 4.4 GB peak). Apply it with the local
+patch above.
+
+**Profile library.** `overlay/examples/bim-slice/bim_profiles.dl` is generated
+by `tools/generate_profiles.py` from the steel profile database of
+[Open FEM Studio](https://github.com/OpenAEC-Foundation/open-fem-studio)
+(`src-tauri/crates/steel-profiles/data/profiles.json`); only the
+cross-section dimensions are taken. The timber and concrete sections are not
+from a catalogue: the generator writes them from size series (commonly
+produced sizes), documented in `timber_and_concrete()`.
 
 **How to run.** Set `DYNLEX_ROOT` to a DynLex checkout at commit `bc653ad`, with its
 compiler built at `build/dynlex`, then:

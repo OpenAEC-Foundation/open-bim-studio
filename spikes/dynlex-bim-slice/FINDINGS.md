@@ -335,6 +335,68 @@ Limits of this evidence:
 Hosts and openings are still found by scanning the openings list for each examined
 wall, which is O(openings) per examined wall.
 
+## Linear members and joints — built and measured
+
+*Measured* by `tests/framing.dl`, `framing_evaluate.dl` and
+`framing_editor.dl` on a different machine from the rest of this note (AMD
+Ryzen 7 3700U, 13 GB, Linux Mint 22.3), with the compiler of `README.md` plus
+`patches/dynlex-pattern-family-cache.patch`.
+
+**Geometry.** A member is its profile's section swept along its axis between
+two end planes (`lib/fastkernel/member.dl`); every side face stays planar, so
+the fast kernel builds butt cuts, mitres and plate setbacks without booleans.
+Every solid in the three tests is closed (`the fast flaw of` is 0).
+
+| Check | Result |
+|---|---|
+| Free IPE 300 beam, 6 m, square ends | volume 0.032478 m³ = section area x length (same to 6 decimals) |
+| Mitred corner, IPE 300 column and beam | volumes unchanged by the mitre (0.016239 and 0.032478 m³), as the halving plane through the axis requires |
+| Butt corner | column runs on to z = 3.150 (half the beam's depth past the node), beam starts at the column's face, x = 0.150; swapped: the reverse |
+| End plate in a T, IPE 300 into an HEA 200 | beam starts at face + gap + plate (x = 20.117); plate 170 x 320 x 15 mm with 6 holes of 22 mm, volume 0.000783 m³ against 0.000782 for the exact circles |
+| Section areas against the profile database | IPE 300 5413 mm² (database 5381, +0.6 %), HEA 200 5429 (5383, +0.9 %), UNP 200 3239 (3220), L 100x100x10 1923.5 (1920), CHS 168.3x8.0 4002.9 (exact circle 4028, −0.6 %): the root radii in three straight pieces per quarter turn, tubes in 32 |
+
+**Incremental evaluation** (`framing_evaluate.dl`, two portal frames, 7
+members and 6 joints): after every step the updated evaluation equals a fresh
+one element by element (signatures and statuses). Elements rebuilt per step:
+
+| Step | Rebuilt (of 13) |
+|---|---|
+| unchanged | 0 |
+| a column and its beam's end moved 0.5 m | 2 (the other column's cut depends only on the beam's direction and section) |
+| the tie beam raised 0.2 m | 3 (the beam and both plates; the columns run through) |
+| thicker end plates | 3 (both plates and the beam) |
+| heavier columns (HEA 240 to HEB 300) | 8 (the mitred beam is not rebuilt: a mitre does not depend on the section) |
+| mitres made butt joints | 3 |
+| a beam deleted with its two plates | 0 |
+| the same model with a new journal | 0 |
+
+**Scale** (`framing_scale.dl` at `-O2`, the editor's steel example: HEB 300
+columns through every storey, IPE 450 and IPE 360 beams butt jointed to them,
+IPE 300 secondary beams on end plates, CHS braces; wall times):
+
+| Building | Members / joints | First evaluation | Inner column moved 0.1 m | End plates thicker | Save / read | IFC4 export |
+|---|---|---|---|---|---|---|
+| 2 x 2 bays, 1 storey | 27 / 34 | 1.9 ms | 0.2 ms (5 rebuilt) | 0.6 ms (12) | 0.2 / 0.2 ms | 0.38 MB |
+| 4 x 3 bays, 2 storeys | 110 / 178 | 10.8 ms | 0.4 ms (9) | 4.2 ms (72) | 0.5 / 0.6 ms | 1.9 MB, 54 ms |
+| 12 x 10 bays, 4 storeys | 1679 / 3070 | 246.5 ms (4749 solids, none failing) | 1.1 ms (17) | 58.3 ms (1440) | 6.0 / 7.0 ms | 35 MB, 1.05 s |
+
+Two scaling faults were found by this test and fixed: a member found its
+joints by scanning every joint (now `the bim joint index of`, a per-member
+index built once per evaluation and per export), and the IFC writer appended
+every entity to one growing string, copying the whole file each time (1.9 MB
+took 74.9 s; it now collects lines and joins them once: 54 ms).
+
+**Not done.** Members are not exported to IFC5 (IfcX). Connection types are
+offered as four templates; their parameters cannot yet be edited in the
+editor. At a point where three members meet, the first joint at an end
+decides its cut. No cope cuts, notches, welds or curved members.
+
+**Compile time.** The editor's compile with the framing records did not finish
+within 300–600 s per test at `-O0` with the unpatched compiler; it spent the time
+in `resolvePatterns`, recomputing pattern families per precedence edge (gdb
+backtraces in `patternResolution.cpp`). With the family cache it compiles in
+231 s at `-O0` (4.4 GB peak).
+
 ## DynLex observations
 
 - **Language pitfalls found here.**

@@ -9,6 +9,8 @@ import examples/bim-slice/bim_ifcx.dl
 import examples/bim-slice/bim_scene.dl
 import examples/bim-slice/bim_file.dl
 import examples/bim-slice/bim_view.dl
+import examples/bim-slice/bim_profiles.dl
+import examples/bim-slice/bim_connection_library.dl
 
 function bim select tool:
     replacement:
@@ -69,6 +71,21 @@ function bim trim tool:
 function bim extend tool:
     replacement:
         16
+# Steel framing: a column at a click, beams in a chain at the storey's top,
+# a brace from the storey's floor at its first click to its top at the
+# second, and a joint between two members clicked in turn.
+function bim column tool:
+    replacement:
+        17
+function bim beam tool:
+    replacement:
+        18
+function bim brace tool:
+    replacement:
+        19
+function bim join tool:
+    replacement:
+        20
 
 # Key codes follow the windowing layer: printable keys are their upper-case
 # ASCII code.
@@ -203,6 +220,19 @@ class:
         turnStart as a 64 bit floating-point number
         boundaryId as a 64 bit integer
         offsetDistance as a 64 bit floating-point number
+        # Steel framing: the profile library, the member type and connection
+        # type new members and joints get, the profile family open in the
+        # project browser, a beam chain or brace under way from `memberStart`,
+        # and the first member clicked for a joint.
+        profiles as the type of (a cad topology list of a bim profile record)
+        memberTypeId as a 64 bit integer
+        connectionTypeId as a 64 bit integer
+        profileFamily as a string
+        memberActive as a boolean
+        memberStart as a cad vector2
+        joinFirstId as a 64 bit integer
+        # The members clicked so far for a joint of more than two members.
+        joinMembers as the type of (a cad topology list of a 64 bit integer)
 
 # POSIX `struct timespec` on 64-bit targets: two 64-bit fields.
 class:
@@ -240,7 +270,7 @@ function a new bim editor:
         commit bim transaction in (the address of documentValue)
         set origin to a cad vector2 with x 0.0 and y 0.0
         set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "")
-        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0)
+        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0, the bim steel profiles, the bim refused id, the bim refused id, the string form of "", false, origin, the bim refused id, a cad topology list of a 64 bit integer)
 
 # ---------------------------------------------------------------- snapping
 
@@ -323,6 +353,15 @@ local function the bim snap segments near {cad vector2:location} within {a 64 bi
             if (the cad distance from location to the segment from gridValue's start to gridValue's finish) <= tolerance:
                 append gridValue's start to result
                 append gridValue's finish to result
+        # The axes of the active storey's beams and braces seen from above.
+        loop cursor from 0 to the length of (modelValue's members's values):
+            set memberValue to the item at cursor in (modelValue's members's values)
+            if memberValue's levelId = editor's levelId:
+                set first to a cad vector2 with x memberValue's start's x and y memberValue's start's y
+                set second to a cad vector2 with x memberValue's finish's x and y memberValue's finish's y
+                if ((the cad distance from first to second) > 1e-9) and ((the cad distance from location to the segment from first to second) <= tolerance):
+                    append first to result
+                    append second to result
         return result
 
 # The point drawing tracks from: the last point of the chain, rectangle,
@@ -337,6 +376,8 @@ function the bim tracking origin of {bim editor record:editor}:
             return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true)
         if (editor's tool = bim grid tool) and editor's gridActive:
             return @intrinsic("construct", a bim snap candidate record, editor's gridStart, the string form of "", 0, 0.0, true)
+        if ((editor's tool = bim beam tool) or (editor's tool = bim brace tool)) and editor's memberActive:
+            return @intrinsic("construct", a bim snap candidate record, editor's memberStart, the string form of "", 0, 0.0, true)
         set moving to ((editor's tool = bim move tool) or (editor's tool = bim copy tool)) or ((editor's tool = bim rotate tool) or (editor's tool = bim mirror tool))
         if moving and (editor's moveStage >= 2):
             return @intrinsic("construct", a bim snap candidate record, editor's moveBase, the string form of "", 0, 0.0, true)
@@ -364,6 +405,12 @@ function the bim snap of {cad vector2:location} in {bim editor record:editor} wi
                 offer bim snap wallValue's finish labelled (the string form of "End point") ranked 0 near location within tolerance to best
                 offer bim snap (the bim middle of wall wallValue) labelled (the string form of "Mid point") ranked 1 near location within tolerance to best
         free candidates
+        # Member ends of the active storey in plan: a column is its foot.
+        loop cursor from 0 to the length of (modelValue's members's values):
+            set memberValue to the item at cursor in (modelValue's members's values)
+            if memberValue's levelId = editor's levelId:
+                offer bim snap (a cad vector2 with x memberValue's start's x and y memberValue's start's y) labelled (the string form of "End point") ranked 0 near location within tolerance to best
+                offer bim snap (a cad vector2 with x memberValue's finish's x and y memberValue's finish's y) labelled (the string form of "End point") ranked 0 near location within tolerance to best
         set segments to the bim snap segments near location within tolerance for editor
         set tracker to the bim tracking origin of editor
         set cursor to 0
@@ -534,7 +581,10 @@ local function the bim failure count of {bim evaluation record:evaluation}:
     execute:
         set failures to 0
         loop cursor from 0 to the length of (evaluation's elements's values):
-            if (the item at cursor in (evaluation's elements's values))'s status != 0:
+            # Status 4 is a joint without a part of its own and 5 a member
+            # missing a cut the kernel refused: neither is a failure.
+            set status to (the item at cursor in (evaluation's elements's values))'s status
+            if ((status != 0) and (status != 4)) and (status != 5):
                 set failures to failures + 1
         return failures
 
@@ -1064,6 +1114,11 @@ function select bim editor element at {cad vector2:location} in {a pointer to a 
         if sketchId != the bim refused id:
             select bim editor bim sketch picked numbered sketchId in editor
             return nothing
+        set memberId to the bim member near location in (@intrinsic("dereference", editor)) within editor's pickTolerance
+        if memberId != the bim refused id:
+            if bim category (the bim category of element memberId in modelValue) is visible in editor's planRules:
+                select bim editor bim member picked numbered memberId in editor
+                return nothing
         if editor's hoverWall != the bim refused id:
             set host to the item at (the bim wall index of editor's hoverWall in modelValue)'s position in (modelValue's walls's values)
             set along to the bim offset along host nearest location
@@ -1377,6 +1432,8 @@ function the bim length {a 64 bit floating-point number:value} in units {integer
 function the bim selection description of {bim editor record:editor}:
     execute:
         set modelValue to editor's documentValue's current
+        if (editor's selectionKind = bim member picked) or (editor's selectionKind = bim joint picked):
+            return the bim framing description of editor
         if editor's selectionKind = bim instance picked:
             set found to the bim instance index of editor's selectionId in modelValue
             if found's valid = false:
@@ -1893,6 +1950,9 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
             commit bim transaction in (the address of (editor's documentValue))
             set editor's moveStage to 0
             set editor's message to the string form of "Moved"
+            return nothing
+        if (((editor's tool = bim column tool) or (editor's tool = bim beam tool)) or (editor's tool = bim brace tool)) or (editor's tool = bim join tool):
+            press bim editor framing at point in editor
             return nothing
         if editor's tool = bim wall tool:
             if editor's chainActive:
@@ -2788,6 +2848,749 @@ function create bim editor similar in {a pointer to a bim editor record:editor}:
             return nothing
         set editor's message to the string form of "Create similar (CS): select an element first"
 
+# ---------------------------------------------------------------- steel framing
+
+# The profile families of the library, in library order.
+function the bim profile families of {bim editor record:editor}:
+    execute:
+        set listed to an empty list of a string
+        loop cursor from 0 to the length of (editor's profiles's values):
+            set family to (the item at cursor in (editor's profiles's values))'s family
+            set count to the length of listed
+            if count = 0:
+                append family to listed
+            else if (the item at (count - 1) in listed) != family:
+                append family to listed
+        return listed
+
+# The member type named after `profile`, added in the open transaction when
+# the model has none.
+local function the bim editor member type for {bim profile record:profile} in {a pointer to a bim editor record:editor}:
+    execute:
+        loop cursor from 0 to the length of (editor's documentValue's current's memberTypes's values):
+            set memberType to the item at cursor in (editor's documentValue's current's memberTypes's values)
+            if memberType's name = profile's name:
+                return memberType's id
+        set material to profile's material
+        if (the length of material) = 0:
+            set material to the string form of "S235"
+        return add bim member type named profile's name with profile profile in material to (the address of (editor's documentValue's current))
+
+local function the bim editor connection type for {bim connection type record:template} in {a pointer to a bim editor record:editor}:
+    execute:
+        loop cursor from 0 to the length of (editor's documentValue's current's connectionTypes's values):
+            set existingType to the item at cursor in (editor's documentValue's current's connectionTypes's values)
+            if existingType's name = template's name:
+                return existingType's id
+        return add bim connection type template to (the address of (editor's documentValue's current))
+
+# Within the open transaction: a member type (an IPE 300 at first) and a
+# connection type (a butt joint at first) for new members and joints.
+local function ensure bim editor framing types in {a pointer to a bim editor record:editor}:
+    execute:
+        if (the bim member type index of editor's memberTypeId in editor's documentValue's current)'s valid = false:
+            set editor's memberTypeId to the bim editor member type for (the bim steel profile named (the string form of "IPE 300") in (editor's profiles's values)) in editor
+        if (the bim connection type index of editor's connectionTypeId in editor's documentValue's current)'s valid = false:
+            set editor's connectionTypeId to the bim editor connection type for (the item at 0 in (the bim connection templates)) in editor
+
+# The name of the profile new members get.
+function the bim current profile name of {bim editor record:editor}:
+    execute:
+        set found to the bim member type index of editor's memberTypeId in editor's documentValue's current
+        if found's valid:
+            return (the item at found's position in (editor's documentValue's current's memberTypes's values))'s name
+        return the string form of "IPE 300"
+
+# The name of the connection type new joints get.
+function the bim current connection name of {bim editor record:editor}:
+    execute:
+        set found to the bim connection type index of editor's connectionTypeId in editor's documentValue's current
+        if found's valid:
+            return (the item at found's position in (editor's documentValue's current's connectionTypes's values))'s name
+        return the string form of "Butt"
+
+# Opens profile family `family` in the project browser, or closes it.
+function toggle bim editor profile family {a string:familyName} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's profileFamily = familyName:
+            set editor's profileFamily to the string form of ""
+        else:
+            set editor's profileFamily to familyName
+
+# Makes library profile `index` the one new members get; a selected member
+# takes it, in one undoable transaction.
+function choose bim editor profile {integer:index} in {a pointer to a bim editor record:editor}:
+    execute:
+        if (index < 0) or (index >= the length of (editor's profiles's values)):
+            return nothing
+        set chosenProfile to the item at index in (editor's profiles's values)
+        set existing to the bim refused id
+        loop cursor from 0 to the length of (editor's documentValue's current's memberTypes's values):
+            set memberType to the item at cursor in (editor's documentValue's current's memberTypes's values)
+            if memberType's name = chosenProfile's name:
+                set existing to memberType's id
+        set memberSelected to (editor's selectionKind = bim member picked) and ((the bim member index of editor's selectionId in editor's documentValue's current)'s valid)
+        if (existing != the bim refused id) and (memberSelected = false):
+            set editor's memberTypeId to existing
+            set editor's message to (the string form of "Profile ") + chosenProfile's name
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set typeId to the bim editor member type for chosenProfile in editor
+        set editor's memberTypeId to typeId
+        if memberSelected:
+            ignore set bim member editor's selectionId type to typeId in (the address of (editor's documentValue's current))
+            ignore settle bim editor change in editor described ((the string form of "Member ") + ((the string form of editor's selectionId) + ((the string form of " is now ") + chosenProfile's name))) or refused as (the string form of "the chosenProfile does not fit its joints")
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to (the string form of "Profile ") + chosenProfile's name
+
+# Makes connection template `index` the one new joints get. A selected
+# joint of as many members takes it; a selected member gets a new joint of
+# it when it joins one member (a base plate). One undoable transaction.
+function choose bim editor connection {integer:index} in {a pointer to a bim editor record:editor}:
+    execute:
+        set templates to the bim connection templates
+        if (index < 0) or (index >= the length of templates):
+            free templates
+            return nothing
+        set template to the item at index in templates
+        free templates
+        begin bim transaction in (the address of (editor's documentValue))
+        set typeId to the bim editor connection type for template in editor
+        set editor's connectionTypeId to typeId
+        if (editor's selectionKind = bim joint picked) and ((the bim joint index of editor's selectionId in editor's documentValue's current)'s valid):
+            if set bim joint editor's selectionId type to typeId in (the address of (editor's documentValue's current)):
+                ignore settle bim editor change in editor described ((the string form of "Joint ") + ((the string form of editor's selectionId) + ((the string form of " is now ") + template's name))) or refused as (the string form of "the connection does not fit the members")
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to ((the string form of "Connection ") + template's name) + (the string form of ": it joins another number of members than the selected joint")
+            return nothing
+        if ((editor's selectionKind = bim member picked) and (template's roles = 1)) and ((the bim member index of editor's selectionId in editor's documentValue's current)'s valid):
+            set fresh to add bim joint typed typeId on editor's selectionId to (the address of (editor's documentValue's current))
+            if fresh != the bim refused id:
+                if settle bim editor change in editor described ((the string form of "Joint ") + ((the string form of fresh) + ((the string form of ": ") + template's name))) or refused as (the string form of "the connection does not fit the member"):
+                    select bim editor bim joint picked numbered fresh in editor
+                return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to (the string form of "Connection ") + template's name
+
+# Changes parameter `parameterIndex` of the selected joint's connection type
+# by one step up or down (not below 0), in one undoable transaction; every
+# joint of the type follows.
+function step bim editor parameter {integer:parameterIndex} up {boolean:upward} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind != bim joint picked:
+            set editor's message to the string form of "Select a joint first"
+            return nothing
+        set modelValue to editor's documentValue's current
+        set jointFound to the bim joint index of editor's selectionId in modelValue
+        if jointFound's valid = false:
+            return nothing
+        set typeId to (the item at jointFound's position in (modelValue's joints's values))'s typeId
+        set typeFound to the bim connection type index of typeId in modelValue
+        if typeFound's valid = false:
+            return nothing
+        set connection to the item at typeFound's position in (modelValue's connectionTypes's values)
+        if (parameterIndex < 0) or (parameterIndex >= the length of (connection's parameters's values)):
+            return nothing
+        set entry to the item at parameterIndex in (connection's parameters's values)
+        set changed to entry's value - entry's step
+        if upward:
+            set changed to entry's value + entry's step
+        if changed < 0.0:
+            set changed to 0.0
+        refresh bim editor editor
+        begin bim transaction in (the address of (editor's documentValue))
+        if set bim connection type typeId parameter parameterIndex to changed in (the address of (editor's documentValue's current)):
+            set joined to 0
+            loop cursor from 0 to the length of (modelValue's joints's values):
+                if (the item at cursor in (modelValue's joints's values))'s typeId = typeId:
+                    set joined to joined + 1
+            ignore settle bim editor change in editor described ((connection's name + (the string form of ": ")) + ((entry's name + (the string form of " ")) + ((the bim parameter text of changed named entry's name) + ((the string form of ", joints ") + (the string form of joined))))) or refused as (the string form of "the parameter does not fit")
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+
+# A parameter's value as shown: a count as a whole number, a length in
+# millimetres.
+function the bim parameter text of {a 64 bit floating-point number:amount} named {a string:label}:
+    execute:
+        set lowered to the lowercase form of label
+        set buffer to a new string buffer containing 32 bytes
+        if ((lowered contains "rows") or (lowered contains "columns")) or (lowered contains "count"):
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.0f", amount)
+            return the substring of buffer from 0 spanning written bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.0f mm", amount * 1000.0)
+        return the substring of buffer from 0 spanning written bytes
+
+# The height of the active storey.
+local function the bim editor storey height of {bim editor record:editor}:
+    execute:
+        set found to the bim level index of editor's levelId in editor's documentValue's current
+        if found's valid:
+            return (the item at found's position in (editor's documentValue's current's levels's values))'s height
+        return 3.0
+
+# The member of the active storey nearest to `location` in plan, within
+# `tolerance` of its section's outline (its axis seen from above, widened by
+# half its section); the refused id when there is none.
+function the bim member near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set best to the bim refused id
+        set bestGap to 1.0 / 0.0
+        loop cursor from 0 to the length of (modelValue's members's values):
+            set memberValue to the item at cursor in (modelValue's members's values)
+            if memberValue's levelId = editor's levelId:
+                set choice to the bim member choice of memberValue's id in modelValue
+                if choice's valid:
+                    set first to a cad vector2 with x memberValue's start's x and y memberValue's start's y
+                    set second to a cad vector2 with x memberValue's finish's x and y memberValue's finish's y
+                    set breadth to (the maximum of choice's profile's width and choice's profile's depth) * 0.5
+                    set gap to the cad distance from location to first
+                    if (the cad distance from first to second) > 1e-9:
+                        set gap to the cad distance from location to the segment from first to second
+                        set breadth to choice's profile's width * 0.5
+                    if (gap <= (tolerance + breadth)) and (gap < bestGap):
+                        set best to memberValue's id
+                        set bestGap to gap
+        return best
+
+# Joins member `memberId`, in the open transaction, to the members it meets
+# with the current connection type: at each of its ends one member whose
+# end lies there (a column first; a column is then the primary member) or
+# whose axis it ends on (that member is primary), and every member whose
+# end lies on its own axis (it is then primary). Returns how many joints it
+# made.
+local function join bim editor member {a 64 bit integer:memberId} in {a pointer to a bim editor record:editor}:
+    execute:
+        set made to 0
+        set target to the address of (editor's documentValue's current)
+        set newChoice to the bim member choice of memberId in (@intrinsic("dereference", target))
+        if newChoice's valid = false:
+            return 0
+        # Columns first, so that at a corner the column takes the joint.
+        set others to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (target's members's values):
+            set otherValue to the item at cursor in (target's members's values)
+            if (otherValue's id != memberId) and (otherValue's role = bim column role):
+                append otherValue's id to others
+        loop cursor from 0 to the length of (target's members's values):
+            set otherValue to the item at cursor in (target's members's values)
+            if (otherValue's id != memberId) and (otherValue's role != bim column role):
+                append otherValue's id to others
+        set startTaken to false
+        set finishTaken to false
+        loop cursor from 0 to the length of others:
+            set otherId to the item at cursor in others
+            set otherChoice to the bim member choice of otherId in (@intrinsic("dereference", target))
+            if otherChoice's valid:
+                set primary to the bim refused id
+                set secondary to the bim refused id
+                set meeting to the bim meeting of otherChoice and newChoice
+                if meeting's kind != 0:
+                    set taken to startTaken
+                    if meeting's secondAtFinish:
+                        set taken to finishTaken
+                    if taken = false:
+                        set primary to otherId
+                        set secondary to memberId
+                        if ((meeting's kind = 1) and (newChoice's member's role = bim column role)) and (otherChoice's member's role != bim column role):
+                            set primary to memberId
+                            set secondary to otherId
+                        if meeting's secondAtFinish:
+                            set finishTaken to true
+                        else:
+                            set startTaken to true
+                else if (the bim meeting of newChoice and otherChoice)'s kind = 2:
+                    set primary to memberId
+                    set secondary to otherId
+                if primary != the bim refused id:
+                    if (add bim joint typed editor's connectionTypeId between primary and secondary to target) != the bim refused id:
+                        set made to made + 1
+        free others
+        return made
+
+# Adds a member of `role` from `startPoint` to `finishPoint` (relative to the
+# active storey) with the current profile, joined to the members it meets,
+# in one undoable transaction.
+local function add bim editor member as {integer:role} from {cad vector3:startPoint} to {cad vector3:finishPoint} in {a pointer to a bim editor record:editor}:
+    execute:
+        refresh bim editor editor
+        begin bim transaction in (the address of (editor's documentValue))
+        ensure bim editor framing types in editor
+        set fresh to add bim member typed editor's memberTypeId on editor's levelId as role from startPoint to finishPoint to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: a member needs a length"
+            return fresh
+        set joints to join bim editor member fresh in editor
+        set noun to the string form of "Beam "
+        if role = bim column role:
+            set noun to the string form of "Column "
+        if role = bim brace role:
+            set noun to the string form of "Brace "
+        set description to (noun + (the string form of fresh)) + ((the string form of ": ") + (the bim current profile name of (@intrinsic("dereference", editor))))
+        if joints > 0:
+            set description to description + ((the string form of ", joints ") + (the string form of joints))
+        if settle bim editor change in editor described description or refused as (the string form of "the member does not fit its joints"):
+            return fresh
+        return the bim refused id
+
+# A click with a framing tool at `point`.
+local function press bim editor framing at {cad vector2:point} in {a pointer to a bim editor record:editor}:
+    execute:
+        set top to the bim editor storey height of (@intrinsic("dereference", editor))
+        if editor's tool = bim column tool:
+            ignore add bim editor member as bim column role from (a cad vector3 with x point's x, y point's y and z 0.0) to (a cad vector3 with x point's x, y point's y and z top) in editor
+            return nothing
+        if editor's tool = bim beam tool:
+            if editor's memberActive:
+                if (add bim editor member as bim beam role from (a cad vector3 with x editor's memberStart's x, y editor's memberStart's y and z top) to (a cad vector3 with x point's x, y point's y and z top) in editor) != the bim refused id:
+                    set editor's memberStart to point
+            else:
+                set editor's memberActive to true
+                set editor's memberStart to point
+                set editor's message to the string form of "Beam: click its end (Esc ends the chain)"
+            return nothing
+        if editor's tool = bim brace tool:
+            if editor's memberActive:
+                set editor's memberActive to false
+                ignore add bim editor member as bim brace role from (a cad vector3 with x editor's memberStart's x, y editor's memberStart's y and z 0.0) to (a cad vector3 with x point's x, y point's y and z top) in editor
+            else:
+                set editor's memberActive to true
+                set editor's memberStart to point
+                set editor's message to the string form of "Brace: click its top end"
+            return nothing
+        if editor's tool = bim join tool:
+            set picked to the bim member near point in (@intrinsic("dereference", editor)) within editor's pickTolerance
+            if picked = the bim refused id:
+                set editor's message to the string form of "Join: click a member"
+                return nothing
+            refresh bim editor editor
+            begin bim transaction in (the address of (editor's documentValue))
+            ensure bim editor framing types in editor
+            set typeFound to the bim connection type index of editor's connectionTypeId in editor's documentValue's current
+            set roles to (the item at typeFound's position in (editor's documentValue's current's connectionTypes's values))'s roles
+            if (editor's joinMembers's values) contains picked:
+                roll back bim transaction in (the address of (editor's documentValue))
+                return nothing
+            append picked to (editor's joinMembers's values)
+            set chosen to the length of (editor's joinMembers's values)
+            if chosen = 2:
+                set existing to the bim joint between (the item at 0 in (editor's joinMembers's values)) and picked in editor's documentValue's current
+                if existing's valid and (roles = 2):
+                    roll back bim transaction in (the address of (editor's documentValue))
+                    set editor's joinMembers to a cad topology list of a 64 bit integer
+                    set jointId to (the item at existing's position in (editor's documentValue's current's joints's values))'s id
+                    select bim editor bim joint picked numbered jointId in editor
+                    set editor's message to (the string form of "Joint ") + ((the string form of jointId) + (the string form of " selected: choose a connection, swap it or change its parameters"))
+                    return nothing
+            if chosen < roles:
+                roll back bim transaction in (the address of (editor's documentValue))
+                select bim editor bim member picked numbered picked in editor
+                set editor's message to (the string form of "Join: member ") + ((the string form of picked) + ((the string form of " is role ") + ((the string form of (chosen - 1)) + ((the string form of "; click the next of ") + (the string form of roles)))))
+                return nothing
+            set fresh to add bim joint typed editor's connectionTypeId among (editor's joinMembers's values) to (the address of (editor's documentValue's current))
+            set editor's joinMembers to a cad topology list of a 64 bit integer
+            if fresh = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Refused: those members cannot be joined"
+                return nothing
+            if settle bim editor change in editor described ((the string form of "Joint ") + ((the string form of fresh) + ((the string form of ": ") + (the bim current connection name of (@intrinsic("dereference", editor)))))) or refused as (the string form of "the joint does not fit the members"):
+                select bim editor bim joint picked numbered fresh in editor
+            return nothing
+
+
+# ---------------------------------------------------------------- steel example
+
+# The member type and connection template named `wanted`, in the open
+# transaction.
+local function the bim example member type {a string:wanted} in {a pointer to a bim editor record:editor}:
+    execute:
+        return the bim editor member type for (the bim steel profile named wanted in (editor's profiles's values)) in editor
+
+local function the bim example connection {integer:templateIndex} in {a pointer to a bim editor record:editor}:
+    execute:
+        set offered to the bim connection templates
+        set chosen to the item at templateIndex in offered
+        free offered
+        return the bim editor connection type for chosen in editor
+
+# A steel frame building as one undoable transaction: `bayCount` x
+# `rowCount` bays of 6 by 5 m over `storeyCount` storeys of 4 m (levels of their own above the
+# active storey's elevation). HEB 300 columns run through every storey;
+# each storey's top carries IPE 450 main beams along x and IPE 360 edge
+# beams along y, butt jointed to the columns, IPE 300 secondary beams
+# halfway each x bay with end plates into the main beams, and CHS braces in
+# the first bay of both long sides. Returns the number of members made.
+function add bim steel example of {integer:bayCount} by {integer:rowCount} bays over {integer:storeyCount} storeys to {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set columnType to the bim example member type (the string form of "HEB 300") in editor
+        set mainType to the bim example member type (the string form of "IPE 450") in editor
+        set edgeType to the bim example member type (the string form of "IPE 360") in editor
+        set secondaryType to the bim example member type (the string form of "IPE 300") in editor
+        set braceType to the bim example member type (the string form of "CHS 168.3x8.0") in editor
+        set butt to the bim example connection 0 in editor
+        set plated to the bim example connection 2 in editor
+        set footing to the bim example connection 6 in editor
+        set baseElevation to 0.0
+        set baseFound to the bim level index of editor's levelId in (@intrinsic("dereference", target))
+        if baseFound's valid:
+            set baseElevation to (the item at baseFound's position in (target's levels's values))'s elevation
+        set storeyHeight to 4.0
+        set levels to an empty list of a 64 bit integer
+        loop storey from 0 to storeyCount:
+            set levelName to (the string form of "Steel level ") + (the string form of (storey + 1))
+            append (add bim level named levelName at (baseElevation + (storeyHeight * (storey as a 64 bit floating-point number))) with height storeyHeight to target) to levels
+        set firstLevel to the item at 0 in levels
+        set columnHeight to storeyHeight * (storeyCount as a 64 bit floating-point number)
+        set made to 0
+        # Columns, one per grid node, indexed column = i * (rowCount + 1) + j.
+        set columns to an empty list of a 64 bit integer
+        loop i from 0 to bayCount + 1:
+            loop j from 0 to rowCount + 1:
+                set x to 6.0 * (i as a 64 bit floating-point number)
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                set column to add bim member typed columnType on firstLevel as bim column role from (a cad vector3 with x x, y y and z 0.0) to (a cad vector3 with x x, y y and z columnHeight) to target
+                append column to columns
+                ignore add bim joint typed footing on column to target
+                set made to made + 1
+        loop storey from 0 to storeyCount:
+            set levelId to the item at storey in levels
+            # Main beams along x, indexed main = i * (rowCount + 1) + j.
+            set mains to an empty list of a 64 bit integer
+            loop i from 0 to bayCount:
+                loop j from 0 to rowCount + 1:
+                    set y to 5.0 * (j as a 64 bit floating-point number)
+                    set beam to add bim member typed mainType on levelId as bim beam role from (a cad vector3 with x (6.0 * (i as a 64 bit floating-point number)), y y and z storeyHeight) to (a cad vector3 with x (6.0 * ((i + 1) as a 64 bit floating-point number)), y y and z storeyHeight) to target
+                    append beam to mains
+                    ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + j) in columns) and beam to target
+                    ignore add bim joint typed butt between (the item at (((i + 1) * (rowCount + 1)) + j) in columns) and beam to target
+                    set made to made + 1
+            # Edge beams along y.
+            loop i from 0 to bayCount + 1:
+                loop j from 0 to rowCount:
+                    set x to 6.0 * (i as a 64 bit floating-point number)
+                    set beam to add bim member typed edgeType on levelId as bim beam role from (a cad vector3 with x x, y (5.0 * (j as a 64 bit floating-point number)) and z storeyHeight) to (a cad vector3 with x x, y (5.0 * ((j + 1) as a 64 bit floating-point number)) and z storeyHeight) to target
+                    ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + j) in columns) and beam to target
+                    ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + (j + 1)) in columns) and beam to target
+                    set made to made + 1
+            # Secondary beams halfway each x bay, framing into the main beams.
+            loop i from 0 to bayCount:
+                loop j from 0 to rowCount:
+                    set x to (6.0 * (i as a 64 bit floating-point number)) + 3.0
+                    set beam to add bim member typed secondaryType on levelId as bim beam role from (a cad vector3 with x x, y (5.0 * (j as a 64 bit floating-point number)) and z storeyHeight) to (a cad vector3 with x x, y (5.0 * ((j + 1) as a 64 bit floating-point number)) and z storeyHeight) to target
+                    ignore add bim joint typed plated between (the item at ((i * (rowCount + 1)) + j) in mains) and beam to target
+                    ignore add bim joint typed plated between (the item at ((i * (rowCount + 1)) + (j + 1)) in mains) and beam to target
+                    set made to made + 1
+            free mains
+            # Braces in the first bay of both long sides.
+            loop side from 0 to 2:
+                set j to 0
+                if side = 1:
+                    set j to rowCount
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                set brace to add bim member typed braceType on levelId as bim brace role from (a cad vector3 with x 0.0, y y and z 0.0) to (a cad vector3 with x 6.0, y y and z storeyHeight) to target
+                if storey > 0:
+                    ignore add bim joint typed butt between (the item at j in columns) and brace to target
+                ignore add bim joint typed butt between (the item at ((rowCount + 1) + j) in columns) and brace to target
+                set made to made + 1
+        free columns
+        free levels
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to ((the string form of "Steel example: ") + (the string form of made)) + ((the string form of " members, ") + ((the string form of (the length of (target's joints's values))) + (the string form of " joints")))
+        return made
+
+# The connection type from the template named `wanted`, in the open
+# transaction.
+local function the bim example connection named {a string:wanted} in {a pointer to a bim editor record:editor}:
+    execute:
+        set offered to the bim connection templates
+        set chosen to the item at 0 in offered
+        loop cursor from 0 to the length of offered:
+            if (the item at cursor in offered)'s name = wanted:
+                set chosen to the item at cursor in offered
+        free offered
+        return the bim editor connection type for chosen in editor
+
+# A small steel structure showing the steel connection templates, as one
+# undoable transaction, on a level of its own: six HEB 240 columns 4 m high
+# on base plates in two rows 5 m apart, 6 m bays; IPE 360 main beams along
+# x joined by an end plate with stiffeners, an end plate without, a butt
+# joint and a mitre at the corner column; IPE 300 edge beams along y on fin
+# plates; IPE 240 secondary beams halfway each bay on a fin plate (bolted
+# through their web) and on a thin end plate; CHS braces on gussets (slotted
+# into the tubes). Returns the number of members made.
+function add bim connection showcase to {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set baseElevation to 0.0
+        set baseFound to the bim level index of editor's levelId in (@intrinsic("dereference", target))
+        if baseFound's valid:
+            set baseElevation to (the item at baseFound's position in (target's levels's values))'s elevation
+        set levelId to add bim level named (the string form of "Connections") at baseElevation with height 4.0 to target
+        set columnType to the bim example member type (the string form of "HEB 240") in editor
+        set mainType to the bim example member type (the string form of "IPE 360") in editor
+        set edgeType to the bim example member type (the string form of "IPE 300") in editor
+        set secondaryType to the bim example member type (the string form of "IPE 240") in editor
+        set braceType to the bim example member type (the string form of "CHS 114.3x6.3") in editor
+        set footing to the bim example connection named (the string form of "Base plate 25, 4 M24") in editor
+        set stiffened to the bim example connection named (the string form of "End plate 20 + stiffeners") in editor
+        set plated to the bim example connection named (the string form of "End plate 20, 4x2 M24") in editor
+        set thin to the bim example connection named (the string form of "End plate 15, 2x2 M24") in editor
+        set butt to the bim example connection named (the string form of "Butt") in editor
+        set mitre to the bim example connection named (the string form of "Mitre") in editor
+        set fin to the bim example connection named (the string form of "Fin plate 10, 3 M20") in editor
+        set gusset to the bim example connection named (the string form of "Gusset 12") in editor
+        set made to 0
+        # Columns at x 0, 6, 12 and y 0, 5, each on a base plate.
+        set columns to an empty list of a 64 bit integer
+        loop i from 0 to 3:
+            loop j from 0 to 2:
+                set x to 6.0 * (i as a 64 bit floating-point number)
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                set column to add bim member typed columnType on levelId as bim column role from (a cad vector3 with x x, y y and z 0.0) to (a cad vector3 with x x, y y and z 4.0) to target
+                append column to columns
+                ignore add bim joint typed footing on column to target
+                set made to made + 1
+        # Main beams along x at the top: row y 0 on end plates (with
+        # stiffeners in the first bay), row y 5 on a butt joint and a mitre.
+        set mains to an empty list of a 64 bit integer
+        loop j from 0 to 2:
+            loop i from 0 to 2:
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                set beam to add bim member typed mainType on levelId as bim beam role from (a cad vector3 with x (6.0 * (i as a 64 bit floating-point number)), y y and z 4.0) to (a cad vector3 with x (6.0 * ((i + 1) as a 64 bit floating-point number)), y y and z 4.0) to target
+                append beam to mains
+                set first to the item at ((i * 2) + j) in columns
+                set second to the item at (((i + 1) * 2) + j) in columns
+                set made to made + 1
+                if j = 0:
+                    if i = 0:
+                        ignore add bim joint typed stiffened between first and beam to target
+                        ignore add bim joint typed stiffened between second and beam to target
+                    else:
+                        ignore add bim joint typed plated between first and beam to target
+                        ignore add bim joint typed plated between second and beam to target
+                else:
+                    ignore set bim member beam justification to bim centre justification in target
+                    ignore add bim joint typed butt between first and beam to target
+                    if i = 1:
+                        ignore add bim joint typed mitre between second and beam to target
+                    else:
+                        ignore add bim joint typed butt between second and beam to target
+        # Edge beams along y at x 0, 6 and 12, on fin plates.
+        loop i from 0 to 3:
+            set x to 6.0 * (i as a 64 bit floating-point number)
+            set beam to add bim member typed edgeType on levelId as bim beam role from (a cad vector3 with x x, y 0.0 and z 3.5) to (a cad vector3 with x x, y 5.0 and z 3.5) to target
+            ignore add bim joint typed fin between (the item at (i * 2) in columns) and beam to target
+            ignore add bim joint typed fin between (the item at ((i * 2) + 1) in columns) and beam to target
+            set made to made + 1
+        # Secondary beams halfway each bay between the main beams: a fin plate
+        # in the first bay, a thin end plate in the second.
+        loop i from 0 to 2:
+            set x to (6.0 * (i as a 64 bit floating-point number)) + 3.0
+            set beam to add bim member typed secondaryType on levelId as bim beam role from (a cad vector3 with x x, y 0.0 and z 4.0) to (a cad vector3 with x x, y 5.0 and z 4.0) to target
+            set joinType to fin
+            if i = 1:
+                set joinType to thin
+            ignore add bim joint typed joinType between (the item at i in mains) and beam to target
+            ignore add bim joint typed joinType between (the item at (2 + i) in mains) and beam to target
+            set made to made + 1
+        # A brace in the first bay of the y 5 row, from a column's foot to the
+        # next column's top, on gussets.
+        set brace to add bim member typed braceType on levelId as bim brace role from (a cad vector3 with x 0.0, y 5.0 and z 0.0) to (a cad vector3 with x 6.0, y 5.0 and z 4.0) to target
+        ignore add bim joint typed gusset between (the item at 1 in columns) and brace to target
+        ignore add bim joint typed gusset between (the item at 3 in columns) and brace to target
+        set made to made + 1
+        free columns
+        free mains
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to ((the string form of "Connection showcase: ") + (the string form of made)) + ((the string form of " members, ") + ((the string form of (the length of (target's joints's values))) + (the string form of " connections")))
+        return made
+
+# One storey of a frame on level `levelId`, `storeyHeight` high, over
+# `bayCount` x `rowCount` bays of 6 by 5 m: columns from the level up, main
+# beams along x and edge beams along y at its top butt jointed to the
+# columns, secondary beams halfway each x bay butt jointed to the main
+# beams, and braces in the first bay of both long sides. Profiles are named
+# by `profileNames` (column, main, edge, secondary, brace). Returns the
+# number of members made.
+local function add bim frame storey on {a 64 bit integer:levelId} high {a 64 bit floating-point number:storeyHeight} over {integer:bayCount} by {integer:rowCount} with {a pointer to a list:profileNames} joined by {integer:mainTemplate} and {integer:secondaryTemplate} to {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set columnType to the bim example member type (the item at 0 in profileNames) in editor
+        set mainType to the bim example member type (the item at 1 in profileNames) in editor
+        set edgeType to the bim example member type (the item at 2 in profileNames) in editor
+        set secondaryType to the bim example member type (the item at 3 in profileNames) in editor
+        set braceType to the bim example member type (the item at 4 in profileNames) in editor
+        set butt to the bim example connection mainTemplate in editor
+        set secondaryJoint to the bim example connection secondaryTemplate in editor
+        set braceJoint to the bim example connection 0 in editor
+        set made to 0
+        set columns to an empty list of a 64 bit integer
+        loop i from 0 to bayCount + 1:
+            loop j from 0 to rowCount + 1:
+                set x to 6.0 * (i as a 64 bit floating-point number)
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                append (add bim member typed columnType on levelId as bim column role from (a cad vector3 with x x, y y and z 0.0) to (a cad vector3 with x x, y y and z storeyHeight) to target) to columns
+                set made to made + 1
+        set mains to an empty list of a 64 bit integer
+        loop i from 0 to bayCount:
+            loop j from 0 to rowCount + 1:
+                set y to 5.0 * (j as a 64 bit floating-point number)
+                set beam to add bim member typed mainType on levelId as bim beam role from (a cad vector3 with x (6.0 * (i as a 64 bit floating-point number)), y y and z storeyHeight) to (a cad vector3 with x (6.0 * ((i + 1) as a 64 bit floating-point number)), y y and z storeyHeight) to target
+                append beam to mains
+                ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + j) in columns) and beam to target
+                ignore add bim joint typed butt between (the item at (((i + 1) * (rowCount + 1)) + j) in columns) and beam to target
+                set made to made + 1
+        loop i from 0 to bayCount + 1:
+            loop j from 0 to rowCount:
+                set x to 6.0 * (i as a 64 bit floating-point number)
+                set beam to add bim member typed edgeType on levelId as bim beam role from (a cad vector3 with x x, y (5.0 * (j as a 64 bit floating-point number)) and z storeyHeight) to (a cad vector3 with x x, y (5.0 * ((j + 1) as a 64 bit floating-point number)) and z storeyHeight) to target
+                ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + j) in columns) and beam to target
+                ignore add bim joint typed butt between (the item at ((i * (rowCount + 1)) + (j + 1)) in columns) and beam to target
+                set made to made + 1
+        loop i from 0 to bayCount:
+            loop j from 0 to rowCount:
+                set x to (6.0 * (i as a 64 bit floating-point number)) + 3.0
+                set beam to add bim member typed secondaryType on levelId as bim beam role from (a cad vector3 with x x, y (5.0 * (j as a 64 bit floating-point number)) and z storeyHeight) to (a cad vector3 with x x, y (5.0 * ((j + 1) as a 64 bit floating-point number)) and z storeyHeight) to target
+                ignore add bim joint typed secondaryJoint between (the item at ((i * (rowCount + 1)) + j) in mains) and beam to target
+                ignore add bim joint typed secondaryJoint between (the item at ((i * (rowCount + 1)) + (j + 1)) in mains) and beam to target
+                set made to made + 1
+        loop side from 0 to 2:
+            set j to 0
+            if side = 1:
+                set j to rowCount
+            set y to 5.0 * (j as a 64 bit floating-point number)
+            set brace to add bim member typed braceType on levelId as bim brace role from (a cad vector3 with x 0.0, y y and z 0.0) to (a cad vector3 with x 6.0, y y and z storeyHeight) to target
+            ignore add bim joint typed braceJoint between (the item at ((rowCount + 1) + j) in columns) and brace to target
+            set made to made + 1
+        free columns
+        free mains
+        return made
+
+# A building of a concrete storey with a timber storey on it, as one
+# undoable transaction: 6 x 4 bays of 6 by 5 m, storeys of 4 m. The concrete
+# storey has 400x400 columns and 300x600 and 300x500 beams (C30/37); the
+# timber storey GL24h columns and beams, sawn C24 secondary beams and
+# braces. Returns the number of members made.
+function add bim timber and concrete example to {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set baseElevation to 0.0
+        set baseFound to the bim level index of editor's levelId in (@intrinsic("dereference", target))
+        if baseFound's valid:
+            set baseElevation to (the item at baseFound's position in (target's levels's values))'s elevation
+        set concreteLevel to add bim level named (the string form of "Concrete storey") at baseElevation with height 4.0 to target
+        set timberLevel to add bim level named (the string form of "Timber storey") at (baseElevation + 4.0) with height 4.0 to target
+        set names to an empty list of a string
+        append (the string form of "Concrete 400x400") to names
+        append (the string form of "Concrete 300x600") to names
+        append (the string form of "Concrete 300x500") to names
+        append (the string form of "Concrete 250x450") to names
+        append (the string form of "Concrete 250x250") to names
+        set made to add bim frame storey on concreteLevel high 4.0 over 6 by 4 with names joined by 11 and 0 to editor
+        clear names
+        append (the string form of "GL24h 200x200") to names
+        append (the string form of "GL24h 160x480") to names
+        append (the string form of "GL24h 140x400") to names
+        append (the string form of "Timber 71x221") to names
+        append (the string form of "Timber 96x96") to names
+        set made to made + (add bim frame storey on timberLevel high 4.0 over 6 by 4 with names joined by 8 and 10 to editor)
+        free names
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to ((the string form of "Timber and concrete example: ") + (the string form of made)) + ((the string form of " members, ") + ((the string form of (the length of (target's joints's values))) + (the string form of " joints")))
+        return made
+
+# The selected member turned a quarter turn about its axis, its
+# justification cycled, or the selected joint's primary member swapped.
+local function adjust bim editor framing by command {integer:code} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if (code = 2104) and (editor's selectionKind = bim joint picked):
+            refresh bim editor editor
+            begin bim transaction in (the address of (editor's documentValue))
+            if swap bim joint editor's selectionId in (the address of (editor's documentValue's current)):
+                ignore settle bim editor change in editor described ((the string form of "Joint ") + ((the string form of editor's selectionId) + (the string form of " swapped"))) or refused as (the string form of "the swapped joint does not fit")
+            else:
+                roll back bim transaction in (the address of (editor's documentValue))
+            return nothing
+        if editor's selectionKind != bim member picked:
+            set editor's message to the string form of "Select a member first"
+            return nothing
+        set found to the bim member index of editor's selectionId in modelValue
+        if found's valid = false:
+            return nothing
+        set memberValue to the item at found's position in (modelValue's members's values)
+        refresh bim editor editor
+        begin bim transaction in (the address of (editor's documentValue))
+        set changed to false
+        set description to the string form of ""
+        if code = 2105:
+            set turned to memberValue's roll + 1.5707963267948966
+            if turned >= 6.283185307179586:
+                set turned to turned - 6.283185307179586
+            set changed to set bim member memberValue's id roll to turned in (the address of (editor's documentValue's current))
+            set description to (the string form of "Member ") + ((the string form of memberValue's id) + (the string form of " turned a quarter"))
+        if code = 2106:
+            set following to the remainder of (memberValue's justification + 1) divided by 3
+            set changed to set bim member memberValue's id justification to following in (the address of (editor's documentValue's current))
+            set names to an empty list of a string
+            append (the string form of "centred on its axis") to names
+            append (the string form of "below its axis") to names
+            append (the string form of "above its axis") to names
+            set description to (the string form of "Member ") + ((the string form of memberValue's id) + ((the string form of " now ") + (the item at following in names)))
+            free names
+        if changed:
+            ignore settle bim editor change in editor described description or refused as (the string form of "the member does not fit its joints")
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+
+# What the properties panel says about a selected member or joint; empty for
+# another selection.
+function the bim framing description of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim member picked:
+            set choice to the bim member choice of editor's selectionId in modelValue
+            if choice's valid = false:
+                return the string form of ""
+            set noun to the string form of "Beam "
+            if choice's member's role = bim column role:
+                set noun to the string form of "Column "
+            if choice's member's role = bim brace role:
+                set noun to the string form of "Brace "
+            set run to the cad length of (the cad difference of (the bim world finish of choice) and (the bim world start of choice))
+            set typeFound to the bim member type index of choice's member's typeId in modelValue
+            set material to (the item at typeFound's position in (modelValue's memberTypes's values))'s material
+            set text to (noun + (the string form of choice's member's id)) + ((the string form of ": ") + choice's profile's name)
+            set text to (text + (the string form of ", ")) + material
+            set text to (text + (the string form of ", length ")) + (the bim length run in units editor's lengthUnit)
+            set joined to 0
+            loop cursor from 0 to the length of (modelValue's joints's values):
+                set jointValue to the item at cursor in (modelValue's joints's values)
+                if bim joint jointValue joins choice's member's id:
+                    set joined to joined + 1
+            return (text + (the string form of ", joints ")) + (the string form of joined)
+        if editor's selectionKind = bim joint picked:
+            set found to the bim joint index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set jointValue to the item at found's position in (modelValue's joints's values)
+            set typeFound to the bim connection type index of jointValue's typeId in modelValue
+            set text to (the string form of "Joint ") + (the string form of jointValue's id)
+            if typeFound's valid:
+                set text to (text + (the string form of ": ")) + (the item at typeFound's position in (modelValue's connectionTypes's values))'s name
+            set text to text + (the string form of ", members")
+            loop participant from 0 to the length of (jointValue's members's values):
+                set text to (text + (the string form of " ")) + (the string form of (the item at participant in (jointValue's members's values)))
+            return text
+        return the string form of ""
+
 function type bim editor key {integer:code} in {a pointer to a bim editor record:editor}:
     execute:
         # While a text is written, keys only edit it.
@@ -2880,6 +3683,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set editor's moveStage to 0
             set editor's sketchChain to a cad topology list of a cad vector2
             set editor's chainActive to false
+            set editor's memberActive to false
+            set editor's joinFirstId to the bim refused id
+            set editor's joinMembers to a cad topology list of a 64 bit integer
             set editor's sectionActive to false
             set editor's gridActive to false
             set editor's selectionKind to bim nothing picked
@@ -2948,6 +3754,30 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             if code = 2014:
                 set editor's tool to bim offset tool
                 set editor's message to ((the string form of "Offset ") + (the bim length editor's offsetDistance in units editor's lengthUnit)) + (the string form of ": type a distance, or click a wall or a line")
+            return nothing
+        # Steel framing (BIM tab): column, beam and brace tools, the join
+        # tool, and swapping, turning and justifying the selection.
+        if (code >= 2100) and (code <= 2103):
+            set editor's chainActive to false
+            set editor's memberActive to false
+            set editor's joinFirstId to the bim refused id
+            set editor's moveStage to 0
+            set profileName to the bim current profile name of (@intrinsic("dereference", editor))
+            if code = 2100:
+                set editor's tool to bim column tool
+                set editor's message to (the string form of "Column ") + (profileName + (the string form of ": click where"))
+            if code = 2101:
+                set editor's tool to bim beam tool
+                set editor's message to (the string form of "Beam ") + (profileName + (the string form of ": click its start"))
+            if code = 2102:
+                set editor's tool to bim brace tool
+                set editor's message to (the string form of "Brace ") + (profileName + (the string form of ": click its foot"))
+            if code = 2103:
+                set editor's tool to bim join tool
+                set editor's message to (the string form of "Join (") + ((the bim current connection name of (@intrinsic("dereference", editor))) + (the string form of "): click the member that runs through"))
+            return nothing
+        if (code >= 2104) and (code <= 2106):
+            adjust bim editor framing by command code in editor
             return nothing
         # The project's length units (Manage tab).
         if (code >= 2050) and (code <= 2052):
@@ -3077,7 +3907,8 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                     return nothing
             set doomedKind to bim nothing picked
             set doomedId to the bim refused id
-            if ((((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim opening picked)) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim grid picked)) or ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)):
+            set framingPicked to (editor's selectionKind = bim member picked) or (editor's selectionKind = bim joint picked)
+            if (((((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim opening picked)) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim grid picked)) or ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked))) or framingPicked:
                 set doomedKind to editor's selectionKind
                 set doomedId to editor's selectionId
             else if editor's hoverWall != the bim refused id:
@@ -3097,6 +3928,10 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set removed to delete bim sketch doomedId from (the address of (editor's documentValue's current))
             else if doomedKind = bim instance picked:
                 set removed to delete bim instance doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim member picked:
+                set removed to delete bim member doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim joint picked:
+                set removed to delete bim joint doomedId from (the address of (editor's documentValue's current))
             else:
                 set removed to delete bim opening doomedId from (the address of (editor's documentValue's current))
             if removed:
@@ -3117,7 +3952,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's message to the string form of "Export failed"
             return nothing
         if code = 88:
-            if write bim text (the bim ifc text of editor's documentValue's current) to file (the string form of "bim-slice.ifc"):
+            if write bim text (the bim ifc text of (editor's documentValue's current)) to file (the string form of "bim-slice.ifc"):
                 set editor's message to the string form of "Exported bim-slice.ifc"
             else:
                 set editor's message to the string form of "Export failed"

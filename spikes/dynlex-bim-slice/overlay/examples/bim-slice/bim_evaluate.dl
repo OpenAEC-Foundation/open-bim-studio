@@ -18,7 +18,10 @@
 # serial number.
 # Views and meshes key their caches on that serial. Slabs are evaluated the
 # same way; they join no other element, so a slab depends only on itself and
-# its level.
+# its level. Linear members and joints too: a changed member, joint, member
+# type or connection type marks the members and joints it can reach through
+# the joints, and each records a signature of its profile, frame and end
+# planes (a joint, of its plate).
 import examples/bim-slice/bim_model.dl
 import examples/bim-slice/bim_index.dl
 import lib/cadkernel/brep_sweep.dl
@@ -27,6 +30,7 @@ import lib/cadkernel/brep_mesh.dl
 import lib/fastkernel/wall.dl
 import lib/fastkernel/prism.dl
 import lib/fastkernel/curved_wall.dl
+import examples/bim-slice/bim_framing.dl
 
 class:
     patterns:
@@ -908,6 +912,72 @@ local function bim slabs {bim slab record:first} and {bim slab record:second} ar
                 return false
         return true
 
+local function bim members {bim member record:first} and {bim member record:second} are identical:
+    execute:
+        set sameStart to ((first's start's x = second's start's x) and (first's start's y = second's start's y)) and (first's start's z = second's start's z)
+        set sameFinish to ((first's finish's x = second's finish's x) and (first's finish's y = second's finish's y)) and (first's finish's z = second's finish's z)
+        set sameRefs to ((first's typeId = second's typeId) and (first's levelId = second's levelId)) and (first's role = second's role)
+        return (sameStart and sameFinish) and (sameRefs and ((first's roll = second's roll) and (first's justification = second's justification)))
+
+local function bim joints {bim joint record:first} and {bim joint record:second} are identical:
+    execute:
+        if (first's typeId != second's typeId) or ((the length of (first's members's values)) != (the length of (second's members's values))):
+            return false
+        loop cursor from 0 to the length of (first's members's values):
+            if (the item at cursor in (first's members's values)) != (the item at cursor in (second's members's values)):
+                return false
+        return true
+
+local function bim profiles {bim profile record:first} and {bim profile record:second} are identical:
+    execute:
+        set sameSize to ((first's kind = second's kind) and (first's depth = second's depth)) and (first's width = second's width)
+        set sameThickness to (first's webThickness = second's webThickness) and (first's flangeThickness = second's flangeThickness)
+        return (sameSize and sameThickness) and (((first's rootRadius = second's rootRadius) and (first's toeRadius = second's toeRadius)) and (first's flangeSlope = second's flangeSlope))
+
+local function bim measures {bim quantity record:first} and {bim quantity record:second} are identical:
+    execute:
+        set sameParameters to ((first's parameter = second's parameter) and (first's parameterFactor = second's parameterFactor)) and ((first's secondParameter = second's secondParameter) and (first's secondFactor = second's secondFactor))
+        set sameDimensions to ((first's role = second's role) and ((first's dimension = second's dimension) and (first's dimensionFactor = second's dimensionFactor))) and ((first's otherRole = second's otherRole) and ((first's otherDimension = second's otherDimension) and (first's otherFactor = second's otherFactor)))
+        return ((first's constant = second's constant) and sameParameters) and sameDimensions
+
+local function bim features {bim feature record:first} and {bim feature record:second} are identical:
+    execute:
+        set sameCodes to ((first's kind = second's kind) and ((first's role = second's role) and (first's target = second's target))) and ((first's other = second's other) and ((first's frameKind = second's frameKind) and (first's mode = second's mode)))
+        set sameCounts to ((first's axis = second's axis) and (first's countA = second's countA)) and ((first's countB = second's countB) and (first's material = second's material))
+        set sameOffsets to (bim measures first's offsetX and second's offsetX are identical) and ((bim measures first's offsetY and second's offsetY are identical) and (bim measures first's offsetZ and second's offsetZ are identical))
+        set sameSizes to (bim measures first's sizeX and second's sizeX are identical) and ((bim measures first's sizeY and second's sizeY are identical) and (bim measures first's sizeZ and second's sizeZ are identical))
+        set samePattern to (bim measures first's extentA and second's extentA are identical) and ((bim measures first's extentB and second's extentB are identical) and (bim measures first's diameter and second's diameter are identical))
+        return ((sameCodes and sameCounts) and (sameOffsets and sameSizes)) and samePattern
+
+local function bim connection types {bim connection type record:first} and {bim connection type record:second} are identical:
+    execute:
+        if (first's roles != second's roles) or (((the length of (first's parameters's values)) != (the length of (second's parameters's values))) or ((the length of (first's features's values)) != (the length of (second's features's values)))):
+            return false
+        loop cursor from 0 to the length of (first's parameters's values):
+            if (the item at cursor in (first's parameters's values))'s value != (the item at cursor in (second's parameters's values))'s value:
+                return false
+        loop cursor from 0 to the length of (first's features's values):
+            if (bim features (the item at cursor in (first's features's values)) and (the item at cursor in (second's features's values)) are identical) = false:
+                return false
+        return true
+
+# Appends `memberId` and, for every joint of `modelValue` it takes part in,
+# the joint and both its members: the elements whose geometry a change of
+# the member can reach.
+local function mark bim member {a 64 bit integer:memberId} with its joints in {bim model record:modelValue} into {a pointer to a list:marked}:
+    execute:
+        append memberId to marked
+        loop cursor from 0 to the length of (modelValue's joints's values):
+            set jointValue to the item at cursor in (modelValue's joints's values)
+            if bim joint jointValue joins memberId:
+                mark bim joint jointValue into marked
+
+local function mark bim joint {bim joint record:jointValue} into {a pointer to a list:marked}:
+    execute:
+        append jointValue's id to marked
+        loop cursor from 0 to the length of (jointValue's members's values):
+            append (the item at cursor in (jointValue's members's values)) to marked
+
 local function mark bim wall {bim wall record:wallValue} and its neighbours in {bim join index record:index} into {a pointer to a list:marked}:
     execute:
         append wallValue's id to marked
@@ -932,10 +1002,14 @@ class:
         addedOpenings as the type of (an empty list of a bim opening record)
         removedSlabs as the type of (an empty list of a bim slab record)
         addedSlabs as the type of (an empty list of a bim slab record)
+        removedMembers as the type of (an empty list of a bim member record)
+        addedMembers as the type of (an empty list of a bim member record)
+        removedJoints as the type of (an empty list of a bim joint record)
+        addedJoints as the type of (an empty list of a bim joint record)
 
 local function a new bim model change:
     execute:
-        return @intrinsic("construct", a bim model change record, an empty list of a bim wall record, an empty list of a bim wall record, an empty list of a bim opening record, an empty list of a bim opening record, an empty list of a bim slab record, an empty list of a bim slab record)
+        return @intrinsic("construct", a bim model change record, an empty list of a bim wall record, an empty list of a bim wall record, an empty list of a bim opening record, an empty list of a bim opening record, an empty list of a bim slab record, an empty list of a bim slab record, an empty list of a bim member record, an empty list of a bim member record, an empty list of a bim joint record, an empty list of a bim joint record)
 
 local function free bim model change {bim model change record:change}:
     execute:
@@ -945,6 +1019,10 @@ local function free bim model change {bim model change record:change}:
         free change's addedOpenings
         free change's removedSlabs
         free change's addedSlabs
+        free change's removedMembers
+        free change's addedMembers
+        free change's removedJoints
+        free change's addedJoints
 
 # Compares `newer` with `older` record by record, walking both id-ordered
 # lists of walls, openings and slabs at once.
@@ -1029,6 +1107,59 @@ local function compare bim model {bim model record:newer} with {bim model record
                     set olderCursor to olderCursor + 1
                     set newerCursor to newerCursor + 1
 
+        set olderMembers to older's members's values
+        set newerMembers to newer's members's values
+        set olderCursor to 0
+        set newerCursor to 0
+        loop while (olderCursor < the length of olderMembers) or (newerCursor < the length of newerMembers):
+            if newerCursor = the length of newerMembers:
+                append (the item at olderCursor in olderMembers) to change's removedMembers
+                set olderCursor to olderCursor + 1
+            else if olderCursor = the length of olderMembers:
+                append (the item at newerCursor in newerMembers) to change's addedMembers
+                set newerCursor to newerCursor + 1
+            else:
+                set olderMember to the item at olderCursor in olderMembers
+                set newerMember to the item at newerCursor in newerMembers
+                if olderMember's id < newerMember's id:
+                    append olderMember to change's removedMembers
+                    set olderCursor to olderCursor + 1
+                else if olderMember's id > newerMember's id:
+                    append newerMember to change's addedMembers
+                    set newerCursor to newerCursor + 1
+                else:
+                    if (bim members olderMember and newerMember are identical) = false:
+                        append olderMember to change's removedMembers
+                        append newerMember to change's addedMembers
+                    set olderCursor to olderCursor + 1
+                    set newerCursor to newerCursor + 1
+        set olderJoints to older's joints's values
+        set newerJoints to newer's joints's values
+        set olderCursor to 0
+        set newerCursor to 0
+        loop while (olderCursor < the length of olderJoints) or (newerCursor < the length of newerJoints):
+            if newerCursor = the length of newerJoints:
+                append (the item at olderCursor in olderJoints) to change's removedJoints
+                set olderCursor to olderCursor + 1
+            else if olderCursor = the length of olderJoints:
+                append (the item at newerCursor in newerJoints) to change's addedJoints
+                set newerCursor to newerCursor + 1
+            else:
+                set olderJoint to the item at olderCursor in olderJoints
+                set newerJoint to the item at newerCursor in newerJoints
+                if olderJoint's id < newerJoint's id:
+                    append olderJoint to change's removedJoints
+                    set olderCursor to olderCursor + 1
+                else if olderJoint's id > newerJoint's id:
+                    append newerJoint to change's addedJoints
+                    set newerCursor to newerCursor + 1
+                else:
+                    if (bim joints olderJoint and newerJoint are identical) = false:
+                        append olderJoint to change's removedJoints
+                        append newerJoint to change's addedJoints
+                    set olderCursor to olderCursor + 1
+                    set newerCursor to newerCursor + 1
+
 # Compares only the elements with the ids in `ids` (ascending, without
 # repeats). Ids of types, levels and dimensions are passed over here.
 local function compare bim journal {a pointer to a list:ids} of {bim model record:newer} with {bim model record:older} recording {bim model change record:change}:
@@ -1059,6 +1190,28 @@ local function compare bim journal {a pointer to a list:ids} of {bim model recor
                         append (the item at olderOpening's position in (older's openings's values)) to change's removedOpenings
                     if newerOpening's valid:
                         append (the item at newerOpening's position in (newer's openings's values)) to change's addedOpenings
+            else if (the bim member index of elementId in older)'s valid or (the bim member index of elementId in newer)'s valid:
+                set olderMember to the bim member index of elementId in older
+                set newerMember to the bim member index of elementId in newer
+                set same to false
+                if olderMember's valid and newerMember's valid:
+                    set same to bim members (the item at olderMember's position in (older's members's values)) and (the item at newerMember's position in (newer's members's values)) are identical
+                if same = false:
+                    if olderMember's valid:
+                        append (the item at olderMember's position in (older's members's values)) to change's removedMembers
+                    if newerMember's valid:
+                        append (the item at newerMember's position in (newer's members's values)) to change's addedMembers
+            else if (the bim joint index of elementId in older)'s valid or (the bim joint index of elementId in newer)'s valid:
+                set olderJoint to the bim joint index of elementId in older
+                set newerJoint to the bim joint index of elementId in newer
+                set same to false
+                if olderJoint's valid and newerJoint's valid:
+                    set same to bim joints (the item at olderJoint's position in (older's joints's values)) and (the item at newerJoint's position in (newer's joints's values)) are identical
+                if same = false:
+                    if olderJoint's valid:
+                        append (the item at olderJoint's position in (older's joints's values)) to change's removedJoints
+                    if newerJoint's valid:
+                        append (the item at newerJoint's position in (newer's joints's values)) to change's addedJoints
             else if olderSlab's valid or newerSlab's valid:
                 set same to false
                 if olderSlab's valid and newerSlab's valid:
@@ -1098,6 +1251,16 @@ local function mark bim change {bim model change record:difference} of {bim mode
             append (the item at cursor in difference's removedSlabs)'s id to marked
         loop cursor from 0 to the length of difference's addedSlabs:
             append (the item at cursor in difference's addedSlabs)'s id to marked
+        # A member reaches its joints and their members before and after the
+        # change; a joint reaches its plate and both its members.
+        loop cursor from 0 to the length of difference's removedMembers:
+            mark bim member (the item at cursor in difference's removedMembers)'s id with its joints in older into marked
+        loop cursor from 0 to the length of difference's addedMembers:
+            mark bim member (the item at cursor in difference's addedMembers)'s id with its joints in newer into marked
+        loop cursor from 0 to the length of difference's removedJoints:
+            mark bim joint (the item at cursor in difference's removedJoints) into marked
+        loop cursor from 0 to the length of difference's addedJoints:
+            mark bim joint (the item at cursor in difference's addedJoints) into marked
         loop candidateCursor from 0 to the length of candidates:
             set candidate to the item at candidateCursor in candidates
             # A changed wall type changes the thickness of its walls and so the
@@ -1125,6 +1288,9 @@ local function mark bim change {bim model change record:difference} of {bim mode
                     loop cursor from 0 to the length of newerWalls:
                         if (the item at cursor in newerWalls)'s levelId = candidate:
                             append (the item at cursor in newerWalls)'s id to marked
+                    loop cursor from 0 to the length of (newer's members's values):
+                        if (the item at cursor in (newer's members's values))'s levelId = candidate:
+                            mark bim member (the item at cursor in (newer's members's values))'s id with its joints in newer into marked
                     loop cursor from 0 to the length of (newer's slabs's values):
                         if (the item at cursor in (newer's slabs's values))'s levelId = candidate:
                             append (the item at cursor in (newer's slabs's values))'s id to marked
@@ -1139,6 +1305,30 @@ local function mark bim change {bim model change record:difference} of {bim mode
                     loop cursor from 0 to the length of (newer's openings's values):
                         if (the item at cursor in (newer's openings's values))'s typeId = candidate:
                             mark bim host (the item at cursor in (newer's openings's values))'s hostId into marked
+            # A changed member type changes the section of its members, and so
+            # the cuts of their partners.
+            set newerMemberTypeFound to the bim member type index of candidate in newer
+            if newerMemberTypeFound's valid:
+                set newerMemberType to the item at newerMemberTypeFound's position in (newer's memberTypes's values)
+                set olderFound to the bim member type index of candidate in older
+                set typeChanged to true
+                if olderFound's valid:
+                    set typeChanged to (bim profiles newerMemberType's profile and (the item at olderFound's position in (older's memberTypes's values))'s profile are identical) = false
+                if typeChanged:
+                    loop cursor from 0 to the length of (newer's members's values):
+                        if (the item at cursor in (newer's members's values))'s typeId = candidate:
+                            mark bim member (the item at cursor in (newer's members's values))'s id with its joints in newer into marked
+            set newerConnectionFound to the bim connection type index of candidate in newer
+            if newerConnectionFound's valid:
+                set newerConnection to the item at newerConnectionFound's position in (newer's connectionTypes's values)
+                set olderFound to the bim connection type index of candidate in older
+                set typeChanged to true
+                if olderFound's valid:
+                    set typeChanged to (bim connection types newerConnection and (the item at olderFound's position in (older's connectionTypes's values)) are identical) = false
+                if typeChanged:
+                    loop cursor from 0 to the length of (newer's joints's values):
+                        if (the item at cursor in (newer's joints's values))'s typeId = candidate:
+                            mark bim joint (the item at cursor in (newer's joints's values)) into marked
 
 # Applies a record-by-record change to `records`, ordered by id: a removed
 # record whose id is not added again is deleted, and an added record replaces
@@ -1161,6 +1351,11 @@ local function apply bim removals {a pointer to a list:removedRecords} and addit
                 replace item at index slot in records with arriving
             else:
                 insert arriving into records at index slot
+
+# A member's or joint's solid in the form an element geometry stores.
+local function the bim solid of framing {bim framing solid record:built}:
+    execute:
+        return @intrinsic("construct", a bim solid record, built's status, built's solid, built's fast, built's shape)
 
 # Counts an examined element of `target`; true when its stored signature
 # differs from `signatureText`, so it must be rebuilt.
@@ -1207,6 +1402,10 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
                 append (the item at cursor in (modelValue's levels's values))'s id to candidates
             loop cursor from 0 to the length of (modelValue's openingTypes's values):
                 append (the item at cursor in (modelValue's openingTypes's values))'s id to candidates
+            loop cursor from 0 to the length of (modelValue's memberTypes's values):
+                append (the item at cursor in (modelValue's memberTypes's values))'s id to candidates
+            loop cursor from 0 to the length of (modelValue's connectionTypes's values):
+                append (the item at cursor in (modelValue's connectionTypes's values))'s id to candidates
         mark bim change change of modelValue against target's modelValue for candidates updating (the address of (target's index)) into marked
         free candidates
         set target's journal to modelValue's journal
@@ -1219,9 +1418,15 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
             append (the item at cursor in change's removedWalls)'s id to goneIds
         loop cursor from 0 to the length of change's removedSlabs:
             append (the item at cursor in change's removedSlabs)'s id to goneIds
+        loop cursor from 0 to the length of change's removedMembers:
+            append (the item at cursor in change's removedMembers)'s id to goneIds
+        loop cursor from 0 to the length of change's removedJoints:
+            append (the item at cursor in change's removedJoints)'s id to goneIds
         loop cursor from 0 to the length of goneIds:
             set gone to the item at cursor in goneIds
-            if ((the bim wall index of gone in modelValue)'s valid = false) and ((the bim slab index of gone in modelValue)'s valid = false):
+            set stillWallOrSlab to (the bim wall index of gone in modelValue)'s valid or (the bim slab index of gone in modelValue)'s valid
+            set stillFraming to (the bim member index of gone in modelValue)'s valid or (the bim joint index of gone in modelValue)'s valid
+            if (stillWallOrSlab = false) and (stillFraming = false):
                 set found to the bim position of gone among geometries
                 if found's valid:
                     remove item found's position from geometries
@@ -1232,6 +1437,10 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
             append (the item at cursor in change's addedWalls)'s id to arrivingIds
         loop cursor from 0 to the length of change's addedSlabs:
             append (the item at cursor in change's addedSlabs)'s id to arrivingIds
+        loop cursor from 0 to the length of change's addedMembers:
+            append (the item at cursor in change's addedMembers)'s id to arrivingIds
+        loop cursor from 0 to the length of change's addedJoints:
+            append (the item at cursor in change's addedJoints)'s id to arrivingIds
         loop cursor from 0 to the length of arrivingIds:
             set arriving to the item at cursor in arrivingIds
             set slot to the bim insertion position of arriving among geometries
@@ -1249,6 +1458,8 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
         set hostedIndex to an empty bim hosted index
         if (the length of marked) > 32:
             set hostedIndex to the bim hosted index of modelValue
+        # Members find their joints through an index of the whole model.
+        set jointIndex to the bim joint index of modelValue
         loop cursor from 0 to the length of marked:
             set elementId to the item at cursor in marked
             set found to the bim wall index of elementId in modelValue
@@ -1264,15 +1475,28 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
                 set signatureText to the bim slab signature of slabValue in modelValue
                 if bim element elementId needs signature signatureText in target:
                     record bim build (the bim slab solid of slabValue in modelValue) of elementId signed signatureText in target
+            else if (the bim member index of elementId in modelValue)'s valid:
+                set signatureText to the bim member signature of elementId in modelValue through jointIndex
+                if bim element elementId needs signature signatureText in target:
+                    record bim build (the bim solid of framing (the bim member solid of elementId in modelValue through jointIndex)) of elementId signed signatureText in target
+            else if (the bim joint index of elementId in modelValue)'s valid:
+                set jointValue to the item at (the bim joint index of elementId in modelValue)'s position in (modelValue's joints's values)
+                set signatureText to the bim joint signature of jointValue in modelValue through jointIndex
+                if bim element elementId needs signature signatureText in target:
+                    record bim build (the bim solid of framing (the bim joint solid of jointValue in modelValue through jointIndex)) of elementId signed signatureText in target
         sort and deduplicate bim ids (target's changed's values)
         set target's generation to target's generation + (1 as a 64 bit integer)
         apply bim removals change's removedWalls and additions change's addedWalls to (target's modelValue's walls's values)
         apply bim removals change's removedOpenings and additions change's addedOpenings to (target's modelValue's openings's values)
         apply bim removals change's removedSlabs and additions change's addedSlabs to (target's modelValue's slabs's values)
+        apply bim removals change's removedMembers and additions change's addedMembers to (target's modelValue's members's values)
+        apply bim removals change's removedJoints and additions change's addedJoints to (target's modelValue's joints's values)
         set target's modelValue's nextId to modelValue's nextId
         set target's modelValue's levels to the cad clone of modelValue's levels
         set target's modelValue's wallTypes to the cad clone of modelValue's wallTypes
         set target's modelValue's openingTypes to the cad clone of modelValue's openingTypes
+        set target's modelValue's memberTypes to the cad clone of modelValue's memberTypes
+        set target's modelValue's connectionTypes to the cad clone of modelValue's connectionTypes
         free bim model change change
         free marked
 
@@ -1288,7 +1512,7 @@ function the bim evaluation of {bim model record:modelValue} after {bim evaluati
 # from its polyhedron or from its B-rep solid.
 function append bim mesh of {bim element geometry record:geometry} to {a pointer to a fast mesh record:target}:
     execute:
-        if geometry's status != 0:
+        if (geometry's status != 0) and (geometry's status != 5):
             return nothing
         if geometry's fast:
             append fast mesh of geometry's shape to target
@@ -1306,7 +1530,7 @@ function append bim mesh of {bim element geometry record:geometry} to {a pointer
 
 function the bim volume of {bim element geometry record:geometry}:
     execute:
-        if geometry's status != 0:
+        if (geometry's status != 0) and (geometry's status != 5):
             return 0.0
         if geometry's fast:
             return the fast volume of geometry's shape

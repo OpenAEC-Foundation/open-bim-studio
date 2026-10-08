@@ -1,0 +1,1431 @@
+# SPDX-License-Identifier: MPL-2.0
+# Geometry of linear members and their joints. A member is its profile's
+# cross-section swept along its axis by the fast kernel and cut off at each
+# end by a plane; the joints decide the planes:
+#
+# - A free end is cut square at the end of the axis.
+# - A mitre cuts both members on the plane through the meeting point that
+#   halves the angle between them.
+# - A butt joint stops the secondary member against the face of the primary
+#   member toward it, and runs the primary member on past the meeting point
+#   until it covers the secondary member's far face. In a T (the secondary
+#   member's end on the primary member's axis) the primary member runs
+#   through unchanged.
+# - An end plate is a butt joint whose secondary member stops short by the
+#   plate and the gap; the plate is the joint's own solid, its size and bolt
+#   holes computed from the connection type over the secondary member's
+#   profile.
+#
+# Which ends meet follows from the members' positions, so a joint follows
+# its members when they move. Every function computes in world coordinates:
+# the member's axis given relative to its level, raised by the level's
+# elevation.
+import examples/bim-slice/bim_model.dl
+import lib/fastkernel/member.dl
+import lib/text.dl
+import lib/cadkernel/brep_make.dl
+import lib/cadkernel/brep_boolean.dl
+
+# How near two axis ends must be to meet, and an end to lie on an axis.
+function the bim member join tolerance:
+    replacement:
+        1e-4
+
+# Segments per quarter turn of a root or toe radius, and around a tube.
+function the bim fillet segments:
+    replacement:
+        3
+function the bim tube segments:
+    replacement:
+        32
+
+# ---------------------------------------------------------------- sections
+
+local function bim section point at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y}:
+    execute:
+        return a cad vector2 with x x and y y
+
+# The ring through `corners` with corner `i` rounded by `radii[i]` (0 keeps
+# it sharp); each arc in straight pieces, `segments` per quarter turn. A
+# radius is reduced where its tangent points would pass half an edge.
+function the bim ring through {a pointer to a list:corners} rounded by {a pointer to a list:radii} in {integer:segments}:
+    execute:
+        set traced to an empty list of a cad vector2
+        set count to the length of corners
+        loop cursor from 0 to count:
+            set here to the item at cursor in corners
+            set radius to the item at cursor in radii
+            if radius <= 0.0:
+                append here to traced
+            else:
+                set before to the item at (the remainder of ((cursor + count) - 1) divided by count) in corners
+                set after to the item at (the remainder of (cursor + 1) divided by count) in corners
+                set inLength to the cad distance from before to here
+                set outLength to the cad distance from here to after
+                set inX to (here's x - before's x) / inLength
+                set inY to (here's y - before's y) / inLength
+                set outX to (after's x - here's x) / outLength
+                set outY to (after's y - here's y) / outLength
+                set turn to @intrinsic("atan2", (inX * outY) - (inY * outX), (inX * outX) + (inY * outY))
+                if (the absolute value of turn) <= 1e-9:
+                    append here to traced
+                else:
+                    set halfTurn to (the absolute value of turn) * 0.5
+                    set tangentLength to radius * ((the sine of halfTurn) / (the cosine of halfTurn))
+                    set limit to (the minimum of inLength and outLength) * 0.5
+                    if tangentLength > limit:
+                        set radius to radius * (limit / tangentLength)
+                        set tangentLength to limit
+                    set side to 1.0
+                    if turn < 0.0:
+                        set side to -1.0
+                    set entry to bim section point at (here's x - (inX * tangentLength)) and (here's y - (inY * tangentLength))
+                    set centre to bim section point at (entry's x - (side * inY * radius)) and (entry's y + (side * inX * radius))
+                    set startAngle to @intrinsic("atan2", entry's y - centre's y, entry's x - centre's x)
+                    set pieces to (@intrinsic("ceil", ((the absolute value of turn) / 1.5707963267948966) * (segments as a 64 bit floating-point number))) as an integer
+                    if pieces < 1:
+                        set pieces to 1
+                    loop step from 0 to pieces + 1:
+                        set angle to startAngle + (turn * ((step as a 64 bit floating-point number) / (pieces as a 64 bit floating-point number)))
+                        append (bim section point at (centre's x + (radius * (the cosine of angle))) and (centre's y + (radius * (the sine of angle)))) to traced
+        return traced
+
+local function the bim circle ring of radius {a 64 bit floating-point number:circleRadius} at {cad vector2:centre} in {integer:pieces}:
+    execute:
+        set traced to an empty list of a cad vector2
+        loop step from 0 to pieces:
+            set angle to 6.283185307179586 * ((step as a 64 bit floating-point number) / (pieces as a 64 bit floating-point number))
+            append (bim section point at (centre's x + (circleRadius * (the cosine of angle))) and (centre's y + (circleRadius * (the sine of angle)))) to traced
+        return traced
+
+local function add bim corner {cad vector2:corner} rounded {a 64 bit floating-point number:radius} to {a pointer to a list:corners} and {a pointer to a list:radii}:
+    execute:
+        append corner to corners
+        append radius to radii
+
+local function the bim rounded ring of {a pointer to a list:corners} and {a pointer to a list:radii}:
+    execute:
+        set traced to the bim ring through corners rounded by radii in the bim fillet segments
+        free corners
+        free radii
+        return traced
+
+# The cross-section of `profile` as rings in its own coordinates, the outer
+# ring first: u across its width, v along its depth, the origin at the
+# middle of its bounding box. A tapered flange (`flangeSlope` > 0) has its
+# nominal thickness at the middle of its outstand (an I-section) or at half
+# the width from the web's back (a channel).
+function the bim section rings of {bim profile record:profile}:
+    execute:
+        set sections to an empty list of the type of (an empty list of a cad vector2)
+        set halfWidth to profile's width * 0.5
+        set halfDepth to profile's depth * 0.5
+        set web to profile's webThickness
+        set flange to profile's flangeThickness
+        set root to profile's rootRadius
+        set toe to profile's toeRadius
+        set slope to profile's flangeSlope
+        set corners to an empty list of a cad vector2
+        set radii to an empty list of a 64 bit floating-point number
+        if profile's kind = bim i profile kind:
+            set halfWeb to web * 0.5
+            set middle to (halfWeb + halfWidth) * 0.5
+            set innerAtTip to (0.0 - halfDepth) + flange - (slope * (halfWidth - middle))
+            set innerAtWeb to (0.0 - halfDepth) + flange + (slope * (middle - halfWeb))
+            add bim corner (bim section point at halfWidth and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and innerAtTip) rounded toe to corners and radii
+            add bim corner (bim section point at halfWeb and innerAtWeb) rounded root to corners and radii
+            add bim corner (bim section point at halfWeb and (0.0 - innerAtWeb)) rounded root to corners and radii
+            add bim corner (bim section point at halfWidth and (0.0 - innerAtTip)) rounded toe to corners and radii
+            add bim corner (bim section point at halfWidth and halfDepth) rounded 0.0 to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and halfDepth) rounded 0.0 to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and (0.0 - innerAtTip)) rounded toe to corners and radii
+            add bim corner (bim section point at (0.0 - halfWeb) and (0.0 - innerAtWeb)) rounded root to corners and radii
+            add bim corner (bim section point at (0.0 - halfWeb) and innerAtWeb) rounded root to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and innerAtTip) rounded toe to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            append (the bim rounded ring of corners and radii) to sections
+        else if profile's kind = bim channel profile kind:
+            # The web along the left side, the flanges toward +u.
+            set webFace to (0.0 - halfWidth) + web
+            set middle to 0.0
+            set innerAtTip to (0.0 - halfDepth) + flange - (slope * (halfWidth - middle))
+            set innerAtWeb to (0.0 - halfDepth) + flange + (slope * (middle - webFace))
+            add bim corner (bim section point at (0.0 - halfWidth) and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and innerAtTip) rounded toe to corners and radii
+            add bim corner (bim section point at webFace and innerAtWeb) rounded root to corners and radii
+            add bim corner (bim section point at webFace and (0.0 - innerAtWeb)) rounded root to corners and radii
+            add bim corner (bim section point at halfWidth and (0.0 - innerAtTip)) rounded toe to corners and radii
+            add bim corner (bim section point at halfWidth and halfDepth) rounded 0.0 to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and halfDepth) rounded 0.0 to corners and radii
+            append (the bim rounded ring of corners and radii) to sections
+        else if profile's kind = bim angle profile kind:
+            # One leg along the bottom (the width), the other up the left
+            # side (the depth).
+            set left to 0.0 - halfWidth
+            set bottom to 0.0 - halfDepth
+            add bim corner (bim section point at left and bottom) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and bottom) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and (bottom + web)) rounded toe to corners and radii
+            add bim corner (bim section point at (left + web) and (bottom + web)) rounded root to corners and radii
+            add bim corner (bim section point at (left + web) and halfDepth) rounded toe to corners and radii
+            add bim corner (bim section point at left and halfDepth) rounded 0.0 to corners and radii
+            append (the bim rounded ring of corners and radii) to sections
+        else if profile's kind = bim box profile kind:
+            set outerRadius to root
+            set innerRadius to the maximum of 0.0 and (root - web)
+            add bim corner (bim section point at (0.0 - halfWidth) and (0.0 - halfDepth)) rounded outerRadius to corners and radii
+            add bim corner (bim section point at halfWidth and (0.0 - halfDepth)) rounded outerRadius to corners and radii
+            add bim corner (bim section point at halfWidth and halfDepth) rounded outerRadius to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and halfDepth) rounded outerRadius to corners and radii
+            append (the bim rounded ring of corners and radii) to sections
+            set innerCorners to an empty list of a cad vector2
+            set innerRadii to an empty list of a 64 bit floating-point number
+            add bim corner (bim section point at ((0.0 - halfWidth) + web) and ((0.0 - halfDepth) + web)) rounded innerRadius to innerCorners and innerRadii
+            add bim corner (bim section point at (halfWidth - web) and ((0.0 - halfDepth) + web)) rounded innerRadius to innerCorners and innerRadii
+            add bim corner (bim section point at (halfWidth - web) and (halfDepth - web)) rounded innerRadius to innerCorners and innerRadii
+            add bim corner (bim section point at ((0.0 - halfWidth) + web) and (halfDepth - web)) rounded innerRadius to innerCorners and innerRadii
+            append (the bim rounded ring of innerCorners and innerRadii) to sections
+        else if profile's kind = bim tube profile kind:
+            free corners
+            free radii
+            set centre to bim section point at 0.0 and 0.0
+            append (the bim circle ring of radius halfDepth at centre in the bim tube segments) to sections
+            append (the bim circle ring of radius (halfDepth - web) at centre in the bim tube segments) to sections
+        else if profile's kind = bim round profile kind:
+            free corners
+            free radii
+            append (the bim circle ring of radius halfDepth at (bim section point at 0.0 and 0.0) in the bim tube segments) to sections
+        else:
+            # A flat bar, or any other kind as its bounding rectangle.
+            add bim corner (bim section point at (0.0 - halfWidth) and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and (0.0 - halfDepth)) rounded 0.0 to corners and radii
+            add bim corner (bim section point at halfWidth and halfDepth) rounded 0.0 to corners and radii
+            add bim corner (bim section point at (0.0 - halfWidth) and halfDepth) rounded 0.0 to corners and radii
+            append (the bim rounded ring of corners and radii) to sections
+        return sections
+
+function free bim rings {a pointer to a list:rings}:
+    execute:
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+
+# The area of a profile's cross-section, from its rings (holes subtract).
+function the bim section area of {bim profile record:profile}:
+    execute:
+        set rings to the bim section rings of profile
+        set total to 0.0
+        loop cursor from 0 to the length of rings:
+            set ring to the item at cursor in rings
+            set doubled to 0.0
+            set anchor to the item at 0 in ring
+            loop corner from 1 to (the length of ring) - 1:
+                set here to the item at corner in ring
+                set following to the item at (corner + 1) in ring
+                set doubled to doubled + (((here's x - anchor's x) * (following's y - anchor's y)) - ((following's x - anchor's x) * (here's y - anchor's y)))
+            if cursor = 0:
+                set total to total + ((the absolute value of doubled) * 0.5)
+            else:
+                set total to total - ((the absolute value of doubled) * 0.5)
+        free bim rings rings
+        return total
+
+# ---------------------------------------------------------------- members
+
+class:
+    patterns:
+        [a|] bim member choice record
+    members:
+        valid as a boolean
+        member as a bim member record
+        profile as a bim profile record
+        elevation as a 64 bit floating-point number
+
+local function no bim member choice:
+    execute:
+        set noProfile to @intrinsic("construct", a bim profile record, the string form of "", the string form of "", 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, the string form of "")
+        set noMember to @intrinsic("construct", a bim member record, the bim refused id, the bim refused id, the bim refused id, 0, the cad zero vector3, the cad zero vector3, 0.0, 0)
+        return @intrinsic("construct", a bim member choice record, false, noMember, noProfile, 0.0)
+
+# Member `memberId` with its profile and level elevation; invalid when it, its
+# type or its level is missing.
+function the bim member choice of {a 64 bit integer:memberId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim member index of memberId in modelValue
+        if found's valid = false:
+            return no bim member choice
+        set memberValue to the item at found's position in (modelValue's members's values)
+        set typeFound to the bim member type index of memberValue's typeId in modelValue
+        set levelFound to the bim level index of memberValue's levelId in modelValue
+        if (typeFound's valid = false) or (levelFound's valid = false):
+            return no bim member choice
+        set profile to (the item at typeFound's position in (modelValue's memberTypes's values))'s profile
+        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        return @intrinsic("construct", a bim member choice record, true, memberValue, profile, elevation)
+
+# The ends of a member's axis in world coordinates.
+function the bim world start of {bim member choice record:choice}:
+    execute:
+        return a cad vector3 with x choice's member's start's x, y choice's member's start's y and z (choice's member's start's z + choice's elevation)
+
+function the bim world finish of {bim member choice record:choice}:
+    execute:
+        return a cad vector3 with x choice's member's finish's x, y choice's member's finish's y and z (choice's member's finish's z + choice's elevation)
+
+function the bim axis of {bim member choice record:choice}:
+    execute:
+        return (the cad normalization of (the cad difference of (the bim world finish of choice) and (the bim world start of choice)))'s value
+
+# The section's frame along a member, at its start. The section's v axis is
+# the world's up direction square to the axis, or for a vertical member the
+# plan's y axis; the profile is then turned by the member's roll. Its origin
+# lies on the axis moved by the justification: half the depth down (top) or
+# up (bottom).
+function the bim frame of {bim member choice record:choice}:
+    execute:
+        set axis to the bim axis of choice
+        set up to the cad z axis
+        if (the absolute value of (the cad dot of axis and up)) > 0.999:
+            set up to a cad vector3 with x 0.0, y 1.0 and z 0.0
+        set vAxis to (the cad normalization of (the cad difference of up and (axis scaled by (the cad dot of up and axis))))'s value
+        set uAxis to the cad cross of vAxis and axis
+        set cosine to the cosine of choice's member's roll
+        set sine to the sine of choice's member's roll
+        set turnedU to the cad sum of (uAxis scaled by cosine) and (vAxis scaled by sine)
+        set turnedV to the cad difference of (vAxis scaled by cosine) and (uAxis scaled by sine)
+        set shift to 0.0
+        if choice's member's justification = bim top justification:
+            set shift to 0.0 - (choice's profile's depth * 0.5)
+        if choice's member's justification = bim bottom justification:
+            set shift to choice's profile's depth * 0.5
+        set origin to the cad sum of (the bim world start of choice) and (turnedV scaled by shift)
+        return @intrinsic("construct", a fast frame record, origin, turnedU, turnedV, axis)
+
+# How far a member's section reaches from its axis toward `direction`
+# (square to the axis): the largest offset of its outer ring's points.
+function the bim reach of {bim member choice record:choice} toward {cad vector3:direction}:
+    execute:
+        set frame to the bim frame of choice
+        set axisPoint to the bim world start of choice
+        set rings to the bim section rings of choice's profile
+        set best to 0.0 - (1.0 / 0.0)
+        set outer to the item at 0 in rings
+        loop cursor from 0 to the length of outer:
+            set location to the fast point of (the item at cursor in outer) in frame
+            set offset to the cad dot of (the cad difference of location and axisPoint) and direction
+            set best to the maximum of best and offset
+        free bim rings rings
+        return best
+
+# ---------------------------------------------------------------- joints
+
+# How two members meet at a joint: `kind` is 0 when they do not meet, 1 when
+# an end of each lies at the same point and 2 when the secondary member's
+# end lies on the primary member's axis. `firstAtFinish` and
+# `secondAtFinish` say which ends meet (the primary's only for kind 1), and
+# `node` is the meeting point.
+class:
+    patterns:
+        [a|] bim meeting record
+    members:
+        kind as an integer
+        firstAtFinish as a boolean
+        secondAtFinish as a boolean
+        node as a cad vector3
+
+local function no bim meeting:
+    execute:
+        return @intrinsic("construct", a bim meeting record, 0, false, false, the cad zero vector3)
+
+local function the bim distance from {cad vector3:location} to the axis of {bim member choice record:choice}:
+    execute:
+        set start to the bim world start of choice
+        set run to the cad difference of (the bim world finish of choice) and start
+        set lengthSquared to the cad dot of run and run
+        set along to (the cad dot of (the cad difference of location and start) and run) / lengthSquared
+        if (along <= 0.0) or (along >= 1.0):
+            return 1.0 / 0.0
+        return the cad length of (the cad difference of location and (the cad sum of start and (run scaled by along)))
+
+function the bim meeting of {bim member choice record:first} and {bim member choice record:second}:
+    execute:
+        set tolerance to the bim member join tolerance
+        loop firstEnd from 0 to 2:
+            loop secondEnd from 0 to 2:
+                set firstPoint to the bim world start of first
+                if firstEnd = 1:
+                    set firstPoint to the bim world finish of first
+                set secondPoint to the bim world start of second
+                if secondEnd = 1:
+                    set secondPoint to the bim world finish of second
+                if (the cad length of (the cad difference of firstPoint and secondPoint)) <= tolerance:
+                    return @intrinsic("construct", a bim meeting record, 1, (firstEnd = 1), (secondEnd = 1), firstPoint)
+        loop secondEnd from 0 to 2:
+            set secondPoint to the bim world start of second
+            if secondEnd = 1:
+                set secondPoint to the bim world finish of second
+            if (the bim distance from secondPoint to the axis of first) <= tolerance:
+                return @intrinsic("construct", a bim meeting record, 2, false, (secondEnd = 1), secondPoint)
+        return no bim meeting
+
+# The direction from a member's end `atFinish` into its body.
+local function the bim inward direction of {bim member choice record:choice} at finish {boolean:atFinish}:
+    execute:
+        set axis to the bim axis of choice
+        if atFinish:
+            return axis scaled by -1.0
+        return axis
+
+local function the bim square cut of {bim member choice record:choice} at finish {boolean:atFinish}:
+    execute:
+        if atFinish:
+            return a fast cut through (the bim world finish of choice) facing (the bim axis of choice)
+        return a fast cut through (the bim world start of choice) facing ((the bim axis of choice) scaled by -1.0)
+
+# The unit part of `direction` square to `axis`; invalid when it has none.
+local function the bim square part of {cad vector3:direction} to {cad vector3:axis}:
+    execute:
+        return the cad normalization of (the cad difference of direction and (axis scaled by (the cad dot of direction and axis)))
+
+
+# ---------------------------------------------------------------- measures
+
+# Dimension `code` of `profile`.
+function the bim dimension {integer:code} of {bim profile record:profile}:
+    execute:
+        if code = bim width dimension:
+            return profile's width
+        if code = bim depth dimension:
+            return profile's depth
+        if code = bim web dimension:
+            return profile's webThickness
+        if code = bim flange dimension:
+            return profile's flangeThickness
+        return 0.0
+
+local function the bim parameter value {integer:index} of {bim connection type record:connection}:
+    execute:
+        if (index < 0) or (index >= the length of (connection's parameters's values)):
+            return 0.0
+        return (the item at index in (connection's parameters's values))'s value
+
+local function the bim profile of role {integer:index} among {a pointer to a list:participants}:
+    execute:
+        return (the item at index in participants)'s profile
+
+# The value of `measure` for `connection` joining `participants` (a list of
+# member choices in role order).
+function the bim value of {bim quantity record:measure} for {bim connection type record:connection} with {a pointer to a list:participants}:
+    execute:
+        set total to measure's constant
+        if measure's parameter >= 0:
+            set total to total + (measure's parameterFactor * (the bim parameter value measure's parameter of connection))
+        if measure's secondParameter >= 0:
+            set total to total + (measure's secondFactor * (the bim parameter value measure's secondParameter of connection))
+        if (measure's role >= 0) and (measure's role < the length of participants):
+            set total to total + (measure's dimensionFactor * (the bim dimension measure's dimension of (the bim profile of role measure's role among participants)))
+        if (measure's otherRole >= 0) and (measure's otherRole < the length of participants):
+            set total to total + (measure's otherFactor * (the bim dimension measure's otherDimension of (the bim profile of role measure's otherRole among participants)))
+        return total
+
+# A count field: itself when 0 or more, else the rounded value of parameter
+# -1 - code; never below 0.
+function the bim count {integer:code} for {bim connection type record:connection}:
+    execute:
+        if code >= 0:
+            return code
+        set rounded to (@intrinsic("call", "libc", "round", a 64 bit floating-point number, the bim parameter value (-1 - code) of connection)) as an integer
+        if rounded < 0:
+            return 0
+        return rounded
+
+# ---------------------------------------------------------------- the node
+
+# A joint ready to evaluate: its type, its participants' member choices in
+# role order and its node; invalid when its type or a member is missing, or
+# its first two participants do not meet.
+class:
+    patterns:
+        [a|] bim joint context record
+    members:
+        valid as a boolean
+        jointId as a 64 bit integer
+        connection as a bim connection type record
+        participants as the type of (a cad topology list of a bim member choice record)
+        node as a cad vector3
+
+function the bim context of joint {bim joint record:jointValue} in {bim model record:modelValue}:
+    execute:
+        set noType to @intrinsic("construct", a bim connection type record, the bim refused id, the string form of "", 0, a cad topology list of a bim parameter record, a cad topology list of a bim feature record)
+        set result to @intrinsic("construct", a bim joint context record, false, jointValue's id, noType, a cad topology list of a bim member choice record, the cad zero vector3)
+        set typeFound to the bim connection type index of jointValue's typeId in modelValue
+        if typeFound's valid = false:
+            return result
+        set result's connection to the item at typeFound's position in (modelValue's connectionTypes's values)
+        if (the length of (jointValue's members's values)) != result's connection's roles:
+            return result
+        loop cursor from 0 to the length of (jointValue's members's values):
+            set choice to the bim member choice of (the item at cursor in (jointValue's members's values)) in modelValue
+            if choice's valid = false:
+                return result
+            append choice to (result's participants's values)
+        if (the length of (result's participants's values)) = 1:
+            set result's node to the bim world start of (the item at 0 in (result's participants's values))
+            set result's valid to true
+            return result
+        set meeting to the bim meeting of (the item at 0 in (result's participants's values)) and (the item at 1 in (result's participants's values))
+        if meeting's kind = 0:
+            return result
+        set result's node to meeting's node
+        set result's valid to true
+        return result
+
+# Which end of `choice` lies at `node`: 0 its start, 1 its finish, 2 neither
+# (the node lies along it).
+function the bim end of {bim member choice record:choice} at node {cad vector3:nodePoint}:
+    execute:
+        if (the cad length of (the cad difference of (the bim world start of choice) and nodePoint)) <= the bim member join tolerance:
+            return 0
+        if (the cad length of (the cad difference of (the bim world finish of choice) and nodePoint)) <= the bim member join tolerance:
+            return 1
+        return 2
+
+# The point of `choice`'s section centre line nearest to `location`.
+local function the bim centre line point of {bim member choice record:choice} nearest {cad vector3:location}:
+    execute:
+        set frame to the bim frame of choice
+        return the cad sum of frame's origin and (frame's axis scaled by (the cad dot of (the cad difference of location and frame's origin) and frame's axis))
+
+# The direction from the node into participant `role`: into its body from
+# the end at the node, or along it when the node lies along it.
+local function the bim inward direction of role {integer:roleIndex} in {bim joint context record:context}:
+    execute:
+        set choice to the item at roleIndex in (context's participants's values)
+        set endCode to the bim end of choice at node context's node
+        if endCode = 1:
+            return (the bim axis of choice) scaled by -1.0
+        return the bim axis of choice
+
+# ---------------------------------------------------------------- trims
+
+# The end plane a trim feature cuts participant `feature's target`'s end at
+# the node with.
+function the bim trim cut of {bim feature record:feature} in {bim joint context record:context}:
+    execute:
+        set role to feature's target
+        set subject to the item at role in (context's participants's values)
+        set inward to the bim inward direction of role role in context
+        set setback to the bim value of feature's offsetX for context's connection with (context's participants's values)
+        set node to context's node
+        set square to a fast cut through (the cad sum of node and (inward scaled by setback)) facing (inward scaled by -1.0)
+        if (feature's other < 0) or (feature's other >= the length of (context's participants's values)):
+            return square
+        set partner to the item at feature's other in (context's participants's values)
+        set partnerAxis to the bim axis of partner
+        if feature's mode = bim trim halving:
+            set halving to the cad normalization of (the cad difference of (the bim inward direction of role feature's other in context) and inward)
+            if halving's valid = false:
+                return square
+            return a fast cut through (the cad sum of node and (halving's value scaled by (0.0 - setback))) facing halving's value
+        if feature's mode = bim trim to face:
+            set toward to the bim square part of inward to partnerAxis
+            if toward's valid = false:
+                return square
+            set face to (the bim reach of partner toward toward's value) + setback
+            set projectedNode to the cad sum of (the bim world start of partner) and (partnerAxis scaled by (the cad dot of (the cad difference of node and (the bim world start of partner)) and partnerAxis))
+            return a fast cut through (the cad sum of projectedNode and (toward's value scaled by face)) facing (toward's value scaled by -1.0)
+        if feature's mode = bim trim covering:
+            set away to the bim square part of (inward scaled by -1.0) to partnerAxis
+            if away's valid = false:
+                return square
+            set farFace to the bim reach of partner toward away's value
+            set facing to the cad dot of away's value and (inward scaled by -1.0)
+            set run to farFace
+            if facing > the fast sweep minimum facing:
+                set run to farFace / facing
+            return a fast cut through (the cad sum of node and (inward scaled by (setback - run))) facing (inward scaled by -1.0)
+        return square
+
+# ---------------------------------------------------------------- the joint index
+
+# The joints of each member: member position `m` has the joint positions
+# `entries[starts[m]]` to `entries[starts[m + 1] - 1]`, in ascending joint
+# order. It indexes one model's members and joints.
+class:
+    patterns:
+        [a|] bim joint index record
+    members:
+        starts as the type of (a cad topology list of an integer)
+        entries as the type of (a cad topology list of an integer)
+
+function the bim joint index of {bim model record:modelValue}:
+    execute:
+        set result to @intrinsic("construct", a bim joint index record, a cad topology list of an integer, a cad topology list of an integer)
+        set memberCount to the length of (modelValue's members's values)
+        set counts to an empty list of an integer
+        loop cursor from 0 to memberCount:
+            append 0 to counts
+        loop cursor from 0 to the length of (modelValue's joints's values):
+            set jointValue to the item at cursor in (modelValue's joints's values)
+            loop participant from 0 to the length of (jointValue's members's values):
+                set found to the bim member index of (the item at participant in (jointValue's members's values)) in modelValue
+                if found's valid:
+                    replace item at index found's position in counts with ((the item at found's position in counts) + 1)
+        set total to 0
+        loop cursor from 0 to memberCount:
+            append total to (result's starts's values)
+            set total to total + (the item at cursor in counts)
+            replace item at index cursor in counts with (the item at cursor in (result's starts's values))
+        append total to (result's starts's values)
+        loop cursor from 0 to total:
+            append -1 to (result's entries's values)
+        loop cursor from 0 to the length of (modelValue's joints's values):
+            set jointValue to the item at cursor in (modelValue's joints's values)
+            loop participant from 0 to the length of (jointValue's members's values):
+                set found to the bim member index of (the item at participant in (jointValue's members's values)) in modelValue
+                if found's valid:
+                    replace item at index (the item at found's position in counts) in (result's entries's values) with cursor
+                    replace item at index found's position in counts with ((the item at found's position in counts) + 1)
+        free counts
+        return result
+
+# The positions of `memberId`'s joints, through `jointIndex`.
+local function the bim joint positions of {a 64 bit integer:memberId} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set entriesFound to an empty list of an integer
+        set memberFound to the bim member index of memberId in modelValue
+        if memberFound's valid:
+            loop entry from (the item at memberFound's position in (jointIndex's starts's values)) to (the item at (memberFound's position + 1) in (jointIndex's starts's values)):
+                append (the item at entry in (jointIndex's entries's values)) to entriesFound
+        return entriesFound
+
+# The role of `memberId` in joint `jointValue`, or -1.
+local function the bim role of {a 64 bit integer:memberId} in {bim joint record:jointValue}:
+    execute:
+        loop cursor from 0 to the length of (jointValue's members's values):
+            if (the item at cursor in (jointValue's members's values)) = memberId:
+                return cursor
+        return -1
+
+# ---------------------------------------------------------------- member ends
+
+# The cut at one end of a member, with the joint that made it (the refused
+# id for a free end).
+class:
+    patterns:
+        [a|] bim member end record
+    members:
+        cut as a fast cut record
+        jointId as a 64 bit integer
+
+# The cut at `subject`'s end `atFinish`: the first trim (in joint order, then
+# feature order) of a joint whose node lies at that end.
+function the bim end of {bim member choice record:subject} at finish {boolean:atFinish} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set memberId to subject's member's id
+        set wantedEnd to 0
+        if atFinish:
+            set wantedEnd to 1
+        set positions to the bim joint positions of memberId in modelValue through jointIndex
+        loop cursor from 0 to the length of positions:
+            set jointValue to the item at (the item at cursor in positions) in (modelValue's joints's values)
+            set context to the bim context of joint jointValue in modelValue
+            if context's valid:
+                set role to the bim role of memberId in jointValue
+                if (the bim end of subject at node context's node) = wantedEnd:
+                    loop featureCursor from 0 to the length of (context's connection's features's values):
+                        set feature to the item at featureCursor in (context's connection's features's values)
+                        if (feature's kind = bim trim feature) and (feature's target = role):
+                            free positions
+                            return @intrinsic("construct", a bim member end record, the bim trim cut of feature in context, jointValue's id)
+        free positions
+        return @intrinsic("construct", a bim member end record, the bim square cut of subject at finish atFinish, the bim refused id)
+
+function the bim end of {bim member choice record:subject} at finish {boolean:atFinish} in {bim model record:modelValue}:
+    execute:
+        return the bim end of subject at finish atFinish in modelValue through (the bim joint index of modelValue)
+
+# ---------------------------------------------------------------- feature frames
+
+# A right-handed frame: x, y and z unit axes at `origin`.
+class:
+    patterns:
+        [a|] bim feature frame record
+    members:
+        origin as a cad vector3
+        x as a cad vector3
+        y as a cad vector3
+        z as a cad vector3
+
+# The frame `feature` is placed in. In its participant's end frame, x runs
+# into the participant from where its section centre line meets its end as
+# cut (along it from the node's projection when the node lies along it); in
+# the other-end frame, x runs along the participant from where the other
+# participant's centre line meets it. z is the participant's section v
+# axis, y completes the frame.
+function the bim frame of {bim feature record:feature} in {bim joint context record:context} with {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set choice to the item at feature's role in (context's participants's values)
+        set section to the bim frame of choice
+        set x to section's axis
+        set origin to the bim centre line point of choice nearest context's node
+        if feature's frameKind = bim other end frame:
+            if (feature's other >= 0) and (feature's other < the length of (context's participants's values)):
+                set partnerPoint to the bim centre line point of (the item at feature's other in (context's participants's values)) nearest context's node
+                set origin to the bim centre line point of choice nearest partnerPoint
+        else:
+            set endCode to the bim end of choice at node context's node
+            if endCode != 2:
+                set x to the bim inward direction of role feature's role in context
+                set memberEnd to the bim end of choice at finish (endCode = 1) in modelValue through jointIndex
+                set facing to the cad dot of memberEnd's cut's normal and section's axis
+                if (the absolute value of facing) > 1e-9:
+                    set reach to (the cad dot of memberEnd's cut's normal and (the cad difference of memberEnd's cut's point and section's origin)) / facing
+                    set origin to the cad sum of section's origin and (section's axis scaled by reach)
+        set z to section's vAxis
+        set y to the cad cross of z and x
+        return @intrinsic("construct", a bim feature frame record, origin, x, y, z)
+
+# The point at frame coordinates `location` of `frame`.
+local function the bim point at {cad vector3:location} in {bim feature frame record:frame}:
+    execute:
+        return the cad sum of frame's origin and (the cad sum of (frame's x scaled by location's x) and (the cad sum of (frame's y scaled by location's y) and (frame's z scaled by location's z)))
+
+# The frame axis `code` (0 x, 1 y, 2 z) of `frame`, and a coordinate of a
+# frame point along it.
+local function the bim axis {integer:code} of {bim feature frame record:frame}:
+    execute:
+        if code = 1:
+            return frame's y
+        if code = 2:
+            return frame's z
+        return frame's x
+
+local function the bim coordinate {integer:code} of {cad vector3:location}:
+    execute:
+        if code = 1:
+            return location's y
+        if code = 2:
+            return location's z
+        return location's x
+
+# ---------------------------------------------------------------- blocks and cylinders
+
+# A block from `low` to `high` (frame coordinates) in `frame`, swept along
+# axis `sweep`, with round holes of `holeRadius` at `holeCentres` (frame
+# coordinates; their position along the sweep axis does not matter),
+# appended to `target`. False when the kernel refuses it.
+local function add bim block from {cad vector3:low} to {cad vector3:high} in {bim feature frame record:frame} swept along {integer:sweep} with holes {a pointer to a list:holeCentres} of {a 64 bit floating-point number:holeRadius} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        # The two axes across the sweep, in cyclic order so that they and the
+        # sweep axis stay right-handed.
+        set first to the remainder of (sweep + 1) divided by 3
+        set second to the remainder of (sweep + 2) divided by 3
+        set base to the cad sum of frame's origin and ((the bim axis sweep of frame) scaled by (the bim coordinate sweep of low))
+        set plateFrame to @intrinsic("construct", a fast frame record, base, the bim axis first of frame, the bim axis second of frame, the bim axis sweep of frame)
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        set outline to an empty list of a cad vector2
+        set lowFirst to the bim coordinate first of low
+        set highFirst to the bim coordinate first of high
+        set lowSecond to the bim coordinate second of low
+        set highSecond to the bim coordinate second of high
+        append (a cad vector2 with x lowFirst and y lowSecond) to outline
+        append (a cad vector2 with x highFirst and y lowSecond) to outline
+        append (a cad vector2 with x highFirst and y highSecond) to outline
+        append (a cad vector2 with x lowFirst and y highSecond) to outline
+        append outline to rings
+        if holeRadius > 0.0:
+            loop cursor from 0 to the length of holeCentres:
+                set centre to the item at cursor in holeCentres
+                append (the bim circle ring of radius holeRadius at (a cad vector2 with x (the bim coordinate first of centre) and y (the bim coordinate second of centre)) in 16) to rings
+        set thickness to (the bim coordinate sweep of high) - (the bim coordinate sweep of low)
+        set built to the fast plate of rings in plateFrame thick thickness within 1e-9
+        free bim rings rings
+        if built's reason != fast sweep built:
+            return false
+        append fast part built's shape to target
+        return true
+
+# The centres (frame coordinates) of `feature`'s cylinder pattern: `countA`
+# by `countB` spread evenly over the extents across its axis, centred on its
+# offset.
+function the bim cylinder centres of {bim feature record:feature} for {bim connection type record:connection} with {a pointer to a list:participants}:
+    execute:
+        set spots to a cad topology list of a cad vector3
+        set countA to the bim count feature's countA for connection
+        set countB to the bim count feature's countB for connection
+        set extentA to the bim value of feature's extentA for connection with participants
+        set extentB to the bim value of feature's extentB for connection with participants
+        set middle to a cad vector3 with x (the bim value of feature's offsetX for connection with participants), y (the bim value of feature's offsetY for connection with participants) and z (the bim value of feature's offsetZ for connection with participants)
+        # A and B across the axis: y and z about x, x and z about y, x and y
+        # about z.
+        set axisA to 0
+        set axisB to 2
+        if feature's axis = 0:
+            set axisA to 1
+        if feature's axis = 2:
+            set axisB to 1
+        loop indexA from 0 to countA:
+            loop indexB from 0 to countB:
+                set shiftA to 0.0
+                if countA > 1:
+                    set shiftA to (extentA * (indexA as a 64 bit floating-point number) / ((countA - 1) as a 64 bit floating-point number)) - (extentA * 0.5)
+                set shiftB to 0.0
+                if countB > 1:
+                    set shiftB to (extentB * (indexB as a 64 bit floating-point number) / ((countB - 1) as a 64 bit floating-point number)) - (extentB * 0.5)
+                set dx to 0.0
+                set dy to 0.0
+                set dz to 0.0
+                if axisA = 0:
+                    set dx to shiftA
+                if axisA = 1:
+                    set dy to shiftA
+                if axisB = 1:
+                    set dy to shiftB
+                if axisB = 2:
+                    set dz to shiftB
+                append (a cad vector3 with x (middle's x + dx), y (middle's y + dy) and z (middle's z + dz)) to (spots's values)
+        return spots
+
+# A cylinder pattern appended to `target`: each cylinder `length` long along
+# frame axis `axisCode`, centred on its centre.
+local function add bim cylinders at {a pointer to a list:centres} along {integer:axisCode} long {a 64 bit floating-point number:length} wide {a 64 bit floating-point number:width} in {bim feature frame record:frame} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        if (length <= 0.0) or (width <= 0.0):
+            return true
+        set made to true
+        set first to the remainder of (axisCode + 1) divided by 3
+        set second to the remainder of (axisCode + 2) divided by 3
+        loop cursor from 0 to the length of centres:
+            set centre to the item at cursor in centres
+            set alongValue to (the bim coordinate axisCode of centre) - (length * 0.5)
+            set base to the cad sum of frame's origin and ((the bim axis axisCode of frame) scaled by alongValue)
+            set plateFrame to @intrinsic("construct", a fast frame record, base, the bim axis first of frame, the bim axis second of frame, the bim axis axisCode of frame)
+            set rings to an empty list of the type of (an empty list of a cad vector2)
+            append (the bim circle ring of radius (width * 0.5) at (a cad vector2 with x (the bim coordinate first of centre) and y (the bim coordinate second of centre)) in 16) to rings
+            set built to the fast plate of rings in plateFrame thick length within 1e-9
+            free bim rings rings
+            if built's reason = fast sweep built:
+                append fast part built's shape to target
+            else:
+                set made to false
+        return made
+
+# The block of `feature` (frame coordinates), from `low` to `high`; invalid
+# (`valid` false) when a size is not above 0.
+class:
+    patterns:
+        [a|] bim block record
+    members:
+        valid as a boolean
+        low as a cad vector3
+        high as a cad vector3
+
+function the bim block of {bim feature record:feature} for {bim connection type record:connection} with {a pointer to a list:participants}:
+    execute:
+        set sizeX to the bim value of feature's sizeX for connection with participants
+        set sizeY to the bim value of feature's sizeY for connection with participants
+        set sizeZ to the bim value of feature's sizeZ for connection with participants
+        set offsetX to the bim value of feature's offsetX for connection with participants
+        set offsetY to the bim value of feature's offsetY for connection with participants
+        set offsetZ to the bim value of feature's offsetZ for connection with participants
+        set low to a cad vector3 with x offsetX, y (offsetY - (sizeY * 0.5)) and z (offsetZ - (sizeZ * 0.5))
+        set high to a cad vector3 with x (offsetX + sizeX), y (offsetY + (sizeY * 0.5)) and z (offsetZ + (sizeZ * 0.5))
+        set valid to ((sizeX > 0.0) and (sizeY > 0.0)) and (sizeZ > 0.0)
+        return @intrinsic("construct", a bim block record, valid, low, high)
+
+# The parts `feature` makes (a block or cylinders), appended to `target`:
+# added parts of the joint, or the cutters of a cut. A block takes the holes
+# of the cut cylinders aimed at it (target -1 - its index), swept along
+# their axis. False when the kernel refuses a part.
+local function add bim parts of feature {integer:featureIndex} in {bim joint context record:context} with {bim model record:modelValue} through {bim joint index record:jointIndex} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set chosenFeature to the item at featureIndex in (context's connection's features's values)
+        set frame to the bim frame of chosenFeature in context with modelValue through jointIndex
+        set participants to context's participants's values
+        if (chosenFeature's kind = bim add block feature) or (chosenFeature's kind = bim cut block feature):
+            set block to the bim block of chosenFeature for context's connection with participants
+            if block's valid = false:
+                return true
+            set holeCentres to an empty list of a cad vector3
+            set holeRadius to 0.0
+            set sweep to 0
+            if chosenFeature's kind = bim add block feature:
+                loop cursor from 0 to the length of (context's connection's features's values):
+                    set holes to the item at cursor in (context's connection's features's values)
+                    if (holes's kind = bim cut cylinders feature) and (holes's target = (-1 - featureIndex)):
+                        set sweep to holes's axis
+                        set holeRadius to (the bim value of holes's diameter for context's connection with participants) * 0.5
+                        set centres to the bim cylinder centres of holes for context's connection with participants
+                        loop centreCursor from 0 to the length of (centres's values):
+                            append (the item at centreCursor in (centres's values)) to holeCentres
+            set made to add bim block from block's low to block's high in frame swept along sweep with holes holeCentres of holeRadius to target
+            free holeCentres
+            return made
+        set centres to the bim cylinder centres of chosenFeature for context's connection with participants
+        set length to the bim value of chosenFeature's sizeX for context's connection with participants
+        set width to the bim value of chosenFeature's diameter for context's connection with participants
+        return add bim cylinders at (centres's values) along chosenFeature's axis long length wide width in frame to target
+
+# ---------------------------------------------------------------- solids
+
+class:
+    patterns:
+        [a|] bim framing solid record
+    members:
+        status as an integer
+        fast as a boolean
+        shape as a fast polyhedron record
+        solid as the type of (an empty cad body)
+
+local function a bim framing failure {integer:status}:
+    execute:
+        return @intrinsic("construct", a bim framing solid record, status, true, an empty fast polyhedron, an empty cad body)
+
+# The material whose hatch and colour a member or joint is drawn in:
+# timber, concrete or aluminium when its type's material (a joint's first
+# added part's) names one, else steel.
+function the bim drawing material of {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        set named to the string form of ""
+        set found to the bim member index of elementId in modelValue
+        if found's valid:
+            set typeFound to the bim member type index of (the item at found's position in (modelValue's members's values))'s typeId in modelValue
+            if typeFound's valid:
+                set named to (the item at typeFound's position in (modelValue's memberTypes's values))'s material
+        set jointFound to the bim joint index of elementId in modelValue
+        if jointFound's valid:
+            set connectionFound to the bim connection type index of (the item at jointFound's position in (modelValue's joints's values))'s typeId in modelValue
+            if connectionFound's valid:
+                set connection to the item at connectionFound's position in (modelValue's connectionTypes's values)
+                loop cursor from 0 to the length of (connection's features's values):
+                    set feature to the item at cursor in (connection's features's values)
+                    if ((feature's kind = bim add block feature) or (feature's kind = bim add cylinders feature)) and ((the length of named) = 0):
+                        set named to feature's material
+        set lowered to the lowercase form of named
+        if lowered contains "timber":
+            return the string form of "timber"
+        if lowered contains "concrete":
+            return the string form of "concrete"
+        if lowered contains "alumin":
+            return the string form of "aluminium"
+        return the string form of "steel"
+
+# The cutters every joint of `memberId` cuts it with, in world coordinates,
+# as one polyhedron of closed parts (empty when there are none).
+function the bim cutters of {a 64 bit integer:memberId} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set cutting to an empty fast polyhedron
+        set positions to the bim joint positions of memberId in modelValue through jointIndex
+        loop cursor from 0 to the length of positions:
+            set jointValue to the item at (the item at cursor in positions) in (modelValue's joints's values)
+            set context to the bim context of joint jointValue in modelValue
+            if context's valid:
+                set role to the bim role of memberId in jointValue
+                loop featureCursor from 0 to the length of (context's connection's features's values):
+                    set feature to the item at featureCursor in (context's connection's features's values)
+                    if ((feature's kind = bim cut block feature) or (feature's kind = bim cut cylinders feature)) and (feature's target = role):
+                        ignore add bim parts of feature featureCursor in context with modelValue through jointIndex to (the address of cutting)
+        free positions
+        return cutting
+
+# The closed parts of `shape` (a polyhedron of disjoint parts, such as the
+# cutters of a member) as polyhedra of their own: faces sharing a corner
+# belong to one part.
+function the bim separate parts of {fast polyhedron record:shape}:
+    execute:
+        set separated to an empty list of a fast polyhedron record
+        set count to the length of (shape's positions's values)
+        set parents to an empty list of an integer
+        loop cursor from 0 to count:
+            append cursor to parents
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set first to the item at face's firstLoop in (shape's loopStarts's values)
+            set past to the item at (face's firstLoop + face's loopCount) in (shape's loopStarts's values)
+            loop cursor from (first + 1) to past:
+                set a to the item at (the item at first in (shape's indices's values)) in parents
+                loop while (the item at a in parents) != a:
+                    set a to the item at a in parents
+                set b to the item at (the item at cursor in (shape's indices's values)) in parents
+                loop while (the item at b in parents) != b:
+                    set b to the item at b in parents
+                if a != b:
+                    replace item at index b in parents with a
+        # The root of each position, then one polyhedron per root.
+        set roots to an empty list of an integer
+        loop cursor from 0 to count:
+            set r to cursor
+            loop while (the item at r in parents) != r:
+                set r to the item at r in parents
+            append r to roots
+        set seen to an empty list of an integer
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set root to the item at (the item at (the item at face's firstLoop in (shape's loopStarts's values)) in (shape's indices's values)) in roots
+            if (seen contains root) = false:
+                append root to seen
+        loop partCursor from 0 to the length of seen:
+            set root to the item at partCursor in seen
+            set part to an empty fast polyhedron
+            set mapping to an empty list of an integer
+            loop cursor from 0 to count:
+                if (the item at cursor in roots) = root:
+                    append (add fast position (the item at cursor in (shape's positions's values)) to (the address of part)) to mapping
+                else:
+                    append -1 to mapping
+            loop faceCursor from 0 to the length of (shape's faces's values):
+                set face to the item at faceCursor in (shape's faces's values)
+                set firstIndex to the item at (the item at face's firstLoop in (shape's loopStarts's values)) in (shape's indices's values)
+                if (the item at firstIndex in roots) = root:
+                    set firstLoop to (the length of (part's loopStarts's values)) - 1
+                    loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                        set ringFirst to the item at ringCursor in (shape's loopStarts's values)
+                        set ringPast to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                        loop cursor from ringFirst to ringPast:
+                            append (the item at (the item at cursor in (shape's indices's values)) in mapping) to (part's indices's values)
+                        append (the length of (part's indices's values)) to (part's loopStarts's values)
+                    append (@intrinsic("construct", a fast face record, firstLoop, face's loopCount, face's normal, face's offset)) to (part's faces's values)
+            free mapping
+            append part to separated
+        free parents
+        free roots
+        free seen
+        return separated
+
+# A planar B-rep as a polyhedron: its triangles merged into one face per
+# region of one plane.
+function the bim merged polyhedron of {cad body:solid}:
+    execute:
+        set tessellated to the cad mesh of solid with maximum angle 0.3 within 1e-6
+        set corners to an empty list of an integer
+        loop cursor from 0 to the length of tessellated's triangles:
+            set face to the item at cursor in tessellated's triangles
+            append face's first to corners
+            append face's second to corners
+            append face's third to corners
+        set points to an empty list of a cad vector3
+        loop cursor from 0 to the length of tessellated's positions:
+            append (the item at cursor in tessellated's positions) to points
+        set rebuilt to the fast polyhedron of triangles corners at points within 1e-7
+        free corners
+        free points
+        return rebuilt
+
+# ---------------------------------------------------------------- face triangulation
+
+local function the bim doubled area of corners {a pointer to a list:cornerList} at {a pointer to a list:flats}:
+    execute:
+        set total to 0.0
+        set count to the length of cornerList
+        loop place from 0 to count:
+            set here to the item at (the item at place in cornerList) in flats
+            set following to the item at (the item at (the remainder of (place + 1) divided by count) in cornerList) in flats
+            set total to total + ((here's x * following's y) - (following's x * here's y))
+        return total
+
+local function the bim turn of {cad vector2:a}, {cad vector2:b} and {cad vector2:c}:
+    execute:
+        return ((b's x - a's x) * (c's y - a's y)) - ((b's y - a's y) * (c's x - a's x))
+
+local function bim flat {cad vector2:probe} lies in triangle {cad vector2:a}, {cad vector2:b} and {cad vector2:c}:
+    execute:
+        set first to the bim turn of a, b and probe
+        set second to the bim turn of b, c and probe
+        set third to the bim turn of c, a and probe
+        return ((first >= 0.0) and (second >= 0.0)) and (third >= 0.0)
+
+# True when segments p-q and r-s cross at a point inside both (touching at
+# a shared corner does not count).
+local function bim segments {cad vector2:p} to {cad vector2:q} and {cad vector2:r} to {cad vector2:t} cross:
+    execute:
+        set d1 to the bim turn of p, q and r
+        set d2 to the bim turn of p, q and t
+        set d3 to the bim turn of r, t and p
+        set d4 to the bim turn of r, t and q
+        return (((d1 > 0.0) and (d2 < 0.0)) or ((d1 < 0.0) and (d2 > 0.0))) and (((d3 > 0.0) and (d4 < 0.0)) or ((d3 < 0.0) and (d4 > 0.0)))
+
+local function bim flat {cad vector2:probe} is enclosed by {a pointer to a list:cornerList} at {a pointer to a list:flats}:
+    execute:
+        set parity to false
+        set count to the length of cornerList
+        loop place from 0 to count:
+            set here to the item at (the item at place in cornerList) in flats
+            set following to the item at (the item at (the remainder of (place + 1) divided by count) in cornerList) in flats
+            if (here's y > probe's y) != (following's y > probe's y):
+                set crossingX to here's x + (((probe's y - here's y) / (following's y - here's y)) * (following's x - here's x))
+                if probe's x < crossingX:
+                    set parity to (parity = false)
+        return parity
+
+# True when the segment between corners `fromCorner` and `toCorner` crosses
+# none of the edges and its middle lies inside `outer` and outside every
+# hole.
+local function bim segment from {integer:fromCorner} to {integer:toCorner} is clear of edges {a pointer to a list:edgeStarts} to {a pointer to a list:edgeEnds} at {a pointer to a list:flats} inside {a pointer to a list:outer} without {a pointer to a list:holeLists}:
+    execute:
+        set p to the item at fromCorner in flats
+        set q to the item at toCorner in flats
+        loop edge from 0 to the length of edgeStarts:
+            set first to the item at edge in edgeStarts
+            set second to the item at edge in edgeEnds
+            if ((first != fromCorner) and (first != toCorner)) and ((second != fromCorner) and (second != toCorner)):
+                if bim segments p to q and (the item at first in flats) to (the item at second in flats) cross:
+                    return false
+        set middle to a cad vector2 with x ((p's x + q's x) * 0.5) and y ((p's y + q's y) * 0.5)
+        if (bim flat middle is enclosed by outer at flats) = false:
+            return false
+        loop holeIndex from 0 to the length of holeLists:
+            if bim flat middle is enclosed by (the item at holeIndex in holeLists) at flats:
+                return false
+        return true
+
+# The triangles (corner index triples into `flats`) of the polygon `outer`
+# with `holes` (lists of corner indices), without adding a corner: each hole
+# is bridged to the outer ring from its rightmost corner, the bridge's two
+# corners appearing twice, and the ring is cut into ears.
+function the bim ear triangles of {a pointer to a list:outer} with holes {a pointer to a list:holeLists} at {a pointer to a list:flats}:
+    execute:
+        set ring to an empty list of an integer
+        loop place from 0 to the length of outer:
+            append (the item at place in outer) to ring
+        if (the bim doubled area of corners ring at flats) < 0.0:
+            set reversedRing to an empty list of an integer
+            set place to (the length of ring) - 1
+            loop while place >= 0:
+                append (the item at place in ring) to reversedRing
+                set place to place - 1
+            free ring
+            set ring to reversedRing
+        # Each hole is bridged from one of its corners to an outer corner not
+        # yet used by a bridge, the shortest such segment that crosses no
+        # edge of the outer ring, of any hole or of an earlier bridge and
+        # whose middle lies inside the face.
+        set edgeStarts to an empty list of an integer
+        set edgeEnds to an empty list of an integer
+        loop place from 0 to the length of outer:
+            append (the item at place in outer) to edgeStarts
+            append (the item at (the remainder of (place + 1) divided by (the length of outer)) in outer) to edgeEnds
+        loop holeIndex from 0 to the length of holeLists:
+            set source to the item at holeIndex in holeLists
+            loop place from 0 to the length of source:
+                append (the item at place in source) to edgeStarts
+                append (the item at (the remainder of (place + 1) divided by (the length of source)) in source) to edgeEnds
+        set usedOuter to an empty list of an integer
+        loop holeIndex from 0 to the length of holeLists:
+            set hole to an empty list of an integer
+            set source to the item at holeIndex in holeLists
+            loop place from 0 to the length of source:
+                append (the item at place in source) to hole
+            # Holes run clockwise.
+            if (the bim doubled area of corners hole at flats) > 0.0:
+                set reversedHole to an empty list of an integer
+                set place to (the length of hole) - 1
+                loop while place >= 0:
+                    append (the item at place in hole) to reversedHole
+                    set place to place - 1
+                free hole
+                set hole to reversedHole
+            set bestLength to 1e300
+            set bestHole to -1
+            set bestOuter to -1
+            loop holePlace from 0 to the length of hole:
+                set h to the item at (the item at holePlace in hole) in flats
+                loop outerPlace from 0 to the length of outer:
+                    set outerCorner to the item at outerPlace in outer
+                    if (usedOuter contains outerCorner) = false:
+                        set o to the item at outerCorner in flats
+                        set span to ((o's x - h's x) * (o's x - h's x)) + ((o's y - h's y) * (o's y - h's y))
+                        if span < bestLength:
+                            if bim segment from (the item at holePlace in hole) to outerCorner is clear of edges edgeStarts to edgeEnds at flats inside outer without holeLists:
+                                set bestLength to span
+                                set bestHole to holePlace
+                                set bestOuter to outerCorner
+            if bestHole < 0:
+                free hole
+                free usedOuter
+                free edgeStarts
+                free edgeEnds
+                return an empty list of an integer
+            append bestOuter to usedOuter
+            append (the item at bestHole in hole) to edgeStarts
+            append bestOuter to edgeEnds
+            # Splice at the outer corner: ..., outer, hole from the bridge
+            # corner round to it again, outer, ...
+            set bridge to 0
+            loop place from 0 to the length of ring:
+                if (the item at place in ring) = bestOuter:
+                    set bridge to place
+            set spliced to an empty list of an integer
+            loop place from 0 to bridge + 1:
+                append (the item at place in ring) to spliced
+            loop step from 0 to (the length of hole) + 1:
+                append (the item at (the remainder of (bestHole + step) divided by (the length of hole)) in hole) to spliced
+            loop place from bridge to the length of ring:
+                append (the item at place in ring) to spliced
+            free ring
+            free hole
+            set ring to spliced
+        free usedOuter
+        free edgeStarts
+        free edgeEnds
+        # Ear clipping.
+        set earCorners to an empty list of an integer
+        set guard to 0
+        loop while ((the length of ring) > 3) and (guard < 100000):
+            set guard to guard + 1
+            set count to the length of ring
+            set clipped to false
+            loop place from 0 to count:
+                if clipped = false:
+                    set before to the item at (the remainder of ((place + count) - 1) divided by count) in ring
+                    set here to the item at place in ring
+                    set after to the item at (the remainder of (place + 1) divided by count) in ring
+                    set a to the item at before in flats
+                    set b to the item at here in flats
+                    set c to the item at after in flats
+                    if (the bim turn of a, b and c) > 1e-18:
+                        set blocked to false
+                        loop other from 0 to count:
+                            set index to the item at other in ring
+                            if ((index != before) and (index != here)) and (index != after):
+                                set probe to the item at index in flats
+                                set onCorner to ((probe's x = a's x) and (probe's y = a's y)) or (((probe's x = b's x) and (probe's y = b's y)) or ((probe's x = c's x) and (probe's y = c's y)))
+                                if (onCorner = false) and (bim flat probe lies in triangle a, b and c):
+                                    set blocked to true
+                        if blocked = false:
+                            append before to earCorners
+                            append here to earCorners
+                            append after to earCorners
+                            remove item place from ring
+                            set clipped to true
+            if clipped = false:
+                # Degenerate remainder: clip the first corner anyway.
+                append (the item at ((the length of ring) - 1) in ring) to earCorners
+                append (the item at 0 in ring) to earCorners
+                append (the item at 1 in ring) to earCorners
+                remove item 0 from ring
+        if (the length of ring) = 3:
+            append (the item at 0 in ring) to earCorners
+            append (the item at 1 in ring) to earCorners
+            append (the item at 2 in ring) to earCorners
+        free ring
+        return earCorners
+
+# The B-rep of a closed polyhedron of one or more parts: its faces as they
+# are, and each face with holeLists as the earCorners of its own plane (corners
+# shared with its neighbours), so a boolean meets few faces.
+function the bim body of {fast polyhedron record:shape}:
+    execute:
+        set faces to an empty list of the type of (an empty list of an integer)
+        set vertices to an empty list of a cad vector3
+        loop cursor from 0 to the length of (shape's positions's values):
+            append (the item at cursor in (shape's positions's values)) to vertices
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            if face's loopCount = 1:
+                set first to the item at face's firstLoop in (shape's loopStarts's values)
+                set past to the item at (face's firstLoop + 1) in (shape's loopStarts's values)
+                set ring to an empty list of an integer
+                loop cursor from first to past:
+                    append (the item at cursor in (shape's indices's values)) to ring
+                append ring to faces
+            else:
+                # The face in its own plane, cut into ears without new corners.
+                set normal to face's normal
+                set helper to the cad x axis
+                if (the absolute value of normal's x) > 0.9:
+                    set helper to a cad vector3 with x 0.0, y 1.0 and z 0.0
+                set uAxis to (the cad normalization of (the cad cross of helper and normal))'s value
+                set vAxis to the cad cross of normal and uAxis
+                set flats to an empty list of a cad vector2
+                loop cursor from 0 to the length of (shape's positions's values):
+                    set location to the item at cursor in (shape's positions's values)
+                    append (a cad vector2 with x (the cad dot of location and uAxis) and y (the cad dot of location and vAxis)) to flats
+                set outerRing to an empty list of an integer
+                set holeRings to an empty list of the type of (an empty list of an integer)
+                loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                    set first to the item at ringCursor in (shape's loopStarts's values)
+                    set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
+                    set localRing to an empty list of an integer
+                    loop cursor from first to past:
+                        append (the item at cursor in (shape's indices's values)) to localRing
+                    if ringCursor = face's firstLoop:
+                        loop cursor from 0 to the length of localRing:
+                            append (the item at cursor in localRing) to outerRing
+                        free localRing
+                    else:
+                        append localRing to holeRings
+                set ears to the bim ear triangles of outerRing with holes holeRings at flats
+                set corner to 0
+                loop while corner < the length of ears:
+                    set ring to an empty list of an integer
+                    append (the item at corner in ears) to ring
+                    append (the item at (corner + 1) in ears) to ring
+                    append (the item at (corner + 2) in ears) to ring
+                    append ring to faces
+                    set corner to corner + 3
+                free ears
+                free flats
+                free outerRing
+                loop cursor from 0 to the length of holeRings:
+                    free (the item at cursor in holeRings)
+                free holeRings
+        set faceted to the cad faceted solid with vertices vertices and faces faces within 1e-9
+        loop cursor from 0 to the length of faces:
+            free (the item at cursor in faces)
+        free faces
+        free vertices
+        return faceted
+
+# The solid of member `memberId`: its section swept between its end cuts by
+# the fast kernel, then, when its joints cut it (notches, mortises, slots,
+# holes), turned into a B-rep and cut by the port's booleans. Status 0 when
+# built, 1 when the member, its type or its level is missing, 2 when the
+# kernel refused the sweep, 5 when it refused a cut (the member is built
+# with the cuts it took).
+function the bim member solid of {a 64 bit integer:memberId} in {bim model record:modelValue}:
+    execute:
+        return the bim member solid of memberId in modelValue through (the bim joint index of modelValue)
+
+function the bim member solid of {a 64 bit integer:memberId} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set choice to the bim member choice of memberId in modelValue
+        if choice's valid = false:
+            return a bim framing failure 1
+        set startEnd to the bim end of choice at finish false in modelValue through jointIndex
+        set finishEnd to the bim end of choice at finish true in modelValue through jointIndex
+        set rings to the bim section rings of choice's profile
+        set built to the fast sweep of rings in (the bim frame of choice) from startEnd's cut to finishEnd's cut within 1e-9
+        free bim rings rings
+        if built's reason != fast sweep built:
+            return a bim framing failure 2
+        set cutters to the bim cutters of memberId in modelValue through jointIndex
+        if (the length of (cutters's faces's values)) = 0:
+            return @intrinsic("construct", a bim framing solid record, 0, true, built's shape, an empty cad body)
+        # One cutter at a time (the booleans take one closed body each). After
+        # each cut the result's coplanar pieces are merged back into planar
+        # faces with holes, so the next cut starts from a clean polyhedron
+        # and the member stays a fast polyhedron.
+        set current to built's shape
+        set pieces to the bim separate parts of cutters
+        # A cut the kernel refuses is left out: the member keeps the cuts made
+        # so far (status 5 tells it is incomplete).
+        set complete to true
+        set cutting to true
+        loop cursor from 0 to the length of pieces:
+            if cutting:
+                set body to the bim body of current
+                set cutterBody to the bim body of (the item at cursor in pieces)
+                if (body's valid = false) or (cutterBody's valid = false):
+                    set cutting to false
+                else:
+                    set voided to the cad combination of body's value and cutterBody's value using cad difference operation within 1e-9
+                    if voided's valid = false:
+                        set cutting to false
+                    else:
+                        set merged to the bim merged polyhedron of voided's value
+                        if (the fast flaw of merged within 1e-7) != 0:
+                            set cutting to false
+                        else:
+                            set current to merged
+                if cutting = false:
+                    set complete to false
+        free pieces
+        set status to 0
+        if complete = false:
+            set status to 5
+        return @intrinsic("construct", a bim framing solid record, status, true, current, an empty cad body)
+
+# The solid of joint `jointValue`: every part its features add, as one
+# polyhedron. Status 0 when it adds a part, 4 when it adds none (a plain
+# butt joint, a mitre, a half lap), 2 when the kernel refused a part.
+function the bim joint solid of {bim joint record:jointValue} in {bim model record:modelValue}:
+    execute:
+        return the bim joint solid of jointValue in modelValue through (the bim joint index of modelValue)
+
+function the bim joint solid of {bim joint record:jointValue} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set context to the bim context of joint jointValue in modelValue
+        if context's valid = false:
+            return a bim framing failure 4
+        set shape to an empty fast polyhedron
+        set made to true
+        loop featureCursor from 0 to the length of (context's connection's features's values):
+            set feature to the item at featureCursor in (context's connection's features's values)
+            if (feature's kind = bim add block feature) or (feature's kind = bim add cylinders feature):
+                if (add bim parts of feature featureCursor in context with modelValue through jointIndex to (the address of shape)) = false:
+                    set made to false
+        if made = false:
+            return a bim framing failure 2
+        if (the length of (shape's faces's values)) = 0:
+            return a bim framing failure 4
+        return @intrinsic("construct", a bim framing solid record, 0, true, shape, an empty cad body)
+
+# ---------------------------------------------------------------- signatures
+
+local function the bim framing number text of {a 64 bit floating-point number:value}:
+    execute:
+        set copy to value
+        set raw to the value at ((the address of copy) as a pointer to a 64 bit unsigned integer)
+        return the string form of raw
+
+local function the bim framing vector text of {cad vector3:value}:
+    execute:
+        return ((((the bim framing number text of value's x) + (the string form of ",")) + (the bim framing number text of value's y)) + (the string form of ",")) + (the bim framing number text of value's z)
+
+local function the bim profile text of {bim profile record:profile}:
+    execute:
+        set written to (the string form of profile's kind) + (the string form of ":")
+        set written to (written + (the bim framing number text of profile's depth)) + (the string form of ",")
+        set written to (written + (the bim framing number text of profile's width)) + (the string form of ",")
+        set written to (written + (the bim framing number text of profile's webThickness)) + (the string form of ",")
+        set written to (written + (the bim framing number text of profile's flangeThickness)) + (the string form of ",")
+        set written to (written + (the bim framing number text of profile's rootRadius)) + (the string form of ",")
+        set written to (written + (the bim framing number text of profile's toeRadius)) + (the string form of ",")
+        return written + (the bim framing number text of profile's flangeSlope)
+
+# Everything a member's solid depends on, written exactly: its profile, its
+# frame, both end planes (which carry its joints and partners) and the
+# corners of every cutter its joints cut it with.
+function the bim member signature of {a 64 bit integer:memberId} in {bim model record:modelValue}:
+    execute:
+        return the bim member signature of memberId in modelValue through (the bim joint index of modelValue)
+
+function the bim member signature of {a 64 bit integer:memberId} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set choice to the bim member choice of memberId in modelValue
+        if choice's valid = false:
+            return the string form of "m-"
+        set frame to the bim frame of choice
+        set written to (the string form of "m") + (the bim profile text of choice's profile)
+        set written to (written + (the string form of ";o")) + (the bim framing vector text of frame's origin)
+        set written to (written + (the string form of ";u")) + (the bim framing vector text of frame's uAxis)
+        set written to (written + (the string form of ";a")) + (the bim framing vector text of frame's axis)
+        set startEnd to the bim end of choice at finish false in modelValue through jointIndex
+        set finishEnd to the bim end of choice at finish true in modelValue through jointIndex
+        set written to (written + (the string form of ";s")) + (the bim framing vector text of startEnd's cut's point)
+        set written to (written + (the string form of "/")) + (the bim framing vector text of startEnd's cut's normal)
+        set written to (written + (the string form of ";f")) + (the bim framing vector text of finishEnd's cut's point)
+        set written to (written + (the string form of "/")) + (the bim framing vector text of finishEnd's cut's normal)
+        set cutting to the bim cutters of memberId in modelValue through jointIndex
+        loop cursor from 0 to the length of (cutting's positions's values):
+            set written to (written + (the string form of ";c")) + (the bim framing vector text of (the item at cursor in (cutting's positions's values)))
+        return written
+
+# Everything a joint's solid depends on, written exactly: the corners of the
+# parts it adds (so every parameter and both members count).
+function the bim joint signature of {bim joint record:jointValue} in {bim model record:modelValue}:
+    execute:
+        return the bim joint signature of jointValue in modelValue through (the bim joint index of modelValue)
+
+function the bim joint signature of {bim joint record:jointValue} in {bim model record:modelValue} through {bim joint index record:jointIndex}:
+    execute:
+        set built to the bim joint solid of jointValue in modelValue through jointIndex
+        if built's status != 0:
+            return (the string form of "j") + (the string form of built's status)
+        set written to (the string form of "j") + (the string form of (the length of (built's shape's positions's values)))
+        loop cursor from 0 to the length of (built's shape's positions's values):
+            set written to (written + (the string form of ";")) + (the bim framing vector text of (the item at cursor in (built's shape's positions's values)))
+        return written
