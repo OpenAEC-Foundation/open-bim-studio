@@ -864,3 +864,60 @@ it, so lines snap to the points and edges of faces where they are seen.
 
 **Not yet.** Lines on a mass's top or side stay on the storey's plane; sketch
 geometry is not a general 3D mesh (see edit mode above).
+
+## Free meshes: Tab into a mass, push/pull any face (2026-10-08)
+
+This follows the edit-mode request: free 3D vertices and SketchUp's push/pull
+on any face.
+
+**The element.** A free mesh is a new model element on a storey:
+- its points are in 3D, relative to the storey;
+- each face is a loop of point numbers, turning anticlockwise seen from
+  outside;
+- faces need not be convex or quite flat. Each face is triangulated in its
+  own plane (the Newell normal) and keeps its own points.
+
+**Making one.** Tab on a mass turns it into a mesh, as one edit that can be
+undone. The mass's foot, top and a side per edge become faces. Edit mode then
+works on the mesh:
+- in the plan, a click picks the highest point, the highest edge or the face
+  seen there;
+- in the 3D panel, a click picks the point nearest the pointer on screen, or
+  the face under it;
+- G grabs with X, Y and Z, and Z now moves single points in height, so a top
+  can be tilted.
+
+**Push/pull of a face.**
+- In the 3D panel, any face can be pushed; it follows the pointer along the
+  face's normal as seen on screen.
+- In the plan, the face on top is pushed.
+- When every face touching the pushed face runs along the push, the face
+  moves and they stretch, so a box stays eight points.
+- Otherwise the face is extruded, and each of its edges grows a side.
+- A typed distance places it exactly; a negative distance pulls it in.
+
+**Stored.**
+- In `.bim`, a mesh is a `mesh` line: the points, then the faces as counts
+  and point numbers.
+- In IfcX, a mesh is an `IfcBuildingElementProxy` with its triangulated body,
+  its volume, and an `openbim::mesh` record from which it is read back
+  exactly.
+- It is drawn in the plan (top faces filled, all edges), shown in the 3D
+  panel, and can be selected, deleted and listed in the properties window
+  (points, faces, volume).
+
+**Checked.** `tests/mesh.dl`:
+- a 4 × 3 × 2.5 m mass made a mesh (30 m³);
+- a top corner raised 1 m (32 m³);
+- undo;
+- the top pushed 1 m, which moves the face (42 m³);
+- the mesh saved and read back as `.bim` and as `.ifcx`;
+- a side pushed out 2 m (63 m³);
+- a corner raised, then the top extruded (12 points, 10 faces);
+- deletion.
+
+**Not yet:**
+- Pushing a face through the far side of the mesh is not refused.
+- There are no loop cuts and no merging of points.
+- Meshes cannot be moved, copied or put in components.
+- Lines drawn on a mesh face do not split it.

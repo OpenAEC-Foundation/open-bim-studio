@@ -19,6 +19,9 @@
 #     component <id> <name>
 #     part <id> 0 <kind> <height> <point count> <x> <y> ... [<text>]    a sketch element of the component above it, in its coordinates
 #     instance <id> <component> <level> <origin x> <origin y> <angle>
+#     mesh <id> <level> <point count> <x> <y> <z> ... <face entry count> <entry> ...
+#                                            a free mesh: its points, then each face as its
+#                                            point count followed by that many point numbers
 #     units <mm, cm or m>                    the project's length units (lengths are stored in metres)
 #     viewrule <view kind> <category> <visible: 0 or 1> <halftone: 0 or 1>
 #
@@ -209,6 +212,22 @@ function the bim file text of {bim model record:modelValue}:
             append (the bim exact text of placement's origin's x) to pieces
             append (the bim exact text of placement's origin's y) to pieces
             append (the bim exact text of placement's angle) to pieces
+            append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            set meshValue to the item at cursor in (modelValue's meshes's values)
+            clear pieces
+            append (the string form of "mesh") to pieces
+            append (the string form of meshValue's id) to pieces
+            append (the string form of meshValue's levelId) to pieces
+            append (the string form of (the length of (meshValue's vertices's values))) to pieces
+            loop corner from 0 to the length of (meshValue's vertices's values):
+                set point to the item at corner in (meshValue's vertices's values)
+                append (the bim exact text of point's x) to pieces
+                append (the bim exact text of point's y) to pieces
+                append (the bim exact text of point's z) to pieces
+            append (the string form of (the length of (meshValue's faces's values))) to pieces
+            loop entry from 0 to the length of (meshValue's faces's values):
+                append (the string form of (the item at entry in (meshValue's faces's values))) to pieces
             append (the bim joined fields of pieces) to lines
         free pieces
         append (the string form of "") to lines
@@ -456,6 +475,12 @@ local function the bim reference fault of {bim model record:modelValue}:
             if ((the bim level index of placement's levelId in modelValue)'s valid = false) or ((the bim component index of placement's componentId in modelValue)'s valid = false):
                 free ids
                 return (the string form of "instance ") + ((the string form of placement's id) + (the string form of " refers to a missing level or component"))
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            set meshValue to the item at cursor in (modelValue's meshes's values)
+            append meshValue's id to ids
+            if (the bim level index of meshValue's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "mesh ") + ((the string form of meshValue's id) + (the string form of " refers to a missing level"))
         set total to the length of ids
         sort and deduplicate bim ids ids
         set problem to the string form of ""
@@ -712,6 +737,45 @@ function the bim model parsed from {a string:content}:
                                 append (@intrinsic("construct", a bim sketch record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, sketchKind, sketchPoints, the item at 0 in (fields's reals), message)) to (owner's sketches's values)
                             else if (the length of refusal) = 0:
                                 append (@intrinsic("construct", a bim sketch record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, sketchKind, sketchPoints, the item at 0 in (fields's reals), message)) to (modelValue's sketches's values)
+                    free bim field reading fields
+                else if kind = (the string form of "mesh"):
+                    set fields to the bim fields 1 to 3 of tokens laid out as (the string form of "iii")
+                    set entryReading to @intrinsic("construct", a bim whole reading record, false, 0 as a 64 bit integer)
+                    if fields's valid:
+                        set countAt to 4 + (((the item at 2 in fields's wholes) as an integer) * 3)
+                        if ((the item at 2 in fields's wholes) >= (0 as a 64 bit integer)) and (countAt < the length of tokens):
+                            set entryReading to the bim whole reading of (the item at countAt in tokens)
+                    if (fields's valid and entryReading's valid) = false:
+                        set refusal to the string form of "malformed mesh"
+                    else:
+                        set pointCount to the item at 2 in fields's wholes
+                        set entryCount to entryReading's value
+                        if ((pointCount < (3 as a 64 bit integer)) or (pointCount > (1000000 as a 64 bit integer))) or ((entryCount < (4 as a 64 bit integer)) or (entryCount > (10000000 as a 64 bit integer))):
+                            set refusal to the string form of "a mesh needs points and faces"
+                        else if (the length of tokens) != ((5 + ((pointCount as an integer) * 3)) + (entryCount as an integer)):
+                            set refusal to the string form of "malformed mesh"
+                        else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's meshes's values)) = false:
+                            set refusal to the string form of "mesh ids out of order"
+                        else:
+                            set meshPoints to a cad topology list of a cad vector3
+                            loop corner from 0 to (pointCount as an integer):
+                                set across to the bim real reading of (the item at (4 + (corner * 3)) in tokens)
+                                set upward to the bim real reading of (the item at (5 + (corner * 3)) in tokens)
+                                set rising to the bim real reading of (the item at (6 + (corner * 3)) in tokens)
+                                if ((across's valid and upward's valid) and rising's valid) = false:
+                                    set refusal to the string form of "malformed mesh point"
+                                append (a cad vector3 with x across's value, y upward's value and z rising's value) to (meshPoints's values)
+                            set meshFaces to a cad topology list of an integer
+                            set entryStart to 5 + ((pointCount as an integer) * 3)
+                            loop entry from 0 to (entryCount as an integer):
+                                set number to the bim whole reading of (the item at (entryStart + entry) in tokens)
+                                if (number's valid = false) or ((number's value < (0 as a 64 bit integer)) or (number's value > (10000000 as a 64 bit integer))):
+                                    set refusal to the string form of "malformed mesh face"
+                                append ((number's value) as an integer) to (meshFaces's values)
+                            if ((the length of refusal) = 0) and ((bim mesh faces (meshFaces's values) fit (pointCount as an integer)) = false):
+                                set refusal to the string form of "a mesh face refers to a missing point"
+                            if (the length of refusal) = 0:
+                                append (@intrinsic("construct", a bim mesh record, the item at 0 in fields's wholes, the item at 1 in fields's wholes, meshPoints, meshFaces)) to (modelValue's meshes's values)
                     free bim field reading fields
                 else if kind = (the string form of "units"):
                     if (the length of tokens) != 2:

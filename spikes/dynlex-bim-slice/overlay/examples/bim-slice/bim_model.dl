@@ -6,6 +6,7 @@
 # a new value and replaces the old one, so a shallow copy of the model is a
 # complete snapshot for undo.
 import lib/cadkernel/brep_topology.dl
+import lib/cadkernel/arrangement2.dl
 
 # Feature kinds a dimension may reference. They name semantic features, never
 # derived topology.
@@ -148,6 +149,18 @@ class:
         height as a 64 bit floating-point number
         content as a string
 
+# A free mesh on a storey, as in Blender and SketchUp: points in 3D (z up
+# from the storey's elevation) and faces, each a closed loop of points. A
+# face is kept as its number of points followed by their indices.
+class:
+    patterns:
+        [a|] bim mesh record
+    members:
+        id as a 64 bit integer
+        levelId as a 64 bit integer
+        vertices as the type of (a cad topology list of a cad vector3)
+        faces as the type of (a cad topology list of an integer)
+
 # A component: sketch elements kept once, in the component's own coordinates,
 # and placed any number of times as instances, as in SketchUp. Editing the
 # component changes every instance.
@@ -198,17 +211,18 @@ class:
         sketches as the type of (a cad topology list of a bim sketch record)
         components as the type of (a cad topology list of a bim component record)
         instances as the type of (a cad topology list of a bim instance record)
+        meshes as the type of (a cad topology list of a bim mesh record)
 
 function an empty bim model:
     execute:
-        return @intrinsic("construct", a bim model record, 1 as a 64 bit integer, a cad topology list of a bim level record, a cad topology list of a bim wall type record, a cad topology list of a bim wall record, a cad topology list of a bim opening type record, a cad topology list of a bim opening record, a cad topology list of a bim dimension record, a cad topology list of a bim slab record, a cad topology list of a 64 bit integer, a cad topology list of a bim grid record, a cad topology list of a bim sketch record, a cad topology list of a bim component record, a cad topology list of a bim instance record)
+        return @intrinsic("construct", a bim model record, 1 as a 64 bit integer, a cad topology list of a bim level record, a cad topology list of a bim wall type record, a cad topology list of a bim wall record, a cad topology list of a bim opening type record, a cad topology list of a bim opening record, a cad topology list of a bim dimension record, a cad topology list of a bim slab record, a cad topology list of a 64 bit integer, a cad topology list of a bim grid record, a cad topology list of a bim sketch record, a cad topology list of a bim component record, a cad topology list of a bim instance record, a cad topology list of a bim mesh record)
 
 # A snapshot shares no element list with the original; elements are immutable
 # values. It shares the journal, which the document replaces whenever a
 # snapshot becomes the current model again.
 function the bim snapshot of {bim model record:modelValue}:
     execute:
-        return @intrinsic("construct", a bim model record, modelValue's nextId, the cad clone of modelValue's levels, the cad clone of modelValue's wallTypes, the cad clone of modelValue's walls, the cad clone of modelValue's openingTypes, the cad clone of modelValue's openings, the cad clone of modelValue's dimensions, the cad clone of modelValue's slabs, modelValue's journal, the cad clone of modelValue's grids, the cad clone of modelValue's sketches, the cad clone of modelValue's components, the cad clone of modelValue's instances)
+        return @intrinsic("construct", a bim model record, modelValue's nextId, the cad clone of modelValue's levels, the cad clone of modelValue's wallTypes, the cad clone of modelValue's walls, the cad clone of modelValue's openingTypes, the cad clone of modelValue's openings, the cad clone of modelValue's dimensions, the cad clone of modelValue's slabs, modelValue's journal, the cad clone of modelValue's grids, the cad clone of modelValue's sketches, the cad clone of modelValue's components, the cad clone of modelValue's instances, the cad clone of modelValue's meshes)
 
 # The journal lists, in order, the id of every element each edit added,
 # changed or removed. An evaluation that has seen a prefix of this same
@@ -368,6 +382,10 @@ function the bim component index of {a 64 bit integer:wanted} in {bim model reco
 function the bim instance index of {a 64 bit integer:wanted} in {bim model record:modelValue}:
     execute:
         return the bim position of wanted among (modelValue's instances's values)
+
+function the bim mesh index of {a 64 bit integer:wanted} in {bim model record:modelValue}:
+    execute:
+        return the bim position of wanted among (modelValue's meshes's values)
 
 function the bim dimension index of {a 64 bit integer:wanted} in {bim model record:modelValue}:
     execute:
@@ -1020,6 +1038,201 @@ function explode bim instance {a 64 bit integer:instanceId} in {a pointer to a b
                 set made to made + 1
         ignore delete bim instance instanceId from target
         return made
+
+# ---------------------------------------------------------------- meshes
+
+# Whether `faces` (counts and indices) refers only to points of `vertexCount`
+# and every face has at least three.
+function bim mesh faces {a pointer to a list:faceList} fit {integer:vertexCount}:
+    execute:
+        set cursor to 0
+        if (the length of faceList) = 0:
+            return false
+        loop while cursor < the length of faceList:
+            set count to the item at cursor in faceList
+            if (count < 3) or ((cursor + count) >= the length of faceList):
+                return false
+            loop corner from 1 to (count + 1):
+                set pointIndex to the item at (cursor + corner) in faceList
+                if (pointIndex < 0) or (pointIndex >= vertexCount):
+                    return false
+            set cursor to cursor + (count + 1)
+        return true
+
+function the bim face count of mesh {bim mesh record:meshValue}:
+    execute:
+        set total to 0
+        set start to 0
+        loop while start < the length of (meshValue's faces's values):
+            set total to total + 1
+            set start to start + ((the item at start in (meshValue's faces's values)) + 1)
+        return total
+
+# A mesh on storey `levelId`; refused when a face does not fit its points.
+function add bim mesh on {a 64 bit integer:levelId} with {a pointer to a list:pointList} and {a pointer to a list:faceList} to {a pointer to a bim model record:target}:
+    execute:
+        if ((the bim level index of levelId in (@intrinsic("dereference", target)))'s valid = false) or ((bim mesh faces faceList fit (the length of pointList)) = false):
+            return the bim refused id
+        set copiedPoints to a cad topology list of a cad vector3
+        loop cursor from 0 to the length of pointList:
+            append (the item at cursor in pointList) to (copiedPoints's values)
+        set copiedFaces to a cad topology list of an integer
+        loop cursor from 0 to the length of faceList:
+            append (the item at cursor in faceList) to (copiedFaces's values)
+        set fresh to the bim new id in target
+        append (@intrinsic("construct", a bim mesh record, fresh, levelId, copiedPoints, copiedFaces)) to (target's meshes's values)
+        return fresh
+
+# Mesh `meshId` now has `pointList` and `faceList`.
+function set bim mesh {a 64 bit integer:meshId} to {a pointer to a list:pointList} and {a pointer to a list:faceList} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim mesh index of meshId in (@intrinsic("dereference", target))
+        if (found's valid = false) or ((bim mesh faces faceList fit (the length of pointList)) = false):
+            return false
+        set meshValue to the item at found's position in (target's meshes's values)
+        set copiedPoints to a cad topology list of a cad vector3
+        loop cursor from 0 to the length of pointList:
+            append (the item at cursor in pointList) to (copiedPoints's values)
+        set copiedFaces to a cad topology list of an integer
+        loop cursor from 0 to the length of faceList:
+            append (the item at cursor in faceList) to (copiedFaces's values)
+        replace item at index found's position in (target's meshes's values) with (@intrinsic("construct", a bim mesh record, meshValue's id, meshValue's levelId, copiedPoints, copiedFaces))
+        note bim change of meshId in target
+        return true
+
+function delete bim mesh {a 64 bit integer:meshId} from {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim mesh index of meshId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        remove item found's position from (target's meshes's values)
+        note bim change of meshId in target
+        return true
+
+# The normal of the face of `meshValue` whose loop starts at `start` in its
+# faces (Newell's method, so a face that is not quite flat still has one).
+function the bim normal of mesh face {integer:start} of {bim mesh record:meshValue}:
+    execute:
+        set count to the item at start in (meshValue's faces's values)
+        set nx to 0.0
+        set ny to 0.0
+        set nz to 0.0
+        loop corner from 0 to count:
+            set here to the item at (the item at ((start + 1) + corner) in (meshValue's faces's values)) in (meshValue's vertices's values)
+            set following to the item at (the item at ((start + 1) + (the remainder of (corner + 1) divided by count)) in (meshValue's faces's values)) in (meshValue's vertices's values)
+            set nx to nx + ((here's y - following's y) * (here's z + following's z))
+            set ny to ny + ((here's z - following's z) * (here's x + following's x))
+            set nz to nz + ((here's x - following's x) * (here's y + following's y))
+        set size to the square root of (((nx * nx) + (ny * ny)) + (nz * nz))
+        if size <= 1e-15:
+            return a cad vector3 with x 0.0, y 0.0 and z 1.0
+        return a cad vector3 with x (nx / size), y (ny / size) and z (nz / size)
+
+# Whether the face of `meshValue` starting at `first` and the one starting at
+# `second` share a point.
+function bim mesh faces {integer:first} and {integer:second} of {bim mesh record:meshValue} touch:
+    execute:
+        set entries to meshValue's faces's values
+        loop corner from 0 to (the item at first in entries):
+            set here to the item at ((first + 1) + corner) in entries
+            loop other from 0 to (the item at second in entries):
+                if (the item at ((second + 1) + other) in entries) = here:
+                    return true
+        return false
+
+# Mesh `meshId` becomes `source` with its face starting at `start` pushed
+# `distance` along its normal, as SketchUp's push/pull: when every other face
+# touching it runs along the push, the face itself moves and they stretch;
+# otherwise it is extruded, each of its edges growing a side.
+function push bim mesh {a 64 bit integer:meshId} face {integer:start} of {bim mesh record:source} by {a 64 bit floating-point number:distance} in {a pointer to a bim model record:target}:
+    execute:
+        set entries to source's faces's values
+        if (start < 0) or (start >= the length of entries):
+            return false
+        set count to the item at start in entries
+        set normal to the bim normal of mesh face start of source
+        set shift to normal scaled by distance
+        set sliding to true
+        set cursor to 0
+        loop while cursor < the length of entries:
+            if (cursor != start) and (bim mesh faces cursor and start of source touch):
+                if (the absolute value of (the cad dot of (the bim normal of mesh face cursor of source) and normal)) > 1e-6:
+                    set sliding to false
+            set cursor to cursor + ((the item at cursor in entries) + 1)
+        set pointList to an empty list of a cad vector3
+        loop cursor from 0 to the length of (source's vertices's values):
+            append (the item at cursor in (source's vertices's values)) to pointList
+        set faceList to an empty list of an integer
+        if sliding:
+            loop corner from 0 to count:
+                set slot to the item at ((start + 1) + corner) in entries
+                replace item at index slot in pointList with (the cad sum of (the item at slot in pointList) and shift)
+            loop cursor from 0 to the length of entries:
+                append (the item at cursor in entries) to faceList
+        else:
+            set base to the length of pointList
+            loop corner from 0 to count:
+                append (the cad sum of (the item at (the item at ((start + 1) + corner) in entries) in pointList) and shift) to pointList
+            loop cursor from 0 to the length of entries:
+                set entry to the item at cursor in entries
+                if (cursor > start) and (cursor <= (start + count)):
+                    set entry to base + ((cursor - start) - 1)
+                append entry to faceList
+            loop corner from 0 to count:
+                set following to the remainder of (corner + 1) divided by count
+                append 4 to faceList
+                append (the item at ((start + 1) + corner) in entries) to faceList
+                append (the item at ((start + 1) + following) in entries) to faceList
+                append (base + following) to faceList
+                append (base + corner) to faceList
+        set done to set bim mesh meshId to pointList and faceList in target
+        free pointList
+        free faceList
+        return done
+
+# The mass (a face raised `height`) `sketchId` becomes a free mesh: its foot
+# and top faces and a side for each edge, the outline turning anticlockwise
+# seen from above. Returns the mesh, or the refused id.
+function make bim mesh of mass {a 64 bit integer:sketchId} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim sketch index of sketchId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return the bim refused id
+        set element to the item at found's position in (target's sketches's values)
+        if (element's kind != bim face sketch) or (element's height <= 0.0):
+            return the bim refused id
+        set ring to element's points's values
+        set count to the length of ring
+        set reversed to (the cad signed area of ring) < 0.0
+        set pointList to an empty list of a cad vector3
+        loop tier from 0 to 2:
+            loop cursor from 0 to count:
+                set source to cursor
+                if reversed:
+                    set source to (count - 1) - cursor
+                set point to the item at source in ring
+                append (a cad vector3 with x point's x, y point's y and z ((tier as a 64 bit floating-point number) * element's height)) to pointList
+        set faceList to an empty list of an integer
+        # The foot, seen from below, and the top.
+        append count to faceList
+        loop cursor from 0 to count:
+            append ((count - 1) - cursor) to faceList
+        append count to faceList
+        loop cursor from 0 to count:
+            append (count + cursor) to faceList
+        loop cursor from 0 to count:
+            set following to the remainder of (cursor + 1) divided by count
+            append 4 to faceList
+            append cursor to faceList
+            append following to faceList
+            append (count + following) to faceList
+            append (count + cursor) to faceList
+        set fresh to add bim mesh on element's levelId with pointList and faceList to target
+        free pointList
+        free faceList
+        if fresh != the bim refused id:
+            ignore delete bim sketch sketchId from target
+        return fresh
 
 # ---------------------------------------------------------------- transactions
 # The document keeps the current model and unlimited undo and redo stacks of

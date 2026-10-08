@@ -127,6 +127,55 @@ function the bim sketch mesh of {bim sketch record:element} at {a 64 bit floatin
             free cad triangulation flat
         return triangles
 
+# The triangles of free mesh `meshValue` on a storey at `elevation`: each face
+# laid flat in its own plane and triangulated there, so that faces need not
+# be convex.
+function the bim mesh shape of {bim mesh record:meshValue} at {a 64 bit floating-point number:elevation}:
+    execute:
+        set triangles to an empty fast mesh
+        set faces to meshValue's faces's values
+        set points to meshValue's vertices's values
+        set start to 0
+        loop while start < the length of faces:
+            set count to the item at start in faces
+            set normal to the bim normal of mesh face start of meshValue
+            set origin to the item at (the item at (start + 1) in faces) in points
+            set second to the item at (the item at (start + 2) in faces) in points
+            set across to the cad difference of second and origin
+            set across to the cad difference of across and (normal scaled by (the cad dot of across and normal))
+            set acrossLength to the cad length of across
+            if acrossLength > 1e-12:
+                set uAxis to across scaled by (1.0 / acrossLength)
+                set vAxis to the cad cross of normal and uAxis
+                set outline to an empty list of a cad vector2
+                loop corner from 0 to count:
+                    set point to the item at (the item at ((start + 1) + corner) in faces) in points
+                    set offset to the cad difference of point and origin
+                    append (a cad vector2 with x (the cad dot of offset and uAxis) and y (the cad dot of offset and vAxis)) to outline
+                set noHoles to an empty list of the type of (an empty list of a cad vector2)
+                set flat to the cad triangulation of outline with holes noHoles
+                free noHoles
+                set base to the length of (triangles's positions's values)
+                # The face's own points where the triangulation kept them, so
+                # that a face not quite flat keeps its shape.
+                set kept to (the length of (the points of flat)) = count
+                loop corner from 0 to the length of (the points of flat):
+                    set planar to the item at corner in (the points of flat)
+                    set placed to the cad sum of origin and (the cad sum of (uAxis scaled by planar's x) and (vAxis scaled by planar's y))
+                    if kept:
+                        set placed to the item at (the item at ((start + 1) + corner) in faces) in points
+                    append (a cad vector3 with x placed's x, y placed's y and z (placed's z + elevation)) to (triangles's positions's values)
+                    append normal to (triangles's normals's values)
+                loop face from 0 to the length of (the triangles of flat):
+                    set triple to the item at face in (the triangles of flat)
+                    append (base + (the first of triple)) to (triangles's triangles's values)
+                    append (base + (the second of triple)) to (triangles's triangles's values)
+                    append (base + (the third of triple)) to (triangles's triangles's values)
+                free cad triangulation flat
+                free outline
+            set start to start + (count + 1)
+        return triangles
+
 # The meshes of the sketch faces of `modelValue`, free and in instances.
 function the bim sketch meshes of {bim model record:modelValue}:
     execute:
@@ -138,6 +187,13 @@ function the bim sketch meshes of {bim model record:modelValue}:
             if (element's kind = bim face sketch) and levelFound's valid:
                 set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
                 append (@intrinsic("construct", a bim scene mesh record, element's id, 0 as a 64 bit integer, the bim sketch mesh of element at elevation, bim mass category, the bim category colouring)) to (result's values)
+        # Free meshes.
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            set meshValue to the item at cursor in (modelValue's meshes's values)
+            set levelFound to the bim level index of meshValue's levelId in modelValue
+            if levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                append (@intrinsic("construct", a bim scene mesh record, meshValue's id, 0 as a 64 bit integer, the bim mesh shape of meshValue at elevation, bim mass category, the bim category colouring)) to (result's values)
         return result
 
 class:
@@ -177,6 +233,10 @@ function bim sketch picked:
 function bim instance picked:
     replacement:
         8
+# A free mesh.
+function bim mesh picked:
+    replacement:
+        9
 
 # Scene meshes of imported elements have ids from here up, above any id the
 # model hands out.
@@ -243,6 +303,77 @@ function bim flat point {cad vector2:location} lies in {a pointer to a list:outl
                     set enclosed to (enclosed = false)
         return enclosed
 
+# The corners of the face of `meshValue` starting at `start`, seen from above.
+function the bim plan outline of mesh face {integer:start} of {bim mesh record:meshValue}:
+    execute:
+        set faceRing to an empty list of a cad vector2
+        loop corner from 0 to (the item at start in (meshValue's faces's values)):
+            set point to the item at (the item at ((start + 1) + corner) in (meshValue's faces's values)) in (meshValue's vertices's values)
+            append (a cad vector2 with x point's x and y point's y) to faceRing
+        return faceRing
+
+# The face of `meshValue` seen from above at `location`: the highest of the
+# faces turned up whose outline contains it; -1 when there is none.
+function the bim top face of mesh {bim mesh record:meshValue} at {cad vector2:location}:
+    execute:
+        set best to -1
+        set bestHeight to 0.0 - (1.0 / 0.0)
+        set start to 0
+        loop while start < the length of (meshValue's faces's values):
+            set count to the item at start in (meshValue's faces's values)
+            if (the bim normal of mesh face start of meshValue)'s z > 1e-6:
+                set faceRing to the bim plan outline of mesh face start of meshValue
+                if bim flat point location lies in faceRing:
+                    set height to 0.0
+                    loop corner from 0 to count:
+                        set height to height + (the item at (the item at ((start + 1) + corner) in (meshValue's faces's values)) in (meshValue's vertices's values))'s z
+                    set height to height / (count as a 64 bit floating-point number)
+                    if height > bestHeight:
+                        set bestHeight to height
+                        set best to start
+                free faceRing
+            set start to start + (count + 1)
+        return best
+
+# The face of `meshValue` on which `spot` (in the mesh's own coordinates)
+# lies: the face whose plane is nearest, among those whose outline holds it
+# in their plane; -1 when there is none.
+function the bim face of mesh {bim mesh record:meshValue} through {cad vector3:spot}:
+    execute:
+        set best to -1
+        set bestGap to 1e-3
+        set start to 0
+        loop while start < the length of (meshValue's faces's values):
+            set count to the item at start in (meshValue's faces's values)
+            set normal to the bim normal of mesh face start of meshValue
+            set origin to the item at (the item at (start + 1) in (meshValue's faces's values)) in (meshValue's vertices's values)
+            set gap to the absolute value of (the cad dot of (the cad difference of spot and origin) and normal)
+            if gap <= bestGap:
+                # Into the face's plane: along its largest normal component.
+                set faceRing to an empty list of a cad vector2
+                set dropAxis to 2
+                if ((the absolute value of normal's x) >= (the absolute value of normal's y)) and ((the absolute value of normal's x) >= (the absolute value of normal's z)):
+                    set dropAxis to 0
+                else if (the absolute value of normal's y) >= (the absolute value of normal's z):
+                    set dropAxis to 1
+                loop corner from 0 to count:
+                    set point to the item at (the item at ((start + 1) + corner) in (meshValue's faces's values)) in (meshValue's vertices's values)
+                    append (the bim flat of point dropping dropAxis) to faceRing
+                if bim flat point (the bim flat of spot dropping dropAxis) lies in faceRing:
+                    set best to start
+                    set bestGap to gap
+                free faceRing
+            set start to start + (count + 1)
+        return best
+
+local function the bim flat of {cad vector3:point} dropping {integer:dropAxis}:
+    execute:
+        if dropAxis = 0:
+            return a cad vector2 with x point's y and y point's z
+        if dropAxis = 1:
+            return a cad vector2 with x point's x and y point's z
+        return a cad vector2 with x point's x and y point's y
+
 # The nearest wall, slab, opening or space along `ray`. `meshes` are the scene
 # meshes of `modelValue`'s evaluation and `spaces` its spaces.
 function the bim pick along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue} with {a pointer to a list:spaces}:
@@ -257,6 +388,8 @@ function the bim pick along {bim ray record:ray} among {a pointer to a list:mesh
                     set entryKind to bim slab picked
                 if entry's category = bim mass category:
                     set entryKind to bim sketch picked
+                    if (the bim mesh index of entry's elementId in modelValue)'s valid:
+                        set entryKind to bim mesh picked
             set points to entry's shape's positions's values
             set corners to entry's shape's triangles's values
             set cursor to 0
