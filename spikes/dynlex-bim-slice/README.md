@@ -1,5 +1,10 @@
 # Spike — the vertical BIM slice on the native DynLex kernel
 
+The editor built from this spike is called **Open BIM Studio**: its window,
+installer, command (`open-bim-studio`), menu entry and default file
+(`open-bim-studio.ifcx`) carry that name. The spike's directories and DynLex
+module paths (`examples/bim-slice/...`) keep their working name.
+
 **Question.** Does the chain the roadmap names as the architectural risk —
 *parametric → geometry → 2D → IFC, with changes propagating* — work end to end in
 DynLex on the native `cadkernel` port, with stable identifiers, semantic

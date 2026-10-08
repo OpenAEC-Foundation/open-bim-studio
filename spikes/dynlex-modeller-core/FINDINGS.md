@@ -950,3 +950,82 @@ works on the mesh:
 - Meshes cannot be put in components.
 - A line on a face must run from outline to outline; a line ending inside a
   face, or crossing several faces, does not cut.
+
+## Selection boxes, the left button in 3D, floor materials (maintainer requests, 2026-10-08)
+
+**Selection boxes.** In the plan and in the 3D panel, dragging with the select
+tool draws a selection box, as in AutoCAD and Revit.
+- **Window.** Dragged to the right, it is drawn solid blue and takes what
+  lies wholly inside it.
+- **Crossing.** Dragged to the left, it is drawn dashed green and also takes
+  what it touches: an element with a point inside it, or with an edge through
+  it.
+- **Shift** adds to the selection.
+
+The box tests the edges of each element:
+- walls at foot and top, with their uprights (a curved wall through its
+  middle);
+- slab outlines;
+- grid lines at datum level;
+- sketch faces and masses as prisms, lines and text anchors;
+- instances' parts;
+- every edge of a mesh.
+
+In the plan these are seen from above, on the active storey. In 3D they are
+projected as the camera sees them. Hidden categories are passed over.
+
+**Several elements at once.** What a box takes is one selection of several
+elements of any kind. It is outlined in both views; move, copy, rotate,
+mirror and delete act on all of it, and delete is one undoable edit.
+
+**The left button in 3D** now selects, by a click or a box, as in Revit and
+Blender. Orbiting moved to the right button and Shift with the middle
+button, and the middle button pans.
+
+**Floor materials.** A floor type carries a material: concrete, or timber for
+"Vloer hout". A slab has a material, concrete unless set:
+- choosing a floor type for a selected slab sets its thickness and material,
+  and the type selector shows the type a slab matches;
+- the material shows in the properties window, the slab's cut hatch, its 3D
+  colour at the fine detail level, a copy, `.bim` (at the end of the slab
+  line, only when it is not concrete, so older files read as before) and
+  IfcX (`openbim::slab` and the body's material).
+
+**Checked:**
+- `tests/box_select.dl`:
+  - a window around a wall and a line;
+  - a crossing over two walls;
+  - the same box as a window taking nothing;
+  - Shift adding;
+  - the three moved together;
+  - all deleted in one edit and undone.
+- `tests/floor_types.dl`:
+  - a slab given "Vloer hout 200" (timber), with its properties;
+  - read back from `.bim` and `.ifcx`;
+  - a copy keeping its material;
+  - undo.
+
+**Extension and parallel snapping.** After the object snaps and before
+tracking, two kinds from Open 2D Studio and AutoCAD are offered.
+- **Extension.** Past either end of a straight piece within reach (25 pick
+  radii), the pointer snaps onto that piece's line. A dashed line is drawn
+  from the end it extends.
+- **Parallel.** While drawing, the line from the previous point snaps
+  parallel to a piece within reach. Pieces along a polar ray are left out,
+  since tracking already offers those directions. A dashed line is drawn
+  from the previous point.
+
+Lengths along either are rounded to 5 cm, as on a polar ray. Checked in
+`tests/snap_extension.dl`: an extension past a sloping line's end, a point
+off it falling to the grid, and a second line drawn parallel to the first.
+
+**The name.** The editor is now called Open BIM Studio:
+- the window title;
+- the installed command `open-bim-studio`, its menu entry and its install
+  directory;
+- `OPEN_BIM_STUDIO_HOME`, with `BIM_SLICE_HOME` still read for earlier
+  installs;
+- the default file `open-bim-studio.ifcx` and the exports;
+- the IFC header and project.
+
+The spike keeps its working name in its paths.

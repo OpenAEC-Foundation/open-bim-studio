@@ -103,6 +103,8 @@ class:
     members:
         point as a cad vector2
         label as a string
+        # Where an extension or a parallel runs from (else `point`).
+        origin as a cad vector2
 
 class:
     patterns:
@@ -260,14 +262,32 @@ function a new bim editor:
         set doorType to add bim door type named (the string form of "Door 900") sized 0.9 by 2.1 with frame 0.05 to (the address of (documentValue's current))
         commit bim transaction in (the address of documentValue)
         set origin to a cad vector2 with x 0.0 and y 0.0
-        set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "")
+        set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "", origin)
         return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0, false, the bim refused id, a cad topology list of an integer, false, 0, origin, -1, the string form of "", -1, -1, false)
 
 # ---------------------------------------------------------------- snapping
 
 local function the bim snap {cad vector2:point} labelled {a string:label}:
     execute:
-        return @intrinsic("construct", a bim snap record, point, the string form of label)
+        return @intrinsic("construct", a bim snap record, point, the string form of label, point)
+
+local function the bim snap {cad vector2:point} labelled {a string:label} from {cad vector2:source}:
+    execute:
+        return @intrinsic("construct", a bim snap record, point, the string form of label, source)
+
+# Rounds a length along a tracking line to 5 cm, as the grid.
+local function the bim tracked length {a 64 bit floating-point number:along}:
+    execute:
+        return (the floor of ((along / 0.05) + 0.5)) * 0.05
+
+# Whether `direction` (a unit vector) runs along a polar ray (every 45
+# degrees), which tracking already offers.
+local function bim direction {cad vector2:direction} is polar:
+    execute:
+        set angle to @intrinsic("atan2", direction's y, direction's x)
+        set step to 3.141592653589793 / 4.0
+        set ray to (the floor of ((angle / step) + 0.5)) * step
+        return (the absolute value of (angle - ray)) < 1e-6
 
 local function the bim grid point near {cad vector2:location} step {a 64 bit floating-point number:stepSize}:
     execute:
@@ -435,6 +455,60 @@ function the bim snap of {cad vector2:location} in {bim editor record:editor} wi
         free segments
         if bestValue's found:
             return the bim snap bestValue's point labelled bestValue's label
+        # Extension, as in CAD: on the line of a straight piece within reach,
+        # past one of its ends; and parallel: from the tracking origin along
+        # the direction of a piece within reach. Ortho keeps to its two
+        # directions, so it takes neither.
+        set reachable to an empty list of a cad vector2
+        if editor's orthoOn = false:
+            free reachable
+            set reachable to the bim snap segments near location within (tolerance * 25.0) for editor
+        set extensionFound to false
+        set extensionGap to tolerance
+        set extensionPoint to location
+        set extensionFrom to location
+        set parallelFound to false
+        set parallelGap to tolerance
+        set parallelPoint to location
+        set cursor to 0
+        loop while (cursor + 1) < the length of reachable:
+            set first to the item at cursor in reachable
+            set second to the item at (cursor + 1) in reachable
+            set run to the cad distance from first to second
+            if run > 1e-9:
+                set ux to (second's x - first's x) / run
+                set uy to (second's y - first's y) / run
+                # Past the second end, then past the first.
+                loop side from 0 to 2:
+                    set endPoint to second
+                    set sign to 1.0
+                    if side = 1:
+                        set endPoint to first
+                        set sign to -1.0
+                    set along to (((location's x - endPoint's x) * ux) + ((location's y - endPoint's y) * uy)) * sign
+                    set across to the absolute value of (((location's x - endPoint's x) * uy) - ((location's y - endPoint's y) * ux))
+                    if (along > tolerance) and (across < extensionGap):
+                        set rounded to the bim tracked length along
+                        set extensionFound to true
+                        set extensionGap to across
+                        set extensionPoint to a cad vector2 with x (endPoint's x + ((rounded * sign) * ux)) and y (endPoint's y + ((rounded * sign) * uy))
+                        set extensionFrom to endPoint
+                if tracker's found and ((bim direction (a cad vector2 with x ux and y uy) is polar) = false):
+                    set dx to location's x - tracker's point's x
+                    set dy to location's y - tracker's point's y
+                    set along to (dx * ux) + (dy * uy)
+                    set across to the absolute value of ((dx * uy) - (dy * ux))
+                    if ((the absolute value of along) > (tolerance * 2.0)) and (across < parallelGap):
+                        set rounded to the bim tracked length along
+                        set parallelFound to true
+                        set parallelGap to across
+                        set parallelPoint to a cad vector2 with x (tracker's point's x + (rounded * ux)) and y (tracker's point's y + (rounded * uy))
+            set cursor to cursor + 2
+        free reachable
+        if extensionFound:
+            return the bim snap extensionPoint labelled (the string form of "Extension") from extensionFrom
+        if parallelFound:
+            return the bim snap parallelPoint labelled (the string form of "Parallel") from tracker's point
         # Tracking from the origin: ortho, or the 45 degree polar rays.
         if tracker's found:
             set dx to location's x - tracker's point's x
@@ -772,6 +846,216 @@ function select bim editor {integer:kindCode} numbered {a 64 bit integer:element
 # The opening of the hovered wall, else the hovered wall, else a slab of the
 # active storey with an edge near `location`, else the space under
 # `location`; nothing when none. Hidden categories are passed over.
+# ---------------------------------------------------------------- box selection
+
+# What a selection box tests an element against: its edges in 3D, as pairs
+# of points (`segments`), or projected (`flat`, pairs of 2D points).
+class:
+    patterns:
+        [a|] bim selection outline record
+    members:
+        kind as an integer
+        id as a 64 bit integer
+        segments as the type of (a cad topology list of a cad vector3)
+        flat as the type of (a cad topology list of a cad vector2)
+
+local function append bim edge from {cad vector3:edgeFrom} to {cad vector3:edgeTo} to {a pointer to a list:edgeList}:
+    execute:
+        append edgeFrom to edgeList
+        append edgeTo to edgeList
+
+local function the bim spot {cad vector2:location} at {a 64 bit floating-point number:height}:
+    execute:
+        return a cad vector3 with x location's x, y location's y and z height
+
+# The edges of the loop `ring` at `low`, and when `high` lies above it, at
+# `high` too with the uprights between them.
+local function append bim prism edges of {a pointer to a list:ring} from {a 64 bit floating-point number:low} to {a 64 bit floating-point number:high} closed {boolean:closed} to {a pointer to a list:edgeList}:
+    execute:
+        set count to the length of ring
+        set edgeCount to count
+        if closed = false:
+            set edgeCount to count - 1
+        loop corner from 0 to edgeCount:
+            set here to the item at corner in ring
+            set following to the item at (the remainder of (corner + 1) divided by count) in ring
+            append bim edge from (the bim spot here at low) to (the bim spot following at low) to edgeList
+            if high > low:
+                append bim edge from (the bim spot here at high) to (the bim spot following at high) to edgeList
+        if high > low:
+            loop corner from 0 to count:
+                set here to the item at corner in ring
+                append bim edge from (the bim spot here at low) to (the bim spot here at high) to edgeList
+
+
+# The outlines of the elements a selection box can take: walls, slabs, grid
+# lines, sketch elements, instances and meshes. In the plan (`inPlan`) only
+# those of the active storey (and every grid line), following the plan's
+# rules; in 3D every storey's, following the 3D rules.
+function the bim selection outlines of {bim editor record:editor} in plan {boolean:inPlan}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set rules to editor's modelRules
+        if inPlan:
+            set rules to editor's planRules
+        set result to an empty list of a bim selection outline record
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if ((inPlan = false) or (wallValue's levelId = editor's levelId)) and (bim category bim wall category is visible in rules):
+                set base to the bim elevation of level wallValue's levelId in modelValue
+                set ring to an empty list of a cad vector2
+                append wallValue's start to ring
+                if wallValue's bulge != 0.0:
+                    append (the bim middle of wall wallValue) to ring
+                append wallValue's finish to ring
+                set edges to a cad topology list of a cad vector3
+                append bim prism edges of ring from base to (base + wallValue's height) closed false to (edges's values)
+                append (@intrinsic("construct", a bim selection outline record, bim wall picked, wallValue's id, edges, a cad topology list of a cad vector2)) to result
+                free ring
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            if ((inPlan = false) or (slabValue's levelId = editor's levelId)) and (bim category bim slab category is visible in rules):
+                set base to the bim elevation of level slabValue's levelId in modelValue
+                set edges to a cad topology list of a cad vector3
+                append bim prism edges of (slabValue's outline's values) from base to base closed true to (edges's values)
+                append (@intrinsic("construct", a bim selection outline record, bim slab picked, slabValue's id, edges, a cad topology list of a cad vector2)) to result
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            set edges to a cad topology list of a cad vector3
+            append bim edge from (the bim spot gridValue's start at 0.0) to (the bim spot gridValue's finish at 0.0) to (edges's values)
+            append (@intrinsic("construct", a bim selection outline record, bim grid picked, gridValue's id, edges, a cad topology list of a cad vector2)) to result
+        set drawn to the bim drawn sketches of modelValue
+        loop cursor from 0 to the length of (drawn's values):
+            set element to the item at cursor in (drawn's values)
+            if (inPlan = false) or (element's levelId = editor's levelId):
+                set base to the bim elevation of level element's levelId in modelValue
+                set edges to a cad topology list of a cad vector3
+                if element's kind = bim face sketch:
+                    append bim prism edges of (element's points's values) from base to (base + element's height) closed true to (edges's values)
+                else if element's kind = bim line sketch:
+                    append bim prism edges of (element's points's values) from base to base closed false to (edges's values)
+                else:
+                    set anchor to the bim spot (the item at 0 in (element's points's values)) at base
+                    append bim edge from anchor to anchor to (edges's values)
+                set kindCode to bim sketch picked
+                if (the bim instance index of element's id in modelValue)'s valid:
+                    set kindCode to bim instance picked
+                append (@intrinsic("construct", a bim selection outline record, kindCode, element's id, edges, a cad topology list of a cad vector2)) to result
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            set meshValue to the item at cursor in (modelValue's meshes's values)
+            if ((inPlan = false) or (meshValue's levelId = editor's levelId)) and (bim category bim mass category is visible in rules):
+                set base to the bim elevation of level meshValue's levelId in modelValue
+                set edges to a cad topology list of a cad vector3
+                set start to 0
+                loop while start < the length of (meshValue's faces's values):
+                    set count to the item at start in (meshValue's faces's values)
+                    loop corner from 0 to count:
+                        set here to the item at (the item at ((start + 1) + corner) in (meshValue's faces's values)) in (meshValue's vertices's values)
+                        set following to the item at (the item at ((start + 1) + (the remainder of (corner + 1) divided by count)) in (meshValue's faces's values)) in (meshValue's vertices's values)
+                        append bim edge from (a cad vector3 with x here's x, y here's y and z (here's z + base)) to (a cad vector3 with x following's x, y following's y and z (following's z + base)) to (edges's values)
+                    set start to start + (count + 1)
+                append (@intrinsic("construct", a bim selection outline record, bim mesh picked, meshValue's id, edges, a cad topology list of a cad vector2)) to result
+        return result
+
+# `outlines` seen from above: each edge's points without their height, as
+# the plan shows them.
+function project bim selection outlines {a pointer to a list:outlines} from above:
+    execute:
+        loop cursor from 0 to the length of outlines:
+            set boxEntry to the item at cursor in outlines
+            loop pointCursor from 0 to the length of (boxEntry's segments's values):
+                set spot to the item at pointCursor in (boxEntry's segments's values)
+                append (a cad vector2 with x spot's x and y spot's y) to (boxEntry's flat's values)
+
+# Whether the segment from `segmentFrom` to `segmentTo` meets the box from
+# `boxLow` to `boxHigh` (Liang and Barsky's clipping).
+function bim segment from {cad vector2:segmentFrom} until {cad vector2:segmentTo} reaches into rectangle {cad vector2:boxLow} {cad vector2:boxHigh}:
+    execute:
+        set entering to 0.0
+        set leaving to 1.0
+        set dx to segmentTo's x - segmentFrom's x
+        set dy to segmentTo's y - segmentFrom's y
+        set steps to an empty list of a 64 bit floating-point number
+        set limits to an empty list of a 64 bit floating-point number
+        append (0.0 - dx) to steps
+        append (segmentFrom's x - boxLow's x) to limits
+        append dx to steps
+        append (boxHigh's x - segmentFrom's x) to limits
+        append (0.0 - dy) to steps
+        append (segmentFrom's y - boxLow's y) to limits
+        append dy to steps
+        append (boxHigh's y - segmentFrom's y) to limits
+        set meets to true
+        loop side from 0 to 4:
+            set step to the item at side in steps
+            set limit to the item at side in limits
+            if (the absolute value of step) <= 1e-15:
+                if limit < 0.0:
+                    set meets to false
+            else:
+                set ratio to limit / step
+                if step < 0.0:
+                    set entering to the maximum of entering and ratio
+                else:
+                    set leaving to the minimum of leaving and ratio
+        free steps
+        free limits
+        return meets and (entering <= leaving)
+
+# Selects by a box dragged from `corner` to `opposite`, as in CAD: dragged to
+# the right a window, which takes the elements wholly inside it; dragged to
+# the left a crossing, which also takes those it touches. `outlines` carry
+# their edges in the box's coordinates (`flat`). Shift adds to the
+# selection. Returns how many elements it took.
+function select bim editor in box from {cad vector2:corner} to {cad vector2:opposite} among {a pointer to a list:outlines} in {a pointer to a bim editor record:editor}:
+    execute:
+        set crossing to opposite's x < corner's x
+        set low to a cad vector2 with x (the minimum of corner's x and opposite's x) and y (the minimum of corner's y and opposite's y)
+        set high to a cad vector2 with x (the maximum of corner's x and opposite's x) and y (the maximum of corner's y and opposite's y)
+        if editor's extending = false:
+            set editor's chosenSketches to a cad topology list of a 64 bit integer
+            set editor's selectionKind to bim nothing picked
+            set editor's selectionId to the bim refused id
+        set taken to 0
+        loop cursor from 0 to the length of outlines:
+            set boxEntry to the item at cursor in outlines
+            set points to boxEntry's flat's values
+            if (the length of points) > 0:
+                set inside to 0
+                loop pointCursor from 0 to the length of points:
+                    set spot to the item at pointCursor in points
+                    if (((spot's x >= low's x) and (spot's x <= high's x)) and ((spot's y >= low's y) and (spot's y <= high's y))):
+                        set inside to inside + 1
+                set chosen to inside = (the length of points)
+                if crossing and (chosen = false):
+                    set chosen to inside > 0
+                    set pairCursor to 0
+                    loop while ((chosen = false) and ((pairCursor + 1) < the length of points)):
+                        set pairStart to the item at pairCursor in points
+                        set pairEnd to the item at (pairCursor + 1) in points
+                        set chosen to bim segment from pairStart until pairEnd reaches into rectangle low high
+                        set pairCursor to pairCursor + 2
+                if chosen:
+                    set already to false
+                    loop chosenCursor from 0 to the length of (editor's chosenSketches's values):
+                        if (the item at chosenCursor in (editor's chosenSketches's values)) = boxEntry's id:
+                            set already to true
+                    if already = false:
+                        append boxEntry's id to (editor's chosenSketches's values)
+                        set taken to taken + 1
+                    if editor's selectionKind = bim nothing picked:
+                        set editor's selectionKind to boxEntry's kind
+                        set editor's selectionId to boxEntry's id
+        set mode to the string form of "window"
+        if crossing:
+            set mode to the string form of "crossing"
+        set total to the length of (editor's chosenSketches's values)
+        if total = 0:
+            set editor's message to (the string form of "Nothing in the ") + mode
+        else:
+            set editor's message to ((the string form of "Selected ") + (the string form of total)) + (((the string form of " elements (") + mode) + (the string form of ")"))
+        return taken
+
 # ---------------------------------------------------------------- sketches
 
 # The sketch element of the active storey at `location`: a text whose anchor
@@ -1204,7 +1488,7 @@ function the bim selected slab of {bim editor record:editor}:
             set found to the bim slab index of editor's selectionId in modelValue
             if found's valid:
                 return @intrinsic("construct", a bim slab choice record, true, the item at found's position in (modelValue's slabs's values))
-        return @intrinsic("construct", a bim slab choice record, false, @intrinsic("construct", a bim slab record, the bim refused id, the bim refused id, a cad topology list of a cad vector2, 0.0))
+        return @intrinsic("construct", a bim slab choice record, false, @intrinsic("construct", a bim slab record, the bim refused id, the bim refused id, a cad topology list of a cad vector2, 0.0, the string form of "concrete"))
 
 # The corner of `slabValue` nearest to `location` within `tolerance`, or -1.
 function the bim slab corner near {cad vector2:location} in {bim slab record:slabValue} within {a 64 bit floating-point number:tolerance}:
@@ -1579,6 +1863,8 @@ function add bim editor slab under the selection in {a pointer to a bim editor r
         begin bim transaction in (the address of (editor's documentValue))
         set floorType to the item at editor's floorTypeIndex in (the bim floor types)
         set fresh to add bim slab on chosen's space's levelId around (chosen's space's outline's values) thick floorType's thickness to (the address of (editor's documentValue's current))
+        if fresh != the bim refused id:
+            ignore set bim slab fresh material to floorType's material in (the address of (editor's documentValue's current))
         if fresh = the bim refused id:
             roll back bim transaction in (the address of (editor's documentValue))
             set editor's message to the string form of "Refused: the space has no valid outline"
@@ -1688,7 +1974,7 @@ function save bim editor to {a string:path} in {a pointer to a bim editor record
     execute:
         if bim path path is ifcx:
             set stamp to the bim utc timestamp
-            set exportText to the bim ifcx text of editor's documentValue's current identified as ((the string form of "open-bim-studio/") + (path + ((the string form of "@") + stamp))) for project (the string form of "open-bim-studio/bim-slice") by (the string form of "Open BIM Studio") at stamp with settings (the bim ifcx settings of (@intrinsic("dereference", editor)))
+            set exportText to the bim ifcx text of editor's documentValue's current identified as ((the string form of "open-bim-studio/") + (path + ((the string form of "@") + stamp))) for project (the string form of "open-bim-studio") by (the string form of "Open BIM Studio") at stamp with settings (the bim ifcx settings of (@intrinsic("dereference", editor)))
             if write bim text exportText to file path:
                 set editor's message to (the string form of "Saved ") + path
             else:
@@ -2332,26 +2618,27 @@ function choose bim editor wall type {a 64 bit integer:typeId} in {a pointer to 
             return nothing
         set editor's message to (the string form of "New walls: ") + chosenName
 
-# A floor type of Open 2D Studio: its name and thickness.
+# A floor type of Open 2D Studio: its name, thickness and material.
 class:
     patterns:
         [a|] bim floor type record
     members:
         name as a string
         thickness as a 64 bit floating-point number
+        material as a string
 
 # The floor types of Open 2D Studio, thinnest concrete first.
 function the bim floor types:
     execute:
         set result to an empty list of a bim floor type record
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 150", 0.15)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 200", 0.2)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 250", 0.25)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 300", 0.3)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 200", 0.2)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 260", 0.26)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 320", 0.32)) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer hout 200", 0.2)) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 150", 0.15, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 200", 0.2, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 250", 0.25, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 300", 0.3, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 200", 0.2, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 260", 0.26, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 320", 0.32, the string form of "concrete")) to result
+        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer hout 200", 0.2, the string form of "timber")) to result
         return result
 
 # Makes floor type `index` the one new floors get; a selected slab takes its
@@ -2365,7 +2652,8 @@ function choose bim editor floor type {integer:index} in {a pointer to a bim edi
         set floorType to the item at index in floorTypes
         if editor's selectionKind = bim slab picked:
             begin bim transaction in (the address of (editor's documentValue))
-            if set bim slab editor's selectionId thickness to floorType's thickness in (the address of (editor's documentValue's current)):
+            set thicknessSet to set bim slab editor's selectionId thickness to floorType's thickness in (the address of (editor's documentValue's current))
+            if thicknessSet and (set bim slab editor's selectionId material to floorType's material in (the address of (editor's documentValue's current))):
                 commit bim transaction in (the address of (editor's documentValue))
                 set editor's message to ((the string form of "Slab ") + (the string form of editor's selectionId)) + ((the string form of " is now ") + floorType's name)
             else:
@@ -2574,13 +2862,13 @@ function the bim mesh faces of {bim mesh record:meshValue} under {bim transform 
             set start to start + (count + 1)
         return result
 
-# The ids the selection covers: the selected element, and with sketch
-# elements or instances every chosen one.
+# The ids the selection covers: the selected element, and every one chosen
+# with it (Shift, or a selection box).
 function the bim selection members of {bim editor record:editor}:
     execute:
         set ids to an empty list of a 64 bit integer
         append editor's selectionId to ids
-        if ((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)) or (editor's selectionKind = bim mesh picked):
+        if editor's selectionKind != bim nothing picked:
             loop cursor from 0 to the length of (editor's chosenSketches's values):
                 set chosen to the item at cursor in (editor's chosenSketches's values)
                 if chosen != editor's selectionId:
@@ -2695,7 +2983,9 @@ function copy bim editor selection changed by {bim transform record:change} in {
             else if slabFound's valid:
                 set slabValue to the item at slabFound's position in (target's slabs's values)
                 set placed to the bim corners (slabValue's outline's values) under change
-                if (add bim slab on slabValue's levelId around placed thick slabValue's thickness to target) != the bim refused id:
+                set freshSlab to add bim slab on slabValue's levelId around placed thick slabValue's thickness to target
+                if freshSlab != the bim refused id:
+                    ignore set bim slab freshSlab material to slabValue's material in target
                     set made to made + 1
                 free placed
             else if gridFound's valid:
@@ -3351,6 +3641,7 @@ function the bim property rows of {bim editor record:editor}:
             if found's valid:
                 set slabValue to the item at found's position in (modelValue's slabs's values)
                 append bim property (the string form of "Thickness") showing (the bim length slabValue's thickness in units unitCode) as bim slab thickness property to propertyRows
+                append bim property (the string form of "Material") showing slabValue's material as 0 to propertyRows
                 append bim property (the string form of "Area") showing ((the bim metres text of (the bim slab area of slabValue)) + (the string form of " m2")) as 0 to propertyRows
             return propertyRows
         if editor's selectionKind = bim sketch picked:
@@ -4038,6 +4329,27 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set removed to delete bim mesh doomedId from (the address of (editor's documentValue's current))
             else:
                 set removed to delete bim opening doomedId from (the address of (editor's documentValue's current))
+            # The rest of a selection of several goes with it.
+            if (doomedId = editor's selectionId) and removed:
+                set others to the bim selection members of (@intrinsic("dereference", editor))
+                set target to the address of (editor's documentValue's current)
+                loop otherCursor from 0 to the length of others:
+                    set otherId to the item at otherCursor in others
+                    if otherId != doomedId:
+                        if (the bim wall index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim wall otherId from target
+                        else if (the bim slab index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim slab otherId from target
+                        else if (the bim grid index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim grid otherId from target
+                        else if (the bim sketch index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim sketch otherId from target
+                        else if (the bim instance index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim instance otherId from target
+                        else if (the bim mesh index of otherId in (@intrinsic("dereference", target)))'s valid:
+                            ignore delete bim mesh otherId from target
+                free others
+                set editor's chosenSketches to a cad topology list of a 64 bit integer
             if removed:
                 commit bim transaction in (the address of (editor's documentValue))
                 set editor's message to the string form of "Deleted"
@@ -4049,14 +4361,14 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         # Ctrl+X exports IFC5 (IfcX), its paths keyed to the model file.
         if code = 1088:
             set stamp to the bim utc timestamp
-            set exportText to the bim ifcx text of editor's documentValue's current identified as ((the string form of "open-bim-studio/bim-slice@") + (stamp + (the string form of ".ifcx"))) for project (the string form of "open-bim-studio/bim-slice") by (the string form of "Open BIM Studio") at stamp
-            if write bim text exportText to file (the string form of "bim-slice.ifcx"):
-                set editor's message to the string form of "Exported bim-slice.ifcx (IFC5)"
+            set exportText to the bim ifcx text of editor's documentValue's current identified as ((the string form of "open-bim-studio@") + (stamp + (the string form of ".ifcx"))) for project (the string form of "open-bim-studio") by (the string form of "Open BIM Studio") at stamp
+            if write bim text exportText to file (the string form of "open-bim-studio.ifcx"):
+                set editor's message to the string form of "Exported open-bim-studio.ifcx (IFC5)"
             else:
                 set editor's message to the string form of "Export failed"
             return nothing
         if code = 88:
-            if write bim text (the bim ifc text of editor's documentValue's current) to file (the string form of "bim-slice.ifc"):
-                set editor's message to the string form of "Exported bim-slice.ifc"
+            if write bim text (the bim ifc text of editor's documentValue's current) to file (the string form of "open-bim-studio.ifc"):
+                set editor's message to the string form of "Exported open-bim-studio.ifc"
             else:
                 set editor's message to the string form of "Export failed"

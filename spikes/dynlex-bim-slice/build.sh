@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds and runs the BIM slice from this spike's overlay on a DynLex checkout.
+# Builds and runs Open BIM Studio (the BIM slice) from this spike's overlay on a DynLex checkout.
 #
-#   DYNLEX_ROOT=/path/to/dynlex-cadkernel ./build.sh app        optimised editor (build/bim-slice)
+#   DYNLEX_ROOT=/path/to/dynlex-cadkernel ./build.sh app        optimised editor (build/open-bim-studio)
 #   DYNLEX_ROOT=... ./build.sh dev                               unoptimised editor with debug info
 #   DYNLEX_ROOT=... ./build.sh run [ARGS...]                     run the editor (--example, FILE, --import ...)
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
@@ -44,13 +44,13 @@ command=${1:-app}
 shift || true
 case "$command" in
     app)
-        build/dynlex examples/bim-slice/main.dl -O2 -o "$out/bim-slice"
-        echo "built $out/bim-slice" ;;
+        build/dynlex examples/bim-slice/main.dl -O2 -o "$out/open-bim-studio"
+        echo "built $out/open-bim-studio" ;;
     dev)
-        build/dynlex examples/bim-slice/main.dl -O0 -g -o "$out/bim-slice-dev"
-        echo "built $out/bim-slice-dev" ;;
+        build/dynlex examples/bim-slice/main.dl -O0 -g -o "$out/open-bim-studio-dev"
+        echo "built $out/open-bim-studio-dev" ;;
     run)
-        exec "$out/bim-slice" "$@" ;;
+        exec "$out/open-bim-studio" "$@" ;;
     test)
         names=("$@")
         if [ ${#names[@]} -eq 0 ]; then
@@ -73,7 +73,7 @@ case "$command" in
         done
         exit $status ;;
     installer)
-        bash examples/bim-slice/installer/make-installer.sh "$out/bim-slice" "${1:?installer output path}" ;;
+        bash examples/bim-slice/installer/make-installer.sh "$out/open-bim-studio" "${1:?installer output path}" ;;
     *)
         echo "unknown command $command" >&2; exit 2 ;;
 esac
