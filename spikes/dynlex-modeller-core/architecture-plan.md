@@ -194,7 +194,7 @@ is its test.
 | 3 | **Views as records**: several plans per storey, crop, scale, templates; browser and tabs on view ids; file and IfcX | test: two plans of one storey with different rules round-trip |
 | 4 | **Sheets**: sheet record, title block, viewports, schedule tables; sheet tab | test: a sheet with a plan and a schedule at 1:100 round-trips; viewport transform exact |
 | 5 | **PDF/SVG export of sheets** | test: the PDF parses and its line count and text match the sheet |
-| 6 | **Walls as planar elements** (step 4 of `element-model.md`) | every existing wall test passes on the planar record |
+| 6 | **Walls as planar elements**: *deferred* (see below) | — |
 | 7 | **Stairs** (generator of planar and linear elements): straight, L and U flights, landings, IfcStair | test: riser height and going exact, solids closed, IFC aggregation |
 | 8 | **Railings** (generator of linear elements along a path, on stairs and slab edges) | test: posts at spacing, top rail length exact |
 | 9 | **Curtain walls** (generator on a wall: linear mullions, planar panels) | test: panel count and areas exact |
@@ -211,7 +211,21 @@ After each step:
 - the work is committed;
 - the app is installed and restarted.
 
-## 8. What stays open
+## 8. Decisions taken on the way
+
+- **Step 6 deferred (2026-10-09).** Walls and plates already share the
+  planar type: role, layers, material, IFC class and naming rule. The type
+  selector, schedules and IfcX all run through that one type. Merging the
+  wall record into the plate record would give no new capability. It would
+  touch every wall feature: joins, hosted openings, curves, lean and bow, and
+  incremental evaluation. It stays as technical debt, taken up when a
+  feature needs a wall and a plate to be the same record.
+- **Stairs reuse linear elements (step 7).** A tread is a plank: a linear
+  element with a rectangular profile, its axis level across the flight. The
+  stringers are linear elements along the slope. Geometry, 3D, plan and
+  material come from the linear element's code.
+
+## 9. What stays open
 
 - **Push access:** GitHub authentication is needed to push.
 - **DynLex issues:** compile time and memory per test (5–8 min, up to 4.6 GB)

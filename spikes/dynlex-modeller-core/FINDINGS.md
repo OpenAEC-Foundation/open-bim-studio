@@ -1472,3 +1472,42 @@ The file is vector data throughout, at the sheet's true size.
 
 **Not yet.** The PDF draws labels in Helvetica, not Osifont. SVG export is
 not done.
+
+## Stairs as generators of linear elements (plan step 7a, 2026-10-09)
+
+**Decision.** Step 6 (walls as planar records) is deferred; see
+`architecture-plan.md`, section 8. Walls and plates already share the planar
+type, and merging the records gives no new capability.
+
+**Stair.** A straight stair record holds:
+- its storey;
+- its run in plan (start and end);
+- its width;
+- its riser count;
+- a material.
+
+Its parts are derived, not stored (`bim_stair.dl`):
+- **Treads.** One fewer than the risers, since the last riser lands on the
+  floor above. Each is a plank: a linear element with a rectangular profile
+  of going + 20 mm nosing by 40 mm, its axis level across the flight at the
+  tread's top less half its thickness.
+- **Stringers.** Two linear elements of 50 × 250 mm along the slope, under
+  the treads' ends.
+
+The linear element's functions gained variants that take the type directly
+(`the bim linear shape of … typed … in …`, also for the plan outline and the
+height range), so derived parts of types the model does not store reuse the
+same geometry. In 3D a stair is one mesh of its parts, coloured by its
+material.
+
+**Files.** `stair` in `.bim`. In IfcX it is an `IfcStair` carrying:
+- `NumberOfRiser`, `RiserHeight` and `TreadLength`;
+- the body of its parts;
+- `openbim::stair`.
+
+**Checked.** `tests/stairs.dl`: 17 risers up 3 m over a 3.6 m run:
+- riser 176.47 mm, going 225 mm, 18 parts;
+- the volume equals the planks' and stringers' sizes times their lengths;
+- the top tread at 2.8235 m;
+- a run under 0.5 m is refused;
+- the same after `.bim` and `.ifcx`.
