@@ -1195,6 +1195,11 @@ sketching, meshes and CSG all model B-reps.
     radius and a height. A sphere takes a centre and a radius and rests on
     the storey. Heights are typed or shown by moving up the plan.
   - Each part is one undo step.
+  - The properties of a selected instance show:
+    - its component;
+    - its parts (kind and operation);
+    - the last part's width and depth (or radius) and height, which can be
+      typed; every instance follows.
   - Ctrl+G on selected free meshes (with or without sketch elements) makes a
     component in which each mesh is a solid part, so that a Blender-style
     mesh can be cut by CSG parts.
@@ -1213,7 +1218,7 @@ sketching, meshes and CSG all model B-reps.
 - `tests/solid_tool.dl`: the tools, the operations and undo.
 
 **Not yet.**
-- Parts have no properties window and no grips.
+- Parts have no grips. Only the last part is typed in the properties window.
 - An instance's body is not yet written as a `usd::usdgeom::mesh` in IfcX.
 - During Ctrl+E editing the parts are hidden.
 - Sizes of new parts are not snapped to existing parts' faces.
