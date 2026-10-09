@@ -1152,3 +1152,91 @@ The plan and the planar element's steps are in `element-model.md`. The
 linear element is built: a type (role → IFC class, profile, material) and an
 element (storey, 3D axis, turn). Details, behaviour and checks are recorded
 there, with `tests/linear.dl` and `tests/linear_tool.dl`.
+
+**Plates.** Floors, roofs and ceilings are now one plate element whose
+planar type gives the role, the IFC class and the layers (steps 1–3 of
+`element-model.md`, with `tests/plates.dl`). Walls stay their own record until
+step 4.
+
+## Components as B-reps: sketch, CSG and mesh in one module (maintainer request, 2026-10-09)
+
+The maintainer asked for a component module in which SketchUp-style
+sketching, meshes and CSG all model B-reps.
+
+**Built** (`examples/bim-slice/bim_component.dl`):
+- **Solid parts.** A component holds an ordered list of solid parts besides
+  its sketch elements. Each part is:
+  - a box, a cylinder, a sphere, an extrusion of a plan profile, or a closed
+    mesh (entering the fold as a faceted solid);
+  - placed in the component's coordinates and turned about the vertical;
+  - added, cut or intersected.
+- **The fold.** The component's push/pulled faces come first, as added
+  extrusions. The parts follow in order. The cadkernel's exact booleans
+  (`the cad combination of … using … within …`) fold them into one B-rep. A
+  cut or intersection before anything is there is skipped.
+- **Display.** The B-rep is meshed once per component, within 2 mm of a
+  curved face. Each instance gets a placed copy in the 3D scene, where it
+  picks as the instance. A component without parts is still drawn from its
+  sketches.
+- **Plan.** Where the cut plane (1.2 m above the storey) passes through an
+  instance, its placed mesh gives a black cut line. Its feature edges below
+  the cut (where faces meet at more than 15°) are drawn thin, as linear
+  elements are.
+- **Files.**
+  - `.bim`: a `solid` line per part after its `component` line.
+  - IfcX: a `solids` array in `openbim::component`.
+- **Editor.**
+  - In the Sketch tab, the Solids group has Box (BX), Cylinder (CY) and
+    Sphere (SH), plus Add / Cut / Intersect.
+  - With an instance selected, the part goes into its component, so every
+    instance follows. With nothing selected, the first part makes a new
+    component.
+  - A box takes two corners and a height. A cylinder takes a centre, a
+    radius and a height. A sphere takes a centre and a radius and rests on
+    the storey. Heights are typed or shown by moving up the plan.
+  - Each part is one undo step.
+  - Ctrl+G on selected free meshes (with or without sketch elements) makes a
+    component in which each mesh is a solid part, so that a Blender-style
+    mesh can be cut by CSG parts.
+
+**Checked.**
+- `tests/component_solids.dl`, volumes against closed forms within 0.2 %:
+  - a block minus a bore (2 − π/16);
+  - a triangle extrusion minus a notch (1.875);
+  - two boxes intersected to a unit cube;
+  - a box turned 45°;
+  - a sphere;
+  - a pushed sketch face minus a cylinder (18 − π/2);
+  - a closed mesh cube as a part, then half of it cut away by a box (0.5);
+  - the instance's placed mesh;
+  - `.bim` and `.ifcx` round trips.
+- `tests/solid_tool.dl`: the tools, the operations and undo.
+
+**Not yet.**
+- Parts have no properties window and no grips.
+- An instance's body is not yet written as a `usd::usdgeom::mesh` in IfcX.
+- During Ctrl+E editing the parts are hidden.
+- Sizes of new parts are not snapped to existing parts' faces.
+
+## Level of detail, tiled views (maintainer requests, 2026-10-09)
+
+**Round shapes.** Round linear elements and the curved faces of components
+are meshed for the 3D view's zoom. No chord leaves the true surface by more
+than half a pixel. A circle of radius r gets n ≈ π / √(2·tol / r) corners,
+from 12 to 256. The tolerance moves in steps of a factor of 2, so the scene is
+meshed again only when the zoom doubles or halves. Without a tolerance (tests,
+files) a round profile keeps 24 corners.
+
+**Tiled views.** Views are tabs (TW), or tiled (WT, also in the View tab's
+ribbon):
+- the plan on the left;
+- the 3D view on the right;
+- the section or schedule tab last made active under the 3D view, when both
+  are open.
+
+Each pane has its own area for drawing, picking, orbiting and zooming.
+
+**Fitting a hidden view.** With views as tabs, the camera was fitted to the
+panes of the active tab, so a 3D view behind the plan's tab got a zoom of 0
+and stayed empty when its tab was opened. A pane that has no width while
+another tab is active now fits to the whole drawing area, as it will show.

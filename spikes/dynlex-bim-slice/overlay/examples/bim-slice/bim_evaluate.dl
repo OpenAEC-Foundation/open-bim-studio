@@ -599,7 +599,9 @@ function the bim slab signature of {bim slab record:slabValue} in {bim model rec
         set written to the string form of "s"
         loop cursor from 0 to the length of (slabValue's outline's values):
             set written to (written + (the string form of ";")) + (the bim point text of (the item at cursor in (slabValue's outline's values)))
-        set written to (written + (the string form of ";t")) + (the bim number text of slabValue's thickness)
+        set written to (written + (the string form of ";t")) + (the bim number text of (the bim thickness of plate slabValue in modelValue))
+        if ((slabValue's top != 0.0) or (slabValue's pitch != 0.0)) or (slabValue's heading != 0.0):
+            set written to (written + (the string form of ";p")) + ((the bim number text of slabValue's top) + ((the string form of ",") + ((the bim number text of slabValue's pitch) + ((the string form of ",") + (the bim number text of slabValue's heading)))))
         set levelFound to the bim level index of slabValue's levelId in modelValue
         if levelFound's valid:
             set written to (written + (the string form of ";e")) + (the bim number text of (the item at levelFound's position in (modelValue's levels's values))'s elevation)
@@ -1293,12 +1295,66 @@ function the bim slab solid of {bim slab record:slabValue} in {bim model record:
         if levelFound's valid = false:
             return a bim solid failure 1
         set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set thickness to the bim thickness of plate slabValue in modelValue
+        set topHeight to elevation + slabValue's top
         set noHoles to an empty list of the type of (an empty list of a cad vector2)
-        set built to the fast prism over (slabValue's outline's values) with holes noHoles from (elevation - slabValue's thickness) rising slabValue's thickness within the bim fast tolerance
+        set built to the fast prism over (slabValue's outline's values) with holes noHoles from (topHeight - thickness) rising thickness within the bim fast tolerance
         free noHoles
         if built's reason != fast prism built:
             return a bim solid failure 1
+        if slabValue's pitch != 0.0:
+            set anchor to the item at 0 in (slabValue's outline's values)
+            set tilted to the bim polyhedron built's shape tilted by ((the sine of slabValue's pitch) / (the cosine of slabValue's pitch)) toward slabValue's heading from anchor
+            return @intrinsic("construct", a bim solid record, 0, an empty cad body, true, tilted)
         return @intrinsic("construct", a bim solid record, 0, an empty cad body, true, built's shape)
+
+# `shape` with every point raised by `slope` times its distance from
+# `anchor` along the plan direction `heading`: a plate tilted to its pitch.
+# A shear keeps every face flat; each face's plane follows its points.
+function the bim polyhedron {fast polyhedron record:shape} tilted by {a 64 bit floating-point number:slope} toward {a 64 bit floating-point number:heading} from {cad vector2:anchor}:
+    execute:
+        set dx to the cosine of heading
+        set dy to the sine of heading
+        set result to an empty fast polyhedron
+        loop cursor from 0 to the length of (shape's positions's values):
+            set spot to the item at cursor in (shape's positions's values)
+            set rise to slope * (((spot's x - anchor's x) * dx) + ((spot's y - anchor's y) * dy))
+            ignore add fast position (a cad vector3 with x spot's x, y spot's y and z (spot's z + rise)) to (the address of result)
+        set placed to result's positions's values
+        loop faceCursor from 0 to the length of (shape's faces's values):
+            set face to the item at faceCursor in (shape's faces's values)
+            set outer to an empty list of an integer
+            set holes to an empty list of the type of (an empty list of an integer)
+            loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
+                set ring to an empty list of an integer
+                loop cursor from (the item at ringCursor in (shape's loopStarts's values)) to (the item at (ringCursor + 1) in (shape's loopStarts's values)):
+                    append (the item at cursor in (shape's indices's values)) to ring
+                if ringCursor = face's firstLoop:
+                    loop cursor from 0 to the length of ring:
+                        append (the item at cursor in ring) to outer
+                    free ring
+                else:
+                    append ring to holes
+            set nx to 0.0
+            set ny to 0.0
+            set nz to 0.0
+            loop corner from 0 to the length of outer:
+                set here to the item at (the item at corner in outer) in placed
+                set there to the item at (the item at (the remainder of (corner + 1) divided by (the length of outer)) in outer) in placed
+                set nx to nx + ((here's y - there's y) * (here's z + there's z))
+                set ny to ny + ((here's z - there's z) * (here's x + there's x))
+                set nz to nz + ((here's x - there's x) * (here's y + there's y))
+            set size to the square root of (((nx * nx) + (ny * ny)) + (nz * nz))
+            set faceNormal to face's normal
+            if size > 1e-15:
+                set shifted to a cad vector3 with x (nx / size), y (ny / size) and z (nz / size)
+                if (the cad dot of shifted and faceNormal) < 0.0:
+                    set shifted to shifted scaled by -1.0
+                set faceNormal to shifted
+            add fast face outer with holes holes facing faceNormal to (the address of result)
+            free outer
+            free holes
+        return result
 
 # ---------------------------------------------------------------- incremental evaluation
 
@@ -1322,6 +1378,9 @@ local function bim opening types {bim opening type record:first} and {bim openin
 local function bim slabs {bim slab record:first} and {bim slab record:second} are identical:
     execute:
         if ((first's levelId != second's levelId) or (first's thickness != second's thickness)) or ((the length of (first's outline's values)) != (the length of (second's outline's values))):
+            return false
+        set samePlace to ((first's typeId = second's typeId) and (first's top = second's top)) and ((first's pitch = second's pitch) and (first's heading = second's heading))
+        if (samePlace and (first's material = second's material)) = false:
             return false
         loop cursor from 0 to the length of (first's outline's values):
             set firstPoint to the item at cursor in (first's outline's values)
@@ -1535,6 +1594,10 @@ local function mark bim change {bim model change record:difference} of {bim mode
                     loop cursor from 0 to the length of newerWalls:
                         if (the item at cursor in newerWalls)'s typeId = candidate:
                             mark bim wall (the item at cursor in newerWalls) and its neighbours in (@intrinsic("dereference", index)) into marked
+                    # Plates of the type, a planar type too, follow it.
+                    loop cursor from 0 to the length of (newer's slabs's values):
+                        if (the item at cursor in (newer's slabs's values))'s typeId = candidate:
+                            append (the item at cursor in (newer's slabs's values))'s id to marked
             # A changed level moves its walls and slabs.
             set newerLevelFound to the bim level index of candidate in newer
             if newerLevelFound's valid:

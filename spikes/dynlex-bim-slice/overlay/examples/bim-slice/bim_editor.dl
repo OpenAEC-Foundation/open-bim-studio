@@ -75,6 +75,12 @@ function bim extend tool:
 function bim linear tool:
     replacement:
         17
+# Models a component's solid parts (box, cylinder, sphere), added to, cut
+# from or intersected with the selected instance's component, or making a
+# new component.
+function bim solid tool:
+    replacement:
+        18
 
 # Key codes follow the windowing layer: printable keys are their upper-case
 # ASCII code.
@@ -234,6 +240,16 @@ class:
         # The linear tool's role and the linear type it draws.
         linearRole as an integer
         linearTypeId as a 64 bit integer
+        # The planar type the next floor, roof or ceiling gets (by role).
+        plateTypeId as a 64 bit integer
+        # The solid tool's part kind and operation, the instance whose
+        # component it models (or none, for a new component), and its first
+        # and second click.
+        solidKind as an integer
+        solidOperation as an integer
+        solidInstanceId as a 64 bit integer
+        solidCorner as a cad vector2
+        solidReach as a cad vector2
 
 # POSIX `struct timespec` on 64-bit targets: two 64-bit fields.
 class:
@@ -271,7 +287,7 @@ function a new bim editor:
         commit bim transaction in (the address of documentValue)
         set origin to a cad vector2 with x 0.0 and y 0.0
         set snapValue to @intrinsic("construct", a bim snap record, origin, the string form of "", origin)
-        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0, false, the bim refused id, a cad topology list of an integer, false, 0, origin, -1, the string form of "", -1, -1, false, 0, the bim refused id)
+        return @intrinsic("construct", a bim editor record, documentValue, bim select tool, storey, cavity, windowType, false, origin, snapValue, the string form of "", false, false, a cad topology list of a bim wall end record, the bim refused id, an empty bim evaluation, (-1) as a 64 bit integer, false, an empty bim view, 0, 0 as a 64 bit integer, the string form of "", false, origin, false, origin, origin, an empty bim view, true, false, 0 as a 64 bit integer, a cad topology list of a bim space record, bim nothing picked, the bim refused id, origin, windowType, doorType, origin, -1, 0.1, the bim template rules of view kind bim plan view kind, the bim template rules of view kind bim section view kind, the bim template rules of view kind bim model view kind, false, origin, the bim refused id, false, the bim refused id, a cad topology list of a cad vector2, the bim refused id, origin, 0.0, false, origin, the string form of "", 0, origin, false, false, true, false, a cad topology list of a 64 bit integer, the bim refused id, the bim refused id, the bim refused id, origin, 0.0, 0 as a 64 bit integer, a cad topology list of a 64 bit integer, 2, 0, bim metre unit, 0 as a 64 bit integer, 0.0, the bim refused id, 1.0, false, the bim refused id, a cad topology list of an integer, false, 0, origin, -1, the string form of "", -1, -1, false, 0, the bim refused id, the bim refused id, 0, 0, the bim refused id, origin, origin)
 
 # ---------------------------------------------------------------- snapping
 
@@ -1058,7 +1074,7 @@ function the bim selection outlines of {bim editor record:editor} in plan {boole
                 free ring
         loop cursor from 0 to the length of (modelValue's slabs's values):
             set slabValue to the item at cursor in (modelValue's slabs's values)
-            if ((inPlan = false) or (slabValue's levelId = editor's levelId)) and (bim category bim slab category is visible in rules):
+            if ((inPlan = false) or (slabValue's levelId = editor's levelId)) and (bim category (the bim category of element slabValue's id in modelValue) is visible in rules):
                 set base to the bim elevation of level slabValue's levelId in modelValue
                 set edges to a cad topology list of a cad vector3
                 append bim prism edges of (slabValue's outline's values) from base to base closed true to (edges's values)
@@ -1277,28 +1293,196 @@ function the bim face at {cad vector2:location} in {bim editor record:editor}:
 
 # ---------------------------------------------------------------- components
 
-# The selected sketch elements become a new component, with one instance in
-# their place (Ctrl+G).
+local function the bim solid kind name of {integer:kindCode}:
+    execute:
+        if kindCode = bim cylinder solid:
+            return the string form of "Cylinder"
+        if kindCode = bim sphere solid:
+            return the string form of "Sphere"
+        if kindCode = bim extrusion solid:
+            return the string form of "Extrusion"
+        return the string form of "Box"
+
+local function the bim operation name of {integer:operationCode}:
+    execute:
+        if operationCode = bim subtract operation:
+            return the string form of "cut"
+        if operationCode = bim intersect operation:
+            return the string form of "intersect"
+        return the string form of "add"
+
+local function show bim editor solid prompt in {a pointer to a bim editor record:editor}:
+    execute:
+        set head to ((the bim solid kind name of editor's solidKind) + (the string form of " (")) + ((the bim operation name of editor's solidOperation) + (the string form of ")"))
+        if editor's solidInstanceId = the bim refused id:
+            set head to head + (the string form of ", new component")
+        set step to the string form of ": click a corner"
+        if editor's solidKind != bim box solid:
+            set step to the string form of ": click the centre"
+        if editor's moveStage = 1:
+            set step to the string form of ": click the opposite corner"
+            if editor's solidKind != bim box solid:
+                set step to the string form of ": click the radius"
+        if editor's moveStage = 2:
+            set step to the string form of ": move up the plan or type a height, then click or Enter"
+        set editor's message to (head + step) + (the string form of "  (Add / Cut / Intersect in the ribbon)")
+
+# The solid tool for parts of `kindCode`: into the selected instance's
+# component, or a new component when no instance is selected.
+function start bim editor solid tool of kind {integer:kindCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's tool != bim solid tool:
+            set editor's solidInstanceId to the bim refused id
+            if editor's selectionKind = bim instance picked:
+                set editor's solidInstanceId to editor's selectionId
+        set editor's tool to bim solid tool
+        set editor's solidKind to kindCode
+        set editor's moveStage to 0
+        set editor's chainActive to false
+        set editor's numeric to the string form of ""
+        show bim editor solid prompt in editor
+
+# The next part adds, cuts or intersects.
+function set bim editor solid operation to {integer:operationCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's solidOperation to operationCode
+        if editor's tool = bim solid tool:
+            show bim editor solid prompt in editor
+        else:
+            set editor's message to (the string form of "Solid parts now ") + (the bim operation name of operationCode)
+
+# The part from the clicks so far, `rise` high, into the instance's
+# component (in its coordinates) or a new component placed at the first
+# click.
+function finish bim editor solid rising {a 64 bit floating-point number:rise} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set first to editor's solidCorner
+        set second to editor's solidReach
+        set reach to the cad distance from first to second
+        set lowX to the minimum of first's x and second's x
+        set lowY to the minimum of first's y and second's y
+        set widthSpan to the absolute value of (second's x - first's x)
+        set depthSpan to the absolute value of (second's y - first's y)
+        begin bim transaction in (the address of (editor's documentValue))
+        set instanceFound to the bim instance index of editor's solidInstanceId in (@intrinsic("dereference", target))
+        set componentId to the bim refused id
+        set placeOrigin to a cad vector2 with x lowX and y lowY
+        set placeAngle to 0.0
+        if instanceFound's valid:
+            set placement to the item at instanceFound's position in (target's instances's values)
+            set componentId to placement's componentId
+            set placeOrigin to placement's origin
+            set placeAngle to placement's angle
+        else:
+            set title to (the string form of "Component ") + (the string form of ((the length of (target's components's values)) + 1))
+            set componentId to add bim component named title to target
+            set editor's solidInstanceId to place bim component componentId on editor's levelId at placeOrigin turned 0.0 to target
+        set noProfile to an empty list of a cad vector2
+        set partOrigin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set partSize to a cad vector3 with x reach, y 0.0 and z rise
+        if editor's solidKind = bim box solid:
+            set corner to the bim component coordinates of (a cad vector2 with x lowX and y lowY) at placeOrigin turned placeAngle
+            set partOrigin to a cad vector3 with x corner's x, y corner's y and z 0.0
+            set partSize to a cad vector3 with x widthSpan, y depthSpan and z rise
+        else:
+            set centre to the bim component coordinates of first at placeOrigin turned placeAngle
+            set partOrigin to a cad vector3 with x centre's x, y centre's y and z 0.0
+            if editor's solidKind = bim sphere solid:
+                set partOrigin to a cad vector3 with x centre's x, y centre's y and z reach
+        set operationCode to editor's solidOperation
+        if instanceFound's valid = false:
+            set operationCode to bim add operation
+        set added to add bim solid of kind editor's solidKind as operationCode at partOrigin sized partSize turned (0.0 - placeAngle) along noProfile of (the string form of "concrete") to component componentId in target
+        free noProfile
+        set editor's moveStage to 0
+        set editor's numeric to the string form of ""
+        if added = false:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "That part has no size; try again"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        show bim editor solid prompt in editor
+        set done to the string form of " added"
+        if operationCode = bim subtract operation:
+            set done to the string form of " cut"
+        if operationCode = bim intersect operation:
+            set done to the string form of " intersected"
+        set editor's message to ((the bim solid kind name of editor's solidKind) + done) + (the string form of "; click for the next part, Esc ends")
+
+# A click of the solid tool at `point`.
+function place bim editor solid at {cad vector2:point} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's moveStage = 0:
+            set editor's solidCorner to point
+            set editor's moveStage to 1
+            show bim editor solid prompt in editor
+            return nothing
+        if editor's moveStage = 1:
+            if (the cad distance from editor's solidCorner to point) <= 1e-6:
+                return nothing
+            set editor's solidReach to point
+            if editor's solidKind = bim sphere solid:
+                finish bim editor solid rising 0.0 in editor
+                return nothing
+            set editor's moveStage to 2
+            set editor's numeric to the string form of ""
+            show bim editor solid prompt in editor
+            return nothing
+        set rise to the cad distance from editor's solidReach to point
+        if (the length of editor's numeric) > 0:
+            set rise to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
+        if rise <= 1e-6:
+            return nothing
+        finish bim editor solid rising rise in editor
+
+# The selected sketch elements and free meshes become a new component, with
+# one instance in their place (Ctrl+G); a mesh becomes a solid part of it.
 function make bim editor component in {a pointer to a bim editor record:editor}:
     execute:
         set gathered to an empty list of a 64 bit integer
+        set meshIds to an empty list of a 64 bit integer
         loop cursor from 0 to the length of (editor's chosenSketches's values):
             set elementId to the item at cursor in (editor's chosenSketches's values)
             if (the bim sketch index of elementId in editor's documentValue's current)'s valid:
                 append elementId to gathered
-        if ((the length of gathered) = 0) and (editor's selectionKind = bim sketch picked):
+            if (the bim mesh index of elementId in editor's documentValue's current)'s valid:
+                append elementId to meshIds
+        if (((the length of gathered) + (the length of meshIds)) = 0) and (editor's selectionKind = bim sketch picked):
             append editor's selectionId to gathered
-        if (the length of gathered) = 0:
-            set editor's message to the string form of "Make component: select sketch elements first (Shift adds)"
+        if (((the length of gathered) + (the length of meshIds)) = 0) and (editor's selectionKind = bim mesh picked):
+            append editor's selectionId to meshIds
+        if ((the length of gathered) + (the length of meshIds)) = 0:
+            set editor's message to the string form of "Make component: select sketch elements or meshes first (Shift adds)"
             free gathered
+            free meshIds
             return nothing
         set title to (the string form of "Component ") + (the string form of ((the length of (editor's documentValue's current's components's values)) + 1))
+        set target to the address of (editor's documentValue's current)
         begin bim transaction in (the address of (editor's documentValue))
-        set placed to make bim component named title from gathered on editor's levelId to (the address of (editor's documentValue's current))
+        set placed to the bim refused id
+        if (the length of gathered) > 0:
+            set placed to make bim component named title from gathered on editor's levelId to target
+        else:
+            set lowX to 1e300
+            set lowY to 1e300
+            loop cursor from 0 to the length of meshIds:
+                set meshValue to the item at (the bim mesh index of (the item at cursor in meshIds) in (@intrinsic("dereference", target)))'s position in (target's meshes's values)
+                loop corner from 0 to the length of (meshValue's vertices's values):
+                    set lowX to the minimum of lowX and (the item at corner in (meshValue's vertices's values))'s x
+                    set lowY to the minimum of lowY and (the item at corner in (meshValue's vertices's values))'s y
+            set fresh to add bim component named title to target
+            set placed to place bim component fresh on editor's levelId at (a cad vector2 with x lowX and y lowY) turned 0.0 to target
         free gathered
         if placed = the bim refused id:
             roll back bim transaction in (the address of (editor's documentValue))
+            free meshIds
             return nothing
+        set placement to the item at (the bim instance index of placed in (@intrinsic("dereference", target)))'s position in (target's instances's values)
+        set shift to a cad vector3 with x (0.0 - placement's origin's x), y (0.0 - placement's origin's y) and z 0.0
+        loop cursor from 0 to the length of meshIds:
+            ignore move bim mesh (the item at cursor in meshIds) into component placement's componentId shifted by shift as bim add operation in target
+        free meshIds
         commit bim transaction in (the address of (editor's documentValue))
         set found to the bim instance index of placed in editor's documentValue's current
         set editor's placeComponentId to (the item at found's position in (editor's documentValue's current's instances's values))'s componentId
@@ -1632,7 +1816,7 @@ function select bim editor element at {cad vector2:location} in {a pointer to a 
             return nothing
         loop cursor from 0 to the length of (modelValue's slabs's values):
             set slabValue to the item at cursor in (modelValue's slabs's values)
-            if ((slabValue's levelId = editor's levelId) and (bim category bim slab category is visible in editor's planRules)) and (bim slab slabValue has an edge near location within editor's pickTolerance):
+            if ((slabValue's levelId = editor's levelId) and (bim category (the bim category of element slabValue's id in modelValue) is visible in editor's planRules)) and (bim slab slabValue has an edge near location within editor's pickTolerance):
                 select bim editor bim slab picked numbered slabValue's id in editor
                 return nothing
         loop cursor from 0 to the length of (editor's spaces's values):
@@ -1650,7 +1834,7 @@ function the bim selected slab of {bim editor record:editor}:
             set found to the bim slab index of editor's selectionId in modelValue
             if found's valid:
                 return @intrinsic("construct", a bim slab choice record, true, the item at found's position in (modelValue's slabs's values))
-        return @intrinsic("construct", a bim slab choice record, false, @intrinsic("construct", a bim slab record, the bim refused id, the bim refused id, a cad topology list of a cad vector2, 0.0, the string form of "concrete"))
+        return @intrinsic("construct", a bim slab choice record, false, @intrinsic("construct", a bim slab record, the bim refused id, the bim refused id, a cad topology list of a cad vector2, 0.0, the string form of "concrete", the bim refused id, 0.0, 0.0, 0.0))
 
 # The corner of `slabValue` nearest to `location` within `tolerance`, or -1.
 function the bim slab corner near {cad vector2:location} in {bim slab record:slabValue} within {a 64 bit floating-point number:tolerance}:
@@ -2022,25 +2206,113 @@ function the bim selection description of {bim editor record:editor}:
             return (text + (the string form of " m2, corners ")) + (the string form of (the length of (slabValue's outline's values)))
         return the string form of ""
 
-# Adds a slab of the editor's thickness under the selected space, following
-# its outline, as one undoable transaction.
-function add bim editor slab under the selection in {a pointer to a bim editor record:editor}:
+local function add bim library planar type {a string:typeName} as role {integer:roleCode} of {a string:firstMaterial} {a 64 bit floating-point number:firstThickness} and {a string:secondMaterial} {a 64 bit floating-point number:secondThickness} to {a pointer to a bim model record:target}:
+    execute:
+        set layerValues to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, firstMaterial, firstThickness)) to layerValues
+        if secondThickness > 0.0:
+            append (@intrinsic("construct", a bim layer record, secondMaterial, secondThickness)) to layerValues
+        ignore add bim planar type named typeName as role roleCode with layerValues to target
+        free layerValues
+
+# The planar types of floors, roofs and ceilings every model starts with
+# (Open 2D Studio's floor types among them), added once as one edit when a
+# model has no floor type.
+function ensure bim plate types in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        loop cursor from 0 to the length of (target's wallTypes's values):
+            if (the item at cursor in (target's wallTypes's values))'s role = bim floor planar role:
+                return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        add bim library planar type (the string form of "Vloer beton 150") as role bim floor planar role of (the string form of "concrete") 0.15 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Vloer beton 200") as role bim floor planar role of (the string form of "concrete") 0.2 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Vloer beton 250") as role bim floor planar role of (the string form of "concrete") 0.25 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Vloer beton 300") as role bim floor planar role of (the string form of "concrete") 0.3 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Kanaalplaat 200") as role bim floor planar role of (the string form of "hollow-core concrete") 0.2 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Kanaalplaat 260") as role bim floor planar role of (the string form of "hollow-core concrete") 0.26 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Kanaalplaat 320") as role bim floor planar role of (the string form of "hollow-core concrete") 0.32 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Vloer hout 200") as role bim floor planar role of (the string form of "timber") 0.2 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Plat dak beton") as role bim roof planar role of (the string form of "insulation PIR") 0.12 and (the string form of "concrete") 0.2 to target
+        add bim library planar type (the string form of "Hellend dak hout") as role bim roof planar role of (the string form of "insulation") 0.15 and (the string form of "timber") 0.05 to target
+        add bim library planar type (the string form of "Plafond gips 12.5") as role bim ceiling planar role of (the string form of "gypsum") 0.0125 and (the string form of "") 0.0 to target
+        add bim library planar type (the string form of "Systeemplafond") as role bim ceiling planar role of (the string form of "gypsum") 0.02 and (the string form of "") 0.0 to target
+        commit bim transaction in (the address of (editor's documentValue))
+
+# The planar type of `roleCode` the editor draws next: its current one when
+# it has that role, else the first of the role.
+function the bim plate type for role {integer:roleCode} of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set found to the bim wall type index of editor's plateTypeId in modelValue
+        if found's valid:
+            if (the item at found's position in (modelValue's wallTypes's values))'s role = roleCode:
+                return editor's plateTypeId
+        # A floor is 250 mm of concrete unless another type was chosen.
+        if roleCode = bim floor planar role:
+            loop cursor from 0 to the length of (modelValue's wallTypes's values):
+                set planarType to the item at cursor in (modelValue's wallTypes's values)
+                if (planarType's role = roleCode) and (planarType's name = (the string form of "Beton 250")):
+                    return planarType's id
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set planarType to the item at cursor in (modelValue's wallTypes's values)
+            if planarType's role = roleCode:
+                return planarType's id
+        return the bim refused id
+
+# A floor, roof or ceiling (`roleCode`) under the selected space, following
+# its outline, as one edit: a floor at the storey's level, a roof on top of
+# the storey's walls, a ceiling 0.3 m under the storey above.
+function add bim editor plate of role {integer:roleCode} under the selection in {a pointer to a bim editor record:editor}:
     execute:
         set chosen to the bim selected space of (@intrinsic("dereference", editor))
         if chosen's valid = false:
             set editor's message to the string form of "Select a space first"
             return nothing
+        ensure bim plate types in editor
+        set typeId to the bim plate type for role roleCode of (@intrinsic("dereference", editor))
+        set modelValue to editor's documentValue's current
+        set typeFound to the bim wall type index of typeId in modelValue
+        set levelFound to the bim level index of chosen's space's levelId in modelValue
+        if (typeFound's valid = false) or (levelFound's valid = false):
+            return nothing
+        set storeyHeight to (the item at levelFound's position in (modelValue's levels's values))'s height
+        set topValue to 0.0
+        if roleCode = bim roof planar role:
+            set topValue to storeyHeight + (the bim thickness of (the item at typeFound's position in (modelValue's wallTypes's values)))
+        if roleCode = bim ceiling planar role:
+            set topValue to storeyHeight - 0.3
         begin bim transaction in (the address of (editor's documentValue))
-        set floorType to the item at editor's floorTypeIndex in (the bim floor types)
-        set fresh to add bim slab on chosen's space's levelId around (chosen's space's outline's values) thick floorType's thickness to (the address of (editor's documentValue's current))
-        if fresh != the bim refused id:
-            ignore set bim slab fresh material to floorType's material in (the address of (editor's documentValue's current))
+        set fresh to add bim plate typed typeId on chosen's space's levelId around (chosen's space's outline's values) at top topValue to (the address of (editor's documentValue's current))
         if fresh = the bim refused id:
             roll back bim transaction in (the address of (editor's documentValue))
             set editor's message to the string form of "Refused: the space has no valid outline"
             return nothing
         commit bim transaction in (the address of (editor's documentValue))
+        set editor's plateTypeId to typeId
         select bim editor bim slab picked numbered fresh in editor
+
+function add bim editor slab under the selection in {a pointer to a bim editor record:editor}:
+    execute:
+        add bim editor plate of role bim floor planar role under the selection in editor
+
+# Planar type `typeId` given to the selected plate, or drawn next.
+function choose bim editor plate type {a 64 bit integer:typeId} in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim wall type index of typeId in editor's documentValue's current
+        if found's valid = false:
+            return nothing
+        set planarType to the item at found's position in (editor's documentValue's current's wallTypes's values)
+        if editor's selectionKind = bim slab picked:
+            begin bim transaction in (the address of (editor's documentValue))
+            if set bim plate editor's selectionId type to typeId in (the address of (editor's documentValue's current)):
+                commit bim transaction in (the address of (editor's documentValue))
+                set editor's message to ((the string form of "Slab ") + (the string form of editor's selectionId)) + ((the string form of " is now ") + planarType's name)
+            else:
+                roll back bim transaction in (the address of (editor's documentValue))
+            return nothing
+        set editor's plateTypeId to typeId
+        set editor's message to ((the string form of "New ") + (the bim name of planar role planarType's role)) + ((the string form of ": ") + planarType's name)
 
 # The name of the active storey; empty when it no longer exists.
 function the bim storey name of {bim editor record:editor}:
@@ -2397,6 +2669,9 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
         if editor's tool = bim linear tool:
             place bim editor linear at point in editor
             return nothing
+        if editor's tool = bim solid tool:
+            place bim editor solid at point in editor
+            return nothing
         if editor's tool = bim place tool:
             begin bim transaction in (the address of (editor's documentValue))
             set placed to place bim component editor's placeComponentId on editor's levelId at point turned 0.0 to (the address of (editor's documentValue's current))
@@ -2727,7 +3002,7 @@ function add bim type library to {a pointer to a bim editor record:editor}:
     execute:
         set target to the address of (editor's documentValue's current)
         loop cursor from 0 to the length of (target's wallTypes's values):
-            if (the item at cursor in (target's wallTypes's values))'s name = (the string form of "Spouwmuur 360"):
+            if (the item at cursor in (target's wallTypes's values))'s name = (the string form of "Metselwerk-spouw-isolatie PIR-kalkzandsteen 360"):
                 return nothing
         begin bim transaction in (the address of (editor's documentValue))
         set layerValues to an empty list of a bim layer record
@@ -2755,7 +3030,6 @@ function add bim type library to {a pointer to a bim editor record:editor}:
         append bim library layer (the string form of "gypsum board") 0.0125 to layerValues
         ignore add bim wall type named (the string form of "Metal Stud Binnenwand") with layerValues to target
         free layerValues
-        add bim library type (the string form of "Massieve Binnenwand") of (the string form of "sand-lime") 0.1 to target
         add bim library type (the string form of "Beton 150") of (the string form of "concrete") 0.15 to target
         add bim library type (the string form of "Beton 200") of (the string form of "concrete") 0.2 to target
         add bim library type (the string form of "Beton 250") of (the string form of "concrete") 0.25 to target
@@ -2790,49 +3064,6 @@ function choose bim editor wall type {a 64 bit integer:typeId} in {a pointer to 
                 roll back bim transaction in (the address of (editor's documentValue))
             return nothing
         set editor's message to (the string form of "New walls: ") + chosenName
-
-# A floor type of Open 2D Studio: its name, thickness and material.
-class:
-    patterns:
-        [a|] bim floor type record
-    members:
-        name as a string
-        thickness as a 64 bit floating-point number
-        material as a string
-
-# The floor types of Open 2D Studio, thinnest concrete first.
-function the bim floor types:
-    execute:
-        set result to an empty list of a bim floor type record
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 150", 0.15, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 200", 0.2, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 250", 0.25, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer beton 300", 0.3, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 200", 0.2, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 260", 0.26, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Kanaalplaat 320", 0.32, the string form of "concrete")) to result
-        append (@intrinsic("construct", a bim floor type record, the string form of "Vloer hout 200", 0.2, the string form of "timber")) to result
-        return result
-
-# Makes floor type `index` the one new floors get; a selected slab takes its
-# thickness.
-function choose bim editor floor type {integer:index} in {a pointer to a bim editor record:editor}:
-    execute:
-        set floorTypes to the bim floor types
-        if (index < 0) or (index >= the length of floorTypes):
-            return nothing
-        set editor's floorTypeIndex to index
-        set floorType to the item at index in floorTypes
-        if editor's selectionKind = bim slab picked:
-            begin bim transaction in (the address of (editor's documentValue))
-            set thicknessSet to set bim slab editor's selectionId thickness to floorType's thickness in (the address of (editor's documentValue's current))
-            if thicknessSet and (set bim slab editor's selectionId material to floorType's material in (the address of (editor's documentValue's current))):
-                commit bim transaction in (the address of (editor's documentValue))
-                set editor's message to ((the string form of "Slab ") + (the string form of editor's selectionId)) + ((the string form of " is now ") + floorType's name)
-            else:
-                roll back bim transaction in (the address of (editor's documentValue))
-            return nothing
-        set editor's message to (the string form of "New floors: ") + floorType's name
 
 # ---------------------------------------------------------------- bending with joins
 
@@ -3100,8 +3331,10 @@ function reposition bim editor selection by {bim transform record:change} in {a 
                 set gridValue to the item at gridFound's position in (original's grids's values)
                 ignore move bim grid elementId to (the bim point gridValue's start under change) and (the bim point gridValue's finish under change) in target
             else if slabFound's valid:
-                set placed to the bim corners ((the item at slabFound's position in (original's slabs's values))'s outline's values) under change
+                set slabOriginal to the item at slabFound's position in (original's slabs's values)
+                set placed to the bim corners (slabOriginal's outline's values) under change
                 ignore set bim slab elementId outline to placed in target
+                ignore set bim plate elementId top to slabOriginal's top pitch slabOriginal's pitch heading (the bim heading slabOriginal's heading under change) in target
                 free placed
             else if instanceFound's valid:
                 set placement to the item at instanceFound's position in (original's instances's values)
@@ -3178,6 +3411,9 @@ function copy bim editor selection changed by {bim transform record:change} in {
                 set freshSlab to add bim slab on slabValue's levelId around placed thick slabValue's thickness to target
                 if freshSlab != the bim refused id:
                     ignore set bim slab freshSlab material to slabValue's material in target
+                    if slabValue's typeId != the bim refused id:
+                        ignore set bim plate freshSlab type to slabValue's typeId in target
+                    ignore set bim plate freshSlab top to slabValue's top pitch slabValue's pitch heading (the bim heading slabValue's heading under change) in target
                     set made to made + 1
                 free placed
             else if gridFound's valid:
@@ -3808,6 +4044,15 @@ function bim linear width property:
 function bim linear depth property:
     replacement:
         16
+function bim plate top property:
+    replacement:
+        17
+function bim plate pitch property:
+    replacement:
+        18
+function bim plate heading property:
+    replacement:
+        19
 
 local function append bim property {a string:label} showing {a string:shown} as {integer:code} to {a pointer to a list:rows}:
     execute:
@@ -3849,8 +4094,17 @@ function the bim property rows of {bim editor record:editor}:
             set found to the bim slab index of editor's selectionId in modelValue
             if found's valid:
                 set slabValue to the item at found's position in (modelValue's slabs's values)
-                append bim property (the string form of "Thickness") showing (the bim length slabValue's thickness in units unitCode) as bim slab thickness property to propertyRows
-                append bim property (the string form of "Material") showing slabValue's material as 0 to propertyRows
+                set plateTyped to (the bim type index of plate slabValue in modelValue)'s valid
+                if plateTyped:
+                    append bim property (the string form of "Type") showing (the item at (the bim type index of plate slabValue in modelValue)'s position in (modelValue's wallTypes's values))'s name as 0 to propertyRows
+                    append bim property (the string form of "IFC class") showing (the bim ifc class of planar role (the bim role of plate slabValue in modelValue)) as 0 to propertyRows
+                    append bim property (the string form of "Thickness (type)") showing (the bim length (the bim thickness of plate slabValue in modelValue) in units unitCode) as 0 to propertyRows
+                    append bim property (the string form of "Top") showing (the bim length slabValue's top in units unitCode) as bim plate top property to propertyRows
+                    append bim property (the string form of "Pitch") showing ((the bim metres text of (slabValue's pitch * (180.0 / 3.141592653589793))) + (the string form of " deg")) as bim plate pitch property to propertyRows
+                    append bim property (the string form of "Slope toward") showing ((the bim metres text of (slabValue's heading * (180.0 / 3.141592653589793))) + (the string form of " deg")) as bim plate heading property to propertyRows
+                else:
+                    append bim property (the string form of "Thickness") showing (the bim length slabValue's thickness in units unitCode) as bim slab thickness property to propertyRows
+                append bim property (the string form of "Material") showing (the bim material of plate slabValue in modelValue) as 0 to propertyRows
                 append bim property (the string form of "Area") showing ((the bim metres text of (the bim slab area of slabValue)) + (the string form of " m2")) as 0 to propertyRows
             return propertyRows
         if editor's selectionKind = bim sketch picked:
@@ -3956,6 +4210,20 @@ function apply bim editor property in {a pointer to a bim editor record:editor}:
             set changed to set bim wall chosenId height to metres in target
         if code = bim wall bulge property:
             set changed to bend bim wall chosenId keeping its joins by metres in target
+        if ((code = bim plate top property) or (code = bim plate pitch property)) or (code = bim plate heading property):
+            set plateFound to the bim slab index of chosenId in (@intrinsic("dereference", target))
+            if plateFound's valid:
+                set plateValue to the item at plateFound's position in (target's slabs's values)
+                set newTop to plateValue's top
+                set newPitch to plateValue's pitch
+                set newHeading to plateValue's heading
+                if code = bim plate top property:
+                    set newTop to metres
+                if code = bim plate pitch property:
+                    set newPitch to typed * (3.141592653589793 / 180.0)
+                if code = bim plate heading property:
+                    set newHeading to typed * (3.141592653589793 / 180.0)
+                set changed to set bim plate chosenId top to newTop pitch newPitch heading newHeading in target
         if ((code = bim linear angle property) or (code = bim linear width property)) or (code = bim linear depth property):
             set linearFound to the bim linear index of chosenId in (@intrinsic("dereference", target))
             if linearFound's valid:
@@ -4059,6 +4327,23 @@ function the bim two letter command of {integer:first} then {integer:second}:
             return 2013
         if pair = 7970:
             return 2014
+        # Revit's: CL column, BM beam; WT tiles the views, TW shows them as
+        # tabs (the window handles 2090 and 2091).
+        if pair = 6776:
+            return 2070
+        if pair = 6677:
+            return 2071
+        if pair = 8784:
+            return 2090
+        # BX box, CY cylinder, SH sphere: solid parts of a component.
+        if pair = 6688:
+            return 2100
+        if pair = 6789:
+            return 2101
+        if pair = 8372:
+            return 2102
+        if pair = 8487:
+            return 2091
         if (pair = 6873) or ((pair = 6876) or ((pair = 6865) or ((pair = 6882) or (pair = 6868)))):
             return 2015
         if pair = 8269:
@@ -4282,7 +4567,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 else if set bim face editor's pushId height to rise in (the address of (editor's documentValue's current)):
                     show bim editor preview in editor
                 return nothing
-            set typing to ((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) or (editor's tool = bim offset tool)
+            set typing to (((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) or (editor's tool = bim offset tool)) or ((editor's tool = bim solid tool) and (editor's moveStage = 2))
             if typing or ((editor's tool = bim wall tool) and editor's chainActive):
                 set character to a new string buffer containing 1 bytes
                 store (code as a byte) into the data of character at 0
@@ -4298,6 +4583,11 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 return nothing
             if (editor's tool = bim line tool) or (editor's tool = bim rectangle tool):
                 set editor's sketchChain to a cad topology list of a cad vector2
+                return nothing
+            if ((editor's tool = bim solid tool) and (editor's moveStage = 2)) and ((the length of editor's numeric) > 0):
+                set typedRise to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
+                if typedRise > 0.0:
+                    finish bim editor solid rising typedRise in editor
                 return nothing
             # A typed angle turns the selection about the centre at once.
             if ((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) and ((the length of editor's numeric) > 0):
@@ -4378,6 +4668,14 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         # skirting, 2074 pipe.
         if (code >= 2070) and (code <= 2074):
             start bim editor linear tool for role (code - 2070) in editor
+            return nothing
+        # The solid tools: 2100 box, 2101 cylinder, 2102 sphere; 2104 add,
+        # 2105 cut, 2106 intersect.
+        if (code >= 2100) and (code <= 2102):
+            start bim editor solid tool of kind (code - 2100) in editor
+            return nothing
+        if (code >= 2104) and (code <= 2106):
+            set bim editor solid operation to (code - 2104) in editor
             return nothing
         if code = 2001:
             create bim editor similar in editor
@@ -4515,6 +4813,12 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set editor's tool to bim opening tool
             set editor's openingTypeId to editor's doorTypeId
             set editor's chainActive to false
+            return nothing
+        if code = 2080:
+            add bim editor plate of role bim roof planar role under the selection in editor
+            return nothing
+        if code = 2081:
+            add bim editor plate of role bim ceiling planar role under the selection in editor
             return nothing
         if code = 66:
             add bim editor slab under the selection in editor

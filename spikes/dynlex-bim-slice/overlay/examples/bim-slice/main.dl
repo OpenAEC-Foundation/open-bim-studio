@@ -203,7 +203,7 @@ local function the bim hatch bands of {bim cut source record:source} for {bim ed
         set single to a cad topology list of a bim hatch band record
         set slabFound to the bim slab index of source's id in modelValue
         if slabFound's valid:
-            append (the bim whole hatch band of (the item at slabFound's position in (modelValue's slabs's values))'s material) to (single's values)
+            append (the bim whole hatch band of (the bim material of plate (the item at slabFound's position in (modelValue's slabs's values)) in modelValue)) to (single's values)
         else:
             append (the bim whole hatch band of (the string form of "")) to (single's values)
         return single
@@ -590,26 +590,20 @@ local function draw bim grids in section of {bim editor record:editor} through {
 # The grids in the 3D view: drawn flat at datum level (peil 0), dash-dot,
 # with a head at each end. The selected grid shows its plane, from its low to
 # its high elevation (drawn with the selection).
-local function draw bim grids in view of {bim editor record:editor} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim canvas record:canvas}:
+local function draw bim grids in view of {bim editor record:editor} among {a pointer to a list:sceneMeshes} remembering {a pointer to a list:covers} afresh {boolean:refresh} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim canvas record:canvas}:
     execute:
         if (bim category bim grid category is visible in editor's modelRules) = false:
             return nothing
         set faded to bim category bim grid category is halftone in editor's modelRules
+        # The lines themselves are drawn depth tested with the model's
+        # edges (`draw bim grid lines in view of …`); here only the heads,
+        # each left out when an element of `sceneMeshes` stands in front of it.
+        # Which heads are covered is found again only when `refresh` is set
+        # (the camera or the model changed) and kept in `covers`.
+        if refresh:
+            clear covers
+        set headCursor to 0
         set gridValues to editor's documentValue's current's grids's values
-        set pairs to an empty list of a cad vector2
-        loop cursor from 0 to the length of gridValues:
-            set gridValue to the item at cursor in gridValues
-            set first to the bim view point (gridValue's start's x) (gridValue's start's y) 0.0 in layout with camera
-            set second to the bim view point (gridValue's finish's x) (gridValue's finish's y) 0.0 in layout with camera
-            set insideFirst to ((first's x > layout's planRight) and (first's x < layout's width)) and ((first's y > layout's top) and (first's y < layout's bottom))
-            set insideSecond to ((second's x > layout's planRight) and (second's x < layout's width)) and ((second's y > layout's top) and (second's y < layout's bottom))
-            set span to the cad distance from first to second
-            if (insideFirst and insideSecond) and (span > 30.0):
-                set ux to (second's x - first's x) / span
-                set uy to (second's y - first's y) / span
-                append bim dash dot from (a cad vector2 with x (first's x + (ux * 11.0)) and y (first's y + (uy * 11.0))) to (a cad vector2 with x (second's x - (ux * 11.0)) and y (second's y - (uy * 11.0))) into pairs
-        draw bim grid lines pairs faint faded on canvas
-        free pairs
         loop cursor from 0 to the length of gridValues:
             set gridValue to the item at cursor in gridValues
             loop endIndex from 0 to 2:
@@ -618,8 +612,22 @@ local function draw bim grids in view of {bim editor record:editor} in {bim scre
                     set place to gridValue's finish
                 set head to the bim view point (place's x) (place's y) 0.0 in layout with camera
                 set inside to ((head's x > (layout's planRight + 12.0)) and (head's x < (layout's width - 12.0))) and ((head's y > (layout's top + 12.0)) and (head's y < (layout's bottom - 12.0)))
+                if refresh:
+                    set covered to false
+                    if inside:
+                        set sight to the bim view ray through head in layout with camera
+                        set headOffset to the cad difference of (a cad vector3 with x place's x, y place's y and z 0.0) and sight's origin
+                        set headDistance to the cad dot of headOffset and sight's direction
+                        set blocker to the bim pick along sight among sceneMeshes in editor's documentValue's current with (editor's spaces's values)
+                        set covered to (blocker's kind != bim nothing picked) and (blocker's distance < (headDistance - 0.05))
+                    append covered to covers
+                set hidden to true
+                if headCursor < the length of covers:
+                    set hidden to the item at headCursor in covers
+                set headCursor to headCursor + 1
                 if inside:
-                    draw bim grid head gridValue's name at head faint faded on canvas
+                    if hidden = false:
+                        draw bim grid head gridValue's name at head faint faded on canvas
 
 # ---------------------------------------------------------------- visibility panel
 # Opened with L over the plan: one row per category, with check boxes for its
@@ -927,16 +935,28 @@ local function draw bim slabs of {bim editor record:editor} through {bim drawing
             if (the item at cursor in (modelValue's slabs's values))'s levelId = editor's levelId:
                 set anyEdge to true
         if anyEdge:
+            # Floors as their edges; a roof, above the cut, dashed; a
+            # ceiling only where its category is shown.
             start triangles in frame
             use vertex color red 196, green 170 and blue 120 in frame
             loop cursor from 0 to the length of (modelValue's slabs's values):
                 set slabValue to the item at cursor in (modelValue's slabs's values)
-                if slabValue's levelId = editor's levelId:
+                set plateCategory to the bim category of element slabValue's id in modelValue
+                if (slabValue's levelId = editor's levelId) and (bim category plateCategory is visible in editor's planRules):
+                    set dashed to (the bim role of plate slabValue in modelValue) != bim floor planar role
                     set count to the length of (slabValue's outline's values)
                     loop corner from 0 to count:
                         set here to the bim pixel of (the item at corner in (slabValue's outline's values)) through transform
                         set following to the bim pixel of (the item at (the remainder of (corner + 1) divided by count) in (slabValue's outline's values)) through transform
-                        add bim stroke from here to following wide 1.0 in frame
+                        if dashed:
+                            set total to the cad distance from here to following
+                            set position to 0.0
+                            loop while (total > 0.0) and (position < total):
+                                set ending to the minimum of (position + 8.0) and total
+                                add bim stroke from (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) wide 1.0 in frame
+                                set position to ending + 4.0
+                        else:
+                            add bim stroke from here to following wide 1.0 in frame
             finish triangles in frame
         if chosen's valid = false:
             return nothing
@@ -1078,6 +1098,90 @@ local function draw bim linears in plan of {bim editor record:editor} through {b
         free cutEdges
         free aboveEdges
         free belowEdges
+
+# The instances of components with solid parts on the active storey, in the
+# plan from their placed meshes (`sceneMeshes`): where the cut plane, 1.2 m
+# above the storey, passes through them a black line, and the feature edges
+# below the cut thin and grey, as the plan shows linear elements.
+local function draw bim folded components in plan of {bim editor record:editor} among {a pointer to a list:sceneMeshes} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set cutHeight to (the bim storey elevation of editor) + 1.2
+        set cutLines to an empty list of a cad vector2
+        set belowLines to an empty list of a cad vector2
+        set comparator to the function named "bim gpu corner ordering $ and $"
+        loop cursor from 0 to the length of sceneMeshes:
+            set entry to the item at cursor in sceneMeshes
+            set placementFound to the bim instance index of entry's elementId in modelValue
+            set shown to false
+            if placementFound's valid:
+                set placement to the item at placementFound's position in (modelValue's instances's values)
+                set definitionFound to the bim component index of placement's componentId in modelValue
+                if (placement's levelId = editor's levelId) and definitionFound's valid:
+                    set shown to bim component (the item at definitionFound's position in (modelValue's components's values)) is folded
+            if shown:
+                set points to entry's shape's positions's values
+                set triangleCorners to entry's shape's triangles's values
+                # The cut: each triangle the plane crosses gives one segment.
+                set triangle to 0
+                loop while (triangle + 2) < the length of triangleCorners:
+                    set crossings to an empty list of a cad vector2
+                    loop side from 0 to 3:
+                        set from to the item at (the item at (triangle + side) in triangleCorners) in points
+                        set onto to the item at (the item at (triangle + (the remainder of (side + 1) divided by 3)) in triangleCorners) in points
+                        if ((from's z - cutHeight) * (onto's z - cutHeight)) < 0.0:
+                            set fraction to (cutHeight - from's z) / (onto's z - from's z)
+                            append (a cad vector2 with x (from's x + ((onto's x - from's x) * fraction)) and y (from's y + ((onto's y - from's y) * fraction))) to crossings
+                    if (the length of crossings) = 2:
+                        append (the bim pixel of (the item at 0 in crossings) through transform) to cutLines
+                        append (the bim pixel of (the item at 1 in crossings) through transform) to cutLines
+                    free crossings
+                    set triangle to triangle + 3
+                # The feature edges, between corners welded by position.
+                set corners to an empty list of a bim gpu corner record
+                loop point from 0 to the length of points:
+                    set spot to the item at point in points
+                    append (@intrinsic("construct", a bim gpu corner record, spot's x, spot's y, spot's z, point)) to corners
+                sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
+                set remap to an empty list of an integer
+                loop point from 0 to the length of corners:
+                    append 0 to remap
+                set welded to an empty list of a cad vector3
+                loop point from 0 to the length of corners:
+                    set here to the item at point in corners
+                    set fresh to true
+                    if point > 0:
+                        set before to the item at (point - 1) in corners
+                        set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
+                    if fresh:
+                        append (a cad vector3 with x here's x, y here's y and z here's z) to welded
+                    replace item at index here's index in remap with ((the length of welded) - 1)
+                set weldedCorners to an empty list of an integer
+                loop corner from 0 to the length of triangleCorners:
+                    append (the item at (the item at corner in triangleCorners) in remap) to weldedCorners
+                set features to an empty list of a cad vector3
+                append bim feature edges of welded and weldedCorners to features
+                set featureCursor to 0
+                loop while (featureCursor + 1) < the length of features:
+                    set from to the item at featureCursor in features
+                    set onto to the item at (featureCursor + 1) in features
+                    if (from's z <= cutHeight) or (onto's z <= cutHeight):
+                        if from's z > cutHeight:
+                            set from to the cad sum of onto and ((the cad difference of from and onto) scaled by ((cutHeight - onto's z) / (from's z - onto's z)))
+                        if onto's z > cutHeight:
+                            set onto to the cad sum of from and ((the cad difference of onto and from) scaled by ((cutHeight - from's z) / (onto's z - from's z)))
+                        append (the bim pixel of (a cad vector2 with x from's x and y from's y) through transform) to belowLines
+                        append (the bim pixel of (a cad vector2 with x onto's x and y onto's y) through transform) to belowLines
+                    set featureCursor to featureCursor + 2
+                free features
+                free weldedCorners
+                free welded
+                free remap
+                free corners
+        record bim strokes belowLines coloured 80, 80 and 80 wide 0.7 on canvas
+        record bim strokes cutLines coloured 0, 0 and 0 wide 1.4 on canvas
+        free belowLines
+        free cutLines
 
 # The sketch elements of the active storey in the plan: faces filled (masses
 # a shade darker), with their outlines, lines, and texts; following the plan's
@@ -1320,6 +1424,29 @@ local function draw bim gesture of {bim editor record:editor} in {bim screen lay
                 add bim stroke from (a cad vector2 with x snapPixel's x and y firstPixel's y) to snapPixel wide 1.5 in frame
                 add bim stroke from snapPixel to (a cad vector2 with x firstPixel's x and y snapPixel's y) wide 1.5 in frame
                 add bim stroke from (a cad vector2 with x firstPixel's x and y snapPixel's y) to firstPixel wide 1.5 in frame
+        # A solid part being drawn: its base (a rectangle, or a circle about
+        # its centre), then the height as a line from its second click.
+        if (editor's tool = bim solid tool) and (editor's moveStage >= 1):
+            set solidFirst to the bim plan pixel of editor's solidCorner in layout with camera
+            set solidSecond to snapPixel
+            if editor's moveStage = 2:
+                set solidSecond to the bim plan pixel of editor's solidReach in layout with camera
+            use vertex color red 220, green 120 and blue 36 in frame
+            if editor's solidKind = bim box solid:
+                add bim stroke from solidFirst to (a cad vector2 with x solidSecond's x and y solidFirst's y) wide 1.5 in frame
+                add bim stroke from (a cad vector2 with x solidSecond's x and y solidFirst's y) to solidSecond wide 1.5 in frame
+                add bim stroke from solidSecond to (a cad vector2 with x solidFirst's x and y solidSecond's y) wide 1.5 in frame
+                add bim stroke from (a cad vector2 with x solidFirst's x and y solidSecond's y) to solidFirst wide 1.5 in frame
+            else:
+                set rim to an empty list of a cad vector2
+                append bim circle at solidFirst radius (the cad distance from solidFirst to solidSecond) into rim
+                set rimCursor to 0
+                loop while (rimCursor + 1) < the length of rim:
+                    add bim stroke from (the item at rimCursor in rim) to (the item at (rimCursor + 1) in rim) wide 1.5 in frame
+                    set rimCursor to rimCursor + 2
+                free rim
+            if editor's moveStage = 2:
+                add bim stroke from solidSecond to snapPixel wide 1.0 in frame
         # A grid being drawn: its line and its heads, as it will be.
         if (editor's tool = bim grid tool) and editor's gridActive:
             set startPixel to the bim plan pixel of editor's gridStart in layout with camera
@@ -1763,6 +1890,8 @@ local function bim tool {integer:toolCode} draws in 3D:
             return true
         if (toolCode = bim place tool) or ((toolCode = bim wall tool) or (toolCode = bim grid tool)):
             return true
+        if (toolCode = bim solid tool) or (toolCode = bim linear tool):
+            return true
         if (toolCode = bim rotate tool) or ((toolCode = bim mirror tool) or (toolCode = bim offset tool)):
             return true
         if (toolCode = bim trim tool) or (toolCode = bim extend tool):
@@ -1817,6 +1946,41 @@ local function draw bim gesture in view of {bim editor record:editor} in {bim sc
             add bim stroke from (the bim view point (editor's gridStart's x) (editor's gridStart's y) 0.0 in layout with camera) to (the bim view point (snapPoint's x) (snapPoint's y) 0.0 in layout with camera) wide 1.5 in frame
         if ((editor's tool = bim move tool) or (editor's tool = bim copy tool)) and (editor's moveStage = 2):
             add bim stroke from (the bim view point (editor's moveBase's x) (editor's moveBase's y) z in layout with camera) to marker wide 1.5 in frame
+        # A solid part being drawn: its base on the storey, then, while its
+        # height is shown, the same outline at that height and the edges
+        # between.
+        if (editor's tool = bim solid tool) and (editor's moveStage >= 1):
+            set baseFirst to editor's solidCorner
+            set baseSecond to snapPoint
+            set partRise to 0.0
+            if editor's moveStage = 2:
+                set baseSecond to editor's solidReach
+                set partRise to the cad distance from editor's solidReach to snapPoint
+            set outline to an empty list of a cad vector2
+            if editor's solidKind = bim box solid:
+                append baseFirst to outline
+                append (a cad vector2 with x baseSecond's x and y baseFirst's y) to outline
+                append baseSecond to outline
+                append (a cad vector2 with x baseFirst's x and y baseSecond's y) to outline
+            else:
+                set partRadius to the cad distance from baseFirst to baseSecond
+                loop step from 0 to 32:
+                    set angleNow to (6.283185307179586 * (step as a 64 bit floating-point number)) / 32.0
+                    append (a cad vector2 with x (baseFirst's x + (partRadius * (the cosine of angleNow))) and y (baseFirst's y + (partRadius * (the sine of angleNow)))) to outline
+            set levels to 1
+            if partRise > 0.0:
+                set levels to 2
+            loop level from 0 to levels:
+                set partHeight to z + (partRise * (level as a 64 bit floating-point number))
+                loop side from 0 to the length of outline:
+                    set here to the item at side in outline
+                    set following to the item at (the remainder of (side + 1) divided by (the length of outline)) in outline
+                    add bim stroke from (the bim view point (here's x) (here's y) partHeight in layout with camera) to (the bim view point (following's x) (following's y) partHeight in layout with camera) wide 1.5 in frame
+            if (partRise > 0.0) and (editor's solidKind = bim box solid):
+                loop side from 0 to the length of outline:
+                    set here to the item at side in outline
+                    add bim stroke from (the bim view point (here's x) (here's y) z in layout with camera) to (the bim view point (here's x) (here's y) (z + partRise) in layout with camera) wide 1.5 in frame
+            free outline
         finish triangles in frame
         if editor's editMode:
             draw bim edit points of editor in layout with camera in view true in frame
@@ -1834,7 +1998,9 @@ local function upload bim gpu scene of {a pointer to a list:meshes} for {bim edi
         set high to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
         loop cursor from 0 to the length of meshes:
             set shape to (the item at cursor in meshes)'s shape
-            set vertexBound to vertexBound + (the length of (shape's positions's values))
+            # A corner may be stored once per smooth group, so at most once
+            # per triangle corner.
+            set vertexBound to vertexBound + (the length of (shape's triangles's values))
             set indexCount to indexCount + (the length of (shape's triangles's values))
             loop point from 0 to the length of (shape's positions's values):
                 set p to the item at point in (shape's positions's values)
@@ -1876,9 +2042,12 @@ local function upload bim gpu scene of {a pointer to a list:meshes} for {bim edi
                 set p to the item at point in (shape's positions's values)
                 append (@intrinsic("construct", a bim gpu corner record, p's x, p's y, p's z, point)) to corners
             sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
+            # The corners welded by position (`remap`: each point's welded
+            # corner, counted from `base`).
             set remap to an empty list of an integer
             loop point from 0 to the length of corners:
                 append 0 to remap
+            set weldedSpots to an empty list of a cad vector3
             set distinct to 0
             loop point from 0 to the length of corners:
                 set here to the item at point in corners
@@ -1887,12 +2056,87 @@ local function upload bim gpu scene of {a pointer to a list:meshes} for {bim edi
                     set before to the item at (point - 1) in corners
                     set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
                 if fresh:
-                    put gpu mesh vertex (base + distinct) at (here's x - origin's x), (here's y - origin's y) and (here's z - origin's z) of element ordinal coloured red, green and blue in (@intrinsic("dereference", context))
+                    append (a cad vector3 with x here's x, y here's y and z here's z) to weldedSpots
                     set distinct to distinct + 1
                 replace item at index here's index in remap with (base + (distinct - 1))
-            loop corner from 0 to the length of (shape's triangles's values):
-                put gpu mesh index slot as (the item at (the item at corner in (shape's triangles's values)) in remap) in (@intrinsic("dereference", context))
+            # Smooth shading, as round surfaces need: each triangle corner
+            # takes the normals of the triangles at its welded corner that
+            # meet its own within 30 degrees (a crease beyond), averaged by
+            # area; a welded corner is stored once per distinct normal.
+            set triangleCorners to shape's triangles's values
+            set triangleCount to (the length of triangleCorners) / 3
+            set faceNormals to an empty list of a cad vector3
+            loop triangle from 0 to triangleCount:
+                set first to the item at (the item at (triangle * 3) in triangleCorners) in (shape's positions's values)
+                set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in (shape's positions's values)
+                set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in (shape's positions's values)
+                append (the cad cross of (the cad difference of second and first) and (the cad difference of third and first)) to faceNormals
+            # The triangles at each welded corner (counted, then listed).
+            set incidentStart to an empty list of an integer
+            loop weld from 0 to (distinct + 1):
+                append 0 to incidentStart
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                replace item at index (weld + 1) in incidentStart with ((the item at (weld + 1) in incidentStart) + 1)
+            loop weld from 1 to (distinct + 1):
+                replace item at index weld in incidentStart with ((the item at weld in incidentStart) + (the item at (weld - 1) in incidentStart))
+            set incidentFill to an empty list of an integer
+            set incident to an empty list of an integer
+            loop weld from 0 to distinct:
+                append (the item at weld in incidentStart) to incidentFill
+            loop corner from 0 to the length of triangleCorners:
+                append 0 to incident
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                replace item at index (the item at weld in incidentFill) in incident with (corner / 3)
+                replace item at index weld in incidentFill with ((the item at weld in incidentFill) + 1)
+            # The GPU corners made so far for each welded corner, as chains.
+            set chainHead to an empty list of an integer
+            loop weld from 0 to distinct:
+                append -1 to chainHead
+            set chainNext to an empty list of an integer
+            set chainNormal to an empty list of a cad vector3
+            set made to 0
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                set own to the item at (corner / 3) in faceNormals
+                set ownLength to the cad length of own
+                set summed to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                if ownLength > 1e-18:
+                    loop link from (the item at weld in incidentStart) to (the item at (weld + 1) in incidentStart):
+                        set other to the item at (the item at link in incident) in faceNormals
+                        set otherLength to the cad length of other
+                        if otherLength > 1e-18:
+                            if (the cad dot of own and other) > ((0.866 * ownLength) * otherLength):
+                                set summed to the cad sum of summed and other
+                set summedLength to the cad length of summed
+                set smoothNormal to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                if summedLength > 1e-18:
+                    set smoothNormal to summed scaled by (1.0 / summedLength)
+                set chosen to -1
+                set walker to the item at weld in chainHead
+                loop while (walker >= 0) and (chosen < 0):
+                    if (the cad dot of (the item at walker in chainNormal) and smoothNormal) > 0.9995:
+                        set chosen to walker
+                    set walker to the item at walker in chainNext
+                if chosen < 0:
+                    set chosen to made
+                    append smoothNormal to chainNormal
+                    append (the item at weld in chainHead) to chainNext
+                    replace item at index weld in chainHead with made
+                    set spot to the item at weld in weldedSpots
+                    put gpu mesh vertex (base + made) at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in (@intrinsic("dereference", context))
+                    set made to made + 1
+                put gpu mesh index slot as (base + chosen) in (@intrinsic("dereference", context))
                 set slot to slot + 1
+            free faceNormals
+            free incidentStart
+            free incidentFill
+            free incident
+            free chainHead
+            free chainNext
+            free chainNormal
+            free weldedSpots
             # The feature edges, for the modes that draw them, between the
             # welded corners.
             if viewMode != bim shaded view mode:
@@ -1907,7 +2151,7 @@ local function upload bim gpu scene of {a pointer to a list:meshes} for {bim edi
                 append bim feature edges of welded and weldedCorners to (edges's values)
                 free welded
                 free weldedCorners
-            set base to base + distinct
+            set base to base + made
             free corners
             free remap
         return @intrinsic("construct", a bim gpu scene record, origin, radius, ids, edges, low, high)
@@ -2131,6 +2375,59 @@ local function draw bim edges of {bim gpu scene record:scene} in {bim screen lay
         finish triangles in frame
         if depthTested:
             disable depth testing in frame
+
+# The grid lines in the 3D panel: dash-dot, depth tested against the model
+# as the edges are, so that a grid line passes behind the elements in front
+# of it. Orthographic projection is affine, so a dash's ends on screen map
+# back along the line by the same fractions.
+local function draw bim grid lines in view of {bim editor record:editor} around {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        if (bim category bim grid category is visible in editor's modelRules) = false:
+            return nothing
+        set faded to bim category bim grid category is halftone in editor's modelRules
+        set shade to the bim halftone of channel 0 when faded
+        set axes to the bim view axes of camera
+        set depthFactor to 16.0 / (the maximum of scene's radius and 1e-6)
+        set gridValues to editor's documentValue's current's grids's values
+        enable depth testing in frame
+        start triangles in frame
+        use vertex color red shade, green shade and blue shade in frame
+        loop cursor from 0 to the length of gridValues:
+            set gridValue to the item at cursor in gridValues
+            set first to the bim view point (gridValue's start's x) (gridValue's start's y) 0.0 in layout with camera
+            set second to the bim view point (gridValue's finish's x) (gridValue's finish's y) 0.0 in layout with camera
+            set span to the cad distance from first to second
+            if span > 30.0:
+                set ux to (second's x - first's x) / span
+                set uy to (second's y - first's y) / span
+                set dashes to an empty list of a cad vector2
+                append bim dash dot from (a cad vector2 with x (first's x + (ux * 11.0)) and y (first's y + (uy * 11.0))) to (a cad vector2 with x (second's x - (ux * 11.0)) and y (second's y - (uy * 11.0))) into dashes
+                set startOffset to the cad difference of (a cad vector3 with x gridValue's start's x, y gridValue's start's y and z 0.0) and axes's centre
+                set finishOffset to the cad difference of (a cad vector3 with x gridValue's finish's x, y gridValue's finish's y and z 0.0) and axes's centre
+                set startDepth to 0.012 - ((the cad dot of startOffset and axes's depth) * depthFactor)
+                set finishDepth to 0.012 - ((the cad dot of finishOffset and axes's depth) * depthFactor)
+                set nx to (0.0 - uy) * 0.5
+                set ny to ux * 0.5
+                set dashCursor to 0
+                loop while (dashCursor + 1) < the length of dashes:
+                    set here to the item at dashCursor in dashes
+                    set there to the item at (dashCursor + 1) in dashes
+                    set inside to (((the minimum of here's x and there's x) > layout's planRight) and ((the maximum of here's x and there's x) < layout's width)) and (((the minimum of here's y and there's y) > layout's top) and ((the maximum of here's y and there's y) < layout's bottom))
+                    if inside:
+                        set hereFraction to (the cad distance from first to here) / span
+                        set thereFraction to (the cad distance from first to there) / span
+                        set hz to startDepth + ((finishDepth - startDepth) * hereFraction)
+                        set tz to startDepth + ((finishDepth - startDepth) * thereFraction)
+                        add a vertex at x (here's x + nx), y (here's y + ny) and z hz to frame
+                        add a vertex at x (there's x + nx), y (there's y + ny) and z tz to frame
+                        add a vertex at x (there's x - nx), y (there's y - ny) and z tz to frame
+                        add a vertex at x (here's x + nx), y (here's y + ny) and z hz to frame
+                        add a vertex at x (there's x - nx), y (there's y - ny) and z tz to frame
+                        add a vertex at x (here's x - nx), y (here's y - ny) and z hz to frame
+                    set dashCursor to dashCursor + 2
+                free dashes
+        finish triangles in frame
+        disable depth testing in frame
 
 # The levels in the 3D panel: each a dashed rectangle at its elevation
 # around the model, with its name and height; the active storey darker.
@@ -2468,12 +2765,20 @@ local function the bim camera fitting {bim editor record:editor} in {bim screen 
             set topZ to the maximum of topZ and (elevation + wallValue's height)
         set spanX to (high's x - low's x) + 2.0
         set spanY to (high's y - low's y) + 2.0
-        set scale to the minimum of (((layout's planRight - layout's planLeft) * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
+        # A panel hidden behind another tab fits as it will show: across the
+        # whole drawing area.
+        set planSpan to layout's planRight - layout's planLeft
+        if planSpan < 50.0:
+            set planSpan to layout's width - layout's planLeft
+        set scale to the minimum of ((planSpan * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
         set centre to a cad vector2 with x ((low's x + high's x) * 0.5) and y ((low's y + high's y) * 0.5)
         set target to a cad vector3 with x centre's x, y centre's y and z ((bottomZ + topZ) * 0.5)
         set spanZ to topZ - bottomZ
         set diagonal to the square root of (((spanX * spanX) + (spanY * spanY)) + (spanZ * spanZ))
-        set panelSize to the minimum of (layout's width - layout's planRight) and (layout's bottom - layout's top)
+        set viewSpan to layout's width - layout's planRight
+        if viewSpan < 50.0:
+            set viewSpan to layout's width - layout's planLeft
+        set panelSize to the minimum of viewSpan and (layout's bottom - layout's top)
         return @intrinsic("construct", a bim camera record, centre, scale, current's yaw, current's pitch, target, (panelSize * 0.9) / diagonal)
 
 # A camera whose plan and 3D view show the box from `low` to `high`, keeping
@@ -2483,11 +2788,19 @@ local function the bim camera fitting box from {cad vector3:low} to {cad vector3
         set spanX to (high's x - low's x) + 2.0
         set spanY to (high's y - low's y) + 2.0
         set spanZ to high's z - low's z
-        set scale to the minimum of (((layout's planRight - layout's planLeft) * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
+        # A panel hidden behind another tab fits as it will show: across the
+        # whole drawing area.
+        set planSpan to layout's planRight - layout's planLeft
+        if planSpan < 50.0:
+            set planSpan to layout's width - layout's planLeft
+        set scale to the minimum of ((planSpan * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
         set centre to a cad vector2 with x ((low's x + high's x) * 0.5) and y ((low's y + high's y) * 0.5)
         set target to a cad vector3 with x centre's x, y centre's y and z ((low's z + high's z) * 0.5)
         set diagonal to the square root of (((spanX * spanX) + (spanY * spanY)) + (spanZ * spanZ))
-        set panelSize to the minimum of (layout's width - layout's planRight) and (layout's bottom - layout's top)
+        set viewSpan to layout's width - layout's planRight
+        if viewSpan < 50.0:
+            set viewSpan to layout's width - layout's planLeft
+        set panelSize to the minimum of viewSpan and (layout's bottom - layout's top)
         return @intrinsic("construct", a bim camera record, centre, scale, current's yaw, current's pitch, target, (panelSize * 0.9) / diagonal)
 
 # The camera with its 3D view turned by `dx` and `dy` pixels of pointer
@@ -2535,10 +2848,66 @@ local function the bim camera {bim camera record:current} zoomed by {a 64 bit fl
         set closer's centre to a cad vector2 with x (anchor's x + ((current's centre's x - anchor's x) / factor)) and y (anchor's y + ((current's centre's y - anchor's y) / factor))
         return closer
 
+# ---------------------------------------------------------------- view tabs
+
+# The kinds of view a tab shows.
+function bim plan tab:
+    replacement:
+        0
+function bim model tab:
+    replacement:
+        1
+function bim section tab:
+    replacement:
+        2
+function bim schedule tab:
+    replacement:
+        3
+
+# The height of the tab bar above the drawing.
+function the bim tab bar height:
+    replacement:
+        26.0
+
+local function the bim tab label of kind {integer:tabKind} detail {a 64 bit integer:detail} for {bim editor record:editor}:
+    execute:
+        if tabKind = bim plan tab:
+            set found to the bim level index of detail in editor's documentValue's current
+            if found's valid:
+                return (the string form of "Plan: ") + (the item at found's position in (editor's documentValue's current's levels's values))'s name
+            return the string form of "Plan"
+        if tabKind = bim model tab:
+            return the string form of "3D"
+        if tabKind = bim section tab:
+            return the string form of "Section"
+        return (the string form of "Schedule: ") + (the bim schedule name of (detail as an integer))
+
+# The tab of `tabKind` with `detail` among the open tabs, or -1.
+local function the bim tab of kind {integer:tabKind} detail {a 64 bit integer:detail} among {a pointer to a list:kinds} and {a pointer to a list:details}:
+    execute:
+        loop cursor from 0 to the length of kinds:
+            if ((the item at cursor in kinds) = tabKind) and (((tabKind = bim model tab) or (tabKind = bim section tab)) or ((the item at cursor in details) = detail)):
+                return cursor
+        return -1
+
+# The left edges of the tabs, and after the last its right edge, in pixels.
+local function the bim tab edges of {a pointer to a list:kinds} and {a pointer to a list:details} for {bim editor record:editor} from {a 64 bit floating-point number:left} using {bim text atlas record:typeface}:
+    execute:
+        set boundaries to an empty list of a 64 bit floating-point number
+        set x to left
+        loop cursor from 0 to the length of kinds:
+            append x to boundaries
+            set tabText to the bim tab label of kind (the item at cursor in kinds) detail (the item at cursor in details) for editor
+            set x to x + ((the bim text width of tabText in face (bim text small) of typeface) + 44.0)
+        append x to boundaries
+        return boundaries
+
 local function the bim tool name of {integer:tool}:
     execute:
         if tool = bim linear tool:
             return the string form of "Linear element (column, beam, mullion, skirting, pipe)"
+        if tool = bim solid tool:
+            return the string form of "Solid part (BX box, CY cylinder, SH sphere)"
         if tool = bim wall tool:
             return the string form of "Wall (W)"
         if tool = bim opening tool:
@@ -2712,7 +3081,13 @@ set previousMiddle to false
 set viewGripActive to false
 set gripElevation to 0.0
 set meshes to a cad topology list of a bim scene mesh record
+set sketchMeshes to a cad topology list of a bim scene mesh record
+# Which grid heads in the 3D view stand behind an element, for the view key
+# they were found for.
+set headCovers to an empty list of a boolean
+set headCoversKey to the string form of "none"
 set meshedRevision to (-1) as a 64 bit integer
+set meshedTier to -1
 set shownMeshes to a cad topology list of a bim scene mesh record
 set shownMeshesKey to the string form of "none"
 set uploadedKey to the string form of "nothing uploaded"
@@ -2743,6 +3118,22 @@ set showSection to false
 # The quantity schedule (T) replaces the 3D view; its rows are recomputed when
 # the evaluation changes.
 set showSchedule to false
+# The open views, as tabs above the drawing, as in Revit: each tab's kind
+# (plan, 3D, section, schedule) and detail (a plan's storey, a schedule's
+# code); the active tab; and whether the plan and the active other view share
+# the drawing (tiled, WT) or the active view fills it (tabs, TW).
+set tabKinds to an empty list of an integer
+set tabDetails to an empty list of a 64 bit integer
+append bim plan tab to tabKinds
+append editor's levelId to tabDetails
+append bim model tab to tabKinds
+append (0 as a 64 bit integer) to tabDetails
+set activeTab to 0
+set sideTab to 1
+set tiledViews to false
+# Tiled, the right column shows the 3D view above and, below it, the section
+# or schedule tab last made active.
+set lowerTab to -1
 # The 3D view's detail level: fine shows each wall's layers in their
 # materials' colours, coarse each wall as one solid. Large models start
 # coarse. K switches.
@@ -2763,6 +3154,58 @@ add bim type library to (the address of editor)
 loop while window remains open:
     set frameStarted to the bim microseconds now
     set layout to the bim screen layout of window
+    # The tab bar takes the drawing's top; the active tab decides what fills
+    # the rest, or (tiled) the plan and the last other view share it.
+    if activeTab >= (the length of tabKinds):
+        set activeTab to (the length of tabKinds) - 1
+    set activeKind to the item at activeTab in tabKinds
+    if activeKind = bim plan tab:
+        if (the item at activeTab in tabDetails) != editor's levelId:
+            replace item at index activeTab in tabDetails with editor's levelId
+    else:
+        set sideTab to activeTab
+    set sideKind to bim model tab
+    if (sideTab >= 0) and (sideTab < (the length of tabKinds)):
+        set sideKind to the item at sideTab in tabKinds
+    if sideKind = bim plan tab:
+        set sideKind to bim model tab
+    set showSection to (sideKind = bim section tab) and editor's hasSection
+    set showSchedule to sideKind = bim schedule tab
+    set scheduleCode to 0
+    if showSchedule:
+        set scheduleCode to (the item at sideTab in tabDetails) as an integer
+    set layout's top to layout's top + (the bim tab bar height)
+    if tiledViews = false:
+        if activeKind = bim plan tab:
+            set layout's planRight to layout's width
+        else:
+            set layout's planRight to layout's planLeft
+    if (activeKind = bim section tab) or (activeKind = bim schedule tab):
+        set lowerTab to activeTab
+    if lowerTab >= (the length of tabKinds):
+        set lowerTab to -1
+    set modelOpen to false
+    loop tabCursor from 0 to the length of tabKinds:
+        if (the item at tabCursor in tabKinds) = bim model tab:
+            set modelOpen to true
+    set splitViews to false
+    if tiledViews and (modelOpen and (lowerTab >= 0)):
+        set lowerKind to the item at lowerTab in tabKinds
+        if ((lowerKind = bim section tab) and editor's hasSection) or (lowerKind = bim schedule tab):
+            set splitViews to true
+            set showSection to (lowerKind = bim section tab) and editor's hasSection
+            set showSchedule to lowerKind = bim schedule tab
+            if showSchedule:
+                set scheduleCode to (the item at lowerTab in tabDetails) as an integer
+    set drawModel to ((showSection and editor's hasSection) = false) and (showSchedule = false)
+    set splitAt to layout's bottom
+    set lowerTop to layout's top
+    if splitViews:
+        set drawModel to true
+        set splitAt to layout's top + ((layout's bottom - layout's top) * 0.55)
+        set lowerTop to splitAt + 3.0
+    set viewLayout to @intrinsic("construct", a bim screen layout record, layout's width, layout's height, layout's planLeft, layout's planRight, layout's top, splitAt)
+    set lowerLayout to @intrinsic("construct", a bim screen layout record, layout's width, layout's height, layout's planLeft, layout's planRight, lowerTop, layout's bottom)
     if fitting:
         set camera to the bim camera fitting editor in layout keeping camera
         if imported's valid and ((the length of (imported's meshes's values)) > 0):
@@ -2780,13 +3223,13 @@ loop while window remains open:
     if overPlan:
         move bim editor pointer to (the bim model point of pixel in layout with camera) within (8.0 / camera's scale) in (the address of editor)
     set leftDown to the left mouse button is pressed in window
-    set overView to ((pixel's x > layout's planRight) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))) and ((showSection and editor's hasSection) = false)
+    set overView to ((pixel's x > layout's planRight) and ((pixel's y > viewLayout's top) and (pixel's y < viewLayout's bottom))) and drawModel
     # Drawing in the 3D view: with a drawing tool the pointer runs over the
     # active storey's plane there (push/pull: over the face under it, then up
     # and down the screen), and a click draws instead of orbiting.
-    set drawingInView to (overView and (showSchedule = false)) and ((bim tool editor's tool draws in 3D) or editor's editMode)
+    set drawingInView to overView and ((bim tool editor's tool draws in 3D) or editor's editMode)
     if drawingInView and ((viewPressActive = false) and (viewGripActive = false)):
-        set ray to the bim view ray through pixel in layout with camera
+        set ray to the bim view ray through pixel in viewLayout with camera
         set stepLength to (meshPushStep's x * meshPushStep's x) + (meshPushStep's y * meshPushStep's y)
         if (((editor's tool = bim push tool) and (editor's pushFace >= 0)) and (pushInView and (stepLength > 1e-6))) and ((the length of editor's numeric) = 0):
             # A mesh face follows the pointer along its normal as seen.
@@ -2851,6 +3294,39 @@ loop while window remains open:
                 set onPlane to a cad vector2 with x (ray's origin's x + (underPointer's distance * ray's direction's x)) and y (ray's origin's y + (underPointer's distance * ray's direction's y))
             move bim editor pointer to onPlane within (8.0 / camera's viewScale) in (the address of editor)
     set panelClicked to false
+    # A click on the tab bar: its x closes a tab, elsewhere it activates it.
+    set barTop to layout's top - (the bim tab bar height)
+    if ((leftDown and (previousLeft = false)) and ((pixel's y >= barTop) and (pixel's y < layout's top))) and (pixel's x > layout's planLeft):
+        set panelClicked to true
+        set tabEdges to the bim tab edges of tabKinds and tabDetails for editor from (layout's planLeft + 4.0) using typeface
+        set closing to -1
+        loop tabCursor from 0 to the length of tabKinds:
+            set tabLeft to the item at tabCursor in tabEdges
+            set tabRight to the item at (tabCursor + 1) in tabEdges
+            if (pixel's x >= tabLeft) and (pixel's x < tabRight):
+                if (pixel's x >= (tabRight - 22.0)) and ((the length of tabKinds) > 1):
+                    set closing to tabCursor
+                else:
+                    set activeTab to tabCursor
+                    if (the item at tabCursor in tabKinds) = bim plan tab:
+                        set editor's levelId to the item at tabCursor in tabDetails
+                        set editor's viewsDirty to true
+        free tabEdges
+        if closing >= 0:
+            remove item closing from tabKinds
+            remove item closing from tabDetails
+            if activeTab > closing:
+                set activeTab to activeTab - 1
+            if activeTab >= (the length of tabKinds):
+                set activeTab to (the length of tabKinds) - 1
+            if sideTab > closing:
+                set sideTab to sideTab - 1
+            if sideTab >= (the length of tabKinds):
+                set sideTab to (the length of tabKinds) - 1
+            if lowerTab = closing:
+                set lowerTab to -1
+            else if lowerTab > closing:
+                set lowerTab to lowerTab - 1
     if (leftDown and (previousLeft = false)) and uiHit's inChrome:
         set panelClicked to true
         if uiHit's command >= 0:
@@ -2864,18 +3340,31 @@ loop while window remains open:
         if uiHit's action = bim browser toggle:
             set groupIndex to uiHit's actionId as an integer
             replace item at index groupIndex in browserClosed with ((the item at groupIndex in browserClosed) = false)
+        # Opening a view from the browser: its tab, made active (opened
+        # when it is not open yet).
+        set openKind to -1
+        set openDetail to 0 as a 64 bit integer
         if uiHit's action = bim browser plan:
-            set showSchedule to false
+            set openKind to bim plan tab
+            set openDetail to editor's levelId
+            if uiHit's storey >= (0 as a 64 bit integer):
+                set openDetail to uiHit's storey
             set editor's viewsDirty to true
         if uiHit's action = bim browser model view:
-            set showSchedule to false
-            set showSection to false
-        if uiHit's action = bim browser section view:
-            set showSchedule to false
-            set showSection to editor's hasSection
+            set openKind to bim model tab
+        if (uiHit's action = bim browser section view) and editor's hasSection:
+            set openKind to bim section tab
         if uiHit's action = bim browser schedule view:
-            set showSchedule to true
-            set showSection to false
+            set openKind to bim schedule tab
+            if uiHit's actionId >= (0 as a 64 bit integer):
+                set openDetail to uiHit's actionId
+        if openKind >= 0:
+            set existing to the bim tab of kind openKind detail openDetail among tabKinds and tabDetails
+            if existing < 0:
+                append openKind to tabKinds
+                append openDetail to tabDetails
+                set existing to (the length of tabKinds) - 1
+            set activeTab to existing
         # The type selector opens and closes; choosing from it closes it.
         set wasOpen to typeSelectorOpen
         set typeSelectorOpen to false
@@ -2900,8 +3389,8 @@ loop while window remains open:
             set editor's placeComponentId to uiHit's actionId
             set editor's tool to bim place tool
             set editor's message to the string form of "Place component: click where"
-        if uiHit's floorType >= 0:
-            choose bim editor floor type uiHit's floorType in (the address of editor)
+        if uiHit's action = bim browser plate type:
+            choose bim editor plate type uiHit's actionId in (the address of editor)
         if uiHit's wallType >= (0 as a 64 bit integer):
             choose bim editor wall type uiHit's wallType in (the address of editor)
         if uiHit's storey >= (0 as a 64 bit integer):
@@ -2936,7 +3425,7 @@ loop while window remains open:
                 set nearestPoint to -1
                 set nearestGap to 9.0
                 loop pointCursor from 0 to the length of (editedMesh's vertices's values):
-                    set onScreen to the bim pixel of mesh point (the item at pointCursor in (editedMesh's vertices's values)) of editor in layout with camera in view true
+                    set onScreen to the bim pixel of mesh point (the item at pointCursor in (editedMesh's vertices's values)) of editor in viewLayout with camera in view true
                     set gap to the cad distance from onScreen to pixel
                     if gap < nearestGap:
                         set nearestGap to gap
@@ -2944,7 +3433,7 @@ loop while window remains open:
                 if nearestPoint >= 0:
                     pick bim editor mesh point nearestPoint in (the address of editor)
                 else:
-                    set faceRay to the bim view ray through pixel in layout with camera
+                    set faceRay to the bim view ray through pixel in viewLayout with camera
                     set faceHit to the bim pick along faceRay among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
                     set hitFace to -1
                     if (faceHit's kind = bim mesh picked) and (faceHit's id = editedMesh's id):
@@ -2986,7 +3475,7 @@ loop while window remains open:
             set meshLineActive to false
         # A push/pull on a face of a mesh pushes that face along its normal.
         if ((editor's tool = bim push tool) and (editor's pushId = the bim refused id)) and (clickHandled = false):
-            set meshRay to the bim view ray through pixel in layout with camera
+            set meshRay to the bim view ray through pixel in viewLayout with camera
             set meshHit to the bim pick along meshRay among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
             if meshHit's kind = bim mesh picked:
                 set hitMeshFound to the bim mesh index of meshHit's id in editor's documentValue's current
@@ -3000,8 +3489,8 @@ loop while window remains open:
                     set hitFace to the bim face of mesh hitMesh through (a cad vector3 with x hitSpot's x, y hitSpot's y and z (hitSpot's z - floorZ))
                     if hitFace >= 0:
                         set faceNormal to the bim normal of mesh face hitFace of hitMesh
-                        set fromPixel to the bim view point (hitSpot's x) (hitSpot's y) (hitSpot's z) in layout with camera
-                        set toPixel to the bim view point (hitSpot's x + faceNormal's x) (hitSpot's y + faceNormal's y) (hitSpot's z + faceNormal's z) in layout with camera
+                        set fromPixel to the bim view point (hitSpot's x) (hitSpot's y) (hitSpot's z) in viewLayout with camera
+                        set toPixel to the bim view point (hitSpot's x + faceNormal's x) (hitSpot's y + faceNormal's y) (hitSpot's z + faceNormal's z) in viewLayout with camera
                         set meshPushStep to a cad vector2 with x (toPixel's x - fromPixel's x) and y (toPixel's y - fromPixel's y)
                         start bim editor push of mesh hitMesh's id face hitFace in (the address of editor)
                         set clickHandled to true
@@ -3009,7 +3498,7 @@ loop while window remains open:
         # SketchUp: the outline edge nearest where the ray met the side.
         if ((editor's tool = bim push tool) and (editor's pushId = the bim refused id)) and (clickHandled = false):
             set editor's pushEdge to -1
-            set sideRay to the bim view ray through pixel in layout with camera
+            set sideRay to the bim view ray through pixel in viewLayout with camera
             set sideHit to the bim pick along sideRay among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
             if sideHit's kind = bim sketch picked:
                 set hitZ to sideRay's origin's z + (sideHit's distance * sideRay's direction's z)
@@ -3032,14 +3521,14 @@ loop while window remains open:
                         move bim editor pointer to hitPoint within 0.0001 in (the address of editor)
         if clickHandled = false:
             press bim editor pointer in (the address of editor)
-    set overSection to ((pixel's x > layout's planRight) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))) and (showSection and editor's hasSection)
+    set overSection to ((pixel's x > layout's planRight) and ((pixel's y > lowerLayout's top) and (pixel's y < lowerLayout's bottom))) and (showSection and editor's hasSection)
     if ((leftDown and (previousLeft = false)) and overSection) and (panelClicked = false):
-        pick bim section element of editor at pixel in layout
+        pick bim section element of editor at pixel in lowerLayout
     if ((leftDown and (previousLeft = false)) and (overView and (drawingInView = false))) and (panelClicked = false):
         # A handle of the selection drags it across its storey's plane;
         # elsewhere the press orbits or selects.
         set handles to the bim grips of editor
-        set gripIndex to the bim grip near pixel among (handles's values) in layout with camera
+        set gripIndex to the bim grip near pixel among (handles's values) in viewLayout with camera
         if gripIndex >= 0:
             set gripElevation to (the item at gripIndex in (handles's values))'s location's z
             start bim editor drag of (the item at gripIndex in (handles's values)) in (the address of editor)
@@ -3049,7 +3538,7 @@ loop while window remains open:
             set viewDragged to false
             set viewPressPixel to pixel
     if viewGripActive and leftDown:
-        set ray to the bim view ray through pixel in layout with camera
+        set ray to the bim view ray through pixel in viewLayout with camera
         if (the absolute value of ray's direction's z) > 1e-9:
             set reach to (gripElevation - ray's origin's z) / ray's direction's z
             set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
@@ -3076,15 +3565,15 @@ loop while window remains open:
                     set boxOutline to the item at outlineCursor in boxOutlines
                     loop edgeCursor from 0 to the length of (boxOutline's segments's values):
                         set edgeSpot to the item at edgeCursor in (boxOutline's segments's values)
-                        append (the bim view point (edgeSpot's x) (edgeSpot's y) (edgeSpot's z) in layout with camera) to (boxOutline's flat's values)
+                        append (the bim view point (edgeSpot's x) (edgeSpot's y) (edgeSpot's z) in viewLayout with camera) to (boxOutline's flat's values)
                 set editor's extending to shiftHeld
                 ignore select bim editor in box from viewPressPixel to pixel among boxOutlines in (the address of editor)
                 set editor's extending to false
             else:
-                set picked to the bim pick along (the bim view ray through viewPressPixel in layout with camera) among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
+                set picked to the bim pick along (the bim view ray through viewPressPixel in viewLayout with camera) among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
                 # A grid line, drawn at datum level, is picked within six
                 # pixels of it before what lies behind.
-                set gridPicked to the bim grid near pixel viewPressPixel of editor in layout with camera
+                set gridPicked to the bim grid near pixel viewPressPixel of editor in viewLayout with camera
                 if gridPicked != the bim refused id:
                     select bim editor bim grid picked numbered gridPicked in (the address of editor)
                 else:
@@ -3124,7 +3613,7 @@ loop while window remains open:
         else if overPlan:
             set camera to the bim camera camera zoomed by factor in plan at pixel in layout
         else if overView:
-            set camera to the bim camera camera zoomed by factor in view at pixel in layout
+            set camera to the bim camera camera zoomed by factor in view at pixel in viewLayout
     # The commands of the keys pressed this frame and of a ribbon button
     # clicked; Ctrl adds `bim ui control command`.
     set pressedCodes to an empty list of an integer
@@ -3168,8 +3657,16 @@ loop while window remains open:
                 set editor's message to the string form of "Grid on (F7)"
             else:
                 set editor's message to the string form of "Grid off (F7)"
+        # WT tiles the views, TW shows them as tabs.
+        if (entry = 2090) or (entry = 2091):
+            set tiledViews to entry = 2090
+            set code to -1
+            if tiledViews:
+                set editor's message to the string form of "Views tiled (TW: tabs)"
+            else:
+                set editor's message to the string form of "Views as tabs (WT: tiled)"
         # Commands of their own (two-letter commands) go to the editor.
-        if entry >= 2000:
+        else if entry >= 2000:
             type bim editor key entry in (the address of editor)
         else if control and (code = 83):
             save bim editor to filePath in (the address of editor)
@@ -3186,9 +3683,13 @@ loop while window remains open:
             set camera's scale to camera's scale / 1.2
         else if code = 61:
             set camera's scale to camera's scale * 1.2
-        else if code = 86:
-            set showSection to (showSection = false) and editor's hasSection
-            set showSchedule to false
+        else if (code = 86) and editor's hasSection:
+            set existing to the bim tab of kind bim section tab detail (0 as a 64 bit integer) among tabKinds and tabDetails
+            if existing < 0:
+                append bim section tab to tabKinds
+                append (0 as a 64 bit integer) to tabDetails
+                set existing to (the length of tabKinds) - 1
+            set activeTab to existing
         else if code = 70:
             set fitting to true
         else if code = 76:
@@ -3202,9 +3703,12 @@ loop while window remains open:
             else:
                 set editor's message to the string form of "3D detail: coarse"
         else if code = 84:
-            set showSchedule to showSchedule = false
-            if showSchedule:
-                set showSection to false
+            set existing to the bim tab of kind bim schedule tab detail (0 as a 64 bit integer) among tabKinds and tabDetails
+            if existing < 0:
+                append bim schedule tab to tabKinds
+                append (0 as a 64 bit integer) to tabDetails
+                set existing to (the length of tabKinds) - 1
+            set activeTab to existing
         else if control and ((code >= 49) and (code <= 52)):
             set viewMode to code - 49
             set editor's message to (the string form of "3D view: ") + (the bim name of view mode viewMode)
@@ -3233,9 +3737,19 @@ loop while window remains open:
     set previousRight to rightDown
     set previousCursor to cursorPosition
     refresh bim editor (the address of editor)
-    if (editor's documentValue's revision != meshedRevision) or editor's dragging:
+    # Round shapes are meshed for the 3D view's zoom: a chord leaves the
+    # true surface by at most half a pixel, in steps of a factor of 2, so
+    # zooming in adds segments and zooming out drops them.
+    set lodTier to 0
+    set lodTolerance to 1.0
+    set halfPixel to 0.5 / (the maximum of camera's viewScale and 1e-6)
+    loop while (lodTier < 24) and (lodTolerance > halfPixel):
+        set lodTolerance to lodTolerance * 0.5
+        set lodTier to lodTier + 1
+    if (editor's documentValue's revision != meshedRevision) or (editor's dragging or (lodTier != meshedTier)):
         set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
-        set sketchMeshes to the bim sketch meshes of editor's documentValue's current
+        set sketchMeshes to the bim sketch meshes of editor's documentValue's current within lodTolerance
+        set meshedTier to lodTier
         loop cursor from 0 to the length of (sketchMeshes's values):
             append (the item at cursor in (sketchMeshes's values)) to (meshes's values)
         set meshedRevision to editor's documentValue's revision
@@ -3249,8 +3763,10 @@ loop while window remains open:
         set shownMeshesKey to shownKey
     set frame to a new graphics frame in window with background red 1.0, green 1.0, blue 1.0 and alpha 1.0
     use screen coordinates in frame
-    if editor's hasSection and (editor's tool = bim section tool):
-        set showSection to true
+    # A section drawn opens its tab.
+    if editor's hasSection and ((the bim tab of kind bim section tab detail (0 as a 64 bit integer) among tabKinds and tabDetails) < 0):
+        append bim section tab to tabKinds
+        append (0 as a 64 bit integer) to tabDetails
     set planTransform to the bim plan transform of layout with camera
     if gridShown:
         draw bim grid in layout with camera in frame
@@ -3269,6 +3785,7 @@ loop while window remains open:
         draw bim grids in plan of editor through planTransform on (the address of planCanvas)
         draw bim sketches of editor through planTransform on (the address of planCanvas) using typeface
         draw bim linears in plan of editor through planTransform on (the address of planCanvas)
+        draw bim folded components in plan of editor among (sketchMeshes's values) through planTransform on (the address of planCanvas)
         set recordedPlanKey to planKey
         set recordedOrigin to originPixel
     # The recorded plan is kept on the GPU and drawn shifted; it is written
@@ -3279,8 +3796,7 @@ loop while window remains open:
         end gpu canvas recording in (the gpu context of window)
         set uploadedPlanKey to recordedPlanKey
     # Slab edges first, so that the cut outlines over them stay black.
-    if bim category bim slab category is visible in editor's planRules:
-        draw bim slabs of editor through planTransform in frame
+    draw bim slabs of editor through planTransform in frame
     draw gpu canvas shifted by (originPixel's x - recordedOrigin's x) and (originPixel's y - recordedOrigin's y) in (the gpu context of window)
     draw bim selection in plan of editor through planTransform in frame
     if planBoxActive and planBoxDragged:
@@ -3291,14 +3807,7 @@ loop while window remains open:
     # Each panel keeps to its area: the right panel is cleared over whatever
     # the plan drew into it, and the bars over whatever either panel drew.
     draw a rectangle at x layout's planRight and y 0 with width (layout's width - layout's planRight) and height layout's height in color red 247, green 249 and blue 252 in frame
-    if showSection and editor's hasSection:
-        draw bim section of editor in layout using typeface in frame
-    else if showSchedule:
-        if editor's evaluation's generation != scheduleGeneration:
-            set scheduleRows to the bim schedule of editor's documentValue's current with editor's evaluation and (editor's spaces's values)
-            set scheduleGeneration to editor's evaluation's generation
-        draw bim schedule (scheduleRows's values) in layout using typeface in frame
-    else:
+    if drawModel:
         # The model lives on the GPU: it is written again only when the shown
         # meshes change, and each frame sets the camera and draws it. The
         # ground and the shadows are recorded per camera and drawn under it.
@@ -3306,36 +3815,38 @@ loop while window remains open:
             set gpuScene to upload bim gpu scene of (shownMeshes's values) for editor in mode viewMode to window
             set uploadedKey to shownMeshesKey
             set uploadedMode to viewMode
-        set viewKey to the bim view key of editor with camera in layout at meshGeneration showing (the length of (shownMeshes's values))
+        set viewKey to the bim view key of editor with camera in viewLayout at meshGeneration showing (the length of (shownMeshes's values))
         if viewKey != recordedViewKey:
             set viewRecording to a new bim depth recording
             set cornerTotal to 0
             loop cursor from 0 to the length of (shownMeshes's values):
                 set cornerTotal to cornerTotal + (the length of ((the item at cursor in (shownMeshes's values))'s shape's triangles's values))
             if (camera's pitch > 0.05) and ((cornerTotal > 0) and (cornerTotal <= 450000)):
-                draw bim ground and shadows of (shownMeshes's values) toward (the bim direction toward the sun) in layout with camera on (the address of viewRecording)
+                draw bim ground and shadows of (shownMeshes's values) toward (the bim direction toward the sun) in viewLayout with camera on (the address of viewRecording)
             set recordedViewKey to viewKey
         replay bim depth recording viewRecording flat in frame
         set selectedForGpu to the bim refused id
         if (((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim imported picked)) or ((((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)) or (editor's selectionKind = bim mesh picked)) or (editor's selectionKind = bim linear picked)):
             set selectedForGpu to editor's selectionId
-        set bim gpu camera camera in layout for gpuScene selecting selectedForGpu on window
+        set bim gpu camera camera in viewLayout for gpuScene selecting selectedForGpu on window
         if viewMode != bim wireframe view mode:
-            draw gpu mesh within layout's planRight, layout's top, (layout's width - layout's planRight) and (layout's bottom - layout's top) in (the gpu context of window)
+            draw gpu mesh within viewLayout's planRight, viewLayout's top, (viewLayout's width - viewLayout's planRight) and (viewLayout's bottom - viewLayout's top) in (the gpu context of window)
         if viewMode != bim shaded view mode:
-            draw bim edges of gpuScene in layout with camera hidden (viewMode != bim wireframe view mode) in frame
-        draw bim label ((the string form of "3D  ") + ((the bim name of view mode viewMode) + (the string form of " (Ctrl+1-4)   drag: select (right: window, left: crossing)   right or Shift+middle: orbit, middle: pan, wheel: zoom"))) at (layout's planRight + 16.0) and (layout's top + 20.0) using typeface in frame
-        draw bim selection in view of editor in layout with camera in frame
+            draw bim edges of gpuScene in viewLayout with camera hidden (viewMode != bim wireframe view mode) in frame
+        draw bim grid lines in view of editor around gpuScene in viewLayout with camera in frame
+        draw bim label ((the string form of "3D  ") + ((the bim name of view mode viewMode) + (the string form of " (Ctrl+1-4)   drag: select (right: window, left: crossing)   right or Shift+middle: orbit, middle: pan, wheel: zoom"))) at (viewLayout's planRight + 16.0) and (viewLayout's top + 20.0) using typeface in frame
+        draw bim selection in view of editor in viewLayout with camera in frame
         set viewCanvas to a new bim canvas
-        draw bim levels of editor around gpuScene in layout with camera on (the address of viewCanvas)
-        draw bim grids in view of editor in layout with camera on (the address of viewCanvas)
+        draw bim levels of editor around gpuScene in viewLayout with camera on (the address of viewCanvas)
+        draw bim grids in view of editor among (shownMeshes's values) remembering headCovers afresh (viewKey != headCoversKey) in viewLayout with camera on (the address of viewCanvas)
+        set headCoversKey to viewKey
         if imported's valid:
-            draw bim curves (imported's curves's values) in layout with camera on (the address of viewCanvas)
+            draw bim curves (imported's curves's values) in viewLayout with camera on (the address of viewCanvas)
         replay bim canvas viewCanvas shifted by 0.0 and 0.0 with typeface in frame
         set handles to the bim grips of editor
-        draw bim grips (handles's values) in view of layout with camera in frame
+        draw bim grips (handles's values) in view of viewLayout with camera in frame
         if drawingInView:
-            draw bim gesture in view of editor in layout with camera in frame
+            draw bim gesture in view of editor in viewLayout with camera in frame
         if viewPressActive and viewDragged:
             draw bim selection box from viewPressPixel to pixel in frame
             # A line across a mesh face: its first point, the outline point
@@ -3343,18 +3854,49 @@ loop while window remains open:
             if editor's tool = bim line tool:
                 start triangles in frame
                 if meshLineActive:
-                    set lineStartPixel to the bim view point (meshLineSpot's x) (meshLineSpot's y) (meshLineSpot's z + meshLineZ) in layout with camera
+                    set lineStartPixel to the bim view point (meshLineSpot's x) (meshLineSpot's y) (meshLineSpot's z + meshLineZ) in viewLayout with camera
                     use vertex color red 255, green 140 and blue 0 in frame
                     add bim square at lineStartPixel sized 8.0 in frame
                     if meshLineHover:
-                        add bim stroke from lineStartPixel to (the bim view point (meshLineHoverSpot's x) (meshLineHoverSpot's y) (meshLineHoverSpot's z + meshLineHoverZ) in layout with camera) wide 2.0 in frame
+                        add bim stroke from lineStartPixel to (the bim view point (meshLineHoverSpot's x) (meshLineHoverSpot's y) (meshLineHoverSpot's z + meshLineHoverZ) in viewLayout with camera) wide 2.0 in frame
                 if meshLineHover:
                     use vertex color red 40, green 160 and blue 60 in frame
-                    add bim square at (the bim view point (meshLineHoverSpot's x) (meshLineHoverSpot's y) (meshLineHoverSpot's z + meshLineHoverZ) in layout with camera) sized 9.0 in frame
+                    add bim square at (the bim view point (meshLineHoverSpot's x) (meshLineHoverSpot's y) (meshLineHoverSpot's z + meshLineHoverZ) in viewLayout with camera) sized 9.0 in frame
                 finish triangles in frame
+    # The section or schedule: after the 3D view, so that in a split column
+    # it is drawn over its own cleared lower half.
+    if splitViews:
+        draw a rectangle at x layout's planRight and y splitAt with width (layout's width - layout's planRight) and height (layout's height - splitAt) in color red 247, green 249 and blue 252 in frame
+    if showSection and editor's hasSection:
+        draw bim section of editor in lowerLayout using typeface in frame
+    else if showSchedule:
+        if editor's evaluation's generation != scheduleGeneration:
+            set scheduleRows to the bim schedule of editor's documentValue's current with editor's evaluation and (editor's spaces's values)
+            set scheduleGeneration to editor's evaluation's generation
+        set chosenRows to the bim rows of (scheduleRows's values) in schedule scheduleCode
+        draw bim schedule (chosenRows's values) in lowerLayout using typeface in frame
+    if splitViews:
+        draw a rectangle at x layout's planRight and y splitAt with width (layout's width - layout's planRight) and height 3 in color red 200, green 206 and blue 216 in frame
     draw a rectangle at x 0 and y 0 with width layout's width and height layout's top in color red 247, green 249 and blue 252 in frame
     draw a rectangle at x 0 and y layout's bottom with width layout's width and height (layout's height - layout's bottom) in color red 247, green 249 and blue 252 in frame
     draw a rectangle at x layout's planRight and y 0 with width 2 and height layout's height in color red 200, green 206 and blue 216 in frame
+    # The tab bar: the open views, the active one raised; x closes a tab.
+    set barTop to layout's top - (the bim tab bar height)
+    draw a rectangle at x layout's planLeft and y barTop with width (layout's width - layout's planLeft) and height (the bim tab bar height) in color red 228, green 231 and blue 236 in frame
+    set tabEdges to the bim tab edges of tabKinds and tabDetails for editor from (layout's planLeft + 4.0) using typeface
+    loop tabCursor from 0 to the length of tabKinds:
+        set tabLeft to the item at tabCursor in tabEdges
+        set tabWidth to ((the item at (tabCursor + 1) in tabEdges) - tabLeft) - 2.0
+        set tabText to the bim tab label of kind (the item at tabCursor in tabKinds) detail (the item at tabCursor in tabDetails) for editor
+        if tabCursor = activeTab:
+            draw a rectangle at x tabLeft and y (barTop + 3.0) with width tabWidth and height ((the bim tab bar height) - 3.0) in color red 255, green 255 and blue 255 in frame
+            draw a rectangle at x tabLeft and y (barTop + 3.0) with width tabWidth and height 2 in color red 0, green 120 and blue 215 in frame
+        else if tiledViews and ((tabCursor = sideTab) or (splitViews and (tabCursor = lowerTab))):
+            draw a rectangle at x tabLeft and y (barTop + 3.0) with width tabWidth and height ((the bim tab bar height) - 3.0) in color red 242, green 244 and blue 247 in frame
+        draw bim text tabText at (tabLeft + 10.0) and (barTop + 18.0) in face (bim text small) with typeface coloured 35, 40 and 50 in frame
+        if (the length of tabKinds) > 1:
+            draw bim text (the string form of "x") at ((tabLeft + tabWidth) - 15.0) and (barTop + 18.0) in face (bim text small) with typeface coloured 120, 125 and 135 in frame
+    free tabEdges
     set status to ((the bim storey name of editor) + (the string form of " (PgUp/PgDn)   ")) + (the bim tool name of editor's tool)
     set status to status + (the string form of "   snap ")
     if editor's orthoOn:

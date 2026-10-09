@@ -74,6 +74,39 @@ that role.
   - `tests/linear_tool.dl`: the tools, the type selector, properties, box
     delete and undo.
 
+## Planar element, steps 1 to 3: built (2026-10-09)
+
+- **Planar type.** The wall type record is the planar type. It gained a
+  `role` (wall, floor, roof, ceiling), and its layers run from the top face
+  down for a plate. The IFC class follows the role: `IfcWall`, `IfcSlab`
+  FLOOR or ROOF, `IfcCovering` CEILING. Its type node in IfcX is
+  `IfcWallType`, `IfcSlabType` or `IfcCoveringType`.
+- **Plate.** Floors, roofs and ceilings are one element: the slab record,
+  with a planar type and its top above its storey. A roof also gets a pitch
+  and the plan direction it rises toward. Its thickness comes from the
+  type's layers and its material from the thickest layer.
+  - **Solid.** A prism under its top, sheared by the pitch from its first
+    corner; a shear keeps every face flat.
+  - **Plan.** Floors are drawn by their edges, roofs dashed, ceilings in
+    their own category (hidden in a floor plan, as a reflected ceiling plan
+    would show them).
+  - **Files.** `planartype` and `plate` lines in `.bim`. Old `slab` lines
+    still read as untyped floors.
+- **Editor.**
+  - The Floor, Roof and Ceiling tools put a plate of that role under the
+    selected space: a floor at the storey's level, a roof on the storey's
+    walls, a ceiling 0.3 m under the storey above.
+  - The type selector and the project browser list the planar types per
+    role, from a library of twelve: Open 2D Studio's eight floor types, two
+    roofs, two ceilings.
+  - The properties window types a plate's top, pitch and slope direction.
+- **Checked.** `tests/plates.dl`:
+  - a floor given the timber type;
+  - a flat roof (6.4 m³) and the same roof pitched 30°, its top rising by
+    4 × tan 30° = 2.31 m over its 4 m depth at the same volume;
+  - a ceiling under 0.3 m of plenum, hidden in the plan;
+  - `.bim` and `.ifcx` round trips.
+
 ## Planar element: plan
 
 The existing wall carries a lot that must survive:

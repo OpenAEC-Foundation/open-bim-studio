@@ -7,6 +7,7 @@
 # complete snapshot for undo.
 import lib/cadkernel/brep_topology.dl
 import lib/cadkernel/arrangement2.dl
+import lib/text.dl
 
 # Feature kinds a dimension may reference. They name semantic features, never
 # derived topology.
@@ -43,6 +44,9 @@ class:
         id as a 64 bit integer
         name as a string
         layers as the type of (a cad topology list of a bim layer record)
+        # The planar type's role (`bim wall planar role` and the others):
+        # what its elements are, and so their IFC class.
+        role as an integer
 
 class:
     patterns:
@@ -128,6 +132,60 @@ class:
         thickness as a 64 bit floating-point number
         # What it is made of, as a wall layer's material (`bim_hatch.dl`).
         material as a string
+        # A plate (floor, roof or ceiling) of planar type `typeId`, its top
+        # `top` metres above its storey at the outline's first corner,
+        # rising `pitch` radians toward the plan direction `heading`
+        # (radians). Without a type it is the floor of `thickness` and
+        # `material` above.
+        typeId as a 64 bit integer
+        top as a 64 bit floating-point number
+        pitch as a 64 bit floating-point number
+        heading as a 64 bit floating-point number
+
+# The roles of planar types: what a planar element is.
+function bim wall planar role:
+    replacement:
+        0
+function bim floor planar role:
+    replacement:
+        1
+function bim roof planar role:
+    replacement:
+        2
+function bim ceiling planar role:
+    replacement:
+        3
+
+# The IFC class (IFC4x3) of a planar element of `roleCode`, and of its type
+# with "Type" added.
+function the bim ifc class of planar role {integer:roleCode}:
+    execute:
+        if roleCode = bim wall planar role:
+            return the string form of "IfcWall"
+        if roleCode = bim ceiling planar role:
+            return the string form of "IfcCovering"
+        return the string form of "IfcSlab"
+
+# The IFC predefined type of a planar element of `roleCode`.
+function the bim ifc predefined type of planar role {integer:roleCode}:
+    execute:
+        if roleCode = bim floor planar role:
+            return the string form of "FLOOR"
+        if roleCode = bim roof planar role:
+            return the string form of "ROOF"
+        if roleCode = bim ceiling planar role:
+            return the string form of "CEILING"
+        return the string form of "STANDARD"
+
+function the bim name of planar role {integer:roleCode}:
+    execute:
+        if roleCode = bim floor planar role:
+            return the string form of "Floor"
+        if roleCode = bim roof planar role:
+            return the string form of "Roof"
+        if roleCode = bim ceiling planar role:
+            return the string form of "Ceiling"
+        return the string form of "Wall"
 
 # A grid line: named, running in plan from `start` to `finish`, and reaching
 # from `low` to `high` in elevation. Grids reference the design; they carry
@@ -261,6 +319,56 @@ class:
         id as a 64 bit integer
         name as a string
         sketches as the type of (a cad topology list of a bim sketch record)
+        # Solid parts folded in order into the component's B-rep (see
+        # `bim_component.dl`).
+        solids as the type of (a cad topology list of a bim solid part record)
+
+# A solid part of a component, in the component's coordinates: a primitive
+# (`kind`: box, cylinder, sphere, an extrusion of `profile`, or a closed mesh
+# of `points` and `faces`, each face its point count then its point
+# numbers, as in `bim mesh record`) at `origin`,
+# `size` (box: width, depth, height; cylinder: radius, -, height; sphere:
+# radius; extrusion: -, -, height), turned `angle` radians about the
+# vertical; added to, cut from or intersected with what the parts before it
+# made (`operation`), of `material`.
+class:
+    patterns:
+        [a|] bim solid part record
+    members:
+        kind as an integer
+        operation as an integer
+        origin as a cad vector3
+        size as a cad vector3
+        angle as a 64 bit floating-point number
+        profile as the type of (a cad topology list of a cad vector2)
+        material as a string
+        points as the type of (a cad topology list of a cad vector3)
+        faces as the type of (a cad topology list of an integer)
+
+function bim box solid:
+    replacement:
+        0
+function bim cylinder solid:
+    replacement:
+        1
+function bim sphere solid:
+    replacement:
+        2
+function bim extrusion solid:
+    replacement:
+        3
+function bim mesh solid:
+    replacement:
+        4
+function bim add operation:
+    replacement:
+        0
+function bim subtract operation:
+    replacement:
+        1
+function bim intersect operation:
+    replacement:
+        2
 
 # One placement of a component on a storey: its origin at `origin`, turned
 # `angle` radians anticlockwise.
@@ -499,6 +607,139 @@ function add bim level named {a string:nameValue} at {a 64 bit floating-point nu
         append (@intrinsic("construct", a bim level record, fresh, nameValue, elevation, heightValue)) to (target's levels's values)
         return fresh
 
+# ---------------------------------------------------------------- naming rules
+
+# Types are named by rules, never by hand, so that a name always says what
+# the type is: its material and size, in millimetres. The role is the group
+# a type is listed in, so it is not part of the name.
+#
+#     planar type   its layers' materials from the exterior (or top) in,
+#                   then the total thickness:  "Beton 250",
+#                   "Metselwerk-spouw-isolatie PIR-kalkzandsteen 360"
+#     linear type   its material and profile:  "Beton 300x300", "Beton rond 300"
+#     opening type  door or window and size:   "Deur 900x2100", "Raam 1200x1500"
+#
+# Two different types of one role whose names would be the same are told
+# apart by " (2)", " (3)" in id order.
+
+# The Dutch name of `material`, as the drawing's legends name it.
+function the bim dutch name of material {a string:material}:
+    execute:
+        set lowered to the lowercase form of material
+        if lowered contains "hollow":
+            return the string form of "kanaalplaat"
+        if lowered contains "concrete":
+            return the string form of "beton"
+        if lowered contains "brick":
+            return the string form of "metselwerk"
+        if lowered contains "sand-lime":
+            return the string form of "kalkzandsteen"
+        if lowered contains "pir":
+            return the string form of "isolatie PIR"
+        if lowered contains "insulation":
+            return the string form of "isolatie"
+        if lowered contains "timber":
+            return the string form of "hout"
+        if lowered contains "steel":
+            return the string form of "staal"
+        if lowered contains "gypsum":
+            return the string form of "gips"
+        if lowered contains "air":
+            return the string form of "spouw"
+        if lowered contains "generic":
+            return the string form of "algemeen"
+        return lowered
+
+# `text` with its first letter a capital.
+local function the bim capitalised {a string:text}:
+    execute:
+        if (the length of text) = 0:
+            return text
+        set first to the substring of text from 0 spanning 1 bytes
+        set rest to the substring of text from 1 spanning ((the length of text) - 1) bytes
+        return (the uppercase form of first) + rest
+
+# `metres` as millimetres: whole, or with one decimal when it has one.
+function the bim millimetre text of {a 64 bit floating-point number:metres}:
+    execute:
+        set tenths to @intrinsic("call", "libc", "round", a 64 bit floating-point number, metres * 10000.0)
+        set whole to (tenths / 10.0) as a 64 bit integer
+        set rest to (tenths - ((whole as a 64 bit floating-point number) * 10.0)) as a 64 bit integer
+        if rest = (0 as a 64 bit integer):
+            return the string form of whole
+        return ((the string form of whole) + (the string form of ".")) + (the string form of rest)
+
+function the bim rule name of planar type {bim wall type record:planarType}:
+    execute:
+        set parts to an empty list of a string
+        loop cursor from 0 to the length of (planarType's layers's values):
+            set dutch to the bim dutch name of material (the item at cursor in (planarType's layers's values))'s material
+            set repeated to false
+            if (the length of parts) > 0:
+                set repeated to (the item at ((the length of parts) - 1) in parts) = dutch
+            if repeated = false:
+                append dutch to parts
+        set joined to parts joined with "-"
+        free parts
+        return ((the bim capitalised joined) + (the string form of " ")) + (the bim millimetre text of (the bim thickness of planarType))
+
+function the bim rule name of linear type {bim linear type record:linearType}:
+    execute:
+        set dutch to the bim capitalised (the bim dutch name of material linearType's material)
+        if linearType's round:
+            return (dutch + (the string form of " rond ")) + (the bim millimetre text of linearType's width)
+        return (dutch + (the string form of " ")) + (((the bim millimetre text of linearType's width) + (the string form of "x")) + (the bim millimetre text of linearType's depth))
+
+function the bim rule name of opening type {bim opening type record:openingType}:
+    execute:
+        set kind to the string form of "Raam"
+        if openingType's isDoor:
+            set kind to the string form of "Deur"
+        return (kind + (the string form of " ")) + (((the bim millimetre text of openingType's width) + (the string form of "x")) + (the bim millimetre text of openingType's height))
+
+# `base` made unique among `taken` (names already given in the same role).
+local function the bim unique name of {a string:base} among {a pointer to a list:taken}:
+    execute:
+        set candidate to base
+        set number to 1
+        set clashing to true
+        loop while clashing:
+            set clashing to false
+            loop cursor from 0 to the length of taken:
+                if (the item at cursor in taken) = candidate:
+                    set clashing to true
+            if clashing:
+                set number to number + 1
+                set candidate to (base + (the string form of " (")) + ((the string form of number) + (the string form of ")"))
+        append candidate to taken
+        return candidate
+
+# Names every type of `target` by the rules above.
+function name bim types by the rules in {a pointer to a bim model record:target}:
+    execute:
+        loop roleCode from 0 to 4:
+            set taken to an empty list of a string
+            loop cursor from 0 to the length of (target's wallTypes's values):
+                set planarType to the item at cursor in (target's wallTypes's values)
+                if planarType's role = roleCode:
+                    set named to the bim unique name of (the bim rule name of planar type planarType) among taken
+                    replace item at index cursor in (target's wallTypes's values) with (@intrinsic("construct", a bim wall type record, planarType's id, named, planarType's layers, planarType's role))
+            free taken
+        loop roleCode from 0 to 6:
+            set taken to an empty list of a string
+            loop cursor from 0 to the length of (target's linearTypes's values):
+                set linearType to the item at cursor in (target's linearTypes's values)
+                if linearType's role = roleCode:
+                    set named to the bim unique name of (the bim rule name of linear type linearType) among taken
+                    replace item at index cursor in (target's linearTypes's values) with (@intrinsic("construct", a bim linear type record, linearType's id, named, linearType's role, linearType's width, linearType's depth, linearType's round, linearType's material))
+            free taken
+        set taken to an empty list of a string
+        loop cursor from 0 to the length of (target's openingTypes's values):
+            set openingType to the item at cursor in (target's openingTypes's values)
+            set named to the bim unique name of (the bim rule name of opening type openingType) among taken
+            replace item at index cursor in (target's openingTypes's values) with (@intrinsic("construct", a bim opening type record, openingType's id, named, openingType's width, openingType's height, openingType's sill, openingType's frame, openingType's isDoor))
+        free taken
+
 function add bim wall type named {a string:nameValue} with {a pointer to a list:layerValues} to {a pointer to a bim model record:target}:
     execute:
         set copied to a cad topology list of a bim layer record
@@ -510,7 +751,8 @@ function add bim wall type named {a string:nameValue} with {a pointer to a list:
         if (the length of (copied's values)) = 0:
             return the bim refused id
         set fresh to the bim new id in target
-        append (@intrinsic("construct", a bim wall type record, fresh, nameValue, copied)) to (target's wallTypes's values)
+        append (@intrinsic("construct", a bim wall type record, fresh, nameValue, copied, bim wall planar role)) to (target's wallTypes's values)
+        name bim types by the rules in target
         return fresh
 
 # Wall `wallId` takes wall type `typeId`; its joins and openings follow when
@@ -544,6 +786,7 @@ function add bim opening type named {a string:nameValue} sized {a 64 bit floatin
             return the bim refused id
         set fresh to the bim new id in target
         append (@intrinsic("construct", a bim opening type record, fresh, nameValue, widthValue, heightValue, sillValue, frameValue, false)) to (target's openingTypes's values)
+        name bim types by the rules in target
         return fresh
 
 # A door type: an opening type standing on the base (sill 0).
@@ -553,6 +796,7 @@ function add bim door type named {a string:nameValue} sized {a 64 bit floating-p
             return the bim refused id
         set fresh to the bim new id in target
         append (@intrinsic("construct", a bim opening type record, fresh, nameValue, widthValue, heightValue, 0.0, frameValue, true)) to (target's openingTypes's values)
+        name bim types by the rules in target
         return fresh
 
 function add bim opening typed {a 64 bit integer:typeId} in {a 64 bit integer:hostId} at {a 64 bit floating-point number:offset} to {a pointer to a bim model record:target}:
@@ -650,7 +894,7 @@ function add bim slab on {a 64 bit integer:levelId} around {a pointer to a list:
         loop cursor from 0 to the length of outlinePoints:
             append (the item at cursor in outlinePoints) to (copied's values)
         set fresh to the bim new id in target
-        append (@intrinsic("construct", a bim slab record, fresh, levelId, copied, thicknessValue, the string form of "concrete")) to (target's slabs's values)
+        append (@intrinsic("construct", a bim slab record, fresh, levelId, copied, thicknessValue, the string form of "concrete", the bim refused id, 0.0, 0.0, 0.0)) to (target's slabs's values)
         return fresh
 
 function add bim dimension from {bim reference record:first} to {bim reference record:second} to {a pointer to a bim model record:target}:
@@ -771,6 +1015,7 @@ function set bim opening type {a 64 bit integer:typeId} sized {a 64 bit floating
         set openingType to the item at found's position in (target's openingTypes's values)
         replace item at index found's position in (target's openingTypes's values) with (@intrinsic("construct", a bim opening type record, openingType's id, openingType's name, widthValue, heightValue, sillValue, openingType's frame, openingType's isDoor))
         note bim change of typeId in target
+        name bim types by the rules in target
         return true
 
 function set bim wall type {a 64 bit integer:typeId} layers to {a pointer to a list:layerValues} in {a pointer to a bim model record:target}:
@@ -785,8 +1030,9 @@ function set bim wall type {a 64 bit integer:typeId} layers to {a pointer to a l
                 return false
             append layerValue to (copied's values)
         set wallType to the item at found's position in (target's wallTypes's values)
-        replace item at index found's position in (target's wallTypes's values) with (@intrinsic("construct", a bim wall type record, wallType's id, wallType's name, copied))
+        replace item at index found's position in (target's wallTypes's values) with (@intrinsic("construct", a bim wall type record, wallType's id, wallType's name, copied, wallType's role))
         note bim change of typeId in target
+        name bim types by the rules in target
         return true
 
 # Deleting a wall deletes its hosted openings and every dimension that refers
@@ -873,7 +1119,7 @@ function set bim slab {a 64 bit integer:slabId} thickness to {a 64 bit floating-
         if (found's valid = false) or (thicknessValue <= 0.0):
             return false
         set slabValue to the item at found's position in (target's slabs's values)
-        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, thicknessValue, slabValue's material))
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, thicknessValue, slabValue's material, slabValue's typeId, slabValue's top, slabValue's pitch, slabValue's heading))
         note bim change of slabId in target
         return true
 
@@ -884,7 +1130,7 @@ function set bim slab {a 64 bit integer:slabId} material to {a string:materialNa
         if (found's valid = false) or ((the length of materialName) = 0):
             return false
         set slabValue to the item at found's position in (target's slabs's values)
-        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, materialName))
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, materialName, slabValue's typeId, slabValue's top, slabValue's pitch, slabValue's heading))
         note bim change of slabId in target
         return true
 
@@ -897,7 +1143,100 @@ function set bim slab {a 64 bit integer:slabId} outline to {a pointer to a list:
         loop cursor from 0 to the length of outlinePoints:
             append (the item at cursor in outlinePoints) to (copied's values)
         set slabValue to the item at found's position in (target's slabs's values)
-        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, copied, slabValue's thickness, slabValue's material))
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, copied, slabValue's thickness, slabValue's material, slabValue's typeId, slabValue's top, slabValue's pitch, slabValue's heading))
+        note bim change of slabId in target
+        return true
+
+# A planar type of `roleCode` with `layerValues` (from the top face down for
+# a plate, from the exterior in for a wall); refused without layers or with
+# a layer not thicker than zero.
+function add bim planar type named {a string:nameValue} as role {integer:roleCode} with {a pointer to a list:layerValues} to {a pointer to a bim model record:target}:
+    execute:
+        set fresh to add bim wall type named nameValue with layerValues to target
+        if fresh = the bim refused id:
+            return fresh
+        set found to the bim wall type index of fresh in (@intrinsic("dereference", target))
+        set made to the item at found's position in (target's wallTypes's values)
+        replace item at index found's position in (target's wallTypes's values) with (@intrinsic("construct", a bim wall type record, made's id, made's name, made's layers, roleCode))
+        name bim types by the rules in target
+        return fresh
+
+# The planar type of plate `slabValue`, valid when it has one.
+function the bim type index of plate {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        return the bim wall type index of slabValue's typeId in modelValue
+
+# What plate `slabValue` is: its type's role, a floor without a type.
+function the bim role of plate {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        set found to the bim type index of plate slabValue in modelValue
+        if found's valid:
+            return (the item at found's position in (modelValue's wallTypes's values))'s role
+        return bim floor planar role
+
+# The thickness of plate `slabValue`: its type's layers, or its own.
+function the bim thickness of plate {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        set found to the bim type index of plate slabValue in modelValue
+        if found's valid:
+            return the bim thickness of (the item at found's position in (modelValue's wallTypes's values))
+        return slabValue's thickness
+
+# The material plate `slabValue` shows: its type's thickest layer's, or its
+# own.
+function the bim material of plate {bim slab record:slabValue} in {bim model record:modelValue}:
+    execute:
+        set found to the bim type index of plate slabValue in modelValue
+        if found's valid = false:
+            return slabValue's material
+        set planarType to the item at found's position in (modelValue's wallTypes's values)
+        set chosen to slabValue's material
+        set thickest to 0.0
+        loop cursor from 0 to the length of (planarType's layers's values):
+            set layerValue to the item at cursor in (planarType's layers's values)
+            if layerValue's thickness > thickest:
+                set thickest to layerValue's thickness
+                set chosen to layerValue's material
+        return chosen
+
+# A plate of planar type `typeId` on storey `levelId` around `outlinePoints`,
+# its top `topValue` metres above the storey, level; refused for a missing
+# storey or type, or an outline that crosses itself.
+function add bim plate typed {a 64 bit integer:typeId} on {a 64 bit integer:levelId} around {a pointer to a list:outlinePoints} at top {a 64 bit floating-point number:topValue} to {a pointer to a bim model record:target}:
+    execute:
+        set typeFound to the bim wall type index of typeId in (@intrinsic("dereference", target))
+        if typeFound's valid = false:
+            return the bim refused id
+        set planarType to the item at typeFound's position in (target's wallTypes's values)
+        set fresh to add bim slab on levelId around outlinePoints thick (the bim thickness of planarType) to target
+        if fresh = the bim refused id:
+            return fresh
+        set found to the bim slab index of fresh in (@intrinsic("dereference", target))
+        set slabValue to the item at found's position in (target's slabs's values)
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, slabValue's material, typeId, topValue, 0.0, 0.0))
+        return fresh
+
+# Plate `slabId` of planar type `typeId`.
+function set bim plate {a 64 bit integer:slabId} type to {a 64 bit integer:typeId} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim slab index of slabId in (@intrinsic("dereference", target))
+        if (found's valid = false) or ((the bim wall type index of typeId in (@intrinsic("dereference", target)))'s valid = false):
+            return false
+        set slabValue to the item at found's position in (target's slabs's values)
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, slabValue's material, typeId, slabValue's top, slabValue's pitch, slabValue's heading))
+        note bim change of slabId in target
+        return true
+
+# Plate `slabId` with its top `topValue` above its storey, rising
+# `pitchValue` radians toward `headingValue`; refused for a pitch of a
+# right angle or more.
+function set bim plate {a 64 bit integer:slabId} top to {a 64 bit floating-point number:topValue} pitch {a 64 bit floating-point number:pitchValue} heading {a 64 bit floating-point number:headingValue} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim slab index of slabId in (@intrinsic("dereference", target))
+        if (found's valid = false) or ((the absolute value of pitchValue) >= 1.5):
+            return false
+        set slabValue to the item at found's position in (target's slabs's values)
+        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, slabValue's material, slabValue's typeId, topValue, pitchValue, headingValue))
         note bim change of slabId in target
         return true
 
@@ -1095,7 +1434,7 @@ function make bim component named {a string:name} from {a pointer to a list:sket
             ignore delete bim sketch element's id from target
         free chosen
         set componentId to the bim new id in target
-        append (@intrinsic("construct", a bim component record, componentId, name, kept)) to (target's components's values)
+        append (@intrinsic("construct", a bim component record, componentId, name, kept, a cad topology list of a bim solid part record)) to (target's components's values)
         return place bim component componentId on levelId at origin turned 0.0 to target
 
 # Component `componentId` now holds `parts` (component coordinates); every
@@ -1109,7 +1448,74 @@ function set bim component {a 64 bit integer:componentId} contents to {a pointer
         set kept to a cad topology list of a bim sketch record
         loop cursor from 0 to the length of parts:
             append (the item at cursor in parts) to (kept's values)
-        replace item at index found's position in (target's components's values) with (@intrinsic("construct", a bim component record, definition's id, definition's name, kept))
+        replace item at index found's position in (target's components's values) with (@intrinsic("construct", a bim component record, definition's id, definition's name, kept, definition's solids))
+        note bim change of componentId in target
+        loop cursor from 0 to the length of (target's instances's values):
+            set placement to the item at cursor in (target's instances's values)
+            if placement's componentId = componentId:
+                note bim change of placement's id in target
+        return true
+
+# Closed mesh `meshId` becomes a part of component `componentId`, moved by
+# `shift` into the component's coordinates and added (or cut or
+# intersected by `operationCode`); the free mesh goes. Refused for a mesh
+# that is missing.
+function move bim mesh {a 64 bit integer:meshId} into component {a 64 bit integer:componentId} shifted by {cad vector3:shift} as {integer:operationCode} in {a pointer to a bim model record:target}:
+    execute:
+        set meshFound to the bim mesh index of meshId in (@intrinsic("dereference", target))
+        set found to the bim component index of componentId in (@intrinsic("dereference", target))
+        if (meshFound's valid = false) or (found's valid = false):
+            return false
+        set meshValue to the item at meshFound's position in (target's meshes's values)
+        set movedPoints to a cad topology list of a cad vector3
+        loop cursor from 0 to the length of (meshValue's vertices's values):
+            append (the cad sum of (the item at cursor in (meshValue's vertices's values)) and shift) to (movedPoints's values)
+        set copiedFaces to a cad topology list of an integer
+        loop cursor from 0 to the length of (meshValue's faces's values):
+            append (the item at cursor in (meshValue's faces's values)) to (copiedFaces's values)
+        set definition to the item at found's position in (target's components's values)
+        set solids to the cad clone of definition's solids
+        set noOrigin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        append (@intrinsic("construct", a bim solid part record, bim mesh solid, operationCode, noOrigin, noOrigin, 0.0, a cad topology list of a cad vector2, the string form of "generic", movedPoints, copiedFaces)) to (solids's values)
+        replace item at index found's position in (target's components's values) with (@intrinsic("construct", a bim component record, definition's id, definition's name, definition's sketches, solids))
+        ignore delete bim mesh meshId from target
+        note bim change of componentId in target
+        loop cursor from 0 to the length of (target's instances's values):
+            set placement to the item at cursor in (target's instances's values)
+            if placement's componentId = componentId:
+                note bim change of placement's id in target
+        return true
+
+# A new component of no parts yet, for solid parts to go into; its id.
+function add bim component named {a string:title} to {a pointer to a bim model record:target}:
+    execute:
+        set componentId to the bim new id in target
+        append (@intrinsic("construct", a bim component record, componentId, title, a cad topology list of a bim sketch record, a cad topology list of a bim solid part record)) to (target's components's values)
+        return componentId
+
+# A solid part added to component `componentId` (after its other parts);
+# refused for a size it cannot have.
+function add bim solid of kind {integer:kindCode} as {integer:operationCode} at {cad vector3:origin} sized {cad vector3:size} turned {a 64 bit floating-point number:turn} along {a pointer to a list:profilePoints} of {a string:materialName} to component {a 64 bit integer:componentId} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim component index of componentId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set sizeValid to (size's x > 0.0) and (size's z > 0.0)
+        if kindCode = bim box solid:
+            set sizeValid to sizeValid and (size's y > 0.0)
+        if kindCode = bim sphere solid:
+            set sizeValid to size's x > 0.0
+        if kindCode = bim extrusion solid:
+            set sizeValid to (size's z > 0.0) and ((the length of profilePoints) >= 3)
+        if sizeValid = false:
+            return false
+        set definition to the item at found's position in (target's components's values)
+        set copied to a cad topology list of a cad vector2
+        loop cursor from 0 to the length of profilePoints:
+            append (the item at cursor in profilePoints) to (copied's values)
+        set solids to the cad clone of definition's solids
+        append (@intrinsic("construct", a bim solid part record, kindCode, operationCode, origin, size, turn, copied, materialName, a cad topology list of a cad vector3, a cad topology list of an integer)) to (solids's values)
+        replace item at index found's position in (target's components's values) with (@intrinsic("construct", a bim component record, definition's id, definition's name, definition's sketches, solids))
         note bim change of componentId in target
         loop cursor from 0 to the length of (target's instances's values):
             set placement to the item at cursor in (target's instances's values)
@@ -1241,6 +1647,7 @@ function add bim linear type named {a string:typeName} as role {integer:roleCode
             return the bim refused id
         set fresh to the bim new id in target
         append (@intrinsic("construct", a bim linear type record, fresh, typeName, roleCode, widthValue, depthValue, isRound, materialName)) to (target's linearTypes's values)
+        name bim types by the rules in target
         return fresh
 
 # Linear type `typeId` with a profile `widthValue` by `depthValue`; every
@@ -1256,6 +1663,7 @@ function size bim linear type {a 64 bit integer:typeId} to {a 64 bit floating-po
             set linearValue to the item at cursor in (target's linears's values)
             if linearValue's typeId = typeId:
                 note bim change of linearValue's id in target
+        name bim types by the rules in target
         return true
 
 # A linear element of type `typeId` on storey `levelId` along `fromSpot` to
