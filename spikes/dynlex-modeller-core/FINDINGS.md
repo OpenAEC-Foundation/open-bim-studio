@@ -1275,3 +1275,31 @@ had no tool and were not drawn. Now:
 - after the second wall moves 1 m out, the first reads 5000 with no edit to
   the dimension;
 - the same values after `.bim` and `.ifcx`.
+
+## Tags (plan step 2b, 2026-10-09)
+
+A tag is an annotation record: the element it points at and the place of
+its text. It stores no text. It shows the element's type name, so it
+follows renames and type changes. Under the naming rules that name says what
+the element is, such as "Raam 1200x1500" or "Beton 300x300".
+
+- **Elements.** Openings, walls, plates, linear elements and component
+  instances can be tagged.
+- **Editor.** TG (Annotate → Tag) tags the element clicked: an opening, then
+  a linear element, a wall, a plate. TA (Tag all) tags every window and door
+  of the storey that has no tag yet. An opening's tag stands 0.7 m outside
+  its wall, on the exterior normal.
+- **Plan.** The name is centred at the tag's place. A thin leader runs to the
+  element when the tag stands more than 0.9 m away.
+- **Files.** `tag <id> <element> <x> <y>` in `.bim`, written last.
+  `openbim::tag` on an `IfcAnnotation` in IfcX. A tag whose element is gone
+  is left out when written.
+
+**Checked.** `tests/tag_tool.dl` on the example building:
+- TA makes 10 tags (7 windows, 3 doors), each 700 mm out.
+- TG on a wall tags it with its type.
+- A window given a new type shows "Raam 600x600".
+- A deleted window's tag is gone.
+- The same after `.bim` and `.ifcx`.
+
+**Text** (Annotate → Text) now starts the existing text tool.
