@@ -1138,3 +1138,17 @@ every solid is closed.
 
 **Not yet.** Joins with walls round in plan keep their ends unslid. The plan's
 door swings stay at the foot.
+
+## One linear element; types decide what it is (maintainer request, 2026-10-09)
+
+The maintainer asked:
+- that everything be stored in IfcX;
+- that every linear object (column, beam, skirting, mullion, pipe) be
+  basically one element, and every planar one (wall, floor, roof, ceiling)
+  another;
+- that the UI and the type decide which you draw.
+
+The plan and the planar element's steps are in `element-model.md`. The
+linear element is built: a type (role → IFC class, profile, material) and an
+element (storey, 3D axis, turn). Details, behaviour and checks are recorded
+there, with `tests/linear.dl` and `tests/linear_tool.dl`.

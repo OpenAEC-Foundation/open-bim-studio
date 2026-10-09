@@ -213,6 +213,182 @@ function bim mesh {bim mesh record:pushed} stays sound after {bim mesh record:ea
             set start to start + ((the item at start in (earlier's faces's values)) + 1)
         return true
 
+# The elevation of storey `levelId` in `modelValue`, 0 when it is gone.
+function the bim elevation of storey {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim level index of levelId in modelValue
+        if found's valid:
+            return (the item at found's position in (modelValue's levels's values))'s elevation
+        return 0.0
+
+# The profile ring of `linear` (of `linearType`) at both ends of its axis, in
+# model coordinates: `count` corners at the start, then `count` at the
+# finish, each ring turning anticlockwise about the axis. The width lies
+# level across the axis (along x for an upright axis), the depth square to
+# both, turned by the element's angle; a round profile has 24 corners.
+function the bim profile rings of {bim linear record:linearValue} as {bim linear type record:linearType} in {bim model record:modelValue}:
+    execute:
+        set profileRings to an empty list of a cad vector3
+        set lift to the bim elevation of storey linearValue's levelId in modelValue
+        set first to a cad vector3 with x linearValue's start's x, y linearValue's start's y and z (linearValue's start's z + lift)
+        set last to a cad vector3 with x linearValue's finish's x, y linearValue's finish's y and z (linearValue's finish's z + lift)
+        set axisVector to the cad difference of last and first
+        set axisLength to the cad length of axisVector
+        set along to axisVector scaled by (1.0 / axisLength)
+        set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        if (the absolute value of along's z) < 0.999:
+            set square to the cad difference of upward and (along scaled by along's z)
+            set upward to square scaled by (1.0 / (the cad length of square))
+            set across to the cad cross of upward and along
+        else:
+            set upward to the cad cross of along and across
+        set c to the cosine of linearValue's angle
+        set sn to the sine of linearValue's angle
+        set widthAxis to the cad sum of (across scaled by c) and (upward scaled by sn)
+        set depthAxis to the cad difference of (upward scaled by c) and (across scaled by sn)
+        set corners to an empty list of a cad vector2
+        if linearType's round:
+            loop step from 0 to 24:
+                set turn to (6.283185307179586 * (step as a 64 bit floating-point number)) / 24.0
+                append (a cad vector2 with x ((linearType's width * 0.5) * (the cosine of turn)) and y ((linearType's width * 0.5) * (the sine of turn))) to corners
+        else:
+            set halfWidth to linearType's width * 0.5
+            set halfDepth to linearType's depth * 0.5
+            append (a cad vector2 with x (0.0 - halfWidth) and y (0.0 - halfDepth)) to corners
+            append (a cad vector2 with x halfWidth and y (0.0 - halfDepth)) to corners
+            append (a cad vector2 with x halfWidth and y halfDepth) to corners
+            append (a cad vector2 with x (0.0 - halfWidth) and y halfDepth) to corners
+        loop endCursor from 0 to 2:
+            set centre to first
+            if endCursor = 1:
+                set centre to last
+            loop cursor from 0 to the length of corners:
+                set corner to the item at cursor in corners
+                append (the cad sum of centre and (the cad sum of (widthAxis scaled by corner's x) and (depthAxis scaled by corner's y))) to profileRings
+        free corners
+        return profileRings
+
+# The triangles of `linear`: its type's profile swept along its axis, each
+# side flat, closed by its two ends.
+function the bim linear shape of {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set triangles to an empty fast mesh
+        set linearType to the bim type of linear linearValue in modelValue
+        set profileRings to the bim profile rings of linearValue as linearType in modelValue
+        set count to (the length of profileRings) / 2
+        set first to the item at 0 in profileRings
+        set last to the item at count in profileRings
+        set along to the cad difference of last and first
+        set along to along scaled by (1.0 / (the cad length of along))
+        loop cursor from 0 to count:
+            set following to the remainder of (cursor + 1) divided by count
+            set a to the item at cursor in profileRings
+            set b to the item at following in profileRings
+            set c to the item at (count + following) in profileRings
+            set d to the item at (count + cursor) in profileRings
+            set side to the cad cross of (the cad difference of b and a) and along
+            set side to side scaled by (1.0 / (the maximum of 1e-12 and (the cad length of side)))
+            set base to the length of (triangles's positions's values)
+            append a to (triangles's positions's values)
+            append b to (triangles's positions's values)
+            append c to (triangles's positions's values)
+            append d to (triangles's positions's values)
+            loop corner from 0 to 4:
+                append side to (triangles's normals's values)
+            append base to (triangles's triangles's values)
+            append (base + 1) to (triangles's triangles's values)
+            append (base + 2) to (triangles's triangles's values)
+            append base to (triangles's triangles's values)
+            append (base + 2) to (triangles's triangles's values)
+            append (base + 3) to (triangles's triangles's values)
+        # The ends: the start faces back along the axis, the finish forward.
+        set backward to along scaled by -1.0
+        loop endCursor from 0 to 2:
+            set base to the length of (triangles's positions's values)
+            set facing to backward
+            if endCursor = 1:
+                set facing to along
+            loop cursor from 0 to count:
+                append (the item at ((endCursor * count) + cursor) in profileRings) to (triangles's positions's values)
+                append facing to (triangles's normals's values)
+            loop cursor from 1 to (count - 1):
+                append base to (triangles's triangles's values)
+                if endCursor = 1:
+                    append (base + cursor) to (triangles's triangles's values)
+                    append (base + (cursor + 1)) to (triangles's triangles's values)
+                else:
+                    append (base + (cursor + 1)) to (triangles's triangles's values)
+                    append (base + cursor) to (triangles's triangles's values)
+        free profileRings
+        return triangles
+
+# What `linear` covers seen from above: the outline (anticlockwise) of its
+# swept profile's corners.
+function the bim plan outline of linear {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set linearType to the bim type of linear linearValue in modelValue
+        set profileRings to the bim profile rings of linearValue as linearType in modelValue
+        set flat to an empty list of a cad vector2
+        loop cursor from 0 to the length of profileRings:
+            set spot to the item at cursor in profileRings
+            append (a cad vector2 with x spot's x and y spot's y) to flat
+        free profileRings
+        # The hull, by gift wrapping (few points).
+        set hull to an empty list of a cad vector2
+        set lowest to 0
+        loop cursor from 1 to the length of flat:
+            set here to the item at cursor in flat
+            set best to the item at lowest in flat
+            if (here's x < best's x) or ((here's x = best's x) and (here's y < best's y)):
+                set lowest to cursor
+        set currentIndex to lowest
+        set guard to 0
+        set wrapping to true
+        loop while wrapping:
+            append (the item at currentIndex in flat) to hull
+            set candidate to 0
+            if candidate = currentIndex:
+                set candidate to 1
+            loop cursor from 0 to the length of flat:
+                if cursor != currentIndex:
+                    set origin to the item at currentIndex in flat
+                    set toCandidate to the item at candidate in flat
+                    set toCursor to the item at cursor in flat
+                    set turnValue to ((toCandidate's x - origin's x) * (toCursor's y - origin's y)) - ((toCandidate's y - origin's y) * (toCursor's x - origin's x))
+                    set further to (the cad distance from origin to toCursor) > (the cad distance from origin to toCandidate)
+                    if (turnValue < -1e-12) or (((the absolute value of turnValue) <= 1e-12) and further):
+                        set candidate to cursor
+            set currentIndex to candidate
+            set guard to guard + 1
+            if (currentIndex = lowest) or (guard > (the length of flat)):
+                set wrapping to false
+        free flat
+        return hull
+
+# The lowest and highest height `linear` reaches, as (low, high).
+function the bim height range of linear {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set linearType to the bim type of linear linearValue in modelValue
+        set profileRings to the bim profile rings of linearValue as linearType in modelValue
+        set low to 1.0 / 0.0
+        set high to 0.0 - (1.0 / 0.0)
+        loop cursor from 0 to the length of profileRings:
+            set low to the minimum of low and (the item at cursor in profileRings)'s z
+            set high to the maximum of high and (the item at cursor in profileRings)'s z
+        free profileRings
+        return a cad vector2 with x low and y high
+
+# The view category of a linear element of `roleCode`: columns and beams
+# their own, the others as other elements.
+function the bim category of linear role {integer:roleCode}:
+    execute:
+        if roleCode = bim column role:
+            return bim column category
+        if roleCode = bim beam role:
+            return bim beam category
+        return bim other category
+
 # The meshes of the sketch faces of `modelValue`, free and in instances.
 function the bim sketch meshes of {bim model record:modelValue}:
     execute:
@@ -224,6 +400,11 @@ function the bim sketch meshes of {bim model record:modelValue}:
             if (element's kind = bim face sketch) and levelFound's valid:
                 set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
                 append (@intrinsic("construct", a bim scene mesh record, element's id, 0 as a 64 bit integer, the bim sketch mesh of element at elevation, bim mass category, the bim category colouring)) to (result's values)
+        # Linear elements, coloured by their material.
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            set linearType to the bim type of linear linearValue in modelValue
+            append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, the bim linear shape of linearValue in modelValue, the bim category of linear role linearType's role, the bim material colour of linearType's material)) to (result's values)
         # Free meshes.
         loop cursor from 0 to the length of (modelValue's meshes's values):
             set meshValue to the item at cursor in (modelValue's meshes's values)
@@ -274,6 +455,10 @@ function bim instance picked:
 function bim mesh picked:
     replacement:
         9
+# A linear element (column, beam, mullion, skirting, pipe).
+function bim linear picked:
+    replacement:
+        10
 
 # Scene meshes of imported elements have ids from here up, above any id the
 # model hands out.
@@ -468,6 +653,8 @@ function the bim pick along {bim ray record:ray} among {a pointer to a list:mesh
                     set entryKind to bim sketch picked
                     if (the bim mesh index of entry's elementId in modelValue)'s valid:
                         set entryKind to bim mesh picked
+                if (the bim linear index of entry's elementId in modelValue)'s valid:
+                    set entryKind to bim linear picked
             set points to entry's shape's positions's values
             set corners to entry's shape's triangles's values
             set cursor to 0
