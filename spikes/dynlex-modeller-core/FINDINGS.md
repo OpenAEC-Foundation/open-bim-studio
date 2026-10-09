@@ -1610,3 +1610,40 @@ Mullions and panels are turned to the wall's direction (the linear element's
 one function deriving linear parts, and the same few hooks (3D, plan, files,
 pick, delete). The linear element's geometry, plan drawing and material
 handling were reused unchanged.
+
+## Building services: systems and the network (plan step 10, 2026-10-10)
+
+**Segments are linear elements.** Two roles join pipes:
+- **duct:** `IfcDuctSegment`;
+- **cable tray:** `IfcCableCarrierSegment`.
+
+The library gains a rectangular and a round duct and a cable tray, added
+once with the first linear tool. The ribbon's Systems group has Pipe, Duct
+and Cable tray.
+
+**Systems.** A system record holds a name, a discipline (water, drainage,
+heating, ventilation, electrical) and its members. Elements are assigned to
+it, as `IfcRelAssignsToGroup` does, so the linear elements themselves do not
+change. An element is in one system at most.
+- In 3D a system's elements take its discipline's colour.
+- SY (Systems → System) makes a system of the selected pipes, ducts or cable
+  trays, of the first one's discipline (pipes water, ducts ventilation,
+  cable trays electrical).
+- **Files.** `system` in `.bim`; `IfcDistributionSystem` with its
+  `PredefinedType` and `openbim::system` in IfcX.
+
+**The network (`bim_network.dl`)** is derived from the model each time:
+- every pipe, duct or cable tray has a connector at each end of its axis,
+  pointing out of it, as wide as its profile;
+- connectors within a millimetre of each other are joined into a node;
+- a node with one connector is an open end, two a joint, three or more a
+  tee;
+- a joint's turn is the angle between its two connectors, 0 when they point
+  at each other.
+
+**Checked.** `tests/network.dl`: five pipes give 10 connectors in 6 nodes:
+- a tee at (4, 0);
+- a straight joint at (4, 3) and a 90° bend at (4, 6);
+- three open ends.
+
+A water system of the five keeps its members through `.bim` and `.ifcx`.

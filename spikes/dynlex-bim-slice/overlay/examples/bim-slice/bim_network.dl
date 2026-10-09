@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MPL-2.0
+# Building services as networks. Pipes, ducts and cable trays are linear
+# elements; each has a connector at both ends of its axis, pointing out of
+# it, as wide as its profile. Connectors that meet (within a millimetre) are
+# joined into a node. A node with one connector is an open end, with two a
+# bend or a straight joint (or a change of size), with three a tee; the
+# fittings belong there (step 11). Nothing here is stored: the network is
+# derived from the model each time.
+import examples/bim-slice/bim_model.dl
+
+# Whether linear elements of `roleCode` carry a medium and so connect.
+function bim role {integer:roleCode} connects:
+    execute:
+        return ((roleCode = bim pipe role) or (roleCode = bim duct role)) or (roleCode = bim cable tray role)
+
+class:
+    patterns:
+        [a|] bim connector record
+    members:
+        elementId as a 64 bit integer
+        # 0 at the axis's start, 1 at its finish.
+        end as an integer
+        # In model coordinates (heights above the storey's base added).
+        spot as a cad vector3
+        # Out of the element, a unit vector.
+        direction as a cad vector3
+        size as a 64 bit floating-point number
+        role as an integer
+
+class:
+    patterns:
+        [a|] bim network node record
+    members:
+        spot as a cad vector3
+        # Indices into the network's connectors.
+        connectors as the type of (a cad topology list of an integer)
+
+class:
+    patterns:
+        [a|] bim network record
+    members:
+        connectors as the type of (a cad topology list of a bim connector record)
+        nodes as the type of (a cad topology list of a bim network node record)
+
+function bim open end node:
+    replacement:
+        1
+function bim joint node:
+    replacement:
+        2
+function bim tee node:
+    replacement:
+        3
+
+# The connectors of every connecting linear element of `modelValue`.
+function the bim connectors of {bim model record:modelValue}:
+    execute:
+        set found to a cad topology list of a bim connector record
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            set linearType to the bim type of linear linearValue in modelValue
+            if bim role linearType's role connects:
+                set lift to 0.0
+                set levelFound to the bim level index of linearValue's levelId in modelValue
+                if levelFound's valid:
+                    set lift to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                set first to a cad vector3 with x linearValue's start's x, y linearValue's start's y and z (linearValue's start's z + lift)
+                set last to a cad vector3 with x linearValue's finish's x, y linearValue's finish's y and z (linearValue's finish's z + lift)
+                set axis to the cad difference of last and first
+                set axisLength to the cad length of axis
+                if axisLength > 1e-9:
+                    set outward to axis scaled by (1.0 / axisLength)
+                    append (@intrinsic("construct", a bim connector record, linearValue's id, 0, first, outward scaled by -1.0, linearType's width, linearType's role)) to (found's values)
+                    append (@intrinsic("construct", a bim connector record, linearValue's id, 1, last, outward, linearType's width, linearType's role)) to (found's values)
+        return found
+
+# The network of `modelValue`: its connectors joined into nodes where they
+# meet within a millimetre.
+function the bim network of {bim model record:modelValue}:
+    execute:
+        set found to the bim connectors of modelValue
+        set joined to a cad topology list of a bim network node record
+        loop cursor from 0 to the length of (found's values):
+            set connector to the item at cursor in (found's values)
+            set placed to false
+            loop nodeCursor from 0 to the length of (joined's values):
+                if placed = false:
+                    set node to the item at nodeCursor in (joined's values)
+                    if (the cad distance from node's spot to connector's spot) <= 0.001:
+                        append cursor to (node's connectors's values)
+                        set placed to true
+            if placed = false:
+                set members to a cad topology list of an integer
+                append cursor to (members's values)
+                append (@intrinsic("construct", a bim network node record, connector's spot, members)) to (joined's values)
+        return @intrinsic("construct", a bim network record, found, joined)
+
+# What `networkNode` is: an open end, a joint (two connectors) or a tee
+# (three or more).
+function the bim kind of node {bim network node record:networkNode}:
+    execute:
+        set count to the length of (networkNode's connectors's values)
+        if count <= 1:
+            return bim open end node
+        if count = 2:
+            return bim joint node
+        return bim tee node
+
+# The angle in degrees a joint turns (0 for a straight joint), from its two
+# connectors' directions: two connectors in line point at each other.
+function the bim turn at joint {bim network node record:networkNode} in {bim network record:network}:
+    execute:
+        if (the length of (networkNode's connectors's values)) != 2:
+            return 0.0
+        set first to the item at (the item at 0 in (networkNode's connectors's values)) in (network's connectors's values)
+        set second to the item at (the item at 1 in (networkNode's connectors's values)) in (network's connectors's values)
+        set along to 0.0 - (the cad dot of first's direction and second's direction)
+        set sideways to the cad length of (the cad cross of first's direction and second's direction)
+        return (@intrinsic("atan2", sideways, along)) * (180.0 / 3.141592653589793)
