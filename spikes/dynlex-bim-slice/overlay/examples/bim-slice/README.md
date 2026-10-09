@@ -178,6 +178,35 @@ building, 12 x 10 bays of 6 x 5 m over 4 storeys by default (1679 members
 and 3070 joints). `tests/framing_scale.dl BAYS ROWS STOREYS`, built `-O2`,
 times its first evaluation, single edits, saving, reading and IFC export.
 
+**Connections** are assemblies of one or more members made by a connection
+type: parameters and a list of features that trim an end (square, against
+the face of another participant, mitre, run on to cover it), cut material
+out of a participant (blocks and cylinder patterns: notches, mortises,
+slots, holes) or add a part in its own material (plates, cleats, corbels,
+tenons). Every size is a measure over the type's parameters and the
+participants' profile dimensions, so one type fits every profile and a
+changed member or parameter updates the connection and the members it
+cuts. The library (`bim_connection_library.dl`) offers butt, mitre, end
+plates with optional stiffeners, fin plate, base plate and gusset for steel,
+mortise and tenon, half lap and a slotted plate with dowels for timber, a
+corbel for concrete and an angle cleat with screws for aluminium. The
+properties panel of a selected joint lists its type's parameters with a
+step down and up; a change re-evaluates every joint of the type.
+
+**Fasteners** are objects of their own: a bolt feature makes, per hole, a
+hexagon bolt with its washers and nut (ISO 4014/4032/7089 sizes for the
+nominal diameter nearest to the type's bolt diameter, the length the
+standard one for the grip, the holes 2 mm wider), an anchor a rod with its
+washer and nut, a dowel a rod and a screw a head and a shank. Each has a
+derived id (its joint's id times 4096 plus its index, above the imported
+ids), its own mesh picked in the 3D view, a row per designation ("M24 x 80")
+in the schedule and an `IfcMechanicalFastener` with its nominal diameter
+and length in the IFC export.
+
+`./build/bim-slice --connections-example` opens a small structure showing
+the steel templates. `tests/look_connections.py` opens it under Xephyr and
+saves screenshots of the 3D view.
+
 The project browser's *Profiles* lists the library by family (steel, timber and concrete); clicking
 a profile makes it the one new members get, and gives it to a selected
 member. *Connections* lists butt, mitre and two bolted end plates; clicking
@@ -191,7 +220,7 @@ B-rep bodies, the members associated with their material.
 Headless tests print results that must equal their `.expected.txt` file:
 
 ```sh
-for test in model evaluate drawing editor spaces pick file journal hatch view curved schedule framing framing_evaluate framing_editor; do
+for test in model evaluate drawing editor spaces pick file journal hatch view curved schedule framing framing_evaluate framing_editor connections; do
   ./build/dynlex examples/bim-slice/tests/$test.dl -O0 -o build/bim-$test
   ./build/bim-$test | diff - examples/bim-slice/tests/$test.expected.txt
 done
@@ -214,6 +243,11 @@ line with a gap, and every solid closed.
 beam raised, thicker plates, heavier columns, mitres made butt joints, a beam
 deleted, a new journal) and requires the incremental evaluation to equal a
 fresh one after each step, printing how many elements each step rebuilt.
+`connections` builds the connection showcase through the editor and requires
+every member and connection to evaluate, counts the fasteners per
+designation, selects one, steps a fin plate type's bolt rows and checks the
+joints it rebuilds, saves and reads the model back and exports IFC with
+members, connection assemblies and mechanical fasteners.
 `framing_editor` draws columns and a chain of beams through the editor (joined
 automatically), chooses a profile and an end plate, uses the join tool,
 swaps, turns, justifies, undoes and deletes, saves and reads the model back,

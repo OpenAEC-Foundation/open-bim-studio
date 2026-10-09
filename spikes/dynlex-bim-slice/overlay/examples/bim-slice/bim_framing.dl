@@ -25,6 +25,7 @@ import lib/fastkernel/member.dl
 import lib/text.dl
 import lib/cadkernel/brep_make.dl
 import lib/cadkernel/brep_boolean.dl
+import lib/cadkernel/constrained2.dl
 
 # How near two axis ends must be to meet, and an end to lie on an axis.
 function the bim member join tolerance:
@@ -869,6 +870,211 @@ local function add bim parts of feature {integer:featureIndex} in {bim joint con
         set width to the bim value of chosenFeature's diameter for context's connection with participants
         return add bim cylinders at (centres's values) along chosenFeature's axis long length wide width in frame to target
 
+# ---------------------------------------------------------------- fasteners
+
+# A fastener a connection adds, as an object of its own: a bolt with its
+# washers and nut, an anchor, a dowel or a screw. `id` is derived from the
+# joint's id and the fastener's place in it (see `the bim fastener id`), so
+# it is stable while the joint keeps its fasteners; `designation` names it
+# as "M24 x 80"; `shape` holds its parts, closed each.
+class:
+    patterns:
+        [a|] bim fastener record
+    members:
+        id as a 64 bit integer
+        jointId as a 64 bit integer
+        designation as a string
+        diameter as a 64 bit floating-point number
+        length as a 64 bit floating-point number
+        shape as a fast polyhedron record
+
+# Fastener ids lie from here up: the joint's id times 4096 plus the
+# fastener's index, above the imported elements' ids.
+function the bim fastener id base:
+    execute:
+        return 2199023255552 as a 64 bit integer
+
+function the bim fastener id of index {integer:index} in joint {a 64 bit integer:jointId}:
+    execute:
+        return ((the bim fastener id base) + (jointId * (4096 as a 64 bit integer))) + (index as a 64 bit integer)
+
+function the bim joint of fastener {a 64 bit integer:fastenerId}:
+    execute:
+        return (fastenerId - (the bim fastener id base)) / (4096 as a 64 bit integer)
+
+# Hexagon bolt, nut and washer dimensions (ISO 4014/4017, ISO 4032, ISO
+# 7089) for the nominal diameter nearest to `diameter`: across flats, head
+# height, nut height, washer outer diameter and thickness, in metres.
+class:
+    patterns:
+        [a|] bim bolt size record
+    members:
+        nominal as a 64 bit floating-point number
+        acrossFlats as a 64 bit floating-point number
+        headHeight as a 64 bit floating-point number
+        nutHeight as a 64 bit floating-point number
+        washerDiameter as a 64 bit floating-point number
+        washerThickness as a 64 bit floating-point number
+
+function the bim bolt size for {a 64 bit floating-point number:diameter}:
+    execute:
+        set sizes to an empty list of a bim bolt size record
+        append (@intrinsic("construct", a bim bolt size record, 0.012, 0.018, 0.0075, 0.0108, 0.024, 0.0025)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.016, 0.024, 0.01, 0.0148, 0.03, 0.003)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.02, 0.03, 0.0125, 0.018, 0.037, 0.003)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.024, 0.036, 0.015, 0.0215, 0.044, 0.004)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.027, 0.041, 0.017, 0.0238, 0.05, 0.004)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.03, 0.046, 0.0187, 0.0256, 0.056, 0.004)) to sizes
+        append (@intrinsic("construct", a bim bolt size record, 0.036, 0.055, 0.0225, 0.031, 0.066, 0.005)) to sizes
+        set chosen to the item at 0 in sizes
+        loop cursor from 0 to the length of sizes:
+            set candidate to the item at cursor in sizes
+            if (the absolute value of (candidate's nominal - diameter)) < (the absolute value of (chosen's nominal - diameter)):
+                set chosen to candidate
+        free sizes
+        return chosen
+
+# The standard bolt length not below `wanted`: in 5 mm steps to 80 mm, 10 mm
+# steps to 160 mm, 20 mm steps beyond.
+function the bim standard bolt length for {a 64 bit floating-point number:wanted}:
+    execute:
+        set step to 0.005
+        if wanted > 0.08:
+            set step to 0.01
+        if wanted > 0.16:
+            set step to 0.02
+        return (@intrinsic("ceil", (wanted - 1e-9) / step)) * step
+
+local function the bim millimetre text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.0f", value * 1000.0)
+        return the substring of buffer from 0 spanning written bytes
+
+# A hexagonal prism of `acrossFlats` across its flats, `height` high from
+# `base` along `axis` (unit), a flat facing `flatAxis`, appended to
+# `target`.
+local function add bim hexagon of {a 64 bit floating-point number:acrossFlats} high {a 64 bit floating-point number:height} from {cad vector3:base} along {cad vector3:axis} facing {cad vector3:flatAxis} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set uAxis to (the cad normalization of (the cad cross of flatAxis and axis))'s value
+        set vAxis to the cad cross of axis and uAxis
+        set frame to @intrinsic("construct", a fast frame record, base, uAxis, vAxis, axis)
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        set ring to an empty list of a cad vector2
+        set radius to acrossFlats / 1.7320508075688772
+        loop corner from 0 to 6:
+            set angle to 0.5235987755982988 + (1.0471975511965976 * (corner as a 64 bit floating-point number))
+            append (a cad vector2 with x (radius * (the cosine of angle)) and y (radius * (the sine of angle))) to ring
+        append ring to rings
+        set built to the fast plate of rings in frame thick height within 1e-9
+        free bim rings rings
+        if built's reason != fast sweep built:
+            return false
+        append fast part built's shape to target
+        return true
+
+local function add bim round of {a 64 bit floating-point number:diameter} long {a 64 bit floating-point number:length} from {cad vector3:base} along {cad vector3:axis} facing {cad vector3:flatAxis} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set uAxis to (the cad normalization of (the cad cross of flatAxis and axis))'s value
+        set vAxis to the cad cross of axis and uAxis
+        set frame to @intrinsic("construct", a fast frame record, base, uAxis, vAxis, axis)
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        append (the bim circle ring of radius (diameter * 0.5) at (a cad vector2 with x 0.0 and y 0.0) in 16) to rings
+        set built to the fast plate of rings in frame thick length within 1e-9
+        free bim rings rings
+        if built's reason != fast sweep built:
+            return false
+        append fast part built's shape to target
+        return true
+
+# The fastener of `kind` ("bolt", "anchor", "dowel" or "screw", from the
+# feature's material) clamping `grip` of material from `gripStart` along
+# `axis` (unit), `diameter` thick, with a flat of the head facing
+# `flatAxis`: a bolt has its head and a washer before the grip and a washer,
+# its nut and a few threads of shank beyond it, its length the standard one
+# not below that; an anchor is a rod from twelve diameters before the grip
+# with the washer and nut beyond; a dowel is a rod over the grip; a screw a
+# head before the grip and a shank over it.
+function the bim fastener of kind {a string:kind} clamping {a 64 bit floating-point number:grip} from {cad vector3:gripStart} along {cad vector3:axis} wide {a 64 bit floating-point number:diameter} facing {cad vector3:flatAxis} numbered {integer:index} in joint {a 64 bit integer:jointId}:
+    execute:
+        set shape to an empty fast polyhedron
+        set target to the address of shape
+        set size to the bim bolt size for diameter
+        set designation to (the string form of "M") + (the bim millimetre text of size's nominal)
+        set length to grip
+        if kind = (the string form of "dowel"):
+            ignore add bim round of diameter long grip from gripStart along axis facing flatAxis to target
+            set designation to ((the string form of "Dowel ") + (the bim millimetre text of diameter)) + ((the string form of " x ") + (the bim millimetre text of grip))
+        else if kind = (the string form of "screw"):
+            set headHeight to 0.6 * diameter
+            set length to the bim standard bolt length for (grip + (0.5 * diameter))
+            ignore add bim round of (2.0 * diameter) long headHeight from (the cad sum of gripStart and (axis scaled by (0.0 - headHeight))) along axis facing flatAxis to target
+            ignore add bim round of diameter long length from gripStart along axis facing flatAxis to target
+            set designation to ((the string form of "Screw ") + (the bim millimetre text of diameter)) + ((the string form of " x ") + (the bim millimetre text of length))
+        else if kind = (the string form of "anchor"):
+            set embedment to 12.0 * size's nominal
+            set beyond to (size's washerThickness + size's nutHeight) + (0.3 * size's nominal)
+            set length to the bim standard bolt length for ((embedment + grip) + beyond)
+            ignore add bim round of size's nominal long length from (the cad sum of gripStart and (axis scaled by (0.0 - embedment))) along axis facing flatAxis to target
+            set top to the cad sum of gripStart and (axis scaled by grip)
+            ignore add bim round of size's washerDiameter long size's washerThickness from top along axis facing flatAxis to target
+            ignore add bim hexagon of size's acrossFlats high size's nutHeight from (the cad sum of top and (axis scaled by size's washerThickness)) along axis facing flatAxis to target
+            set designation to ((the string form of "Anchor M") + (the bim millimetre text of size's nominal)) + ((the string form of " x ") + (the bim millimetre text of length))
+        else:
+            set beyond to (size's washerThickness + size's nutHeight) + (0.3 * size's nominal)
+            set length to the bim standard bolt length for ((grip + size's washerThickness) + beyond)
+            set headStart to the cad sum of gripStart and (axis scaled by (0.0 - (size's washerThickness + size's headHeight)))
+            ignore add bim hexagon of size's acrossFlats high size's headHeight from headStart along axis facing flatAxis to target
+            ignore add bim round of size's washerDiameter long size's washerThickness from (the cad sum of gripStart and (axis scaled by (0.0 - size's washerThickness))) along axis facing flatAxis to target
+            ignore add bim round of size's nominal long length from (the cad sum of gripStart and (axis scaled by (0.0 - size's washerThickness))) along axis facing flatAxis to target
+            set top to the cad sum of gripStart and (axis scaled by grip)
+            ignore add bim round of size's washerDiameter long size's washerThickness from top along axis facing flatAxis to target
+            ignore add bim hexagon of size's acrossFlats high size's nutHeight from (the cad sum of top and (axis scaled by size's washerThickness)) along axis facing flatAxis to target
+            set designation to (designation + (the string form of " x ")) + (the bim millimetre text of length)
+        return @intrinsic("construct", a bim fastener record, the bim fastener id of index index in joint jointId, jointId, designation, diameter, length, shape)
+
+# The fastener kind of a feature's material: "bolt", "anchor", "dowel" or
+# "screw", or empty for a part that is no fastener.
+function the bim fastener kind of {a string:material}:
+    execute:
+        set lowered to the lowercase form of material
+        if lowered contains "anchor":
+            return the string form of "anchor"
+        if lowered contains "dowel":
+            return the string form of "dowel"
+        if lowered contains "screw":
+            return the string form of "screw"
+        if lowered contains "bolt":
+            return the string form of "bolt"
+        return the string form of ""
+
+# The fasteners of `feature` (an add-cylinders feature whose material names
+# a fastener) in `context`: one per cylinder centre, its grip the feature's
+# `sizeX` centred on the centre along the feature's axis, its head on the
+# side where the axis coordinate is lower (higher with `mode` 1).
+function the bim fasteners of feature {integer:featureIndex} in {bim joint context record:context} with {bim model record:modelValue} through {bim joint index record:jointIndex} counting from {integer:firstIndex}:
+    execute:
+        set made to a cad topology list of a bim fastener record
+        set chosenFeature to the item at featureIndex in (context's connection's features's values)
+        set kind to the bim fastener kind of chosenFeature's material
+        if (chosenFeature's kind != bim add cylinders feature) or ((the length of kind) = 0):
+            return made
+        set frame to the bim frame of chosenFeature in context with modelValue through jointIndex
+        set participants to context's participants's values
+        set centres to the bim cylinder centres of chosenFeature for context's connection with participants
+        set grip to the bim value of chosenFeature's sizeX for context's connection with participants
+        set diameter to the bim value of chosenFeature's diameter for context's connection with participants
+        set axis to the bim axis chosenFeature's axis of frame
+        set flatAxis to the bim axis (the remainder of (chosenFeature's axis + 1) divided by 3) of frame
+        # Mode 1 turns the fastener round: its head on the high side.
+        if chosenFeature's mode = 1:
+            set axis to axis scaled by -1.0
+        loop cursor from 0 to the length of (centres's values):
+            set centre to the item at cursor in (centres's values)
+            set gripStart to the cad sum of (the bim point at centre in frame) and (axis scaled by (0.0 - (grip * 0.5)))
+            append (the bim fastener of kind kind clamping grip from gripStart along axis wide diameter facing flatAxis numbered (firstIndex + cursor) in joint context's jointId) to (made's values)
+        return made
+
 # ---------------------------------------------------------------- solids
 
 class:
@@ -879,10 +1085,11 @@ class:
         fast as a boolean
         shape as a fast polyhedron record
         solid as the type of (an empty cad body)
+        fasteners as the type of (a cad topology list of a bim fastener record)
 
 local function a bim framing failure {integer:status}:
     execute:
-        return @intrinsic("construct", a bim framing solid record, status, true, an empty fast polyhedron, an empty cad body)
+        return @intrinsic("construct", a bim framing solid record, status, true, an empty fast polyhedron, an empty cad body, a cad topology list of a bim fastener record)
 
 # The material whose hatch and colour a member or joint is drawn in:
 # timber, concrete or aluminium when its type's material (a joint's first
@@ -1014,204 +1221,21 @@ function the bim merged polyhedron of {cad body:solid}:
         free points
         return rebuilt
 
-# ---------------------------------------------------------------- face triangulation
-
-local function the bim doubled area of corners {a pointer to a list:cornerList} at {a pointer to a list:flats}:
+# The position index of the face corner at `flat` (exactly, else the nearest
+# within a tenth of a micrometre), or -1.
+local function the bim flat index of {cad vector2:flat} among {a pointer to a list:flats} as {a pointer to a list:flatIndices}:
     execute:
-        set total to 0.0
-        set count to the length of cornerList
-        loop place from 0 to count:
-            set here to the item at (the item at place in cornerList) in flats
-            set following to the item at (the item at (the remainder of (place + 1) divided by count) in cornerList) in flats
-            set total to total + ((here's x * following's y) - (following's x * here's y))
-        return total
-
-local function the bim turn of {cad vector2:a}, {cad vector2:b} and {cad vector2:c}:
-    execute:
-        return ((b's x - a's x) * (c's y - a's y)) - ((b's y - a's y) * (c's x - a's x))
-
-local function bim flat {cad vector2:probe} lies in triangle {cad vector2:a}, {cad vector2:b} and {cad vector2:c}:
-    execute:
-        set first to the bim turn of a, b and probe
-        set second to the bim turn of b, c and probe
-        set third to the bim turn of c, a and probe
-        return ((first >= 0.0) and (second >= 0.0)) and (third >= 0.0)
-
-# True when segments p-q and r-s cross at a point inside both (touching at
-# a shared corner does not count).
-local function bim segments {cad vector2:p} to {cad vector2:q} and {cad vector2:r} to {cad vector2:t} cross:
-    execute:
-        set d1 to the bim turn of p, q and r
-        set d2 to the bim turn of p, q and t
-        set d3 to the bim turn of r, t and p
-        set d4 to the bim turn of r, t and q
-        return (((d1 > 0.0) and (d2 < 0.0)) or ((d1 < 0.0) and (d2 > 0.0))) and (((d3 > 0.0) and (d4 < 0.0)) or ((d3 < 0.0) and (d4 > 0.0)))
-
-local function bim flat {cad vector2:probe} is enclosed by {a pointer to a list:cornerList} at {a pointer to a list:flats}:
-    execute:
-        set parity to false
-        set count to the length of cornerList
-        loop place from 0 to count:
-            set here to the item at (the item at place in cornerList) in flats
-            set following to the item at (the item at (the remainder of (place + 1) divided by count) in cornerList) in flats
-            if (here's y > probe's y) != (following's y > probe's y):
-                set crossingX to here's x + (((probe's y - here's y) / (following's y - here's y)) * (following's x - here's x))
-                if probe's x < crossingX:
-                    set parity to (parity = false)
-        return parity
-
-# True when the segment between corners `fromCorner` and `toCorner` crosses
-# none of the edges and its middle lies inside `outer` and outside every
-# hole.
-local function bim segment from {integer:fromCorner} to {integer:toCorner} is clear of edges {a pointer to a list:edgeStarts} to {a pointer to a list:edgeEnds} at {a pointer to a list:flats} inside {a pointer to a list:outer} without {a pointer to a list:holeLists}:
-    execute:
-        set p to the item at fromCorner in flats
-        set q to the item at toCorner in flats
-        loop edge from 0 to the length of edgeStarts:
-            set first to the item at edge in edgeStarts
-            set second to the item at edge in edgeEnds
-            if ((first != fromCorner) and (first != toCorner)) and ((second != fromCorner) and (second != toCorner)):
-                if bim segments p to q and (the item at first in flats) to (the item at second in flats) cross:
-                    return false
-        set middle to a cad vector2 with x ((p's x + q's x) * 0.5) and y ((p's y + q's y) * 0.5)
-        if (bim flat middle is enclosed by outer at flats) = false:
-            return false
-        loop holeIndex from 0 to the length of holeLists:
-            if bim flat middle is enclosed by (the item at holeIndex in holeLists) at flats:
-                return false
-        return true
-
-# The triangles (corner index triples into `flats`) of the polygon `outer`
-# with `holes` (lists of corner indices), without adding a corner: each hole
-# is bridged to the outer ring from its rightmost corner, the bridge's two
-# corners appearing twice, and the ring is cut into ears.
-function the bim ear triangles of {a pointer to a list:outer} with holes {a pointer to a list:holeLists} at {a pointer to a list:flats}:
-    execute:
-        set ring to an empty list of an integer
-        loop place from 0 to the length of outer:
-            append (the item at place in outer) to ring
-        if (the bim doubled area of corners ring at flats) < 0.0:
-            set reversedRing to an empty list of an integer
-            set place to (the length of ring) - 1
-            loop while place >= 0:
-                append (the item at place in ring) to reversedRing
-                set place to place - 1
-            free ring
-            set ring to reversedRing
-        # Each hole is bridged from one of its corners to an outer corner not
-        # yet used by a bridge, the shortest such segment that crosses no
-        # edge of the outer ring, of any hole or of an earlier bridge and
-        # whose middle lies inside the face.
-        set edgeStarts to an empty list of an integer
-        set edgeEnds to an empty list of an integer
-        loop place from 0 to the length of outer:
-            append (the item at place in outer) to edgeStarts
-            append (the item at (the remainder of (place + 1) divided by (the length of outer)) in outer) to edgeEnds
-        loop holeIndex from 0 to the length of holeLists:
-            set source to the item at holeIndex in holeLists
-            loop place from 0 to the length of source:
-                append (the item at place in source) to edgeStarts
-                append (the item at (the remainder of (place + 1) divided by (the length of source)) in source) to edgeEnds
-        set usedOuter to an empty list of an integer
-        loop holeIndex from 0 to the length of holeLists:
-            set hole to an empty list of an integer
-            set source to the item at holeIndex in holeLists
-            loop place from 0 to the length of source:
-                append (the item at place in source) to hole
-            # Holes run clockwise.
-            if (the bim doubled area of corners hole at flats) > 0.0:
-                set reversedHole to an empty list of an integer
-                set place to (the length of hole) - 1
-                loop while place >= 0:
-                    append (the item at place in hole) to reversedHole
-                    set place to place - 1
-                free hole
-                set hole to reversedHole
-            set bestLength to 1e300
-            set bestHole to -1
-            set bestOuter to -1
-            loop holePlace from 0 to the length of hole:
-                set h to the item at (the item at holePlace in hole) in flats
-                loop outerPlace from 0 to the length of outer:
-                    set outerCorner to the item at outerPlace in outer
-                    if (usedOuter contains outerCorner) = false:
-                        set o to the item at outerCorner in flats
-                        set span to ((o's x - h's x) * (o's x - h's x)) + ((o's y - h's y) * (o's y - h's y))
-                        if span < bestLength:
-                            if bim segment from (the item at holePlace in hole) to outerCorner is clear of edges edgeStarts to edgeEnds at flats inside outer without holeLists:
-                                set bestLength to span
-                                set bestHole to holePlace
-                                set bestOuter to outerCorner
-            if bestHole < 0:
-                free hole
-                free usedOuter
-                free edgeStarts
-                free edgeEnds
-                return an empty list of an integer
-            append bestOuter to usedOuter
-            append (the item at bestHole in hole) to edgeStarts
-            append bestOuter to edgeEnds
-            # Splice at the outer corner: ..., outer, hole from the bridge
-            # corner round to it again, outer, ...
-            set bridge to 0
-            loop place from 0 to the length of ring:
-                if (the item at place in ring) = bestOuter:
-                    set bridge to place
-            set spliced to an empty list of an integer
-            loop place from 0 to bridge + 1:
-                append (the item at place in ring) to spliced
-            loop step from 0 to (the length of hole) + 1:
-                append (the item at (the remainder of (bestHole + step) divided by (the length of hole)) in hole) to spliced
-            loop place from bridge to the length of ring:
-                append (the item at place in ring) to spliced
-            free ring
-            free hole
-            set ring to spliced
-        free usedOuter
-        free edgeStarts
-        free edgeEnds
-        # Ear clipping.
-        set earCorners to an empty list of an integer
-        set guard to 0
-        loop while ((the length of ring) > 3) and (guard < 100000):
-            set guard to guard + 1
-            set count to the length of ring
-            set clipped to false
-            loop place from 0 to count:
-                if clipped = false:
-                    set before to the item at (the remainder of ((place + count) - 1) divided by count) in ring
-                    set here to the item at place in ring
-                    set after to the item at (the remainder of (place + 1) divided by count) in ring
-                    set a to the item at before in flats
-                    set b to the item at here in flats
-                    set c to the item at after in flats
-                    if (the bim turn of a, b and c) > 1e-18:
-                        set blocked to false
-                        loop other from 0 to count:
-                            set index to the item at other in ring
-                            if ((index != before) and (index != here)) and (index != after):
-                                set probe to the item at index in flats
-                                set onCorner to ((probe's x = a's x) and (probe's y = a's y)) or (((probe's x = b's x) and (probe's y = b's y)) or ((probe's x = c's x) and (probe's y = c's y)))
-                                if (onCorner = false) and (bim flat probe lies in triangle a, b and c):
-                                    set blocked to true
-                        if blocked = false:
-                            append before to earCorners
-                            append here to earCorners
-                            append after to earCorners
-                            remove item place from ring
-                            set clipped to true
-            if clipped = false:
-                # Degenerate remainder: clip the first corner anyway.
-                append (the item at ((the length of ring) - 1) in ring) to earCorners
-                append (the item at 0 in ring) to earCorners
-                append (the item at 1 in ring) to earCorners
-                remove item 0 from ring
-        if (the length of ring) = 3:
-            append (the item at 0 in ring) to earCorners
-            append (the item at 1 in ring) to earCorners
-            append (the item at 2 in ring) to earCorners
-        free ring
-        return earCorners
+        set found to -1
+        set nearest to 1e-7
+        loop candidate from 0 to the length of flats:
+            set known to the item at candidate in flats
+            if (known's x = flat's x) and (known's y = flat's y):
+                return the item at candidate in flatIndices
+            set gap to the cad length of (the cad difference of known and flat)
+            if gap <= nearest:
+                set nearest to gap
+                set found to the item at candidate in flatIndices
+        return found
 
 # The B-rep of a closed polyhedron of one or more parts: its faces as they
 # are, and each face with holeLists as the earCorners of its own plane (corners
@@ -1232,46 +1256,56 @@ function the bim body of {fast polyhedron record:shape}:
                     append (the item at cursor in (shape's indices's values)) to ring
                 append ring to faces
             else:
-                # The face in its own plane, cut into ears without new corners.
+                # The face in its own plane, triangulated by the constrained
+                # Delaunay triangulation with its rings as constraints, which
+                # adds no corner; the triangles' corners map back to the
+                # face's by their coordinates.
                 set normal to face's normal
                 set helper to the cad x axis
                 if (the absolute value of normal's x) > 0.9:
                     set helper to a cad vector3 with x 0.0, y 1.0 and z 0.0
                 set uAxis to (the cad normalization of (the cad cross of helper and normal))'s value
                 set vAxis to the cad cross of normal and uAxis
+                set rings to an empty list of the type of (an empty list of a cad vector2)
                 set flats to an empty list of a cad vector2
-                loop cursor from 0 to the length of (shape's positions's values):
-                    set location to the item at cursor in (shape's positions's values)
-                    append (a cad vector2 with x (the cad dot of location and uAxis) and y (the cad dot of location and vAxis)) to flats
-                set outerRing to an empty list of an integer
-                set holeRings to an empty list of the type of (an empty list of an integer)
+                set flatIndices to an empty list of an integer
                 loop ringCursor from face's firstLoop to (face's firstLoop + face's loopCount):
                     set first to the item at ringCursor in (shape's loopStarts's values)
                     set past to the item at (ringCursor + 1) in (shape's loopStarts's values)
-                    set localRing to an empty list of an integer
+                    set ring to an empty list of a cad vector2
                     loop cursor from first to past:
-                        append (the item at cursor in (shape's indices's values)) to localRing
-                    if ringCursor = face's firstLoop:
-                        loop cursor from 0 to the length of localRing:
-                            append (the item at cursor in localRing) to outerRing
-                        free localRing
-                    else:
-                        append localRing to holeRings
-                set ears to the bim ear triangles of outerRing with holes holeRings at flats
-                set corner to 0
-                loop while corner < the length of ears:
-                    set ring to an empty list of an integer
-                    append (the item at corner in ears) to ring
-                    append (the item at (corner + 1) in ears) to ring
-                    append (the item at (corner + 2) in ears) to ring
-                    append ring to faces
-                    set corner to corner + 3
-                free ears
+                        set positionIndex to the item at cursor in (shape's indices's values)
+                        set location to the item at positionIndex in (shape's positions's values)
+                        set flat to a cad vector2 with x (the cad dot of location and uAxis) and y (the cad dot of location and vAxis)
+                        append flat to ring
+                        append flat to flats
+                        append positionIndex to flatIndices
+                    append ring to rings
+                set meshed to the cad constrained mesh of rings rings
+                if meshed's valid:
+                    set triangles to the cad constrained triangles of meshed's value
+                    loop triangleCursor from 0 to the length of triangles:
+                        set triangle to the item at triangleCursor in triangles
+                        set ring to an empty list of an integer
+                        append (the bim flat index of triangle's first among flats as flatIndices) to ring
+                        append (the bim flat index of triangle's second among flats as flatIndices) to ring
+                        append (the bim flat index of triangle's third among flats as flatIndices) to ring
+                        # Counter-clockwise about the normal.
+                        set turn to ((triangle's second's x - triangle's first's x) * (triangle's third's y - triangle's first's y)) - ((triangle's second's y - triangle's first's y) * (triangle's third's x - triangle's first's x))
+                        if turn < 0.0:
+                            set swapped to the item at 1 in ring
+                            replace item at index 1 in ring with (the item at 2 in ring)
+                            replace item at index 2 in ring with swapped
+                        if (((the item at 0 in ring) >= 0) and ((the item at 1 in ring) >= 0)) and ((the item at 2 in ring) >= 0):
+                            append ring to faces
+                        else:
+                            free ring
+                    free triangles
+                loop cursor from 0 to the length of rings:
+                    free (the item at cursor in rings)
+                free rings
                 free flats
-                free outerRing
-                loop cursor from 0 to the length of holeRings:
-                    free (the item at cursor in holeRings)
-                free holeRings
+                free flatIndices
         set faceted to the cad faceted solid with vertices vertices and faces faces within 1e-9
         loop cursor from 0 to the length of faces:
             free (the item at cursor in faces)
@@ -1303,7 +1337,7 @@ function the bim member solid of {a 64 bit integer:memberId} in {bim model recor
             return a bim framing failure 2
         set cutters to the bim cutters of memberId in modelValue through jointIndex
         if (the length of (cutters's faces's values)) = 0:
-            return @intrinsic("construct", a bim framing solid record, 0, true, built's shape, an empty cad body)
+            return @intrinsic("construct", a bim framing solid record, 0, true, built's shape, an empty cad body, a cad topology list of a bim fastener record)
         # One cutter at a time (the booleans take one closed body each). After
         # each cut the result's coplanar pieces are merged back into planar
         # faces with holes, so the next cut starts from a clean polyhedron
@@ -1336,7 +1370,7 @@ function the bim member solid of {a 64 bit integer:memberId} in {bim model recor
         set status to 0
         if complete = false:
             set status to 5
-        return @intrinsic("construct", a bim framing solid record, status, true, current, an empty cad body)
+        return @intrinsic("construct", a bim framing solid record, status, true, current, an empty cad body, a cad topology list of a bim fastener record)
 
 # The solid of joint `jointValue`: every part its features add, as one
 # polyhedron. Status 0 when it adds a part, 4 when it adds none (a plain
@@ -1352,16 +1386,22 @@ function the bim joint solid of {bim joint record:jointValue} in {bim model reco
             return a bim framing failure 4
         set shape to an empty fast polyhedron
         set made to true
+        set fasteners to a cad topology list of a bim fastener record
         loop featureCursor from 0 to the length of (context's connection's features's values):
             set feature to the item at featureCursor in (context's connection's features's values)
-            if (feature's kind = bim add block feature) or (feature's kind = bim add cylinders feature):
+            set fastenerKind to the bim fastener kind of feature's material
+            if (feature's kind = bim add cylinders feature) and ((the length of fastenerKind) > 0):
+                set added to the bim fasteners of feature featureCursor in context with modelValue through jointIndex counting from (the length of (fasteners's values))
+                loop cursor from 0 to the length of (added's values):
+                    append (the item at cursor in (added's values)) to (fasteners's values)
+            else if (feature's kind = bim add block feature) or (feature's kind = bim add cylinders feature):
                 if (add bim parts of feature featureCursor in context with modelValue through jointIndex to (the address of shape)) = false:
                     set made to false
         if made = false:
             return a bim framing failure 2
-        if (the length of (shape's faces's values)) = 0:
+        if ((the length of (shape's faces's values)) = 0) and ((the length of (fasteners's values)) = 0):
             return a bim framing failure 4
-        return @intrinsic("construct", a bim framing solid record, 0, true, shape, an empty cad body)
+        return @intrinsic("construct", a bim framing solid record, 0, true, shape, an empty cad body, fasteners)
 
 # ---------------------------------------------------------------- signatures
 
@@ -1428,4 +1468,9 @@ function the bim joint signature of {bim joint record:jointValue} in {bim model 
         set written to (the string form of "j") + (the string form of (the length of (built's shape's positions's values)))
         loop cursor from 0 to the length of (built's shape's positions's values):
             set written to (written + (the string form of ";")) + (the bim framing vector text of (the item at cursor in (built's shape's positions's values)))
+        loop cursor from 0 to the length of (built's fasteners's values):
+            set fastener to the item at cursor in (built's fasteners's values)
+            set written to (written + (the string form of ";f")) + fastener's designation
+            if (the length of (fastener's shape's positions's values)) > 0:
+                set written to (written + (the string form of "@")) + (the bim framing vector text of (the item at 0 in (fastener's shape's positions's values)))
         return written

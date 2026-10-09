@@ -386,10 +386,37 @@ index built once per evaluation and per export), and the IFC writer appended
 every entity to one growing string, copying the whole file each time (1.9 MB
 took 74.9 s; it now collects lines and joins them once: 54 ms).
 
-**Not done.** Members are not exported to IFC5 (IfcX). Connection types are
-offered as four templates; their parameters cannot yet be edited in the
-editor. At a point where three members meet, the first joint at an end
-decides its cut. No cope cuts, notches, welds or curved members.
+**Generic connections — built and measured** (`tests/framing.dl`,
+`tests/connections.dl`, `-O2`, same laptop). A connection is an assembly of
+one or more members made by a type of parameters and features (trims, cuts,
+added parts, fasteners), every size a measure over parameters and profile
+dimensions. Thirteen templates evaluate on a column and a beam framing into
+it (or a column alone), every fast solid closed: butt, mitre, end plate with
+stiffeners, fin plate, base plate, gusset, mortise and tenon, half lap,
+slotted plate with dowels, corbel and angle cleat. Cuts into members go
+through the port's booleans; each boolean leaves a face in hundreds of
+coplanar pieces (one hole in a strip: 264 faces), which are merged back into
+planar faces with holes after every cut, and a face with holes is written to
+the B-rep through the kernel's constrained Delaunay triangulation, which adds
+no corner. The kernel's face-components walk was quadratic in faces (now
+index tables) and the imprint copied the body per face split (now in place,
+with the guarded split as fallback): a web with six holes went from not
+finishing to about 1.4 s per hole, still growing with the holes on the face.
+
+The connection showcase (16 members, 26 connections, 88 fasteners) evaluates
+in 99 s at `-O2` including a parameter step, a save and read and the IFC
+export; stepping the fin plate type's bolt rows rebuilds 12 of 42 elements
+(8 joints and 4 beams). Fasteners are objects of their own: 24 anchors
+M24 x 360, 32 bolts M24 x 75 (plate 20 + flange 17 + washer, nut and threads,
+rounded to the standard length), 24 bolts M20 x 50 and 8 bolts M24 x 65, each
+with its own mesh, selection and `IfcMechanicalFastener`.
+
+**Not done.** Members are not exported to IFC5 (IfcX). Connection types come
+from templates; the editor steps their parameters but cannot add or remove
+features. At a point where three members meet, the first joint at an end
+decides its cut. Welds are a parameter without geometry; no curved members.
+A cut into a member costs about a second per hole and grows with the holes
+already in the face.
 
 **Compile time.** The editor's compile with the framing records did not finish
 within 300–600 s per test at `-O0` with the unpatched compiler; it spent the time
