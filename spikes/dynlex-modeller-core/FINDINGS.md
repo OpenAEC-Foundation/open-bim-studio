@@ -1303,3 +1303,32 @@ the element is, such as "Raam 1200x1500" or "Beton 300x300".
 - The same after `.bim` and `.ifcx`.
 
 **Text** (Annotate → Text) now starts the existing text tool.
+
+## Views as records (plan step 3a, 2026-10-09)
+
+Views are now kept with the model (`bim view definition record`), as in
+Revit. Each view has:
+- a kind: plan, ceiling plan, section, 3D or schedule;
+- a name;
+- a storey (for plans);
+- a detail: a schedule's code or a section's number;
+- a plan cut height (1.2 m by default);
+- a drawing scale;
+- a crop rectangle;
+- its rules: per category, shown or not and halftone or not.
+
+A view's rules start from its kind's template.
+
+- Every storey gets a plan named after it, and the model one 3D view, when
+  it has none (`ensure bim default views in …`). Running it again makes
+  nothing.
+- A view can be duplicated with its rules (`duplicate bim view … named …`).
+- **Files.** `.bim` has a `view` line with the flags as one field of 0s and
+  1s. IfcX has `openbim::view` on a node of its own, with no IFC class:
+  views are documentation, not building elements.
+
+**Checked.** `tests/views.dl`: two storeys get three default views. A
+duplicated plan with walls in halftone, grids hidden, at 1:50 and cropped
+keeps all of it through `.bim` and `.ifcx`.
+
+The editor does not use the view records yet; that is step 3b.
