@@ -1443,3 +1443,32 @@ point), and `openbim::sheet` in IfcX: documentation, like views.
 
 **Not yet.** Viewport content is not clipped to its frame. Sheets do not pan
 or zoom. Schedules cannot be placed on sheets yet (step 4d).
+
+## Schedules on sheets, and sheets as PDF (plan steps 4d and 5, 2026-10-09)
+
+**Schedules on sheets.** PS (View → Place schedule) places the schedule the
+window shows on the sheet open, its top left corner inside the border. The
+schedule gets a view record of kind schedule the first time; placing it
+again reuses that view. On the sheet it is a table 180 mm wide: a title, a
+header (Element, Type, Count, m, m², m³) and a 6 mm row per type, drawn from
+the schedule as it is now.
+
+**PDF (EP, or View → Export PDF).** The sheet open is recorded once more, in
+PDF points (72 / 25.4 per millimetre), and written as a one-page PDF named
+after its number (`A-101.pdf`):
+- each batch of the recording is a filled path in its colour;
+- each label is a line of Helvetica, with brackets escaped;
+- a cross-reference table gives every object's byte offset.
+
+The file is vector data throughout, at the sheet's true size.
+
+**Checked.**
+- `tests/pdf.dl`: a stroke and a label on a 100 × 50 pt page. The file is
+  printed whole; its offsets (9, 58, 115, 246, 472, xref at 542) were checked
+  against the bytes, and `pdftotext` reads the label back as
+  "Plan (1:100)".
+- `tests/view_editor.dl`: PS refused without a schedule shown, then placed
+  twice with one schedule view.
+
+**Not yet.** The PDF draws labels in Helvetica, not Osifont. SVG export is
+not done.
