@@ -90,6 +90,10 @@ function bim dimension tool:
 function bim tag tool:
     replacement:
         20
+# Crops the plan view shown to a rectangle of two clicks.
+function bim crop tool:
+    replacement:
+        21
 
 # Key codes follow the windowing layer: printable keys are their upper-case
 # ASCII code.
@@ -646,7 +650,7 @@ function refresh bim editor {a pointer to a bim editor record:editor}:
         set elevation to 0.0
         if levelFound's valid:
             set elevation to (the item at levelFound's position in (editor's documentValue's current's levels's values))'s elevation
-        set planPlane to the bim plan plane at elevation cut at 1.2
+        set planPlane to the bim plan plane at elevation cut at (the bim plan cut height of (@intrinsic("dereference", editor)))
         if bim planes editor's plan's viewPlane and planPlane are identical:
             if modelChanged:
                 update bim view (the address of (editor's plan)) from editor's evaluation
@@ -1309,6 +1313,56 @@ function the bim face at {cad vector2:location} in {bim editor record:editor}:
         return the bim refused id
 
 # ---------------------------------------------------------------- views
+
+# How high above the storey the plan cuts: the plan view's cut height, or
+# 1.2 m without a view.
+function the bim plan cut height of {bim editor record:editor}:
+    execute:
+        set found to the bim view index of editor's planViewId in editor's documentValue's current
+        if found's valid:
+            return (the item at found's position in (editor's documentValue's current's views's values))'s cutHeight
+        return 1.2
+
+# A click of the crop tool: the first corner, then the plan view shown is
+# cropped to the rectangle.
+function place bim editor crop at {cad vector2:point} in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim view index of editor's planViewId in editor's documentValue's current
+        if found's valid = false:
+            set editor's message to the string form of "Crop: no plan view"
+            return nothing
+        if editor's moveStage = 0:
+            set editor's solidCorner to point
+            set editor's moveStage to 1
+            set editor's message to the string form of "Crop: click the opposite corner"
+            return nothing
+        set viewValue to the item at found's position in (editor's documentValue's current's views's values)
+        set lowCorner to a cad vector2 with x (the minimum of point's x and editor's solidCorner's x) and y (the minimum of point's y and editor's solidCorner's y)
+        set highCorner to a cad vector2 with x (the maximum of point's x and editor's solidCorner's x) and y (the maximum of point's y and editor's solidCorner's y)
+        set editor's moveStage to 0
+        if ((highCorner's x - lowCorner's x) < 0.01) or ((highCorner's y - lowCorner's y) < 0.01):
+            return nothing
+        set viewValue's cropped to true
+        set viewValue's cropLow to lowCorner
+        set viewValue's cropHigh to highCorner
+        begin bim transaction in (the address of (editor's documentValue))
+        store bim view viewValue in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's tool to bim select tool
+        set editor's message to (the string form of "Cropped ") + viewValue's name
+
+# The plan view shown, uncropped (UC).
+function uncrop bim editor plan view in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim view index of editor's planViewId in editor's documentValue's current
+        if found's valid = false:
+            return nothing
+        set viewValue to the item at found's position in (editor's documentValue's current's views's values)
+        set viewValue's cropped to false
+        begin bim transaction in (the address of (editor's documentValue))
+        store bim view viewValue in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to (the string form of "Uncropped ") + viewValue's name
 
 # The plan view the editor shows for storey `levelId`: the active one when it
 # is of that storey, else the storey's first; the refused id when it has none.
@@ -2969,6 +3023,9 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
         if editor's tool = bim tag tool:
             place bim editor tag at point in editor
             return nothing
+        if editor's tool = bim crop tool:
+            place bim editor crop at point in editor
+            return nothing
         if editor's tool = bim place tool:
             begin bim transaction in (the address of (editor's documentValue))
             set placed to place bim component editor's placeComponentId on editor's levelId at point turned 0.0 to (the address of (editor's documentValue's current))
@@ -4360,6 +4417,13 @@ function bim part depth property:
 function bim part height property:
     replacement:
         22
+# The plan view shown: its scale (1:n) and its cut height.
+function bim view scale property:
+    replacement:
+        23
+function bim view cut property:
+    replacement:
+        24
 
 local function append bim property {a string:label} showing {a string:shown} as {integer:code} to {a pointer to a list:rows}:
     execute:
@@ -4488,6 +4552,16 @@ function the bim property rows of {bim editor record:editor}:
             append bim property (the string form of "Storey") showing levelValue's name as 0 to propertyRows
             append bim property (the string form of "Elevation") showing (the bim length levelValue's elevation in units unitCode) as bim level elevation property to propertyRows
             append bim property (the string form of "Storey height") showing (the bim length levelValue's height in units unitCode) as bim level height property to propertyRows
+        set viewFound to the bim view index of editor's planViewId in modelValue
+        if viewFound's valid:
+            set viewValue to the item at viewFound's position in (modelValue's views's values)
+            append bim property (the string form of "View") showing viewValue's name as 0 to propertyRows
+            append bim property (the string form of "Scale 1:") showing (the string form of viewValue's scale) as bim view scale property to propertyRows
+            append bim property (the string form of "Cut height") showing (the bim length viewValue's cutHeight in units unitCode) as bim view cut property to propertyRows
+            set cropText to the string form of "none (CV crops)"
+            if viewValue's cropped:
+                set cropText to (the bim length (viewValue's cropHigh's x - viewValue's cropLow's x) in units unitCode) + ((the string form of " x ") + (the bim length (viewValue's cropHigh's y - viewValue's cropLow's y) in units unitCode))
+            append bim property (the string form of "Crop") showing cropText as 0 to propertyRows
         return propertyRows
 
 # A click on a property's value: typing it begins.
@@ -4603,6 +4677,22 @@ function apply bim editor property in {a pointer to a bim editor record:editor}:
             if found's valid:
                 set placement to the item at found's position in (target's instances's values)
                 set changed to move bim instance chosenId to placement's origin turned (typed * (3.141592653589793 / 180.0)) in target
+        if (code = bim view scale property) or (code = bim view cut property):
+            set viewFound to the bim view index of editor's planViewId in (@intrinsic("dereference", target))
+            if viewFound's valid:
+                set viewValue to the item at viewFound's position in (target's views's values)
+                set changed to true
+                if code = bim view scale property:
+                    set wholeScale to (the rounded value of typed) as an integer
+                    if (wholeScale < 1) or (wholeScale > 10000):
+                        set changed to false
+                    set viewValue's scale to wholeScale
+                else:
+                    if (metres < -10.0) or (metres > 100.0):
+                        set changed to false
+                    set viewValue's cutHeight to metres
+                if changed:
+                    store bim view viewValue in target
         if ((code = bim part width property) or (code = bim part depth property)) or (code = bim part height property):
             set found to the bim instance index of chosenId in (@intrinsic("dereference", target))
             if found's valid:
@@ -4678,9 +4768,13 @@ function the bim two letter command of {integer:first} then {integer:second}:
             return 2071
         if pair = 8784:
             return 2090
-        # DV duplicates the plan view.
+        # DV duplicates the plan view, CV crops it, UC uncrops it.
         if pair = 6886:
             return 2092
+        if pair = 6786:
+            return 2093
+        if pair = 8567:
+            return 2094
         # TG tags an element, TA tags every window and door.
         if pair = 8471:
             return 2030
@@ -5090,6 +5184,14 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             return nothing
         if code = 2092:
             duplicate bim editor plan view in editor
+            return nothing
+        if code = 2093:
+            set editor's tool to bim crop tool
+            set editor's moveStage to 0
+            set editor's message to the string form of "Crop view: click a corner"
+            return nothing
+        if code = 2094:
+            uncrop bim editor plan view in editor
             return nothing
         if (code >= 2015) and (code < 2100):
             set editor's message to (the bim name of command code) + (the string form of ": not in the modeller yet")

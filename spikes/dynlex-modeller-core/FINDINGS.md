@@ -1377,3 +1377,23 @@ line and its rules.
 - two sections drawn are two section views with their lines;
 - showing the first brings back its line;
 - both are read back from `.bim`.
+
+## Cut height, scale and crop per view (plan step 3d, 2026-10-09)
+
+- **Cut height.** The plan cuts at its view's height above the storey: walls
+  in the plan slice, linear elements and components alike (1.2 m without a
+  view).
+- **Properties.** With nothing selected, the properties window shows the plan
+  view after the storey: its name, its scale (typed as n for 1:n), its cut
+  height, and its crop.
+- **Crop (CV, or View → Crop CV).** Two clicks crop the plan view shown to
+  their rectangle. The plan outside it is covered, and the crop is drawn as a
+  thin frame. UC uncrops. Each change is one undoable step.
+- **Scale** is kept for the sheets (step 4). It places a view on a sheet and
+  sizes its annotation there.
+
+**Checked.** `tests/view_editor.dl`:
+- scale 50 and cut 1.5 m typed;
+- a crop of two clicks from (−1, −0.5) to (1, 2), however the clicks are
+  ordered;
+- UC.
