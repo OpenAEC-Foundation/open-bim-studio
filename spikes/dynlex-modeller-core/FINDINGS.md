@@ -1332,3 +1332,27 @@ duplicated plan with walls in halftone, grids hidden, at 1:50 and cropped
 keeps all of it through `.bim` and `.ifcx`.
 
 The editor does not use the view records yet; that is step 3b.
+
+## The editor on view records (plan step 3b, 2026-10-09)
+
+- **Making views.** The window prepares the views each frame
+  (`prepare bim editor views in …`): every storey has a plan view, the model
+  a 3D view. Headless tests keep no views unless they make them, so the ids
+  of their elements stay as they were.
+- **Plan tabs** carry a view id and show the view's name.
+  - Opening a plan view, from its tab or the project browser, makes its
+    storey active and its rules the plan's.
+  - PgUp and PgDn show the next storey's plan view.
+- **Project browser.** Floor plans lists the plan views, highest storey
+  first.
+- **Visibility panel (L).** Changes to the plan's columns are kept in the
+  view shown, as one undoable step.
+- **Duplicate (DV, or View → Duplicate DV)** copies the plan view shown, with
+  its rules, and shows the copy. A storey can then have, for example, a
+  furnished plan and a services plan side by side.
+
+**Checked.** `tests/view_editor.dl`:
+- a new storey gets its plan view;
+- PgDn returns to the first storey's;
+- walls set to halftone in a duplicate stay in the duplicate;
+- showing the original brings back its own rules.
