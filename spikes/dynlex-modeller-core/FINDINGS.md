@@ -1397,3 +1397,49 @@ line and its rules.
 - a crop of two clicks from (−1, −0.5) to (1, 2), however the clicks are
   ordered;
 - UC.
+
+## Sheets (plan step 4a–4c, 2026-10-09)
+
+**Model (`bim sheet record`).** A sheet has:
+- a number and a name for the title block;
+- a paper: A0 to A4, landscape or portrait;
+- viewports.
+
+A viewport places a view: one model point of the view lands on one sheet
+point, in millimetres from the lower left corner, at the view's scale (one
+model metre is 1000 / scale mm). `bim_sheet.dl` holds the geometry:
+- paper sizes;
+- the title block (180 × 40 mm in the lower right corner, inside a 10 mm
+  border);
+- a viewport's frame: the view's crop, or its storey's walls with a metre
+  around, at its scale;
+- the mapping from model to sheet.
+
+**Files.** A `sheet` line in `.bim` (viewports as view, sheet point, model
+point), and `openbim::sheet` in IfcX: documentation, like views.
+
+**Editor and window.**
+- NS (View → New sheet) makes an A1 landscape sheet, numbered A-10n, and
+  opens its tab.
+- PV (View → Place view) places the plan view shown on the sheet open,
+  centred above the title block.
+- The project browser lists the sheets under Sheets.
+- A sheet tab shows the sheet fitted into the drawing on a grey ground:
+  - the paper, the border and the title block (name, number);
+  - each plan view on it, drawn as the plan draws it (its storey, rules and
+    cut) at its scale, with its name and scale under its frame.
+
+  The sheet is recorded again only when the model, the sheet or the pane
+  changes.
+
+**Checked.** `tests/sheets.dl`, an A1 landscape sheet:
+- size 841 × 594 mm;
+- title block from (651, 10) to (831, 50);
+- a 10 × 8 m crop at 1:50 placed at (420, 330) gives a 200 × 160 mm frame
+  from (320, 250), and model point (6, 4) lands at (440, 330), 20 mm per
+  metre;
+- the same after moving the viewport, after `.bim` and after `.ifcx`;
+- placing a missing view is refused.
+
+**Not yet.** Viewport content is not clipped to its frame. Sheets do not pan
+or zoom. Schedules cannot be placed on sheets yet (step 4d).
