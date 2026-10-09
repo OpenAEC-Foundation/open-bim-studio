@@ -1356,3 +1356,24 @@ The editor does not use the view records yet; that is step 3b.
 - PgDn returns to the first storey's;
 - walls set to halftone in a duplicate stay in the duplicate;
 - showing the original brings back its own rules.
+
+## Sections as views (plan step 3c, 2026-10-09)
+
+The editor kept one section line. Now each section drawn with the section
+tool (C) is a section view of its own, named "Section n", which keeps its
+line and its rules.
+
+- **Section panel.** It shows one section view at a time: the one just
+  drawn, or one opened from its tab or from the project browser, which lists
+  every section view.
+- **Visibility panel (L).** Changes to the section column are kept in the
+  section view shown.
+- **Plan.** Every section view's line is drawn; the one shown is wider.
+- **Files.** A view keeps its line: four more numbers on the `.bim` view line
+  (view lines without them still read), `from` and `to` in `openbim::view`.
+- **Undo.** Undoing a section's creation leaves the section panel empty.
+
+**Checked.** `tests/view_editor.dl`:
+- two sections drawn are two section views with their lines;
+- showing the first brings back its line;
+- both are read back from `.bim`.
