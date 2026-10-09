@@ -872,33 +872,36 @@ local function add bim parts of feature {integer:featureIndex} in {bim joint con
 
 # ---------------------------------------------------------------- fasteners
 
-# A fastener a connection adds, as an object of its own: a bolt with its
-# washers and nut, an anchor, a dowel or a screw. `id` is derived from the
-# joint's id and the fastener's place in it (see `the bim fastener id`), so
-# it is stable while the joint keeps its fasteners; `designation` names it
-# as "M24 x 80"; `shape` holds its parts, closed each.
+# A small object an element owns: a fastener a connection adds (a bolt with
+# its washers and nut, an anchor, a dowel or a screw; `kind` 0) or a bar of
+# a concrete member's reinforcement (`kind` 1). `id` is derived from the
+# owner's id and the object's place in it (see `the bim fastener id`), so it
+# is stable while the owner keeps its objects; `designation` names it as
+# "M24 x 80" or "Bar D20"; `shape` holds its parts, closed each.
 class:
     patterns:
         [a|] bim fastener record
     members:
         id as a 64 bit integer
-        jointId as a 64 bit integer
+        ownerId as a 64 bit integer
+        kind as an integer
         designation as a string
         diameter as a 64 bit floating-point number
         length as a 64 bit floating-point number
         shape as a fast polyhedron record
 
-# Fastener ids lie from here up: the joint's id times 4096 plus the
-# fastener's index, above the imported elements' ids.
+# Fastener and bar ids lie from here up: the owner's id times 4096 plus the
+# object's index, above the imported elements' ids.
 function the bim fastener id base:
     execute:
         return 2199023255552 as a 64 bit integer
 
-function the bim fastener id of index {integer:index} in joint {a 64 bit integer:jointId}:
+function the bim fastener id of index {integer:index} owned by {a 64 bit integer:ownerId}:
     execute:
-        return ((the bim fastener id base) + (jointId * (4096 as a 64 bit integer))) + (index as a 64 bit integer)
+        return ((the bim fastener id base) + (ownerId * (4096 as a 64 bit integer))) + (index as a 64 bit integer)
 
-function the bim joint of fastener {a 64 bit integer:fastenerId}:
+# The joint or member that owns fastener or bar `fastenerId`.
+function the bim owner of fastener {a 64 bit integer:fastenerId}:
     execute:
         return (fastenerId - (the bim fastener id base)) / (4096 as a 64 bit integer)
 
@@ -1031,7 +1034,7 @@ function the bim fastener of kind {a string:kind} clamping {a 64 bit floating-po
             ignore add bim round of size's washerDiameter long size's washerThickness from top along axis facing flatAxis to target
             ignore add bim hexagon of size's acrossFlats high size's nutHeight from (the cad sum of top and (axis scaled by size's washerThickness)) along axis facing flatAxis to target
             set designation to (designation + (the string form of " x ")) + (the bim millimetre text of length)
-        return @intrinsic("construct", a bim fastener record, the bim fastener id of index index in joint jointId, jointId, designation, diameter, length, shape)
+        return @intrinsic("construct", a bim fastener record, the bim fastener id of index index owned by jointId, jointId, 0, designation, diameter, length, shape)
 
 # The fastener kind of a feature's material: "bolt", "anchor", "dowel" or
 # "screw", or empty for a part that is no fastener.
@@ -1074,6 +1077,265 @@ function the bim fasteners of feature {integer:featureIndex} in {bim joint conte
             set gripStart to the cad sum of (the bim point at centre in frame) and (axis scaled by (0.0 - (grip * 0.5)))
             append (the bim fastener of kind kind clamping grip from gripStart along axis wide diameter facing flatAxis numbered (firstIndex + cursor) in joint context's jointId) to (made's values)
         return made
+
+# ---------------------------------------------------------------- reinforcement
+
+# The reinforcement rule of `modelValue` that fits `choice`: the first whose
+# role and depth limits fit, for a concrete member (its type's material names
+# concrete) of rectangular or round section; `valid` is false when none
+# does.
+class:
+    patterns:
+        [a|] bim rebar choice record
+    members:
+        valid as a boolean
+        rule as a bim rebar rule record
+
+function the bim rebar rule for {bim member choice record:choice} in {bim model record:modelValue}:
+    execute:
+        set missing to @intrinsic("construct", a bim rebar choice record, false, no bim rebar rule)
+        if choice's valid = false:
+            return missing
+        if (choice's profile's kind != bim flat profile kind) and (choice's profile's kind != bim round profile kind):
+            return missing
+        set typeFound to the bim member type index of choice's member's typeId in modelValue
+        if typeFound's valid = false:
+            return missing
+        set lowered to the lowercase form of (the item at typeFound's position in (modelValue's memberTypes's values))'s material
+        if (lowered contains "concrete") = false:
+            return missing
+        loop cursor from 0 to the length of (modelValue's rebarRules's values):
+            set candidate to the item at cursor in (modelValue's rebarRules's values)
+            set fits to (candidate's role = bim any role) or (candidate's role = choice's member's role)
+            if choice's profile's depth < candidate's leastDepth:
+                set fits to false
+            if (candidate's greatestDepth > 0.0) and (choice's profile's depth > candidate's greatestDepth):
+                set fits to false
+            if fits:
+                return @intrinsic("construct", a bim rebar choice record, true, candidate)
+        return missing
+
+# Bars are drawn with eight sides.
+function the bim bar sides:
+    replacement:
+        8
+
+local function add bim bar leg of {a 64 bit floating-point number:diameter} long {a 64 bit floating-point number:length} from {cad vector3:base} along {cad vector3:axis} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set flatAxis to the cad z axis
+        if (the absolute value of (the cad dot of axis and flatAxis)) > 0.9:
+            set flatAxis to the cad x axis
+        set uAxis to (the cad normalization of (the cad cross of flatAxis and axis))'s value
+        set vAxis to the cad cross of axis and uAxis
+        set frame to @intrinsic("construct", a fast frame record, base, uAxis, vAxis, axis)
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        append (the bim circle ring of radius (diameter * 0.5) at (a cad vector2 with x 0.0 and y 0.0) in (the bim bar sides)) to rings
+        set built to the fast plate of rings in frame thick length within 1e-9
+        free bim rings rings
+        if built's reason != fast sweep built:
+            return false
+        append fast part built's shape to target
+        return true
+
+# A bar of `diameter` along `corners` (a loop when `closed`), as one object:
+# a round leg between each pair of corners, lengthened by half the diameter
+# at both ends of a loop so the legs meet at the corners. Its length is
+# that of its centre line.
+local function the bim bar of {a 64 bit floating-point number:diameter} through {a pointer to a list:corners} closed {boolean:isLoop} named {a string:designation} numbered {integer:index} in member {a 64 bit integer:memberId}:
+    execute:
+        set shape to an empty fast polyhedron
+        set target to the address of shape
+        set total to 0.0
+        set legs to (the length of corners) - 1
+        set overrun to 0.0
+        if isLoop:
+            set legs to the length of corners
+            set overrun to diameter * 0.5
+        loop leg from 0 to legs:
+            set start to the item at leg in corners
+            set finish to the item at (the remainder of (leg + 1) divided by (the length of corners)) in corners
+            set direction to the cad difference of finish and start
+            set run to the cad length of direction
+            if run > 1e-9:
+                set axis to direction scaled by (1.0 / run)
+                ignore add bim bar leg of diameter long (run + (2.0 * overrun)) from (the cad difference of start and (axis scaled by overrun)) along axis to target
+                set total to total + run
+        return @intrinsic("construct", a bim fastener record, the bim fastener id of index index owned by memberId, memberId, 1, designation, diameter, total, shape)
+
+# The axial coordinate (along `frame`'s axis from its origin) where the line
+# through section point `spot` crosses `cut`'s plane; where the plane lies
+# along the axis, that of the cut's point.
+local function the bim along of {cad vector2:spot} in {fast frame record:frame} at {fast cut record:cut}:
+    execute:
+        set base to the fast point of spot in frame
+        set slope to the cad dot of frame's axis and cut's normal
+        if (the absolute value of slope) < 1e-9:
+            return the cad dot of (the cad difference of cut's point and frame's origin) and frame's axis
+        return (the cad dot of (the cad difference of cut's point and base) and cut's normal) / slope
+
+# `count` section points evenly from `first` to `last` (one at the middle),
+# appended to `spots`.
+local function spread bim bars {integer:count} from {cad vector2:first} to {cad vector2:last} into {a pointer to a list:spots}:
+    execute:
+        if count = 1:
+            append (a cad vector2 with x ((first's x + last's x) * 0.5) and y ((first's y + last's y) * 0.5)) to spots
+            return nothing
+        loop cursor from 0 to count:
+            set fraction to (cursor as a 64 bit floating-point number) / ((count - 1) as a 64 bit floating-point number)
+            append (a cad vector2 with x (first's x + ((last's x - first's x) * fraction)) and y (first's y + ((last's y - first's y) * fraction))) to spots
+
+# The reinforcement of `choice` under `ruleValue` between its end cuts: the
+# links every `linkSpacing`, centred along the member between the cover at
+# both ends, and the main bars inside the links, each from the cover inside
+# one cut to the cover inside the other. A rule without top bars (a
+# column's) spreads the main bars round the section: one in each corner and
+# the rest along the sides, or evenly round a round section; otherwise the
+# main bars lie along the bottom of the section and the top bars along its
+# top. Empty when the section is too small for the cover.
+function the bim reinforcement of {bim member choice record:choice} by {bim rebar rule record:ruleValue} from {fast cut record:startCut} to {fast cut record:finishCut}:
+    execute:
+        set made to a cad topology list of a bim fastener record
+        set frame to the bim frame of choice
+        set profile to choice's profile
+        set isRound to profile's kind = bim round profile kind
+        set halfWidth to profile's width * 0.5
+        set halfDepth to profile's depth * 0.5
+        set cover to ruleValue's cover
+        set linkInset to cover + (ruleValue's linkDiameter * 0.5)
+        if ((halfWidth - linkInset) <= 0.0) or ((halfDepth - linkInset) <= 0.0):
+            return made
+        set linkName to (the string form of "Link D") + (the bim millimetre text of ruleValue's linkDiameter)
+        set mainName to (the string form of "Bar D") + (the bim millimetre text of ruleValue's mainDiameter)
+        set topName to (the string form of "Bar D") + (the bim millimetre text of ruleValue's topDiameter)
+        # The link's corners in the section, and the links' extent along the
+        # axis: from the cover inside the deepest crossing of the start cut
+        # over the corners to the cover inside the shallowest of the finish
+        # cut.
+        set linkCorners to an empty list of a cad vector2
+        if isRound:
+            set linkRadius to halfWidth - linkInset
+            loop step from 0 to 16:
+                set angle to 6.283185307179586 * ((step as a 64 bit floating-point number) / 16.0)
+                append (a cad vector2 with x (linkRadius * (the cosine of angle)) and y (linkRadius * (the sine of angle))) to linkCorners
+        else:
+            append (a cad vector2 with x (0.0 - (halfWidth - linkInset)) and y (0.0 - (halfDepth - linkInset))) to linkCorners
+            append (a cad vector2 with x (halfWidth - linkInset) and y (0.0 - (halfDepth - linkInset))) to linkCorners
+            append (a cad vector2 with x (halfWidth - linkInset) and y (halfDepth - linkInset)) to linkCorners
+            append (a cad vector2 with x (0.0 - (halfWidth - linkInset)) and y (halfDepth - linkInset)) to linkCorners
+        set linkStart to 0.0 - (1.0 / 0.0)
+        set linkFinish to 1.0 / 0.0
+        loop cursor from 0 to the length of linkCorners:
+            set corner to the item at cursor in linkCorners
+            set linkStart to the maximum of linkStart and (the bim along of corner in frame at startCut)
+            set linkFinish to the minimum of linkFinish and (the bim along of corner in frame at finishCut)
+        set linkStart to linkStart + cover
+        set linkFinish to linkFinish - cover
+        set index to 0
+        set clear to linkFinish - linkStart
+        if clear > 0.0:
+            set count to ((@intrinsic("floor", clear / ruleValue's linkSpacing)) as an integer) + 1
+            set first to linkStart + ((clear - (((count - 1) as a 64 bit floating-point number) * ruleValue's linkSpacing)) * 0.5)
+            loop link from 0 to count:
+                set along to first + ((link as a 64 bit floating-point number) * ruleValue's linkSpacing)
+                set loopCorners to an empty list of a cad vector3
+                loop cursor from 0 to the length of linkCorners:
+                    append (the cad sum of (the fast point of (the item at cursor in linkCorners) in frame) and (frame's axis scaled by along)) to loopCorners
+                append (the bim bar of ruleValue's linkDiameter through loopCorners closed true named linkName numbered index in member choice's member's id) to (made's values)
+                free loopCorners
+                set index to index + 1
+        free linkCorners
+        # The main bars' places in the section, with their diameters.
+        set mainInset to cover + (ruleValue's linkDiameter + (ruleValue's mainDiameter * 0.5))
+        set topInset to cover + (ruleValue's linkDiameter + (ruleValue's topDiameter * 0.5))
+        set spots to an empty list of a cad vector2
+        set diameters to an empty list of a 64 bit floating-point number
+        set reachU to halfWidth - mainInset
+        set reachV to halfDepth - mainInset
+        if (reachU > 0.0) and (reachV > 0.0):
+            if isRound:
+                set barRadius to halfWidth - mainInset
+                loop cursor from 0 to ruleValue's mainCount:
+                    set angle to 1.5707963267948966 + (6.283185307179586 * ((cursor as a 64 bit floating-point number) / (ruleValue's mainCount as a 64 bit floating-point number)))
+                    append (a cad vector2 with x (barRadius * (the cosine of angle)) and y (barRadius * (the sine of angle))) to spots
+                    append ruleValue's mainDiameter to diameters
+            else if (ruleValue's topCount = 0) and (ruleValue's mainCount >= 4):
+                # Round the section: the corners, then the rest along the
+                # sides, the bottom and top sides first.
+                set extras to ruleValue's mainCount - 4
+                loop side from 0 to 4:
+                    set sideExtras to extras / 4
+                    if side < (the remainder of extras divided by 4):
+                        set sideExtras to sideExtras + 1
+                    set sideStart to a cad vector2 with x (0.0 - reachU) and y (0.0 - reachV)
+                    set sideFinish to a cad vector2 with x reachU and y (0.0 - reachV)
+                    if side = 1:
+                        set sideStart to a cad vector2 with x (0.0 - reachU) and y reachV
+                        set sideFinish to a cad vector2 with x reachU and y reachV
+                    if side = 2:
+                        set sideStart to a cad vector2 with x (0.0 - reachU) and y (0.0 - reachV)
+                        set sideFinish to a cad vector2 with x (0.0 - reachU) and y reachV
+                    if side = 3:
+                        set sideStart to a cad vector2 with x reachU and y (0.0 - reachV)
+                        set sideFinish to a cad vector2 with x reachU and y reachV
+                    if side < 2:
+                        append sideStart to spots
+                        append ruleValue's mainDiameter to diameters
+                        append sideFinish to spots
+                        append ruleValue's mainDiameter to diameters
+                    loop cursor from 0 to sideExtras:
+                        set fraction to ((cursor + 1) as a 64 bit floating-point number) / ((sideExtras + 1) as a 64 bit floating-point number)
+                        append (a cad vector2 with x (sideStart's x + ((sideFinish's x - sideStart's x) * fraction)) and y (sideStart's y + ((sideFinish's y - sideStart's y) * fraction))) to spots
+                        append ruleValue's mainDiameter to diameters
+            else:
+                if ruleValue's mainCount > 0:
+                    set before to the length of spots
+                    spread bim bars ruleValue's mainCount from (a cad vector2 with x (0.0 - reachU) and y (0.0 - reachV)) to (a cad vector2 with x reachU and y (0.0 - reachV)) into spots
+                    loop cursor from before to the length of spots:
+                        append ruleValue's mainDiameter to diameters
+                set topReachU to halfWidth - topInset
+                set topReachV to halfDepth - topInset
+                if ((ruleValue's topCount > 0) and (topReachU > 0.0)) and (topReachV > 0.0):
+                    set before to the length of spots
+                    spread bim bars ruleValue's topCount from (a cad vector2 with x (0.0 - topReachU) and y topReachV) to (a cad vector2 with x topReachU and y topReachV) into spots
+                    loop cursor from before to the length of spots:
+                        append ruleValue's topDiameter to diameters
+        loop cursor from 0 to the length of spots:
+            set spot to the item at cursor in spots
+            set diameter to the item at cursor in diameters
+            set barStart to (the bim along of spot in frame at startCut) + cover
+            set barFinish to (the bim along of spot in frame at finishCut) - cover
+            if barFinish > barStart:
+                set ends to an empty list of a cad vector3
+                append (the cad sum of (the fast point of spot in frame) and (frame's axis scaled by barStart)) to ends
+                append (the cad sum of (the fast point of spot in frame) and (frame's axis scaled by barFinish)) to ends
+                set designation to mainName
+                if diameter != ruleValue's mainDiameter:
+                    set designation to topName
+                append (the bim bar of diameter through ends closed false named designation numbered index in member choice's member's id) to (made's values)
+                free ends
+                set index to index + 1
+        free spots
+        free diameters
+        return made
+
+# The bars of `choice` between its end cuts: none unless a rule of
+# `modelValue` fits it.
+function the bim bars of {bim member choice record:choice} in {bim model record:modelValue} from {fast cut record:startCut} to {fast cut record:finishCut}:
+    execute:
+        set ruleFit to the bim rebar rule for choice in modelValue
+        if ruleFit's valid = false:
+            return a cad topology list of a bim fastener record
+        return the bim reinforcement of choice by ruleFit's rule from startCut to finishCut
+
+# The mass of the bars among `objects` (kind 1), in kilograms of steel.
+function the bim bar mass of {a pointer to a list:objects}:
+    execute:
+        set barMass to 0.0
+        loop cursor from 0 to the length of objects:
+            set piece to the item at cursor in objects
+            if piece's kind = 1:
+                set barMass to barMass + ((7850.0 * piece's length) * (0.7853981633974483 * (piece's diameter * piece's diameter)))
+        return barMass
 
 # ---------------------------------------------------------------- solids
 
@@ -1335,9 +1597,10 @@ function the bim member solid of {a 64 bit integer:memberId} in {bim model recor
         free bim rings rings
         if built's reason != fast sweep built:
             return a bim framing failure 2
+        set barList to the bim bars of choice in modelValue from startEnd's cut to finishEnd's cut
         set cutters to the bim cutters of memberId in modelValue through jointIndex
         if (the length of (cutters's faces's values)) = 0:
-            return @intrinsic("construct", a bim framing solid record, 0, true, built's shape, an empty cad body, a cad topology list of a bim fastener record)
+            return @intrinsic("construct", a bim framing solid record, 0, true, built's shape, an empty cad body, barList)
         # One cutter at a time (the booleans take one closed body each). After
         # each cut the result's coplanar pieces are merged back into planar
         # faces with holes, so the next cut starts from a clean polyhedron
@@ -1370,7 +1633,7 @@ function the bim member solid of {a 64 bit integer:memberId} in {bim model recor
         set status to 0
         if complete = false:
             set status to 5
-        return @intrinsic("construct", a bim framing solid record, status, true, current, an empty cad body, a cad topology list of a bim fastener record)
+        return @intrinsic("construct", a bim framing solid record, status, true, current, an empty cad body, barList)
 
 # The solid of joint `jointValue`: every part its features add, as one
 # polyhedron. Status 0 when it adds a part, 4 when it adds none (a plain
@@ -1429,6 +1692,18 @@ local function the bim profile text of {bim profile record:profile}:
 # Everything a member's solid depends on, written exactly: its profile, its
 # frame, both end planes (which carry its joints and partners) and the
 # corners of every cutter its joints cut it with.
+# Everything of a rule the bars depend on, written exactly.
+function the bim rebar rule text of {bim rebar rule record:ruleValue}:
+    execute:
+        set written to (the string form of ruleValue's role) + (the string form of ":")
+        set written to (written + (the bim framing number text of ruleValue's cover)) + (the string form of ",")
+        set written to (written + (the bim framing number text of ruleValue's mainDiameter)) + (the string form of ",")
+        set written to (written + (the string form of ruleValue's mainCount)) + (the string form of ",")
+        set written to (written + (the bim framing number text of ruleValue's topDiameter)) + (the string form of ",")
+        set written to (written + (the string form of ruleValue's topCount)) + (the string form of ",")
+        set written to (written + (the bim framing number text of ruleValue's linkDiameter)) + (the string form of ",")
+        return written + (the bim framing number text of ruleValue's linkSpacing)
+
 function the bim member signature of {a 64 bit integer:memberId} in {bim model record:modelValue}:
     execute:
         return the bim member signature of memberId in modelValue through (the bim joint index of modelValue)
@@ -1452,6 +1727,9 @@ function the bim member signature of {a 64 bit integer:memberId} in {bim model r
         set cutting to the bim cutters of memberId in modelValue through jointIndex
         loop cursor from 0 to the length of (cutting's positions's values):
             set written to (written + (the string form of ";c")) + (the bim framing vector text of (the item at cursor in (cutting's positions's values)))
+        set ruleFit to the bim rebar rule for choice in modelValue
+        if ruleFit's valid:
+            set written to (written + (the string form of ";r")) + (the bim rebar rule text of ruleFit's rule)
         return written
 
 # Everything a joint's solid depends on, written exactly: the corners of the

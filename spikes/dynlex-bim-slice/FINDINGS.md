@@ -411,7 +411,32 @@ M24 x 360, 32 bolts M24 x 75 (plate 20 + flange 17 + washer, nut and threads,
 rounded to the standard length), 24 bolts M20 x 50 and 8 bolts M24 x 65, each
 with its own mesh, selection and `IfcMechanicalFastener`.
 
-**Not done.** Members are not exported to IFC5 (IfcX). Connection types come
+**Reinforcement — built and measured** (`tests/rebar.dl`, `-O2`). A
+concrete member's bars follow rules: a rule names the role and depth range
+it fits and gives cover, main bars, top bars and links; the first rule that
+fits a member reinforces it, so the reinforcement is a function of the
+member and the rule list, and the member's signature carries the rule. The
+bars are objects of the same kind as the fasteners (owner id times 4096 plus
+index), with their own meshes, a schedule row per designation with length
+and steel volume, a `rebarrule` file record and an `IfcReinforcingBar` each.
+The concrete example (17 members of which 15 concrete columns and beams,
+20 butt joints, three rules) evaluates with 482 bars (1148 kg of steel),
+every bar closed, in 0.46 s for the whole test: the evaluation, selecting a
+bar and members, stepping a beam rule's link spacing (4 of 37 elements
+rebuilt: the beams of that rule), stepping a column rule's bar count (6
+rebuilt), undoing it, saving and reading back and the IFC export, which
+IfcOpenShell reads as 462 bars with closed bodies, a diameter, a section and
+a length each. So a bar costs well under a millisecond. The same test on the
+timber and concrete example (238 members and 332 joints with corbel,
+mortise and slotted plate joints; 119 reinforced members, 4126 bars) took
+44 minutes of CPU, nearly all of it in the joints' booleans over its five
+evaluations and the IFC export, not in the bars.
+
+**Not done.** Bars are straight legs: no bend radii, hooks, laps or
+anchorage lengths, and a link's length counts its centre line only; no
+reinforcement of slabs or walls; a rule is stepped, not written, and the
+rules of a model come from the example or the file. Members are not
+exported to IFC5 (IfcX). Connection types come
 from templates; the editor steps their parameters but cannot add or remove
 features. At a point where three members meet, the first joint at an end
 decides its cut. Welds are a parameter without geometry; no curved members.

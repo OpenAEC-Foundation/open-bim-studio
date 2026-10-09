@@ -34,6 +34,8 @@ def main() -> None:
                         help="a 3D view to capture, passed on to the editor; repeatable")
     parser.add_argument("--label", action="append", default=[], dest="labels", help="a name per --camera, in order")
     parser.add_argument("--edges", action="store_true", help="show the 3D view with edges (Ctrl+2)")
+    parser.add_argument("--extra", action="append", default=[], metavar="ARG",
+                        help="a further argument for the editor, such as --hide Columns; repeatable")
     args = parser.parse_args()
     if len(args.labels) < len(args.camera):
         args.labels += [f"camera{index}" for index in range(len(args.labels), len(args.camera))]
@@ -48,6 +50,8 @@ def main() -> None:
         print(f"captured {path}", flush=True)
 
     command = [str(args.binary.resolve()), args.example]
+    for extra in args.extra:
+        command += extra.split()
     for preset in args.camera:
         command += ["--camera", *preset.split()]
     process = subprocess.Popen(command, cwd=ROOT)

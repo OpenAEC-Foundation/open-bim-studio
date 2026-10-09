@@ -207,6 +207,25 @@ and length in the IFC export.
 the steel templates. `tests/look_connections.py` opens it under Xephyr and
 saves screenshots of the 3D view.
 
+**Reinforcement** follows rules: a rule names the role and the depth range
+of the concrete members it fits and gives their cover, main bars (count and
+diameter), top bars (a beam's), and closed links (diameter and spacing);
+the first rule that fits a member reinforces it. A column's main bars sit in
+the corners and along the sides (evenly round a round column), a beam's
+along the bottom and the top; links run between the covers at both ends,
+centred, and every bar ends at the cover inside the member's end cut. Each
+bar is an object of its own like a fastener (its member's id times 4096
+plus its index), with its own mesh in the *Reinforcement* category, a row
+per designation ("Bar D20", "Link D8") with its length and steel volume in
+the schedule, a `rebarrule` record in the file and an `IfcReinforcingBar`
+(main or ligature) with its diameter, section and length in the IFC export.
+A selected concrete member (or bar) shows its rule's fields in the
+properties panel with a step down and up; a change re-evaluates every
+member the rule reinforces, and a changed member rebuilds its bars. The
+project browser's *Reinforcement* lists the rules; clicking one selects a
+member it reinforces. `--timber-concrete-example` adds three rules
+(columns, beams to 450 deep, deeper beams).
+
 The project browser's *Profiles* lists the library by family (steel, timber and concrete); clicking
 a profile makes it the one new members get, and gives it to a selected
 member. *Connections* lists butt, mitre and two bolted end plates; clicking
@@ -220,7 +239,7 @@ B-rep bodies, the members associated with their material.
 Headless tests print results that must equal their `.expected.txt` file:
 
 ```sh
-for test in model evaluate drawing editor spaces pick file journal hatch view curved schedule framing framing_evaluate framing_editor connections; do
+for test in model evaluate drawing editor spaces pick file journal hatch view curved schedule framing framing_evaluate framing_editor connections rebar; do
   ./build/dynlex examples/bim-slice/tests/$test.dl -O0 -o build/bim-$test
   ./build/bim-$test | diff - examples/bim-slice/tests/$test.expected.txt
 done
@@ -248,6 +267,12 @@ every member and connection to evaluate, counts the fasteners per
 designation, selects one, steps a fin plate type's bolt rows and checks the
 joints it rebuilds, saves and reads the model back and exports IFC with
 members, connection assemblies and mechanical fasteners.
+`rebar` builds the timber and concrete example through the editor and
+requires every concrete member to carry closed bars from the rules, counts
+them in the schedule, selects a bar and members, steps a beam rule's link
+spacing and a column rule's bar count (only the members of the rule
+rebuilt) and undoes it, saves and reads the model back (same text, same
+solids) and exports the bars to IFC (checked by `verify_ifc_framing.py`).
 `framing_editor` draws columns and a chain of beams through the editor (joined
 automatically), chooses a profile and an end plate, uses the join tool,
 swaps, turns, justifies, undoes and deletes, saves and reads the model back,

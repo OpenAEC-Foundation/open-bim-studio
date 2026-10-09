@@ -31,6 +31,7 @@ import lib/fastkernel/wall.dl
 import lib/fastkernel/prism.dl
 import lib/fastkernel/curved_wall.dl
 import examples/bim-slice/bim_framing.dl
+import lib/text.dl
 
 class:
     patterns:
@@ -59,8 +60,8 @@ class:
         solid as the type of (an empty cad body)
         fast as a boolean
         shape as a fast polyhedron record
-        # The fasteners a joint adds, each an object of its own (empty for
-        # any other element).
+        # The fasteners a joint adds or the bars of a member's reinforcement,
+        # each an object of its own (empty for any other element).
         fasteners as the type of (a cad topology list of a bim fastener record)
 
 # `modelValue` is a private copy of the evaluated model's levels, types, walls,
@@ -952,6 +953,25 @@ local function bim features {bim feature record:first} and {bim feature record:s
         set samePattern to (bim measures first's extentA and second's extentA are identical) and ((bim measures first's extentB and second's extentB are identical) and (bim measures first's diameter and second's diameter are identical))
         return ((sameCodes and sameCounts) and (sameOffsets and sameSizes)) and samePattern
 
+local function bim rebar rules {bim rebar rule record:first} and {bim rebar rule record:second} are identical:
+    execute:
+        if (first's role != second's role) or ((first's mainCount != second's mainCount) or (first's topCount != second's topCount)):
+            return false
+        if (first's leastDepth != second's leastDepth) or (first's greatestDepth != second's greatestDepth):
+            return false
+        if (first's cover != second's cover) or ((first's mainDiameter != second's mainDiameter) or (first's topDiameter != second's topDiameter)):
+            return false
+        return (first's linkDiameter = second's linkDiameter) and (first's linkSpacing = second's linkSpacing)
+
+# True when `memberValue`'s type names concrete: the members reinforcement
+# rules can reach.
+local function bim member {bim member record:memberValue} in {bim model record:modelValue} is concrete:
+    execute:
+        set typeFound to the bim member type index of memberValue's typeId in modelValue
+        if typeFound's valid = false:
+            return false
+        return (the lowercase form of (the item at typeFound's position in (modelValue's memberTypes's values))'s material) contains "concrete"
+
 local function bim connection types {bim connection type record:first} and {bim connection type record:second} are identical:
     execute:
         if (first's roles != second's roles) or (((the length of (first's parameters's values)) != (the length of (second's parameters's values))) or ((the length of (first's features's values)) != (the length of (second's features's values)))):
@@ -1332,6 +1352,19 @@ local function mark bim change {bim model change record:difference} of {bim mode
                     loop cursor from 0 to the length of (newer's joints's values):
                         if (the item at cursor in (newer's joints's values))'s typeId = candidate:
                             mark bim joint (the item at cursor in (newer's joints's values)) into marked
+            # A reinforcement rule changed, added or removed can change which
+            # rule reinforces any concrete member; the signatures tell which
+            # members it does change.
+            set newerRuleFound to the bim rebar rule index of candidate in newer
+            set olderRuleFound to the bim rebar rule index of candidate in older
+            if newerRuleFound's valid or olderRuleFound's valid:
+                set ruleChanged to true
+                if newerRuleFound's valid and olderRuleFound's valid:
+                    set ruleChanged to (bim rebar rules (the item at newerRuleFound's position in (newer's rebarRules's values)) and (the item at olderRuleFound's position in (older's rebarRules's values)) are identical) = false
+                if ruleChanged:
+                    loop cursor from 0 to the length of (newer's members's values):
+                        if bim member (the item at cursor in (newer's members's values)) in newer is concrete:
+                            mark bim host (the item at cursor in (newer's members's values))'s id into marked
 
 # Applies a record-by-record change to `records`, ordered by id: a removed
 # record whose id is not added again is deleted, and an added record replaces
@@ -1413,6 +1446,10 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
                 append (the item at cursor in (modelValue's memberTypes's values))'s id to candidates
             loop cursor from 0 to the length of (modelValue's connectionTypes's values):
                 append (the item at cursor in (modelValue's connectionTypes's values))'s id to candidates
+            loop cursor from 0 to the length of (modelValue's rebarRules's values):
+                append (the item at cursor in (modelValue's rebarRules's values))'s id to candidates
+            loop cursor from 0 to the length of (target's modelValue's rebarRules's values):
+                append (the item at cursor in (target's modelValue's rebarRules's values))'s id to candidates
         mark bim change change of modelValue against target's modelValue for candidates updating (the address of (target's index)) into marked
         free candidates
         set target's journal to modelValue's journal
@@ -1504,6 +1541,7 @@ function update bim evaluation {a pointer to a bim evaluation record:target} to 
         set target's modelValue's openingTypes to the cad clone of modelValue's openingTypes
         set target's modelValue's memberTypes to the cad clone of modelValue's memberTypes
         set target's modelValue's connectionTypes to the cad clone of modelValue's connectionTypes
+        set target's modelValue's rebarRules to the cad clone of modelValue's rebarRules
         free bim model change change
         free marked
 
