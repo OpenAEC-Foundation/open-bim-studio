@@ -1532,3 +1532,43 @@ material.
 **Checked.** `tests/stair_tool.dl`: a 4 m run gives 17 risers of 176.5 mm
 and a 250 mm going. A click in its footprint selects it, Delete removes it
 and undo restores it.
+
+## Railings (plan step 8, 2026-10-09)
+
+A railing is a generator of linear elements too. Its record holds:
+- a path in plan;
+- a height;
+- a material;
+- optionally the stair it stands on.
+
+Its parts (`the bim parts of railing … in …`):
+- **Posts.** 40 × 40 mm, at every corner of the path and at most a metre
+  apart.
+- **Rails.** One round rail of 40 mm along each segment, on top.
+
+On a stair the feet follow the stair's nosing line: one riser up per going
+from the foot of the run, held to the run. Deleting a stair deletes the
+railings it hosts.
+
+- **3D.** One mesh per railing, through the same function that builds a
+  stair's mesh (`the bim shape of derived parts …`).
+- **Plan.** The parts' outlines are drawn, dashed above the cut, through the
+  helper shared with stairs.
+- **Files.** `railing` in `.bim`; `IfcRailing` with its body and
+  `openbim::railing` in IfcX.
+- **Editor.**
+  - RL (BIM → Circulation → Railing) draws a railing point by point; Enter
+    ends it. It is 1 m high, in steel.
+  - RS (On stair) puts 0.9 m railings on both sides of the selected stair,
+    50 mm inside its edges.
+  - A railing is selected by a click near its path, or on it in 3D, and
+    deleted with Delete.
+
+**Checked.**
+- `tests/railings.dl`:
+  - a 4 + 3 m free railing: 8 posts and 2 rails, top at 1 m;
+  - stair railings: 5 posts each, their feet rising from 0 and their tops
+    reaching 3.7235 m (2.8235 + 0.9);
+  - the same after `.bim` and `.ifcx`;
+  - only the free railing is left after the stair is deleted.
+- `tests/stair_tool.dl`: RS gives two railings, RL a third.
