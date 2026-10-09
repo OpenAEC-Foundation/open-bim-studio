@@ -1245,3 +1245,33 @@ Each pane has its own area for drawing, picking, orbiting and zooming.
 panes of the active tab, so a 3D view behind the plan's tab got a zoom of 0
 and stayed empty when its tab was opened. A pane that has no width while
 another tab is active now fits to the whole drawing area, as it will show.
+
+## Associative dimensions in the plan (plan step 2a, 2026-10-09)
+
+The dimension records already referred to semantic features: a wall's start
+or end, its exterior or interior face, an opening's left or right edge. They
+had no tool and were not drawn. Now:
+
+- **Tool (DI, or Annotate → Dimension).** Three clicks: the first feature,
+  the second, then where the dimension line goes.
+  - A click picks the nearest opening edge or wall end within the pick
+    tolerance, else the nearest wall face.
+  - Two faces that are not parallel are refused.
+- **Drawing.** As in Open 2D Studio:
+  - the dimension line, with extension lines from the measured features;
+  - a 45° tick at each end;
+  - the value in millimetres over the middle.
+
+  Two faces are measured square to them, two points along the line through
+  them, a point and a face square to the face. A dimension being placed is
+  drawn through the pointer.
+- **Files.** The dimension line's place is kept: `dimension … [x y]` in
+  `.bim`, `place` in `openbim::dimension`. Dimensions without one are drawn
+  through the middle of what they measure.
+
+**Checked.** `tests/dimension_tool.dl`:
+- face to face 4000 between walls 4 m apart (exterior faces);
+- end to end 6000;
+- after the second wall moves 1 m out, the first reads 5000 with no edit to
+  the dimension;
+- the same values after `.bim` and `.ifcx`.
