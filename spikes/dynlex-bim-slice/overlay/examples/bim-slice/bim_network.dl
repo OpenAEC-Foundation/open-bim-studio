@@ -7,6 +7,7 @@
 # fittings belong there (step 11). Nothing here is stored: the network is
 # derived from the model each time.
 import examples/bim-slice/bim_model.dl
+import examples/bim-slice/bim_stair.dl
 
 # Whether linear elements of `roleCode` carry a medium and so connect.
 function bim role {integer:roleCode} connects:
@@ -117,3 +118,98 @@ function the bim turn at joint {bim network node record:networkNode} in {bim net
         set along to 0.0 - (the cad dot of first's direction and second's direction)
         set sideways to the cad length of (the cad cross of first's direction and second's direction)
         return (@intrinsic("atan2", sideways, along)) * (180.0 / 3.141592653589793)
+
+# ---------------------------------------------------------------- fittings
+
+function bim bend fitting:
+    replacement:
+        1
+function bim transition fitting:
+    replacement:
+        2
+function bim junction fitting:
+    replacement:
+        3
+
+# A fitting derived at a node: its kind, the node, the role and system of
+# the segments it joins, and its body as short stubs of their profiles (one
+# per connector, from the node outward), linear elements like the segments.
+class:
+    patterns:
+        [a|] bim fitting record
+    members:
+        kind as an integer
+        nodeIndex as an integer
+        role as an integer
+        systemId as a 64 bit integer
+        firstElementId as a 64 bit integer
+        stubs as the type of (a cad topology list of a bim stair part record)
+
+function the bim name of fitting {integer:fittingKind}:
+    execute:
+        if fittingKind = bim bend fitting:
+            return the string form of "Bend"
+        if fittingKind = bim transition fitting:
+            return the string form of "Transition"
+        return the string form of "Junction"
+
+# IFC's class and predefined type of a fitting of `fittingKind` on segments
+# of `roleCode`.
+function the bim ifc class of fitting on role {integer:roleCode}:
+    execute:
+        if roleCode = bim duct role:
+            return the string form of "IfcDuctFitting"
+        if roleCode = bim cable tray role:
+            return the string form of "IfcCableCarrierFitting"
+        return the string form of "IfcPipeFitting"
+
+function the bim ifc type of fitting {integer:fittingKind}:
+    execute:
+        if fittingKind = bim bend fitting:
+            return the string form of "BEND"
+        if fittingKind = bim transition fitting:
+            return the string form of "TRANSITION"
+        return the string form of "JUNCTION"
+
+# The fittings of `network`: a bend where a joint turns more than a degree,
+# a transition where it joins two sizes, a junction at every tee.
+function the bim fittings of {bim network record:network} in {bim model record:modelValue}:
+    execute:
+        set made to a cad topology list of a bim fitting record
+        loop nodeCursor from 0 to the length of (network's nodes's values):
+            set networkNode to the item at nodeCursor in (network's nodes's values)
+            set nodeKind to the bim kind of node networkNode
+            set fittingKind to 0
+            if nodeKind = bim tee node:
+                set fittingKind to bim junction fitting
+            if nodeKind = bim joint node:
+                set first to the item at (the item at 0 in (networkNode's connectors's values)) in (network's connectors's values)
+                set second to the item at (the item at 1 in (networkNode's connectors's values)) in (network's connectors's values)
+                if (the bim turn at joint networkNode in network) > 1.0:
+                    set fittingKind to bim bend fitting
+                else if (the absolute value of (first's size - second's size)) > 0.0005:
+                    set fittingKind to bim transition fitting
+            if fittingKind > 0:
+                set stubs to a cad topology list of a bim stair part record
+                set leading to the item at (the item at 0 in (networkNode's connectors's values)) in (network's connectors's values)
+                loop memberCursor from 0 to the length of (networkNode's connectors's values):
+                    set connector to the item at (the item at memberCursor in (networkNode's connectors's values)) in (network's connectors's values)
+                    set linearFound to the bim linear index of connector's elementId in modelValue
+                    if linearFound's valid:
+                        set segment to the item at linearFound's position in (modelValue's linears's values)
+                        set segmentType to the bim type of linear segment in modelValue
+                        set stubLength to segmentType's width * 0.75
+                        set lift to 0.0
+                        set levelFound to the bim level index of segment's levelId in modelValue
+                        if levelFound's valid:
+                            set lift to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                        # The stub runs back into its segment from the node,
+                        # in the segment's storey coordinates.
+                        set stubFrom to a cad vector3 with x connector's spot's x, y connector's spot's y and z (connector's spot's z - lift)
+                        set stubTo to the cad sum of stubFrom and (connector's direction scaled by (0.0 - stubLength))
+                        set stubElement to @intrinsic("construct", a bim linear record, connector's elementId, the bim refused id, segment's levelId, stubFrom, stubTo, segment's angle)
+                        set stubType to @intrinsic("construct", a bim linear type record, the bim refused id, the string form of "Fitting", segmentType's role, segmentType's width * 1.15, segmentType's depth * 1.15, segmentType's round, segmentType's material)
+                        append (@intrinsic("construct", a bim stair part record, stubElement, stubType)) to (stubs's values)
+                set systemId to the bim system of element leading's elementId in modelValue
+                append (@intrinsic("construct", a bim fitting record, fittingKind, nodeCursor, leading's role, systemId, leading's elementId, stubs)) to (made's values)
+        return made

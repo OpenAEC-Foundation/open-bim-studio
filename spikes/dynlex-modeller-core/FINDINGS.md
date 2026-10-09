@@ -1647,3 +1647,38 @@ change. An element is in one system at most.
 - three open ends.
 
 A water system of the five keeps its members through `.bim` and `.ifcx`.
+
+## Fittings and the building services schedule (plan step 11, 2026-10-10)
+
+**Fittings** are derived at the network's nodes (`the bim fittings of …`):
+- a **bend** where a joint turns more than a degree;
+- a **transition** where a straight joint joins two sizes;
+- a **junction** at every tee.
+
+None is placed at a straight joint of one size. A fitting's body is one
+short stub per connector, from the node back into its segment, 0.75 of the
+segment's size long and 15 % larger. The stubs are linear elements, like
+the segments, so the fitting reuses the same geometry. The stubs overlap
+rather than form one closed solid; a single CSG solid (a free-form
+component, as the plan proposes) is left for later. A fitting takes its
+segments' system colour in 3D and picks as the first segment it joins.
+
+In IfcX a fitting is an `IfcPipeFitting`, `IfcDuctFitting` or
+`IfcCableCarrierFitting` with `PredefinedType` BEND, TRANSITION or JUNCTION
+and its body, keyed by its first segment and node.
+
+**Schedule.** "Building services" (code 6, listed in the project browser)
+gives per system its segments per type (count, length) and its fittings per
+kind (count). Segments in no system come under "Services". Ducts and cable
+trays also join the linear elements schedule.
+
+**Checked.** `tests/network.dl`, a 32 mm pipe continuing the 50 mm run:
+- a junction at (4, 0) with 3 stubs;
+- a bend at (4, 6);
+- a transition at (6, 6);
+- nothing at the straight joint (4, 3);
+- the schedule: 5 × Ø50 (16 m) and 1 × Ø32 (2 m), 1 bend, 1 transition and
+  1 junction in "Water 1".
+
+**Not yet.** The pipe tool does not snap to connectors, and rises are drawn
+with explicit heights only.
