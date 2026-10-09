@@ -1511,3 +1511,24 @@ material.
 - the top tread at 2.8235 m;
 - a run under 0.5 m is refused;
 - the same after `.bim` and `.ifcx`.
+
+## The stair tool and stairs in plan (plan step 7b, 2026-10-09)
+
+- **Tool (ST, or BIM → Circulation → Stair).** Two clicks set the foot and
+  the head of the run. The risers are as many as keep each at most 185 mm up
+  the storey's height. The stair is 1 m wide, in timber. The message gives the
+  riser height and going, as "17 risers of 176.5 mm, going 250 mm".
+- **Plan.** A stair is drawn from its derived parts:
+  - treads whose top is under the plan's cut drawn;
+  - treads above it dashed, as the floor above hides them;
+  - stringers in the same way;
+  - the walking line from the foot, with an arrow at the head.
+
+  Sheets draw stairs too.
+- **Selection.** A click inside its footprint in plan, or on it in 3D,
+  selects the stair (`bim stair picked`). Delete removes it in one undoable
+  step.
+
+**Checked.** `tests/stair_tool.dl`: a 4 m run gives 17 risers of 176.5 mm
+and a 250 mm going. A click in its footprint selects it, Delete removes it
+and undo restores it.
