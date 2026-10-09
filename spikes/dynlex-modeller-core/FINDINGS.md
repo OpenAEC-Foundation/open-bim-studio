@@ -1572,3 +1572,41 @@ railings it hosts.
   - the same after `.bim` and `.ifcx`;
   - only the free railing is left after the stair is deleted.
 - `tests/stair_tool.dl`: RS gives two railings, RL a third.
+
+## Curtain walls (plan step 9, 2026-10-09)
+
+A curtain wall is the third generator of linear elements. Its record holds:
+- a line;
+- a height;
+- a bay width and a row height (at most);
+- the frame's material.
+
+Its parts (`the bim parts of curtain wall … in …`):
+- **Mullions.** Upright, 50 mm along the wall by 150 mm deep, at every
+  bay's edge.
+- **Transoms.** Level, 150 deep by 50 high, at every row's edge.
+- **Glass panels.** One per bay and row, between the frame. A panel is a
+  linear element too: an upright plank as wide as its bay less a mullion,
+  24 mm thick.
+
+Mullions and panels are turned to the wall's direction (the linear element's
+`angle`). Bays and rows divide the length and height equally.
+
+- **Files.** `curtain` in `.bim`; `IfcCurtainWall` with its body and
+  `openbim::curtain` in IfcX.
+- **Editor.** CW (BIM → Systems → Facade CW, the button that was disabled)
+  draws one by two clicks. It rises the storey's height in bays of 1.2 m and
+  rows of 1.5 m. It is drawn in plan and 3D like the other generators, and
+  selected and deleted like them.
+
+**Checked.**
+- `tests/curtains.dl`: 6 × 3 m in bays of 1.2 and rows of 1.5 gives
+  6 mullions, 3 transoms and 10 panels, the glass volume exactly
+  10 × 1.15 × 1.45 × 0.024 m³; the same after `.bim` and `.ifcx`; a 0.2 m
+  wall is refused.
+- `tests/stair_tool.dl`: CW, select, delete.
+
+**The pattern.** Stairs, railings and curtain walls each took one record,
+one function deriving linear parts, and the same few hooks (3D, plan, files,
+pick, delete). The linear element's geometry, plan drawing and material
+handling were reused unchanged.
