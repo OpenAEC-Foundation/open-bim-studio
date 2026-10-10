@@ -1738,3 +1738,30 @@ place them on a component.
 **Not yet.** Walls are taken without their openings, so a duct through a
 window opening is still reported. Curved walls, plates, stairs and component
 solids are not checked.
+
+## The type editor (plan step 14, 2026-10-10)
+
+Types are edited in the properties window of an element of that type. Every
+change is one undoable step. The naming rules rename the type, and every
+element of it follows.
+
+- **Planar types (walls and plates).** After the element's own rows, each
+  layer shows:
+  - its material: a click takes the next of brick, sand-lime, concrete,
+    insulation, PIR insulation, timber, steel, gypsum, air cavity, generic;
+  - its thickness, typed.
+
+  "+ Layer" adds 100 mm of insulation; "- Layer" removes the last.
+- **Linear types.** "Material" takes the next material by a click; width and
+  depth were already typed there.
+
+**Checked.** `tests/type_editor.dl`, a cavity wall:
+- layer 2 typed to 150 mm makes "Metselwerk-isolatie-beton 350";
+- layer 1's material clicked makes "Kalkzandsteen-isolatie-beton 350";
+- a layer added makes "…-isolatie 450", and removing it gives 350 again;
+- undo goes back to 450;
+- a concrete column's type clicked to the next material becomes
+  "Isolatie 300x300".
+
+The naming rules match materials by words. "sand-lime brick" was read as
+brick, so the editor offers "sand-lime".

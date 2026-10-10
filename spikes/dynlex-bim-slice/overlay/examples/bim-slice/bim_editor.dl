@@ -4737,10 +4737,112 @@ function bim view scale property:
 function bim view cut property:
     replacement:
         24
+# The type editor: 40 + n a planar type's layer n's thickness (typed), 50 + n
+# its material (a click takes the next), 60 adds a layer, 61 removes the
+# last, 62 the next material of a linear element's type.
+function bim layer thickness property:
+    replacement:
+        40
+function bim layer material property:
+    replacement:
+        50
+function bim add layer property:
+    replacement:
+        60
+function bim remove layer property:
+    replacement:
+        61
+function bim linear material property:
+    replacement:
+        62
 
 local function append bim property {a string:label} showing {a string:shown} as {integer:code} to {a pointer to a list:rows}:
     execute:
         append (@intrinsic("construct", a bim property row record, label, shown, code)) to rows
+
+# The layers of planar type `typeId` as property rows: each layer's material
+# (a click takes the next) and thickness (typed), then adding and removing a
+# layer.
+local function append bim layer rows of type {a 64 bit integer:typeId} in {bim model record:modelValue} units {integer:unitCode} to {a pointer to a list:rows}:
+    execute:
+        set found to the bim wall type index of typeId in modelValue
+        if found's valid = false:
+            return nothing
+        set planarType to the item at found's position in (modelValue's wallTypes's values)
+        set layerList to planarType's layers's values
+        loop cursor from 0 to (the minimum of (the length of layerList) and 10):
+            set layerValue to the item at cursor in layerList
+            set label to (the string form of "Layer ") + (the string form of (cursor + 1))
+            append bim property (label + (the string form of " (click)")) showing layerValue's material as ((bim layer material property) + cursor) to rows
+            append bim property (label + (the string form of " thickness")) showing (the bim length layerValue's thickness in units unitCode) as ((bim layer thickness property) + cursor) to rows
+        append bim property (the string form of "+ Layer (click)") showing (the string form of "") as bim add layer property to rows
+        if (the length of layerList) > 1:
+            append bim property (the string form of "- Layer (click)") showing (the string form of "") as bim remove layer property to rows
+
+# The planar type of the selected wall or plate, or the refused id.
+function the bim selected planar type of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim wall picked:
+            set found to the bim wall index of editor's selectionId in modelValue
+            if found's valid:
+                return (the item at found's position in (modelValue's walls's values))'s typeId
+        if editor's selectionKind = bim slab picked:
+            set found to the bim slab index of editor's selectionId in modelValue
+            if found's valid:
+                return (the item at found's position in (modelValue's slabs's values))'s typeId
+        return the bim refused id
+
+# The selected element's planar type with `layerList` as its layers, in one
+# undoable step; the type's name follows the rules.
+local function give bim editor selected type layers {a pointer to a list:layerList} in {a pointer to a bim editor record:editor}:
+    execute:
+        set typeId to the bim selected planar type of (@intrinsic("dereference", editor))
+        begin bim transaction in (the address of (editor's documentValue))
+        if set bim wall type typeId layers to layerList in (the address of (editor's documentValue's current)):
+            commit bim transaction in (the address of (editor's documentValue))
+            set found to the bim wall type index of typeId in editor's documentValue's current
+            set editor's message to (the string form of "Type now ") + (the item at found's position in (editor's documentValue's current's wallTypes's values))'s name
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: a layer must be thicker than nothing"
+
+# A click on a type editor row that acts at once (material, add or remove a
+# layer); true when `code` was one.
+function act bim editor type property {integer:code} in {a pointer to a bim editor record:editor}:
+    execute:
+        if code = bim linear material property:
+            set found to the bim linear index of editor's selectionId in editor's documentValue's current
+            if found's valid = false:
+                return true
+            set linearType to the bim type of linear (the item at found's position in (editor's documentValue's current's linears's values)) in editor's documentValue's current
+            begin bim transaction in (the address of (editor's documentValue))
+            ignore set bim linear type linearType's id material to (the bim material after linearType's material) in (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to (the string form of "Type now ") + (the bim type of linear (the item at found's position in (editor's documentValue's current's linears's values)) in editor's documentValue's current)'s name
+            return true
+        if (code < (bim layer material property)) or (code > (bim remove layer property)):
+            return false
+        set typeFound to the bim wall type index of (the bim selected planar type of (@intrinsic("dereference", editor))) in editor's documentValue's current
+        if typeFound's valid = false:
+            return true
+        set planarType to the item at typeFound's position in (editor's documentValue's current's wallTypes's values)
+        set changed to an empty list of a bim layer record
+        loop cursor from 0 to the length of (planarType's layers's values):
+            append (the item at cursor in (planarType's layers's values)) to changed
+        if code = bim add layer property:
+            append (@intrinsic("construct", a bim layer record, the string form of "insulation", 0.1)) to changed
+        else if code = bim remove layer property:
+            if (the length of changed) > 1:
+                remove item ((the length of changed) - 1) from changed
+        else:
+            set layerIndex to code - (bim layer material property)
+            if layerIndex < (the length of changed):
+                set original to the item at layerIndex in changed
+                replace item at index layerIndex in changed with (@intrinsic("construct", a bim layer record, the bim material after original's material, original's thickness))
+        give bim editor selected type layers changed in editor
+        free changed
+        return true
 
 # The properties of the selection, or of the active storey when nothing is
 # selected: what they are, in the project's units, and which can be typed.
@@ -4760,6 +4862,7 @@ function the bim property rows of {bim editor record:editor}:
                 append bim property (the string form of "Length") showing (the bim length (the bim centreline length of wallValue) in units unitCode) as 0 to propertyRows
                 append bim property (the string form of "Width") showing (the bim length (the bim wall thickness of wallValue in modelValue) in units unitCode) as 0 to propertyRows
                 append bim property (the string form of "Storey") showing (the item at (the bim level index of wallValue's levelId in modelValue)'s position in (modelValue's levels's values))'s name as 0 to propertyRows
+                append bim layer rows of type wallValue's typeId in modelValue units unitCode to propertyRows
             return propertyRows
         if editor's selectionKind = bim opening picked:
             set found to the bim opening index of editor's selectionId in modelValue
@@ -4786,6 +4889,7 @@ function the bim property rows of {bim editor record:editor}:
                     append bim property (the string form of "Top") showing (the bim length slabValue's top in units unitCode) as bim plate top property to propertyRows
                     append bim property (the string form of "Pitch") showing ((the bim metres text of (slabValue's pitch * (180.0 / 3.141592653589793))) + (the string form of " deg")) as bim plate pitch property to propertyRows
                     append bim property (the string form of "Slope toward") showing ((the bim metres text of (slabValue's heading * (180.0 / 3.141592653589793))) + (the string form of " deg")) as bim plate heading property to propertyRows
+                    append bim layer rows of type slabValue's typeId in modelValue units unitCode to propertyRows
                 else:
                     append bim property (the string form of "Thickness") showing (the bim length slabValue's thickness in units unitCode) as bim slab thickness property to propertyRows
                 append bim property (the string form of "Material") showing (the bim material of plate slabValue in modelValue) as 0 to propertyRows
@@ -4814,7 +4918,7 @@ function the bim property rows of {bim editor record:editor}:
                 append bim property (the string form of "Angle") showing ((the bim metres text of (linearValue's angle * (180.0 / 3.141592653589793))) + (the string form of " deg")) as bim linear angle property to propertyRows
                 append bim property (the string form of "Width (type)") showing (the bim length linearType's width in units unitCode) as bim linear width property to propertyRows
                 append bim property (the string form of "Depth (type)") showing (the bim length linearType's depth in units unitCode) as bim linear depth property to propertyRows
-                append bim property (the string form of "Material") showing linearType's material as 0 to propertyRows
+                append bim property (the string form of "Material (click)") showing linearType's material as bim linear material property to propertyRows
             return propertyRows
         if editor's selectionKind = bim mesh picked:
             set found to the bim mesh index of editor's selectionId in modelValue
@@ -4880,6 +4984,8 @@ function the bim property rows of {bim editor record:editor}:
 # A click on a property's value: typing it begins.
 function start bim editor property {integer:code} in {a pointer to a bim editor record:editor}:
     execute:
+        if act bim editor type property code in editor:
+            return nothing
         set editor's propertyCode to code
         set editor's propertyText to the string form of ""
         set editor's message to the string form of "Type the value and press Enter (Esc cancels)"
@@ -4990,6 +5096,19 @@ function apply bim editor property in {a pointer to a bim editor record:editor}:
             if found's valid:
                 set placement to the item at found's position in (target's instances's values)
                 set changed to move bim instance chosenId to placement's origin turned (typed * (3.141592653589793 / 180.0)) in target
+        if (code >= (bim layer thickness property)) and (code < (bim layer material property)):
+            set typeFound to the bim wall type index of (the bim selected planar type of (@intrinsic("dereference", editor))) in (@intrinsic("dereference", target))
+            if typeFound's valid:
+                set planarType to the item at typeFound's position in (target's wallTypes's values)
+                set layerIndex to code - (bim layer thickness property)
+                if (layerIndex < (the length of (planarType's layers's values))) and (metres > 0.0):
+                    set thickened to an empty list of a bim layer record
+                    loop cursor from 0 to the length of (planarType's layers's values):
+                        append (the item at cursor in (planarType's layers's values)) to thickened
+                    set original to the item at layerIndex in thickened
+                    replace item at index layerIndex in thickened with (@intrinsic("construct", a bim layer record, original's material, metres))
+                    set changed to set bim wall type planarType's id layers to thickened in target
+                    free thickened
         if (code = bim view scale property) or (code = bim view cut property):
             set viewFound to the bim view index of editor's planViewId in (@intrinsic("dereference", target))
             if viewFound's valid:
