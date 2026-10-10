@@ -1682,3 +1682,31 @@ trays also join the linear elements schedule.
 
 **Not yet.** The pipe tool does not snap to connectors, and rises are drawn
 with explicit heights only.
+
+## Equipment and terminals (plan step 12, 2026-10-10)
+
+Equipment and terminals are components, the free-form base element, with
+two additions:
+- **A role:** generic, terminal (`IfcFlowTerminal`: a radiator, a basin) or
+  equipment (`IfcEnergyConversionDevice`: a boiler, a fan). An instance is
+  written with its component's class.
+- **Connectors:** a point, the direction out of it, a size and the segment
+  role it takes, in the component's coordinates.
+
+The network takes every instance's connectors, moved and turned with the
+instance, beside the segments' connectors. A node where a segment meets a
+component is a connection, not a fitting.
+
+**Files.** `connector` lines after their component in `.bim` (they carry the
+component's role too); `role` and `connectors` in `openbim::component`.
+
+**Checked.** `tests/network.dl`, a radiator (a box, as a component solid)
+with a supply and a return connector underneath, placed at x = 20:
+- a 15 mm pipe rising to the supply joins it (a node of 2 connectors, no
+  fitting);
+- the return is an open end;
+- the radiator is an `IfcFlowTerminal` with 2 connectors after `.bim` and
+  `.ifcx`.
+
+**Not yet.** Connectors are made in the model API; the editor has no tool to
+place them on a component.
