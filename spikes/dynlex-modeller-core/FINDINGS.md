@@ -1806,3 +1806,33 @@ lasting cost.
 
 **Not yet.** Undo history grows without bound. The clash check is on demand
 and runs again over the whole model each time.
+
+## Clashes respect wall openings (plan step 16, 2026-10-10)
+
+The maintainer asked for the open items to be taken up. They are planned as
+steps 16 to 30 in `architecture-plan.md`, with:
+- 2D components;
+- materials with images;
+- a render function;
+- an API;
+- IFC and DWG import and export;
+- large real IFC models;
+- sheets integrated;
+- trimming in 3D.
+
+A straight wall is now checked as convex pieces that leave its openings'
+voids out:
+- the stretches between openings, over the full height;
+- under each opening's sill;
+- over each opening's head.
+
+A wall clashing through several pieces is reported once.
+
+**Checked.** `tests/clash.dl`, a wall with a 1.2 × 1.5 m window (sill 0.9 m):
+- a pipe through the window's void at 1.6 m is not reported;
+- a pipe under the sill at 0.5 m is;
+- the earlier clashes stand.
+
+DynLex's `and` evaluates both sides. A search guarded by
+`(slot < length) and (item at slot)` still reads past an empty list, so the
+search carries its own flag. This is the issue already drafted.

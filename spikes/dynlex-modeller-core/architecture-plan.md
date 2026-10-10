@@ -227,6 +227,29 @@ The largest open items:
 - Osifont in the PDF;
 - SVG export.
 
+## 7b. Second round (2026-10-10)
+
+The maintainer asked for the open items to be taken up, and for 2D
+components. The same rules apply: one step at a time, reusing what exists.
+
+| # | Step | Reuses | Done when |
+|---|---|---|---|
+| 16 | **Clashes respect wall openings**: a segment through an opening's void does not clash | the opening's void box from the wall evaluation | test: a duct through a window opening is not reported, beside it it is |
+| 17 | **SVG export of sheets** | the canvas recording, as for the PDF | test: the SVG parses and holds the sheet's paths and texts |
+| 18 | **2D components**: symbols and details of lines, faces and texts, placed in one view only (or as a symbol in every plan of a storey) | components (their sketch elements) and instances, an instance gaining the view it belongs to | test: a view-specific instance is drawn in its view and not in another or in 3D; files round-trip |
+| 19 | **Connectors placed in the editor** on a component, and the pipe tool snapping to connectors | component connectors, snapping | test: a connector placed by clicks; a pipe drawn from it takes its size |
+| 20 | **Elevations and ceiling plans drawn** | section cuts (an elevation is a section looking at a façade), the plan cut looking up | test: an elevation view shows the walls of its side; a ceiling plan shows ceilings |
+| 21 | **Fittings as single solids** | the component fold (CSG union of the stubs) | test: a bend's volume equals the union's, not the sum of its stubs |
+| 22 | **Osifont in the PDF** | the font file the drawing already uses | test: the PDF embeds the font and `pdftotext` reads the text |
+| 23 | **Materials as records**: name, colour, image (texture), roughness; layers and types refer to them by name | the material names types already carry; IfcX `IfcSurfaceStyle` | test: a material with an image round-trips; a type's layer shows its material's colour |
+| 24 | **Render**: a ray-traced image of the 3D view with materials (colour or image), sun light and shadows, written as PNG | the scene meshes, the view ray, the pick's triangle intersection, plus a bounding volume hierarchy | test: a small scene renders; a pixel in shadow is darker than one in sun |
+| 25 | **API**: the modeller driven by commands (JSON lines in, JSON lines out): open, query elements, add and change elements, export | the editor's model functions, IfcX records as the payloads | test: a script of commands builds a wall with a window and exports IfcX |
+| 26 | **IFC import as elements**: IFC (STEP) walls, slabs, openings, columns, beams, storeys read into the model's own elements where they fit, the rest as imported meshes | the existing IFC import (meshes), the element families | test: a small IFC's walls and storeys become elements, editable |
+| 27 | **DWG import and export**: 2D DWG/DXF read as sketch lines and texts on a storey (or as an underlay), sheets and plans written as DXF | the sketch elements, the canvas recording | test: a DXF round-trips its lines and texts; a sheet exports as DXF |
+| 28 | **Large real IFC models**: public sample models downloaded (not committed, not redistributed), loaded, timed and looked at | steps 26 and 15 | a report of load times, memory and what imports as what |
+| 29 | **Sheets integrated**: viewports dragged and their views set, the title block's fields edited, sheets listed, a sheet set exported | sheets (step 4), the properties window | test: a viewport dragged and a title field typed round-trip |
+| 30 | **Trim and extend in 3D**: the trim and extend tools work in the 3D view too, on walls and on linear elements (a beam trimmed to a column) | the plan's trim and extend, the 3D pick | test: a beam extended to a column face and trimmed back, in 3D coordinates |
+
 ## 8. Decisions taken on the way
 
 - **Step 6 deferred (2026-10-09).** Walls and plates already share the

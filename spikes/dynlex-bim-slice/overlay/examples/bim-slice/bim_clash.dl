@@ -98,6 +98,99 @@ function the bim convex of wall {bim wall record:wallValue} in {bim model record
         free plan
         return solid
 
+# The piece of a straight wall between `fromT` and `toT` along it (fractions
+# of its length) and between heights `low` and `high` above its base, as a
+# convex box.
+local function the bim wall piece of {bim wall record:wallValue} with {bim footprint record:wallFootprint} from {a 64 bit floating-point number:fromT} to {a 64 bit floating-point number:toT} between {a 64 bit floating-point number:low} and {a 64 bit floating-point number:high} above {a 64 bit floating-point number:base}:
+    execute:
+        set boxPiece to @intrinsic("construct", a bim convex record, wallValue's id, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3, false)
+        set plan to an empty list of a cad vector2
+        set ex to wallFootprint's startExterior
+        set fx to wallFootprint's finishExterior
+        set si to wallFootprint's startInterior
+        set fi to wallFootprint's finishInterior
+        append (a cad vector2 with x (ex's x + ((fx's x - ex's x) * fromT)) and y (ex's y + ((fx's y - ex's y) * fromT))) to plan
+        append (a cad vector2 with x (ex's x + ((fx's x - ex's x) * toT)) and y (ex's y + ((fx's y - ex's y) * toT))) to plan
+        append (a cad vector2 with x (si's x + ((fi's x - si's x) * toT)) and y (si's y + ((fi's y - si's y) * toT))) to plan
+        append (a cad vector2 with x (si's x + ((fi's x - si's x) * fromT)) and y (si's y + ((fi's y - si's y) * fromT))) to plan
+        loop level from 0 to 2:
+            set height to base + low
+            if level = 1:
+                set height to base + high
+            loop cursor from 0 to 4:
+                set spot to the item at cursor in plan
+                append (a cad vector3 with x spot's x, y spot's y and z height) to (boxPiece's corners's values)
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        append upward to (boxPiece's normals's values)
+        append upward to (boxPiece's edges's values)
+        loop cursor from 0 to 4:
+            set here to the item at cursor in plan
+            set following to the item at (the remainder of (cursor + 1) divided by 4) in plan
+            set side to a cad vector3 with x (following's x - here's x), y (following's y - here's y) and z 0.0
+            append bim unit side to (boxPiece's edges's values)
+            append bim unit (the cad cross of side and upward) to (boxPiece's normals's values)
+        free plan
+        return boxPiece
+
+# A straight wall as convex pieces that leave its openings' voids out: the
+# stretches between openings over the full height, and under each opening's
+# sill and over its head.
+function the bim convex pieces of wall {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set pieceList to a cad topology list of a bim convex record
+        set wallFootprint to the bim footprint of wallValue in modelValue using index
+        set base to 0.0
+        set levelFound to the bim level index of wallValue's levelId in modelValue
+        if levelFound's valid:
+            set base to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set wallLength to the cad distance from wallValue's start to wallValue's finish
+        if wallLength < 1e-9:
+            return pieceList
+        # The openings' spans along the wall, in order.
+        set starts to an empty list of a 64 bit floating-point number
+        set ends to an empty list of a 64 bit floating-point number
+        set sills to an empty list of a 64 bit floating-point number
+        set heads to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if (openingValue's hostId = wallValue's id) and typeFound's valid:
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                set halfWidth to (the bim rough width of openingType) * 0.5
+                set fromT to the maximum of 0.0 and ((openingValue's offset - halfWidth) / wallLength)
+                set toT to the minimum of 1.0 and ((openingValue's offset + halfWidth) / wallLength)
+                # Where it goes in order (DynLex's `and` does not stop early,
+                # so the search carries its own flag).
+                set slot to 0
+                set searching to (the length of starts) > 0
+                loop while searching:
+                    if (the item at slot in starts) < fromT:
+                        set slot to slot + 1
+                        if slot >= the length of starts:
+                            set searching to false
+                    else:
+                        set searching to false
+                insert fromT into starts at index slot
+                insert toT into ends at index slot
+                insert openingType's sill into sills at index slot
+                insert (openingType's sill + (the bim rough height of openingType)) into heads at index slot
+        set along to 0.0
+        loop cursor from 0 to the length of starts:
+            if (the item at cursor in starts) > along:
+                append (the bim wall piece of wallValue with wallFootprint from along to (the item at cursor in starts) between 0.0 and wallValue's height above base) to (pieceList's values)
+            if (the item at cursor in sills) > 0.0:
+                append (the bim wall piece of wallValue with wallFootprint from (the item at cursor in starts) to (the item at cursor in ends) between 0.0 and (the item at cursor in sills) above base) to (pieceList's values)
+            if (the item at cursor in heads) < wallValue's height:
+                append (the bim wall piece of wallValue with wallFootprint from (the item at cursor in starts) to (the item at cursor in ends) between (the item at cursor in heads) and wallValue's height above base) to (pieceList's values)
+            set along to the maximum of along and (the item at cursor in ends)
+        if along < 1.0:
+            append (the bim wall piece of wallValue with wallFootprint from along to 1.0 between 0.0 and wallValue's height above base) to (pieceList's values)
+        free starts
+        free ends
+        free sills
+        free heads
+        return pieceList
+
 # How far `first` and `second` overlap along `direction` (negative when a gap
 # separates them).
 local function the bim overlap of {bim convex record:first} and {bim convex record:second} along {cad vector3:direction}:
@@ -202,7 +295,9 @@ function the bim clashes of {bim model record:modelValue}:
         loop cursor from 0 to the length of (modelValue's walls's values):
             set wallValue to the item at cursor in (modelValue's walls's values)
             if wallValue's bulge = 0.0:
-                append (the bim convex of wall wallValue in modelValue using index) to (solids's values)
+                set wallPieces to the bim convex pieces of wall wallValue in modelValue using index
+                loop pieceCursor from 0 to the length of (wallPieces's values):
+                    append (the item at pieceCursor in (wallPieces's values)) to (solids's values)
         set servicesNetwork to the bim network of modelValue
         set boxes to an empty list of a bim clash box record
         loop cursor from 0 to the length of (solids's values):
@@ -235,5 +330,12 @@ function the bim clashes of {bim model record:modelValue}:
                         set joined to bim segments first's elementId and second's elementId meet in servicesNetwork
                     if joined = false:
                         if bim convex first clashes with second beyond 0.001:
-                            append (@intrinsic("construct", a bim clash record, first's elementId, second's elementId)) to (found's values)
+                            # A wall's pieces report it once.
+                            set already to false
+                            loop foundCursor from 0 to the length of (found's values):
+                                set earlier to the item at foundCursor in (found's values)
+                                if (earlier's firstId = first's elementId) and (earlier's secondId = second's elementId):
+                                    set already to true
+                            if already = false:
+                                append (@intrinsic("construct", a bim clash record, first's elementId, second's elementId)) to (found's values)
         return found
