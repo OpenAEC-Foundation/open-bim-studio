@@ -1836,3 +1836,18 @@ A wall clashing through several pieces is reported once.
 DynLex's `and` evaluates both sides. A search guarded by
 `(slot < length) and (item at slot)` still reads past an empty list, so the
 search carries its own flag. This is the issue already drafted.
+
+## SVG export of sheets (plan step 17, 2026-10-10)
+
+ES (View → Export SVG) writes the sheet open as SVG, named after its number
+(`bim_svg.dl`). The sheet is recorded once more at one unit per millimetre:
+SVG's y runs down as the recording's does, so nothing is flipped. The page
+is sized in millimetres (`width="841mm"`, `viewBox="0 0 841 594"`).
+- **Batches.** Each batch is one path of triangles in its colour.
+- **Labels.** Each label is a `<text>` in Osifont (falling back to
+  sans-serif), centred labels anchored at the middle, with XML's reserved
+  characters written as entities.
+
+**Checked.** `tests/svg.dl`: a stroke and the label "Plan & <1:100>" on a
+100 × 50 mm page. The file is printed whole, and an XML parser reads one
+path and the label back unchanged.
