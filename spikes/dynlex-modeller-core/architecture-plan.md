@@ -211,6 +211,22 @@ After each step:
 - the work is committed;
 - the app is installed and restarted.
 
+## 7a. Progress (2026-10-10)
+
+Steps 1 to 5 and 7 to 15 are built, each with its test and a section in
+`FINDINGS.md`. Step 6 is deferred (below). The suite has 46 tests with expected output, plus timing programs;
+`tests/mixed_timing.dl` measures scale and ageing.
+
+What each step left open is listed at the end of its `FINDINGS.md` section.
+The largest open items:
+- walls as planar records (step 6);
+- fittings as single CSG solids;
+- connectors placed in the editor;
+- wall openings in the clash check;
+- views of kind elevation and ceiling plan drawn;
+- Osifont in the PDF;
+- SVG export.
+
 ## 8. Decisions taken on the way
 
 - **Step 6 deferred (2026-10-09).** Walls and plates already share the
