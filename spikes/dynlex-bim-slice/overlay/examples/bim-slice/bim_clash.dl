@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: MPL-2.0
+# Clash detection across disciplines. Linear elements are convex prisms (a
+# convex profile along an axis) and straight walls convex boxes, so two of
+# them intersect exactly when no separating axis exists: the face normals of
+# either and the cross products of their edge directions (the separating
+# axis theorem). A clash is reported when they overlap by more than a
+# millimetre along every axis.
+#
+# A pipe, duct or cable tray clashes with any element that is not a segment,
+# and with segments it is not joined to in the network.
+import examples/bim-slice/bim_scene.dl
+import examples/bim-slice/bim_network.dl
+
+# A convex solid by its corners, with the directions its faces and edges
+# run in.
+class:
+    patterns:
+        [a|] bim convex record
+    members:
+        elementId as a 64 bit integer
+        corners as the type of (a cad topology list of a cad vector3)
+        normals as the type of (a cad topology list of a cad vector3)
+        edges as the type of (a cad topology list of a cad vector3)
+        connects as a boolean
+
+class:
+    patterns:
+        [a|] bim clash record
+    members:
+        firstId as a 64 bit integer
+        secondId as a 64 bit integer
+
+local function append bim unit {cad vector3:direction} to {a pointer to a list:directions}:
+    execute:
+        set size to the cad length of direction
+        if size > 1e-12:
+            append (direction scaled by (1.0 / size)) to directions
+
+# Linear element `linearValue` as a convex solid: its profile rings' corners,
+# its side faces' normals and its axis.
+function the bim convex of linear {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set linearType to the bim type of linear linearValue in modelValue
+        set profileCorners to the bim profile rings of linearValue as linearType in modelValue at 12 round corners
+        set solid to @intrinsic("construct", a bim convex record, linearValue's id, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3, bim role linearType's role connects)
+        loop cursor from 0 to the length of profileCorners:
+            append (the item at cursor in profileCorners) to (solid's corners's values)
+        set count to (the length of profileCorners) / 2
+        set axis to the cad difference of (the item at count in profileCorners) and (the item at 0 in profileCorners)
+        append bim unit axis to (solid's normals's values)
+        append bim unit axis to (solid's edges's values)
+        loop cursor from 0 to count:
+            set here to the item at cursor in profileCorners
+            set following to the item at (the remainder of (cursor + 1) divided by count) in profileCorners
+            set side to the cad difference of following and here
+            append bim unit side to (solid's edges's values)
+            append bim unit (the cad cross of side and axis) to (solid's normals's values)
+        free profileCorners
+        return solid
+
+# A straight wall as a convex box: its footprint's corners at its base and
+# top (its openings are not taken out).
+function the bim convex of wall {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set solid to @intrinsic("construct", a bim convex record, wallValue's id, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3, false)
+        set wallFootprint to the bim footprint of wallValue in modelValue using index
+        set base to 0.0
+        set levelFound to the bim level index of wallValue's levelId in modelValue
+        if levelFound's valid:
+            set base to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set plan to an empty list of a cad vector2
+        append wallFootprint's startExterior to plan
+        append wallFootprint's finishExterior to plan
+        append wallFootprint's finishInterior to plan
+        append wallFootprint's startInterior to plan
+        loop level from 0 to 2:
+            set height to base + (wallValue's height * (level as a 64 bit floating-point number))
+            loop cursor from 0 to 4:
+                set spot to the item at cursor in plan
+                append (a cad vector3 with x spot's x, y spot's y and z height) to (solid's corners's values)
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        append upward to (solid's normals's values)
+        append upward to (solid's edges's values)
+        loop cursor from 0 to 4:
+            set here to the item at cursor in plan
+            set following to the item at (the remainder of (cursor + 1) divided by 4) in plan
+            set side to a cad vector3 with x (following's x - here's x), y (following's y - here's y) and z 0.0
+            append bim unit side to (solid's edges's values)
+            append bim unit (the cad cross of side and upward) to (solid's normals's values)
+        free plan
+        return solid
+
+# How far `first` and `second` overlap along `direction` (negative when a gap
+# separates them).
+local function the bim overlap of {bim convex record:first} and {bim convex record:second} along {cad vector3:direction}:
+    execute:
+        set lowFirst to 1e300
+        set highFirst to -1e300
+        loop cursor from 0 to the length of (first's corners's values):
+            set reach to the cad dot of (the item at cursor in (first's corners's values)) and direction
+            set lowFirst to the minimum of lowFirst and reach
+            set highFirst to the maximum of highFirst and reach
+        set lowSecond to 1e300
+        set highSecond to -1e300
+        loop cursor from 0 to the length of (second's corners's values):
+            set reach to the cad dot of (the item at cursor in (second's corners's values)) and direction
+            set lowSecond to the minimum of lowSecond and reach
+            set highSecond to the maximum of highSecond and reach
+        return (the minimum of highFirst and highSecond) - (the maximum of lowFirst and lowSecond)
+
+# Whether `first` and `second` overlap by more than `margin` along every
+# candidate separating axis.
+function bim convex {bim convex record:first} clashes with {bim convex record:second} beyond {a 64 bit floating-point number:margin}:
+    execute:
+        set axes to an empty list of a cad vector3
+        loop cursor from 0 to the length of (first's normals's values):
+            append (the item at cursor in (first's normals's values)) to axes
+        loop cursor from 0 to the length of (second's normals's values):
+            append (the item at cursor in (second's normals's values)) to axes
+        loop cursor from 0 to the length of (first's edges's values):
+            loop other from 0 to the length of (second's edges's values):
+                append bim unit (the cad cross of (the item at cursor in (first's edges's values)) and (the item at other in (second's edges's values))) to axes
+        set clashing to true
+        loop cursor from 0 to the length of axes:
+            if clashing:
+                if (the bim overlap of first and second along (the item at cursor in axes)) <= margin:
+                    set clashing to false
+        free axes
+        return clashing
+
+# Whether segments `firstId` and `secondId` share a node of `network`.
+local function bim segments {a 64 bit integer:firstId} and {a 64 bit integer:secondId} meet in {bim network record:network}:
+    execute:
+        loop nodeCursor from 0 to the length of (network's nodes's values):
+            set networkNode to the item at nodeCursor in (network's nodes's values)
+            set hasFirst to false
+            set hasSecond to false
+            loop memberCursor from 0 to the length of (networkNode's connectors's values):
+                set member to the item at (the item at memberCursor in (networkNode's connectors's values)) in (network's connectors's values)
+                if member's elementId = firstId:
+                    set hasFirst to true
+                if member's elementId = secondId:
+                    set hasSecond to true
+            if hasFirst and hasSecond:
+                return true
+        return false
+
+# The clashes of `modelValue`: every pipe, duct or cable tray against every
+# other linear element and every straight wall, each pair once, segments
+# joined in the network left out.
+function the bim clashes of {bim model record:modelValue}:
+    execute:
+        set found to a cad topology list of a bim clash record
+        set solids to a cad topology list of a bim convex record
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            append (the bim convex of linear (the item at cursor in (modelValue's linears's values)) in modelValue) to (solids's values)
+        set index to the bim join index of modelValue
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if wallValue's bulge = 0.0:
+                append (the bim convex of wall wallValue in modelValue using index) to (solids's values)
+        set servicesNetwork to the bim network of modelValue
+        loop cursor from 0 to the length of (solids's values):
+            set first to the item at cursor in (solids's values)
+            loop other from (cursor + 1) to the length of (solids's values):
+                set second to the item at other in (solids's values)
+                if first's connects or second's connects:
+                    set joined to false
+                    if first's connects and second's connects:
+                        set joined to bim segments first's elementId and second's elementId meet in servicesNetwork
+                    if joined = false:
+                        if bim convex first clashes with second beyond 0.001:
+                            append (@intrinsic("construct", a bim clash record, first's elementId, second's elementId)) to (found's values)
+        return found

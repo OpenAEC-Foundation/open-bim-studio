@@ -1710,3 +1710,31 @@ with a supply and a return connector underneath, placed at x = 20:
 
 **Not yet.** Connectors are made in the model API; the editor has no tool to
 place them on a component.
+
+## Clash detection (plan step 13, 2026-10-10)
+
+`bim_clash.dl` checks exactly, without meshes:
+- **Convex solids.** A linear element is a convex prism: its profile rings,
+  12 corners for a round profile. A straight wall is a convex box of its
+  footprint's corners at base and top.
+- **Separating axes.** Two convex solids clash when they overlap by more than
+  1 mm along every candidate axis: each solid's face normals and the cross
+  products of their edge directions.
+- **What is checked.**
+  - Every pipe, duct or cable tray against every other linear element and
+    every straight wall, each pair once.
+  - Segments joined at a node of the network are left out: their ends touch
+    by design.
+- **Editor.** CK (Systems → Clashes CK) reports the count. The "Clashes"
+  schedule (code 7, left out of Quantities) lists each pair by its
+  elements' type names.
+
+**Checked.** `tests/clash.dl`:
+- a duct crossing a beam at its height clashes;
+- a duct 0.2 m under the beam does not;
+- two pipes joined at a node do not clash with each other;
+- a pipe through a wall clashes with it.
+
+**Not yet.** Walls are taken without their openings, so a duct through a
+window opening is still reported. Curved walls, plates, stairs and component
+solids are not checked.
