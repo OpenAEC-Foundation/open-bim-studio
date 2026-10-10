@@ -23,6 +23,14 @@ class:
         edges as the type of (a cad topology list of a cad vector3)
         connects as a boolean
 
+# The box around a convex solid, to rule pairs out before the exact test.
+class:
+    patterns:
+        [a|] bim clash box record
+    members:
+        low as a cad vector3
+        high as a cad vector3
+
 class:
     patterns:
         [a|] bim clash record
@@ -145,6 +153,42 @@ local function bim segments {a 64 bit integer:firstId} and {a 64 bit integer:sec
                 return true
         return false
 
+function the bim box around convex {bim convex record:solid}:
+    execute:
+        set low to a cad vector3 with x 1e300, y 1e300 and z 1e300
+        set high to a cad vector3 with x -1e300, y -1e300 and z -1e300
+        loop cursor from 0 to the length of (solid's corners's values):
+            set spot to the item at cursor in (solid's corners's values)
+            set low to a cad vector3 with x (the minimum of low's x and spot's x), y (the minimum of low's y and spot's y) and z (the minimum of low's z and spot's z)
+            set high to a cad vector3 with x (the maximum of high's x and spot's x), y (the maximum of high's y and spot's y) and z (the maximum of high's z and spot's z)
+        return @intrinsic("construct", a bim clash box record, low, high)
+
+# A solid's place in the sweep: where its box starts along x.
+class:
+    patterns:
+        [a|] bim sweep entry record
+    members:
+        lowX as a 64 bit floating-point number
+        index as an integer
+
+function bim sweep ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to @intrinsic("dereference", left as a pointer to a bim sweep entry record)
+        set second to @intrinsic("dereference", right as a pointer to a bim sweep entry record)
+        if first's lowX < second's lowX:
+            return -1
+        if first's lowX > second's lowX:
+            return 1
+        return 0
+
+local function bim box {bim clash box record:first} overlaps {bim clash box record:second}:
+    execute:
+        if (first's high's x < second's low's x) or (second's high's x < first's low's x):
+            return false
+        if (first's high's y < second's low's y) or (second's high's y < first's low's y):
+            return false
+        return (first's high's z >= second's low's z) and (second's high's z >= first's low's z)
+
 # The clashes of `modelValue`: every pipe, duct or cable tray against every
 # other linear element and every straight wall, each pair once, segments
 # joined in the network left out.
@@ -160,11 +204,32 @@ function the bim clashes of {bim model record:modelValue}:
             if wallValue's bulge = 0.0:
                 append (the bim convex of wall wallValue in modelValue using index) to (solids's values)
         set servicesNetwork to the bim network of modelValue
+        set boxes to an empty list of a bim clash box record
         loop cursor from 0 to the length of (solids's values):
-            set first to the item at cursor in (solids's values)
-            loop other from (cursor + 1) to the length of (solids's values):
+            append (the bim box around convex (the item at cursor in (solids's values))) to boxes
+        # Sweep and prune: the solids in order of where their boxes start
+        # along x; each is compared only with those that start before its box
+        # ends there.
+        set sweep to an empty list of a bim sweep entry record
+        loop cursor from 0 to the length of boxes:
+            append (@intrinsic("construct", a bim sweep entry record, (the item at cursor in boxes)'s low's x, cursor)) to sweep
+        set comparator to the function named "bim sweep ordering $ and $"
+        sort native array at ((the data of sweep) as a pointer) with ((the length of sweep) as a word sized unsigned integer) items of ((the size of a bim sweep entry record) as a word sized unsigned integer) bytes using comparator
+        loop sweepCursor from 0 to the length of sweep:
+            set firstIndex to (the item at sweepCursor in sweep)'s index
+            set firstBox to the item at firstIndex in boxes
+            set ahead to sweepCursor + 1
+            loop while (ahead < the length of sweep) and ((the item at ((the minimum of ahead and ((the length of sweep) - 1))) in sweep)'s lowX <= firstBox's high's x):
+                set secondIndex to (the item at ahead in sweep)'s index
+                set ahead to ahead + 1
+                set cursor to the minimum of firstIndex and secondIndex
+                set other to the maximum of firstIndex and secondIndex
+                set first to the item at cursor in (solids's values)
                 set second to the item at other in (solids's values)
-                if first's connects or second's connects:
+                set candidate to first's connects or second's connects
+                if candidate:
+                    set candidate to bim box (the item at cursor in boxes) overlaps (the item at other in boxes)
+                if candidate:
                     set joined to false
                     if first's connects and second's connects:
                         set joined to bim segments first's elementId and second's elementId meet in servicesNetwork

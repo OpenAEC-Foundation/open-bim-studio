@@ -46,15 +46,6 @@ local function the bim ring area of {a pointer to a list:points}:
             set total to total + (((here's x - anchor's x) * (following's y - anchor's y)) - ((following's x - anchor's x) * (here's y - anchor's y)))
         return (the absolute value of total) * 0.5
 
-# The volume of the evaluated element `elementId`, or 0 when it has none.
-local function the bim evaluated volume of {a 64 bit integer:elementId} in {bim evaluation record:evaluation}:
-    execute:
-        loop cursor from 0 to the length of (evaluation's elements's values):
-            set geometry to the item at cursor in (evaluation's elements's values)
-            if geometry's id = elementId:
-                return the bim volume of geometry
-        return 0.0
-
 # The building services per system: each system's segments per type (count
 # and length) and its fittings per kind (count), in groups named after the
 # system ("Services: Water 1"); segments in no system under "Services".
@@ -62,6 +53,16 @@ function append bim services rows of {bim model record:modelValue} to {a pointer
     execute:
         set servicesNetwork to the bim network of modelValue
         set derivedFittings to the bim fittings of servicesNetwork in modelValue
+        # Each linear element's system, found once.
+        set linearSystems to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            append (the bim refused id) to linearSystems
+        loop cursor from 0 to the length of (modelValue's systems's values):
+            set systemValue to the item at cursor in (modelValue's systems's values)
+            loop memberCursor from 0 to the length of (systemValue's members's values):
+                set memberFound to the bim linear index of (the item at memberCursor in (systemValue's members's values)) in modelValue
+                if memberFound's valid:
+                    replace item at index memberFound's position in linearSystems with systemValue's id
         # The systems, then no system (the refused id).
         set groups to an empty list of a 64 bit integer
         loop cursor from 0 to the length of (modelValue's systems's values):
@@ -79,7 +80,7 @@ function append bim services rows of {bim model record:modelValue} to {a pointer
                     set row's length to 0.0
                     loop cursor from 0 to the length of (modelValue's linears's values):
                         set linearValue to the item at cursor in (modelValue's linears's values)
-                        if (linearValue's typeId = linearType's id) and ((the bim system of element linearValue's id in modelValue) = systemId):
+                        if (linearValue's typeId = linearType's id) and ((the item at cursor in linearSystems) = systemId):
                             set row's count to row's count + 1
                             set row's length to row's length + (the cad length of (the cad difference of linearValue's finish and linearValue's start))
                     if row's count > 0:
@@ -93,12 +94,40 @@ function append bim services rows of {bim model record:modelValue} to {a pointer
                 if row's count > 0:
                     append row to rows
         free groups
+        free linearSystems
 
 # The schedule of `modelValue`, with volumes from `evaluation` (which must
 # have evaluated it) and the spaces `spaces`.
 function the bim schedule of {bim model record:modelValue} with {bim evaluation record:evaluation} and {a pointer to a list:spaces}:
     execute:
         set rows to a cad topology list of a bim schedule row record
+        # Once for the whole model: each wall's and slab's evaluated volume
+        # and each wall's openings' area, by position (each element is found
+        # by its id, in id order, not searched for per row).
+        set wallVolumes to an empty list of a 64 bit floating-point number
+        set wallOpenings to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            append 0.0 to wallVolumes
+            append 0.0 to wallOpenings
+        set slabVolumes to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            append 0.0 to slabVolumes
+        loop cursor from 0 to the length of (evaluation's elements's values):
+            set geometry to the item at cursor in (evaluation's elements's values)
+            set wallFound to the bim wall index of geometry's id in modelValue
+            if wallFound's valid:
+                replace item at index wallFound's position in wallVolumes with (the bim volume of geometry)
+            else:
+                set slabFound to the bim slab index of geometry's id in modelValue
+                if slabFound's valid:
+                    replace item at index slabFound's position in slabVolumes with (the bim volume of geometry)
+        loop openingCursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at openingCursor in (modelValue's openings's values)
+            set hostFound to the bim wall index of openingValue's hostId in modelValue
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if hostFound's valid and typeFound's valid:
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                replace item at index hostFound's position in wallOpenings with ((the item at hostFound's position in wallOpenings) + ((the bim rough width of openingType) * (the bim rough height of openingType)))
         loop typeCursor from 0 to the length of (modelValue's wallTypes's values):
             set wallType to the item at typeCursor in (modelValue's wallTypes's values)
             set row to a bim schedule row in (the string form of "Walls") named wallType's name
@@ -111,18 +140,11 @@ function the bim schedule of {bim model record:modelValue} with {bim evaluation 
                 set wallValue to the item at cursor in (modelValue's walls's values)
                 if wallValue's typeId = wallType's id:
                     set run to the bim centreline length of wallValue
-                    set face to run * wallValue's height
-                    loop openingCursor from 0 to the length of (modelValue's openings's values):
-                        set openingValue to the item at openingCursor in (modelValue's openings's values)
-                        if openingValue's hostId = wallValue's id:
-                            set typeFound to the bim opening type index of openingValue's typeId in modelValue
-                            if typeFound's valid:
-                                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
-                                set face to face - ((the bim rough width of openingType) * (the bim rough height of openingType))
+                    set face to (run * wallValue's height) - (the item at cursor in wallOpenings)
                     set row's count to row's count + 1
                     set row's length to row's length + run
                     set row's area to row's area + face
-                    set row's volume to row's volume + (the bim evaluated volume of wallValue's id in evaluation)
+                    set row's volume to row's volume + (the item at cursor in wallVolumes)
             if row's count > 0:
                 append row to (rows's values)
         loop typeCursor from 0 to the length of (modelValue's openingTypes's values):
@@ -161,7 +183,7 @@ function the bim schedule of {bim model record:modelValue} with {bim evaluation 
                         if ownType = typeId:
                             set row's count to row's count + 1
                             set row's area to row's area + (the bim ring area of (slabValue's outline's values))
-                            set row's volume to row's volume + (the bim evaluated volume of slabValue's id in evaluation)
+                            set row's volume to row's volume + (the item at cursor in slabVolumes)
                     if row's count > 0:
                         append row to (rows's values)
         # Linear elements per type, grouped by role: count, length, volume
@@ -218,6 +240,9 @@ function the bim schedule of {bim model record:modelValue} with {bim evaluation 
                     set row's area to row's area + (footprint * (row's count as a 64 bit floating-point number))
                     set row's volume to row's volume + ((footprint * element's height) * (row's count as a 64 bit floating-point number))
             append row to (rows's values)
+        free wallVolumes
+        free wallOpenings
+        free slabVolumes
         append bim services rows of modelValue to (rows's values)
         # The clashes, one row per pair, named by the elements' types.
         set clashList to the bim clashes of modelValue

@@ -1765,3 +1765,44 @@ element of it follows.
 
 The naming rules match materials by words. "sand-lime brick" was read as
 brick, so the editor offers "sand-lime".
+
+## Scale and ageing (plan step 15, risk R-12, 2026-10-10)
+
+**Model.** `tests/mixed_timing.dl` builds about 11,000 elements:
+- a generated tower of 6,000 walls with their openings;
+- 2,000 columns;
+- 1,000 pipes in runs, assigned to a water system.
+
+It measures the full evaluation, the 3D meshes with the network's fittings,
+the clash check, the schedule, and one edit (a column moved; the median of
+twenty, each re-evaluated and re-meshed). It measures once on the fresh
+model and once after a simulated lifetime:
+- 300 edits, each undone;
+- 400 elements added and deleted;
+- 60 views duplicated;
+- 30 empty systems.
+
+**Three costs fixed on the way** (fresh model, before → after):
+
+| | Before | After | Change |
+|---|---|---|---|
+| Schedule | 16.4 s | 0.6 s | Each wall's and slab's volume found once by id instead of searched for per wall, each wall's opening area summed once, each segment's system found once |
+| Clash check | 4.9 s | 0.55 s | Boxes and sweep and prune along x, before the exact test |
+| One edit | 1.0 s | 10 ms | The spaces of the storey are found again only when what they depend on changes (a signature of its walls and of the wall types' layers); moving a column keeps them |
+
+**Result.**
+
+| | Fresh | Aged | Drift |
+|---|---|---|---|
+| Evaluation | 1,096 ms | 1,121 ms | 2 % |
+| Meshes | 9 ms | 10 ms | 12 % |
+| Clashes | 542 ms | 559 ms | 3 % |
+| Schedule | 575 ms | 574 ms | 0 % |
+| One edit | 10 ms | 10 ms | −2 % |
+
+R-12's criterion (within 20 % of the fresh model after a lifetime) is met.
+Undo snapshots, deleted elements and unused views and systems leave no
+lasting cost.
+
+**Not yet.** Undo history grows without bound. The clash check is on demand
+and runs again over the whole model each time.
