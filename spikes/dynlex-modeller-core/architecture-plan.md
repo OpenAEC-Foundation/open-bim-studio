@@ -250,6 +250,71 @@ components. The same rules apply: one step at a time, reusing what exists.
 | 29 | **Sheets integrated**: viewports dragged and their views set, the title block's fields edited, sheets listed, a sheet set exported | sheets (step 4), the properties window | test: a viewport dragged and a title field typed round-trip |
 | 30 | **Trim and extend in 3D**: the trim and extend tools work in the 3D view too, on walls and on linear elements (a beam trimmed to a column) | the plan's trim and extend, the 3D pick | test: a beam extended to a column face and trimmed back, in 3D coordinates |
 
+## 7c. Drawing rules and requests from use (2026-10-12)
+
+Using the modeller, the maintainer asked for drawing types and a number of
+interface changes. The largest is **drawing rules**: every kind of drawing
+is defined once, in the model, and views follow it.
+
+**Drawing types.** A `bim drawing type record` has:
+- an id, a name and a parent;
+- visibility and graphics per category;
+- annotation rules;
+- a phase filter.
+
+Every setting is either **inherited** from the parent or set here, so a
+child states only what differs. Two roots ship with every model:
+- **Architectural**, with the children Floor plan, Ceiling plan,
+  Section/Elevation and Details;
+- **Structural**, with the children Structural plan, Pile plan and
+  Structural details.
+
+Users add their own types beneath any type. Visibility and graphics follow
+Revit's Visibility/Graphics: per category, shown or hidden, halftone, and
+later line weight and colour.
+
+**Annotation rules** say what a drawing of the type gets drawn on it
+automatically:
+- dimensions to the grids;
+- pile numbers and a pile table;
+- beam labels with the profile;
+- room labels;
+- door and window tags;
+- and so on.
+
+**Views.** A view refers to its drawing type and is **Automatic**, showing
+what the type resolves to, or **Manual**, keeping its own overrides on top.
+The old fixed templates per view kind become the defaults of the library
+types.
+
+**Phasing.** Phases are records of the model (existing, demolition, new, or
+the user's own). Elements carry a phase created and a phase demolished. A
+drawing type's phase filter (show all, new only, existing and demolished,
+and so on) is inherited like the other rules. Drawing types combined with
+phases give, for example, "Structural plan – new".
+
+**Model rules.** Every object lying in the plane can be rotated into 3D:
+sketch lines, faces, 2D components and imported 2D geometry all carry a
+full placement, not a plan position alone.
+
+| # | Step | Reuses | Done when |
+|---|---|---|---|
+| 31 | **Piles**: a linear role (IfcPile) reaching down from its storey, with library types, a pile tool and a pile category | the linear element | test: a pile placed, exported as IfcPile, read back |
+| 32 | **Drawing types**: records with inheritance; visibility per category resolved through the parents; the library (Architectural and Structural trees); views referring to a type, Automatic or Manual | view rules, category rules | test: a child overriding one category resolves the rest from its parent; a view follows its type; files round-trip |
+| 33 | **Drawing Rules window**: the tree of types on the left, tabs Visibility/Graphics, Annotation and Phasing on the right, each rule marked inherited or set, with new, duplicate, rename and delete (a type in use cannot be deleted) | the type editor's window, Open 2D Studio's type manager | a type created, a rule overridden and reset to inherited, by clicks |
+| 34 | **Annotation rules applied**: pile numbering and pile table, beam labels, grid dimensions, room labels, door and window tags, per drawing type | dimensions, tags, schedules | test: a pile plan numbers its piles and lists them; a structural plan labels its beams |
+| 35 | **Phasing**: phase records, phase created and demolished on elements, phase filters in drawing types, demolished elements dashed | drawing types | test: a wall demolished in phase 2 shows dashed in "existing and demolished", absent in "new" |
+| 36 | **Manage types**: one window for wall, floor, column, beam, pile and other types: new, duplicate, rename, delete (not when in use), edit; opened from the ribbon and the type selector's pencil | the type editor | a type duplicated, renamed and given to an element, by clicks |
+| 37 | **Floor and roof sketches**: a floor or roof drawn as a closed sketch of lines and arcs, Finish makes the element; afterwards shape handles move its corners and edges; an "Opening" on a selected floor or roof cuts a sketched hole | plates, sketch elements, grips | test: a sketch with an arc makes a floor; an opening sketch cuts it |
+| 38 | **Ribbon: Collaborate tab**: import and export (DWG/DXF in 2D and in 3D, IFC, IfcX, PDF, SVG) in one place | the existing exporters, step 27 | the buttons run their importers and exporters |
+| 39 | **Ribbon: small icons**: groups mixing large buttons with columns of three small ones | the ribbon | a group draws stacked small buttons and they work |
+| 40 | **Plane objects rotated into 3D**: sketch lines, faces and 2D components placed on any plane, rotated with a 3D rotation gesture | sketch elements, components, the 3D grips | test: a face rotated about an edge becomes vertical and stays editable |
+
+Done in this round outside the numbering: a right-click context menu in the
+views, selected elements filled in the selection colour, the snaps as
+buttons, a draggable divider between tiled views, and shadows kept within
+the 3D panel.
+
 ## 8. Decisions taken on the way
 
 - **Step 6 deferred (2026-10-09).** Walls and plates already share the

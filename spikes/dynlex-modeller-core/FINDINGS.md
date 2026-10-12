@@ -1892,3 +1892,182 @@ Three requests from use of the modeller, outside the plan's numbering:
 plan and in 3D, a height typed in the menu, a command run from it, the
 storey menu on empty space, the wall filled blue in both views, and the
 toggles turning Mid off and the grid on.
+
+## Piles (plan step 31, 2026-10-12)
+
+A pile is a linear element of a new role, `bim pile role`, written as
+`IfcPile`. It is upright and reaches down from its storey: placed with one
+click, its head at the storey's level, its foot 12 m down. It reuses the
+linear element's geometry, 3D mesh, files and IfcX unchanged.
+- **Types.** PI starts the pile tool. The library adds three pile types when
+  the model has none: precast 290×290, vibro Ø457 and bored Ø600.
+- **Category.** Piles have their own category, and a floor plan's template
+  hides them. Files written before the category have one view flag fewer;
+  they still read, and the missing flag counts as shown.
+- **Plan.** A pile is drawn as its outline with a cross through it.
+
+**Checked.** `tests/piles.dl`: the tool's prompt, the pile placed from 0 to
+−12 m, its category, hidden in a floor plan, and the same after `.bim` and
+IfcX.
+
+## Drawing types (plan step 32, 2026-10-12)
+
+Drawing types (`bim drawing type record`) are kept in the model. Each holds:
+- per category, shown and halftone;
+- per annotation rule, on or off;
+- a phase filter.
+
+Each setting is −1 (inherited from the parent) or a value. A setting
+resolves through the parents, the first that sets it winning, and a chain
+longer than 32 is cut off. What no ancestor sets falls back to the floor
+plan's template.
+- **Library.** `ensure bim drawing types` adds two trees:
+  - Architectural, with Floor plan, Ceiling plan, Section/Elevation and
+    Details;
+  - Structural, with Structural plan, Pile plan and Structural details.
+
+  It runs only when the types are first used (a structural or pile plan
+  made, or the Drawing Rules window opened), so existing models and tests
+  keep their ids.
+- **Views.** A view gains `drawingTypeId` and `automatic`. Automatic, its
+  rules are its type's; Manual, its own. A rule changed by hand in the
+  visibility panel makes the view Manual. "Automatic" on the View tab puts
+  it back.
+- **Files.** `.bim` writes `drawingtype` lines (settings as `-01` strings)
+  and `viewtype` lines after the views. IfcX writes `openbim::drawingType`
+  records and two fields on `openbim::view`.
+
+**Checked.** `tests/drawing_types.dl`:
+- the library tree;
+- the floor, structural and pile plans resolving visibility and
+  annotations;
+- doors shown on Structural appearing in the pile plan, and inherited again;
+- a view following the pile plan, made Manual and Automatic;
+- the types and the link after `.bim` and IfcX.
+
+## Drawing Rules window and annotation rules (plan steps 33–34, 2026-10-12)
+
+**The window.** View → Drawing Rules (or the context menu) opens a window.
+- **Left:** the tree of drawing types.
+- **Right:** Visibility/Graphics, Annotation and Phasing tabs. Every cell
+  reads "Inherit (value)" in grey or its own value in white. A click runs
+  inherit → on → off → inherit; the phase filter runs through its values.
+- **Buttons:**
+  - New adds a child of the chosen type.
+  - Duplicate adds a sibling with its settings.
+  - Rename types a name in place.
+  - Delete refuses a type that a view follows or another type inherits
+    from.
+- **Effect:** changes apply to automatic views at once.
+
+**Annotation rules** are drawn in the plan from the view's drawing type:
+- **pile numbers:** P1, P2 … in reading order, rows from the top and each
+  row from the left;
+- **pile table:** beside the piles, with type, head, tip and length;
+- **beam labels:** each beam's type at its middle.
+
+Dimensions to grids, room labels, tags and level marks are rules already;
+drawing them by rule comes next.
+
+**Checked** in the running application (Xephyr):
+- a pile plan made from the View tab, listed under its own group in the
+  browser;
+- four piles numbered and tabled, walls in halftone, doors hidden;
+- doors set to shown in the window appearing in the pile plan at once.
+
+## Interface fixes from use (2026-10-12)
+
+- **Divider.** After WT the divider between the plan and the right column,
+  and the one between the 3D view and the section or schedule below, can be
+  dragged (15–85 %).
+- **Shadows.** The 3D view's recorded ground and shadows are keyed to the
+  panel's edges as well as the camera. They no longer replay over another
+  view after a tab change or a divider drag.
+- **Hidden panel.** When a plan fills the drawing, the right panel has no
+  width. The 3D view, the section and the schedule are then not drawn at
+  all; before, the 3D selection overlay and the cached shadows landed on
+  the plan.
+- **Small ribbon buttons.** A ribbon button can be small: three stacked in a
+  column, the icon drawn at half size beside its label. Icons now draw at
+  any scale. View → Panels, Manage → Units and Collaborate → Export use
+  them.
+- **Collaborate tab.** One place for import and export. DWG/DXF (plan step
+  27) is shown dimmed until it exists.
+
+## Phasing (plan step 35, 2026-10-12)
+
+**Phases** are model records, kept in order, Existing and New construction
+by default. A **phasing record** says when an element was built and
+demolished, keyed by element id. It is kept apart from the elements, so
+every kind of element can have one without its record changing.
+- **No record:** the element is new in the last phase and never demolished.
+- **Openings:** an opening without one follows its wall.
+- **Views:** a view has a phase; the refused id means the last.
+
+**State.** Seen in a view's phase, an element is one of:
+- **absent:** built later, or demolished earlier;
+- **demolished:** demolished in this phase;
+- **new:** built in this phase;
+- **existing:** built in an earlier phase.
+
+**Look.** The drawing type's phase filter turns the state into a look. With
+"show all", existing work is halftone, demolished work dashed and unhatched,
+and new work normal. The other filters (new only, existing, existing and
+demolished, demolition) hide what they leave out.
+- **Plan and section:** the look applies to cut walls and floors, and also
+  hides openings, plate outlines and linear elements.
+- **3D view:** drops what is absent.
+
+**Editing:**
+- The properties gain "Phase built" and "Phase demolished"; a click takes
+  the next phase.
+- With nothing selected, the properties show the plan's drawing type and
+  phase, also clicked through.
+- DM (View → Demolish) demolishes the selection in the plan's phase, moving
+  its building into an earlier one.
+
+**Files.** `phase` and `phasing` lines in `.bim`, `openbim::phase` and
+`openbim::phasing` records in IfcX, and the view's phase with its drawing
+type.
+
+**Checked.** `tests/phases.dl`:
+- three columns (existing, demolished in new, new) in New construction and
+  in Existing;
+- under the floor plan's "new" and "existing and demolished" filters;
+- a phasing removed when made plain;
+- all of it after `.bim` and IfcX.
+
+In the running application, DM made a wall dashed, and the plan's phase set
+to Existing showed only that wall.
+
+## Shape handles and levels in the section (2026-10-12)
+
+**Handles.** The selection gets handles in the section:
+- **a wall:** at its top;
+- **a floor:** at its top and its underside;
+- **an opening:** at its head and its sill.
+
+An opening's void is computed where the section line crosses its host wall
+within the opening's width, as deep as the wall is thick across the line. A
+click in that void selects the opening.
+
+**Dragging.** A drag shows a dashed line and the height under the pointer.
+On release it makes one edit, to 10 mm:
+- **wall:** its height;
+- **floor:** its top above the storey, or its thickness (a typed floor's
+  thickness follows its type, and says so);
+- **opening:** its type's height, or its sill keeping the head.
+
+**Levels.** Every storey shows as a dashed line across the cut, with a level
+head and its name and elevation at the right. The fit keeps room for them.
+
+**Click versus drag.** Clicking a selected wall no longer nudges it. A press
+counts as a drag only once the pointer has travelled half the pick
+tolerance. Before, a snap shifting under the pointer moved the wall a few
+millimetres and made an undo step.
+
+**Checked** in the running application:
+- the opening selected in the section;
+- the first floor's wall raised to 3460 mm;
+- the window's sill lowered to 500 mm with the head kept;
+- a floor's underside dragged to 490 mm.
