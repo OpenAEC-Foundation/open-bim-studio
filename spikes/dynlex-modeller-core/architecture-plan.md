@@ -309,11 +309,29 @@ full placement, not a plan position alone.
 | 38 | **Ribbon: Collaborate tab**: import and export (DWG/DXF in 2D and in 3D, IFC, IfcX, PDF, SVG) in one place | the existing exporters, step 27 | the buttons run their importers and exporters |
 | 39 | **Ribbon: small icons**: groups mixing large buttons with columns of three small ones | the ribbon | a group draws stacked small buttons and they work |
 | 40 | **Plane objects rotated into 3D**: sketch lines, faces and 2D components placed on any plane, rotated with a 3D rotation gesture | sketch elements, components, the 3D grips | test: a face rotated about an edge becomes vertical and stays editable |
+| 41 | **Area plans (NEN 2580)**: an Area plan drawing type showing per storey the gross area (BVO, outer faces), usable area (GO, the outer walls' inner faces), net area (NVO, the spaces) and lettable area (VVO), with their bounds and a table of storey and building totals | spaces, drawing types, annotation rules | test: a walled room gives BVO, GO and NVO exactly |
+| 42 | **Building system parts**: the facade system (formerly curtain wall) with its mullions, transoms and panels chosen one by one; panels of a layered planar type built layer by layer; a panel type for the whole system or one panel | the curtain generator, planar types | test: a sandwich panel gives a part per layer; parts are named by their place; types survive the file and IfcX |
+| 43 | **Rooms in 3D**: the spaces as see-through volumes in the 3D view, when the 3D view shows the space category | spaces, the 3D view | the rooms show and hide with the category |
 
 Done in this round outside the numbering: a right-click context menu in the
 views, selected elements filled in the selection colour, the snaps as
 buttons, a draggable divider between tiled views, and shadows kept within
 the 3D panel.
+
+Later the same day, from use:
+- **TR** is Revit's Trim/Extend to Corner: two clicks, each on the part of a
+  wall or line to keep. The extend tool trims too when its boundary crosses
+  the element (Revit's Trim/Extend Single Element).
+- **A wall's foot** has a base offset. A section handle at the foot moves it
+  and keeps the top.
+- **A floor's sides** are dragged across themselves: by arrows on each
+  edge's middle in the plan, and by handles on its two cut sides in the
+  section. The neighbouring edges keep their directions. Corners are added
+  in the sketch (step 37).
+- **Section lines** are drawn as in Revit: dash-dot, with heavy ends and a
+  head at each end. A head holds the section's number and an arrow toward
+  the side it looks at. Placing a section snaps and tracks from its first
+  point.
 
 ## 8. Decisions taken on the way
 

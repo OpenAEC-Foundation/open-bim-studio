@@ -452,7 +452,7 @@ local function the bim snap segments near {cad vector2:location} within {a 64 bi
         return result
 
 # The point drawing tracks from: the last point of the chain, rectangle,
-# grid or move under way; `found` is false when there is none.
+# grid, section line or move under way; `found` is false when there is none.
 function the bim tracking origin of {bim editor record:editor}:
     execute:
         set none to @intrinsic("construct", a bim snap candidate record, editor's pointerLocation, the string form of "", 0, 0.0, false, 0)
@@ -463,6 +463,8 @@ function the bim tracking origin of {bim editor record:editor}:
             return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true, 0)
         if (editor's tool = bim grid tool) and editor's gridActive:
             return @intrinsic("construct", a bim snap candidate record, editor's gridStart, the string form of "", 0, 0.0, true, 0)
+        if (editor's tool = bim section tool) and editor's sectionActive:
+            return @intrinsic("construct", a bim snap candidate record, editor's sectionStart, the string form of "", 0, 0.0, true, 0)
         set moving to ((editor's tool = bim move tool) or (editor's tool = bim copy tool)) or ((editor's tool = bim rotate tool) or (editor's tool = bim mirror tool))
         if moving and (editor's moveStage >= 2):
             return @intrinsic("construct", a bim snap candidate record, editor's moveBase, the string form of "", 0, 0.0, true, 0)
@@ -728,7 +730,7 @@ function the bim spaces key of {bim editor record:editor}:
             if wallValue's levelId = editor's levelId:
                 set count to count + 1
                 set signature to signature + (((wallValue's start's x * 1.31) + (wallValue's start's y * 1.73)) + ((wallValue's finish's x * 2.37) + (wallValue's finish's y * 2.91)))
-                set signature to signature + ((((wallValue's typeId as a 64 bit floating-point number) * 0.0037) + (wallValue's bulge * 3.11)) + (wallValue's height * 0.113))
+                set signature to signature + ((((wallValue's typeId as a 64 bit floating-point number) * 0.0037) + (wallValue's bulge * 3.11)) + ((wallValue's height * 0.113) + (wallValue's baseOffset * 0.157)))
         loop cursor from 0 to the length of (modelValue's wallTypes's values):
             set wallType to the item at cursor in (modelValue's wallTypes's values)
             loop layerCursor from 0 to the length of (wallType's layers's values):
@@ -1154,7 +1156,7 @@ function the bim selection outlines of {bim editor record:editor} in plan {boole
         loop cursor from 0 to the length of (modelValue's walls's values):
             set wallValue to the item at cursor in (modelValue's walls's values)
             if ((inPlan = false) or (wallValue's levelId = editor's levelId)) and (bim category bim wall category is visible in rules):
-                set base to the bim elevation of level wallValue's levelId in modelValue
+                set base to (the bim elevation of level wallValue's levelId in modelValue) + wallValue's baseOffset
                 set ring to an empty list of a cad vector2
                 append wallValue's start to ring
                 if wallValue's bulge != 0.0:
@@ -1908,7 +1910,7 @@ function place bim editor curtain at {cad vector2:point} in {a pointer to a bim 
         if editor's moveStage = 0:
             set editor's solidCorner to point
             set editor's moveStage to 1
-            set editor's message to the string form of "Curtain wall: click its end"
+            set editor's message to the string form of "Building system: click its end"
             return nothing
         set editor's moveStage to 0
         set levelFound to the bim level index of editor's levelId in editor's documentValue's current
@@ -1919,11 +1921,11 @@ function place bim editor curtain at {cad vector2:point} in {a pointer to a bim 
         set made to add bim curtain wall on editor's levelId from editor's solidCorner to point rising storeyHeight in bays of 1.2 by 1.5 of (the string form of "steel") to (the address of (editor's documentValue's current))
         if made = the bim refused id:
             roll back bim transaction in (the address of (editor's documentValue))
-            set editor's message to the string form of "Curtain wall refused: it must be at least 0.5 m long"
+            set editor's message to the string form of "Building system refused: it must be at least 0.5 m long"
             return nothing
         commit bim transaction in (the address of (editor's documentValue))
         select bim editor bim curtain picked numbered made in editor
-        set editor's message to (the string form of "Curtain wall ") + (the string form of made)
+        set editor's message to (the string form of "Building system ") + (the string form of made)
 
 # A click of the railing tool: a point of its path; Enter ends it.
 function place bim editor railing point at {cad vector2:point} in {a pointer to a bim editor record:editor}:
@@ -2640,6 +2642,68 @@ function the bim slab edge middle near {cad vector2:location} in {bim slab recor
                 set bestDistance to gap
         return best
 
+# `slabCorner` while an edge is dragged: this minus the edge's index.
+function bim slab edge drag base:
+    replacement:
+        -10
+
+# Fills `pushedCorners` with the outline of `slabValue` with edge `edgeIndex`
+# moved across itself by the part of `shift` along its normal; its two
+# corners slide along the edges before and after it so those keep their
+# directions. False (and `pushedCorners` left empty) when a neighbouring edge
+# runs parallel to it.
+function fill bim outline of {bim slab record:slabValue} with edge {integer:edgeIndex} pushed by {cad vector2:shift} into {a pointer to a list:pushedCorners}:
+    execute:
+        set corners to slabValue's outline's values
+        set count to the length of corners
+        if count < 3:
+            return false
+        set here to the item at edgeIndex in corners
+        set following to the item at (the remainder of (edgeIndex + 1) divided by count) in corners
+        set run to the cad distance from here to following
+        if run <= 1e-9:
+            return false
+        set nx to (0.0 - (following's y - here's y)) / run
+        set ny to (following's x - here's x) / run
+        set amount to (shift's x * nx) + (shift's y * ny)
+        # The pushed edge's line and the lines of its neighbours meet at its
+        # new corners.
+        set before to the item at (the remainder of ((edgeIndex + count) - 1) divided by count) in corners
+        set after to the item at (the remainder of (edgeIndex + 2) divided by count) in corners
+        set edgeRun to a cad vector2 with x (following's x - here's x) and y (following's y - here's y)
+        set newHere to the bim meeting point from before through here with (a cad vector2 with x (here's x + (amount * nx)) and y (here's y + (amount * ny))) along edgeRun
+        set newFollowing to the bim meeting point from after through following with (a cad vector2 with x (following's x + (amount * nx)) and y (following's y + (amount * ny))) along edgeRun
+        if (newHere's valid = false) or (newFollowing's valid = false):
+            return false
+        set followingIndex to the remainder of (edgeIndex + 1) divided by count
+        loop cursor from 0 to count:
+            if cursor = edgeIndex:
+                append newHere's point to pushedCorners
+            else if cursor = followingIndex:
+                append newFollowing's point to pushedCorners
+            else:
+                append (the item at cursor in corners) to pushedCorners
+        return true
+
+class:
+    patterns:
+        [a|] bim meeting choice record
+    members:
+        valid as a boolean
+        point as a cad vector2
+
+# Where the line through `neighbour` and `cornerPoint` meets the line through
+# `spot` running along `direction`.
+local function the bim meeting point from {cad vector2:neighbour} through {cad vector2:cornerPoint} with {cad vector2:spot} along {cad vector2:direction}:
+    execute:
+        set ex to cornerPoint's x - neighbour's x
+        set ey to cornerPoint's y - neighbour's y
+        set denominator to (ex * direction's y) - (ey * direction's x)
+        if (the absolute value of denominator) <= 1e-12:
+            return @intrinsic("construct", a bim meeting choice record, false, cornerPoint)
+        set t to (((spot's x - neighbour's x) * direction's y) - ((spot's y - neighbour's y) * direction's x)) / denominator
+        return @intrinsic("construct", a bim meeting choice record, true, a cad vector2 with x (neighbour's x + (t * ex)) and y (neighbour's y + (t * ey)))
+
 # True when an edge of `slabValue` passes within `tolerance` of `location`.
 local function bim slab {bim slab record:slabValue} has an edge near {cad vector2:location} within {a 64 bit floating-point number:tolerance}:
     execute:
@@ -3345,6 +3409,16 @@ function move bim editor pointer to {cad vector2:location} within {a 64 bit floa
                 if move bim grid editor's gridDragId to newStart and newFinish in (the address of (editor's documentValue's current)):
                     set editor's dragMoved to true
             return nothing
+        if editor's slabCorner <= bim slab edge drag base:
+            set chosen to the bim selected slab of (@intrinsic("dereference", editor))
+            if chosen's valid:
+                set corners to an empty list of a cad vector2
+                if fill bim outline of chosen's slab with edge (bim slab edge drag base - editor's slabCorner) pushed by (a cad vector2 with x (target's x - editor's moveBase's x) and y (target's y - editor's moveBase's y)) into corners:
+                    if set bim slab chosen's slab's id outline to corners in (the address of (editor's documentValue's current)):
+                        set editor's dragMoved to true
+                        set editor's moveBase to target
+                free corners
+            return nothing
         if editor's slabCorner >= 0:
             set chosen to the bim selected slab of (@intrinsic("dereference", editor))
             if chosen's valid:
@@ -3561,8 +3635,27 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                 set editor's message to (the string form of "Offset ") + ((the bim length editor's offsetDistance in units editor's lengthUnit) + (the string form of "; click the next, or type a distance"))
             set editor's moveStage to 0
             return nothing
-        if (editor's tool = bim trim tool) or (editor's tool = bim extend tool):
-            set extending to editor's tool = bim extend tool
+        # TR trims or extends two walls or lines to the corner where they
+        # meet, keeping the parts that were clicked (Revit's Trim/Extend to
+        # Corner).
+        if editor's tool = bim trim tool:
+            set cornerPick to editor's pointerLocation
+            select bim editor element at cornerPick in editor
+            if ((editor's selectionKind != bim wall picked) and (editor's selectionKind != bim sketch picked)) or (((the bim segment of editor's selectionId in editor's documentValue's current)'s valid) = false):
+                set editor's moveStage to 0
+                set editor's message to the string form of "Trim to corner: click a straight wall or line, on the part to keep"
+                return nothing
+            if (editor's moveStage = 0) or (editor's selectionId = editor's boundaryId):
+                set editor's boundaryId to editor's selectionId
+                set editor's moveBase to cornerPick
+                set editor's moveStage to 1
+                set editor's message to the string form of "Trim to corner: click the second wall or line, on the part to keep"
+                return nothing
+            set editor's message to trim bim editor corner of editor's boundaryId at editor's moveBase and editor's selectionId at cornerPick in editor
+            set editor's moveStage to 0
+            return nothing
+        if editor's tool = bim extend tool:
+            set extending to true
             if editor's moveStage = 0:
                 select bim editor element at editor's pointerLocation in editor
                 if (editor's selectionKind = bim nothing picked) or (((the bim segment of editor's selectionId in editor's documentValue's current)'s valid) = false):
@@ -3680,7 +3773,7 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
             set editor's message to the string form of "Section placed"
             return nothing
         # Select tool. On the selected slab, pressing on a corner drags it and
-        # pressing on an edge's middle adds a corner there and drags that.
+        # pressing on an edge's middle pushes that side across itself.
         # Pressing on a wall end point of the active storey drags every wall
         # end of that storey that meets there, so joins stay joined. Pressing
         # elsewhere selects what lies under the pointer; pressing on a wall
@@ -3713,22 +3806,15 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                 set editor's dragging to true
                 set editor's dragMoved to false
                 return nothing
+            # An edge's middle drags that side across itself, its corners
+            # sliding along the neighbouring edges' directions.
             set edgeIndex to the bim slab edge middle near editor's pointerLocation in chosen's slab within editor's pickTolerance
             if edgeIndex >= 0:
-                set corners to an empty list of a cad vector2
-                loop cursor from 0 to the length of (chosen's slab's outline's values):
-                    append (the item at cursor in (chosen's slab's outline's values)) to corners
-                    if cursor = edgeIndex:
-                        append (the bim middle of slab edge edgeIndex of chosen's slab) to corners
                 begin bim transaction in (the address of (editor's documentValue))
-                if set bim slab chosen's slab's id outline to corners in (the address of (editor's documentValue's current)):
-                    set editor's slabCorner to edgeIndex + 1
-                    set editor's dragging to true
-                    set editor's dragMoved to true
-                    set editor's message to the string form of "Corner added"
-                else:
-                    roll back bim transaction in (the address of (editor's documentValue))
-                free corners
+                set editor's slabCorner to bim slab edge drag base - edgeIndex
+                set editor's moveBase to editor's pointerLocation
+                set editor's dragging to true
+                set editor's dragMoved to false
                 return nothing
         # The middle of the selected wall bends it.
         if editor's selectionKind = bim wall picked:
@@ -3763,6 +3849,8 @@ function release bim editor pointer in {a pointer to a bim editor record:editor}
             commit bim transaction in (the address of (editor's documentValue))
             if editor's bendWallId != the bim refused id:
                 set editor's message to the string form of "Bent"
+            else if editor's slabCorner <= bim slab edge drag base:
+                set editor's message to the string form of "Edge moved"
             else if editor's slabCorner < 0:
                 set editor's message to the string form of "Moved"
             else if editor's message != "Corner added":
@@ -4288,8 +4376,9 @@ function the bim segment of {a 64 bit integer:elementId} in {bim model record:mo
 
 # Trims (`extending` false) or extends wall or sketch line `elementId` to the
 # line of the boundary: trimming keeps the side `pick` is on, extending moves
-# the end nearer `pick` onto the boundary. Returns a description, empty when
-# nothing changed.
+# the end nearer `pick` onto the boundary, or trims like trimming when the
+# boundary crosses the element (Revit's Trim/Extend Single Element). Returns
+# a description.
 function trim bim editor element {a 64 bit integer:elementId} at {cad vector2:pick} extending {boolean:extending} in {a pointer to a bim editor record:editor}:
     execute:
         set target to the address of (editor's documentValue's current)
@@ -4310,13 +4399,14 @@ function trim bim editor element {a 64 bit integer:elementId} at {cad vector2:pi
         set pickT to (((pick's x - piece's start's x) * dx) + ((pick's y - piece's start's y) * dy)) / runSquared
         set newStart to piece's start
         set newFinish to piece's finish
-        if extending:
+        set crossing to (t > 0.0) and (t < 1.0)
+        if extending and (crossing = false):
             if pickT < 0.5:
                 set newStart to meeting
             else:
                 set newFinish to meeting
         else:
-            if (t <= 0.0) or (t >= 1.0):
+            if crossing = false:
                 return the string form of "the boundary does not cross it"
             if pickT > t:
                 set newStart to meeting
@@ -4336,11 +4426,75 @@ function trim bim editor element {a 64 bit integer:elementId} at {cad vector2:pi
             free ends
         if changed:
             commit bim transaction in (the address of (editor's documentValue))
-            if extending:
+            if extending and (crossing = false):
                 return the string form of "Extended"
             return the string form of "Trimmed"
         roll back bim transaction in (the address of (editor's documentValue))
         return the string form of "refused"
+
+# The ends of straight segment `piece` cut or stretched to `meeting` on the
+# line through it, keeping the part `pick` lies on: when `meeting` lies within
+# the segment the side of `pick` stays, otherwise the end nearer `meeting`
+# moves onto it.
+local function the bim segment {bim segment choice record:piece} cornered at {cad vector2:meeting} keeping {cad vector2:pick}:
+    execute:
+        set dx to piece's finish's x - piece's start's x
+        set dy to piece's finish's y - piece's start's y
+        set runSquared to (dx * dx) + (dy * dy)
+        set along to (((meeting's x - piece's start's x) * dx) + ((meeting's y - piece's start's y) * dy)) / runSquared
+        set pickAlong to (((pick's x - piece's start's x) * dx) + ((pick's y - piece's start's y) * dy)) / runSquared
+        if (along > 0.0) and (along < 1.0):
+            if pickAlong > along:
+                return @intrinsic("construct", a bim segment choice record, true, meeting, piece's finish)
+            return @intrinsic("construct", a bim segment choice record, true, piece's start, meeting)
+        if along <= 0.0:
+            return @intrinsic("construct", a bim segment choice record, true, meeting, piece's finish)
+        return @intrinsic("construct", a bim segment choice record, true, piece's start, meeting)
+
+# Moves the ends of wall or sketch line `elementId` to `cut`'s.
+local function place bim segment {a 64 bit integer:elementId} as {bim segment choice record:cut} in {a pointer to a bim model record:target}:
+    execute:
+        if (the bim wall index of elementId in (@intrinsic("dereference", target)))'s valid:
+            return move bim wall elementId to cut's start and cut's finish in target
+        set ends to an empty list of a cad vector2
+        append cut's start to ends
+        append cut's finish to ends
+        set placed to set bim sketch elementId points to ends in target
+        free ends
+        return placed
+
+# Trims or extends walls or sketch lines `firstId` and `secondId` to the
+# corner where their lines meet, as one edit, keeping the part of each that
+# was clicked (`firstPick`, `secondPick`). Returns a description.
+function trim bim editor corner of {a 64 bit integer:firstId} at {cad vector2:firstPick} and {a 64 bit integer:secondId} at {cad vector2:secondPick} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set firstSegment to the bim segment of firstId in (@intrinsic("dereference", target))
+        set secondSegment to the bim segment of secondId in (@intrinsic("dereference", target))
+        if (firstSegment's valid = false) or (secondSegment's valid = false):
+            return the string form of "Trim to corner: pick straight walls or lines"
+        set dx to firstSegment's finish's x - firstSegment's start's x
+        set dy to firstSegment's finish's y - firstSegment's start's y
+        set otherX to secondSegment's finish's x - secondSegment's start's x
+        set otherY to secondSegment's finish's y - secondSegment's start's y
+        set denominator to (dx * otherY) - (dy * otherX)
+        if (the absolute value of denominator) <= 1e-12:
+            return the string form of "Trim to corner: they run parallel"
+        set t to (((secondSegment's start's x - firstSegment's start's x) * otherY) - ((secondSegment's start's y - firstSegment's start's y) * otherX)) / denominator
+        set meeting to a cad vector2 with x (firstSegment's start's x + (t * dx)) and y (firstSegment's start's y + (t * dy))
+        set firstCut to the bim segment firstSegment cornered at meeting keeping firstPick
+        set secondCut to the bim segment secondSegment cornered at meeting keeping secondPick
+        if ((the cad distance from firstCut's start to firstCut's finish) <= 1e-6) or ((the cad distance from secondCut's start to secondCut's finish) <= 1e-6):
+            return the string form of "Trim to corner: nothing would be left"
+        begin bim transaction in (the address of (editor's documentValue))
+        set placed to place bim segment firstId as firstCut in target
+        if placed:
+            set placed to place bim segment secondId as secondCut in target
+        if placed:
+            commit bim transaction in (the address of (editor's documentValue))
+            return the string form of "Trimmed to corner"
+        roll back bim transaction in (the address of (editor's documentValue))
+        return the string form of "Trim to corner: refused"
 
 # ---------------------------------------------------------------- push/pull of a mesh face
 
@@ -4901,6 +5055,9 @@ function bim view phase property:
 function bim view drawing type property:
     replacement:
         66
+function bim wall base property:
+    replacement:
+        67
 
 local function append bim property {a string:label} showing {a string:shown} as {integer:code} to {a pointer to a list:rows}:
     execute:
@@ -5174,6 +5331,7 @@ local function the bim own property rows of {bim editor record:editor}:
             if found's valid:
                 set wallValue to the item at found's position in (modelValue's walls's values)
                 append bim property (the string form of "Height") showing (the bim length wallValue's height in units unitCode) as bim wall height property to propertyRows
+                append bim property (the string form of "Base offset") showing (the bim length wallValue's baseOffset in units unitCode) as bim wall base property to propertyRows
                 append bim property (the string form of "Curvature") showing (the bim length wallValue's bulge in units unitCode) as bim wall bulge property to propertyRows
                 append bim property (the string form of "Lean (top)") showing (the bim length wallValue's lean in units unitCode) as bim wall lean property to propertyRows
                 append bim property (the string form of "Bow (section)") showing (the bim length wallValue's rise in units unitCode) as bim wall rise property to propertyRows
@@ -5346,6 +5504,10 @@ function apply bim editor property in {a pointer to a bim editor record:editor}:
         set changed to false
         if code = bim wall height property:
             set changed to set bim wall chosenId height to metres in target
+        if code = bim wall base property:
+            set baseFound to the bim wall index of chosenId in (@intrinsic("dereference", target))
+            if baseFound's valid:
+                set changed to set bim wall chosenId base to metres and height to (the item at baseFound's position in (target's walls's values))'s height in target
         if code = bim wall bulge property:
             set changed to bend bim wall chosenId keeping its joins by metres in target
         if ((code = bim plate top property) or (code = bim plate pitch property)) or (code = bim plate heading property):
@@ -5967,7 +6129,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                     set editor's message to the string form of "Mirror: click the first point of the mirror line"
             if code = 2012:
                 set editor's tool to bim trim tool
-                set editor's message to the string form of "Trim: click the boundary (wall, line or grid)"
+                set editor's message to the string form of "Trim to corner: click the first wall or line, on the part to keep"
             if code = 2013:
                 set editor's tool to bim extend tool
                 set editor's message to the string form of "Extend: click the boundary (wall, line or grid)"
@@ -6012,7 +6174,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         if code = 2112:
             set editor's tool to bim curtain tool
             set editor's moveStage to 0
-            set editor's message to the string form of "Curtain wall: click its start"
+            set editor's message to the string form of "Building system: click its start"
             return nothing
         if code = 2110:
             set editor's tool to bim railing tool

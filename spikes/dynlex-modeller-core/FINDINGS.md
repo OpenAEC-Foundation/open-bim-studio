@@ -2071,3 +2071,54 @@ millimetres and made an undo step.
 - the first floor's wall raised to 3460 mm;
 - the window's sill lowered to 500 mm with the head kept;
 - a floor's underside dragged to 490 mm.
+
+## Trim to corner, wall foot, floor sides, section heads (2026-10-12)
+
+**TR** was AutoCAD's trim: pick a boundary, then the parts to cut. A user
+coming from Revit expects TR to be Trim/Extend to Corner, and two walls
+stopping short of each other only gave "the boundary does not cross it".
+TR now takes two clicks, each on the part of a wall or sketch line to keep:
+- where the lines' meeting point lies within an element, the clicked side
+  stays;
+- otherwise the element's end nearer the meeting point moves onto it.
+
+Both changes make one edit, and walls meeting at the point join as usual.
+The extend tool now also trims when its boundary crosses the element, which
+is Revit's Trim/Extend Single Element.
+
+**A wall's foot.** Walls had no base offset, so a section handle at the foot
+had nothing to change. `baseOffset` is now the wall record's last member. It
+is written as a separate `wallbase id offset` line, and in IfcX as an
+optional `baseOffset` field, so older files read unchanged. Several places
+take it into account:
+- the solid, layered and clash pieces start at the level plus the offset;
+- openings stay relative to the level, so their sills are given relative to
+  the wall's foot;
+- the evaluation's signature and the plan's cache key include it, or the
+  wall would not be rebuilt;
+- IFC export places the wall at the offset.
+
+The handle at the foot moves the foot and keeps the top. The property sheet
+shows "Base offset".
+
+**Floor sides.** An edge's middle used to add a corner. It now pushes that
+side across itself, and the neighbouring edges keep their directions, as a
+Revit shape handle does. It is drawn as a pair of arrows, left out on edges
+too short to hold them (an arc's pieces). In the section, a floor gets a
+handle on each cut side. It is dragged along the section and pushes the edge
+the section crosses there. Adding corners moves to the floor sketch (step
+37).
+
+**Pitfall.** Freeing a list taken from a record's topology-list field
+(`free moved's points's values`) crashed the application at the first drag,
+though the same code passed in a test. The edge push now fills a plain local
+list, as the corner drag does.
+
+**Section heads.** Section lines were a red stroke in the gesture layer.
+They are now part of the plan drawing, so sheets get them too:
+- a dash-dot line with heavy ends;
+- a head beyond each end, with the section's number in a circle and a filled
+  arrow toward the side the section looks at (the left of its line).
+
+The section on show keeps a thin red overlay. Placing a section now tracks
+from its first point (ortho, polar), as walls and grids do.
