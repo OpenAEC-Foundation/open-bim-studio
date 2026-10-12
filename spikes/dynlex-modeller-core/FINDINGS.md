@@ -1851,3 +1851,44 @@ is sized in millimetres (`width="841mm"`, `viewBox="0 0 841 594"`).
 **Checked.** `tests/svg.dl`: a stroke and the label "Plan & <1:100>" on a
 100 × 50 mm page. The file is printed whole, and an XML parser reads one
 path and the label back unchanged.
+
+## 2D detail components (plan step 18, 2026-10-12)
+
+DC (Annotate → Detail) makes the selected lines and shapes a detail
+component of the view open. A detail component is an ordinary component
+whose instance records the view it is drawn in (`viewId` on the instance);
+the refused id means a model instance, shown everywhere.
+- **Views.** A plan draws the model instances and the detail instances of
+  its own view only (`the bim drawn sketches of … seen from view …`). A
+  duplicated view starts without the detail; the 3D view never shows it.
+- **Files.** The view is written to `.bim` and IfcX and read back.
+
+**Checked.** `tests/detail.dl`: two parts drawn in the first view, one in
+its duplicate (the model part), one in 3D; both files keep the split.
+
+## Viewport interaction (2026-10-12)
+
+Three requests from use of the modeller, outside the plan's numbering:
+- **Context menu.** A right click that does not drag opens a menu at the
+  pointer in the plan and the 3D view. With nothing selected, it first
+  selects what lies under the pointer. The menu shows the selection's
+  description and properties: the rows of the explorer, typed in place.
+  Then it lists the commands for the selection (move, copy, rotate, mirror,
+  create similar, tag, make component or edit/explode, delete, deselect,
+  fit, visibility). With nothing selected, it shows the storey's
+  properties and the drawing tools. A right drag still pans or orbits.
+  Escape closes the menu.
+- **Selection colour.** A selected wall, slab or linear element is filled
+  see-through blue in the plan, as well as outlined. In 3D up to nine
+  selected elements are drawn blue: the mesh shader compares the element
+  ordinal with parameters 22 to 30, where it compared one before.
+- **Snap toggles.** The command line shows SNAP, ORTHO, POLAR and GRID, then
+  each object snap (end, mid, intersection, perpendicular, nearest, grid
+  step) as buttons that turn them on and off. An object snap that is off is
+  skipped by `offer bim snap` (`snapRefused`, one bit per rank, on the
+  editor).
+
+**Checked** in the running application (Xephyr): the menu on a wall in the
+plan and in 3D, a height typed in the menu, a command run from it, the
+storey menu on empty space, the wall filled blue in both views, and the
+toggles turning Mid off and the grid on.
