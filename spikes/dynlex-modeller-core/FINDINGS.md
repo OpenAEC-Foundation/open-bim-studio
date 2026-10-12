@@ -2122,3 +2122,65 @@ They are now part of the plan drawing, so sheets get them too:
 
 The section on show keeps a thin red overlay. Placing a section now tracks
 from its first point (ortho, polar), as walls and grids do.
+
+## Area plans, building system parts, levels in the section, typed sums (2026-10-12)
+
+**Area plans (NEN 2580).** An Area plan drawing type, added to every model's
+library (also to older ones, the first time drawing types are ensured),
+shows the Dutch floor areas. They come from the same arrangement of wall
+outlines as the spaces:
+- every face counts for BVO;
+- the faces that are no wall count for NVO;
+- a wall face with an edge no other face shares is an outer wall, and GO is
+  BVO less the outer walls.
+
+VVO equals GO until spaces can be marked as not lettable. The plan draws
+BVO's bound heavy red and GO's dashed green, with a table of the storey and
+the whole building. The test's 6 x 4 m room of 320 mm walls with a 100 mm
+partition gives BVO 27.3024, GO 20.9024 and NVO 20.5344 m², exactly.
+
+**Building system parts.** A second click on a selected building system
+chooses the part under the pointer:
+- in the plan, by its place along the line at the cut height;
+- in 3D, where the sight meets the system's plane.
+
+Parts are coded as mullion i, transom 1000+j and panel 2000+k. Escape
+returns to the whole system. A panel, or the whole system, takes a planar
+type: Glass, then each planar type in turn. A layered type builds the panel
+from one part per layer, stacked across the line. Those layers are edited in
+the property rows, as a wall type's are. Panel types are kept in a
+`systemPanels` table of the model. They are written as a `systempanels`
+line after the system, and in IfcX as a `panels` field of pairs.
+
+**Levels and grids in the section.** A click on a level's line or head
+selects it. A click on its label also starts typing its elevation. A
+selected level shows in the selection colour, with a handle to drag it. A
+click on a grid's line or head selects the grid.
+
+**Snaps while dragging.** A drag tracks from where it began (horizontal,
+vertical, polar), and a corner drag snaps accordingly.
+- Wall face corners and slab corners snap as end points. They are offered
+  as points only: as segments their lines gave "nearest" snaps that pulled a
+  dragged wall end off the grid (7.5596 instead of 7.5 in the editor test).
+- In the section, a dragged handle snaps to levels and to the tops and
+  undersides of other cut elements, named beside the dashed line.
+
+**Typed sums.** Wherever a value is typed, `=1500+500`, `2*(1200+300)/3`
+and the like are worked out. Shifted digits and = arrive as characters (+ *
+( )), so while a value is typed the key path passes them over and the
+character path adds them.
+
+**G and AL.** G grabs the selection at once, from the pointer, as in
+Blender; a click places and Escape puts it back. AL takes a reference (a
+grid first, else a straight wall or a line) and moves parallel walls, grids
+or lines onto it. In the section, AL aligns a level to a height or to
+another level.
+
+**Pitfalls met:**
+- **A local sharing a word with its own function's pattern** stops the
+  calls to that function from resolving. In this round that was `text` in
+  `the bim panel text of`, `area` in `the bim area measures of`, and
+  `reference` in `align … to the reference`.
+- **The compiler under memory pressure.** The app's compile reaches 5.4 GB.
+  Next to a test compile it was killed for lack of memory, so the app is
+  built alone.

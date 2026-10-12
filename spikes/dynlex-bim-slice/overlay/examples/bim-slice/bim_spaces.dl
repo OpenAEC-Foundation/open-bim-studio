@@ -120,6 +120,133 @@ function the bim spaces of {bim model record:modelValue} on level {a 64 bit inte
         free rings
         return result
 
+# ---------------------------------------------------------------- NEN 2580
+
+# A storey's floor areas after NEN 2580 (metres squared), with the lines that
+# bound them as pixel-free pairs of plan points:
+# - `gross` (BVO, bruto vloeroppervlakte): within the outer faces of the
+#   walls;
+# - `usable` (GO, gebruiksoppervlakte): within the inner faces of the outer
+#   walls, so with the inner walls;
+# - `net` (NVO, netto vloeroppervlakte): the spaces, without any wall;
+# - `lettable` (VVO, verhuurbaar vloeroppervlak): the usable area less the
+#   spaces marked as not lettable; none can be marked yet, so it equals GO.
+# `grossPairs` runs along the outer faces, `usablePairs` along the outer
+# walls' inner faces.
+class:
+    patterns:
+        [a|] bim area measures record
+    members:
+        gross as a 64 bit floating-point number
+        usable as a 64 bit floating-point number
+        net as a 64 bit floating-point number
+        lettable as a 64 bit floating-point number
+        grossPairs as the type of (a cad topology list of a cad vector2)
+        usablePairs as the type of (a cad topology list of a cad vector2)
+
+# The NEN 2580 areas of level `levelId`. The walls' outlines divide the
+# storey into faces, as for the spaces: faces inside a wall are wall, the
+# others are spaces. A face edge no other face shares lies on the outside; a
+# wall face with such an edge belongs to an outer wall.
+function the bim area measures of {bim model record:modelValue} on level {a 64 bit integer:levelId} using {bim join index record:index}:
+    execute:
+        set walls to modelValue's walls's values
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        set tagged to an empty list of a cad tagged line2
+        loop cursor from 0 to the length of walls:
+            set wallValue to the item at cursor in walls
+            set ring to an empty list of a cad vector2
+            if wallValue's levelId = levelId:
+                set footprint to the bim footprint of wallValue in modelValue using index
+                if footprint's valid:
+                    free ring
+                    set ring to the bim outline of wallValue with footprint wide (the bim wall thickness of wallValue in modelValue)
+                    set sides to the length of ring
+                    loop side from 0 to sides:
+                        set line to a cad line2 from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by sides) in ring)
+                        append (a cad tagged line2 from line with tag (wallValue's id as a 64 bit unsigned integer)) to tagged
+            append ring to rings
+        set regions to the cad bounded face edges of tagged within (a cad tolerance of the bim join tolerance)
+        free tagged
+        # Every face edge, with the face it belongs to.
+        set edgeStarts to an empty list of a cad vector2
+        set edgeEnds to an empty list of a cad vector2
+        set edgeFaces to an empty list of an integer
+        set faceAreas to an empty list of a 64 bit floating-point number
+        set faceInWall to an empty list of a boolean
+        loop regionCursor from 0 to the length of (regions's rings):
+            set edges to the item at regionCursor in (regions's rings)
+            set outline to an empty list of a cad vector2
+            loop edgeCursor from 0 to the length of edges:
+                append (the item at edgeCursor in edges)'s line's start to outline
+            set faceArea to the cad signed area of outline
+            set inWall to false
+            if faceArea > (the bim join tolerance * the bim join tolerance):
+                set probe to a bim point inside outline
+                loop cursor from 0 to the length of walls:
+                    set candidateRing to the item at cursor in rings
+                    if (the length of candidateRing) >= 4:
+                        if bim ring candidateRing encloses probe:
+                            set inWall to true
+                set faceIndex to the length of faceAreas
+                append faceArea to faceAreas
+                append inWall to faceInWall
+                loop edgeCursor from 0 to the length of edges:
+                    set edge to the item at edgeCursor in edges
+                    append edge's line's start to edgeStarts
+                    append edge's line's end to edgeEnds
+                    append faceIndex to edgeFaces
+            free outline
+        # The face across each edge, or -1 on the outside.
+        set joinReach to the bim join tolerance
+        set across to an empty list of an integer
+        loop cursor from 0 to the length of edgeStarts:
+            set neighbour to -1
+            loop other from 0 to the length of edgeStarts:
+                if (neighbour < 0) and ((the item at other in edgeFaces) != (the item at cursor in edgeFaces)):
+                    if ((the cad distance from (the item at other in edgeStarts) to (the item at cursor in edgeEnds)) <= joinReach) and ((the cad distance from (the item at other in edgeEnds) to (the item at cursor in edgeStarts)) <= joinReach):
+                        set neighbour to the item at other in edgeFaces
+            append neighbour to across
+        set outerWall to an empty list of a boolean
+        loop faceCursor from 0 to the length of faceAreas:
+            append false to outerWall
+        loop cursor from 0 to the length of edgeStarts:
+            set face to the item at cursor in edgeFaces
+            if ((the item at cursor in across) < 0) and (the item at face in faceInWall):
+                replace item at index face in outerWall with true
+        set gross to 0.0
+        set net to 0.0
+        set outerWalls to 0.0
+        loop faceCursor from 0 to the length of faceAreas:
+            set gross to gross + (the item at faceCursor in faceAreas)
+            if (the item at faceCursor in faceInWall) = false:
+                set net to net + (the item at faceCursor in faceAreas)
+            if the item at faceCursor in outerWall:
+                set outerWalls to outerWalls + (the item at faceCursor in faceAreas)
+        set grossPairs to a cad topology list of a cad vector2
+        set usablePairs to a cad topology list of a cad vector2
+        loop cursor from 0 to the length of edgeStarts:
+            set face to the item at cursor in edgeFaces
+            set neighbour to the item at cursor in across
+            if neighbour < 0:
+                append (the item at cursor in edgeStarts) to (grossPairs's values)
+                append (the item at cursor in edgeEnds) to (grossPairs's values)
+            else if (the item at face in outerWall) and ((the item at neighbour in outerWall) = false):
+                append (the item at cursor in edgeStarts) to (usablePairs's values)
+                append (the item at cursor in edgeEnds) to (usablePairs's values)
+        free edgeStarts
+        free edgeEnds
+        free edgeFaces
+        free faceAreas
+        free faceInWall
+        free across
+        free outerWall
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+        set usable to gross - outerWalls
+        return @intrinsic("construct", a bim area measures record, gross, usable, net, usable, grossPairs, usablePairs)
+
 # A stable 64-bit identity of a space: FNV-1a over its bounding wall ids.
 function the bim identity of {bim space record:space}:
     execute:
