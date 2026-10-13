@@ -251,25 +251,14 @@ function the bim round corners for radius {a 64 bit floating-point number:circle
 # The profile rings with `roundCorners` corners on a round profile.
 function the bim profile rings of {bim linear record:linearValue} as {bim linear type record:linearType} in {bim model record:modelValue} at {integer:roundCorners} round corners:
     execute:
+        return the bim profile rings of linearValue as linearType in modelValue at roundCorners round corners cut by (a bim uncut end)
+
+# The same, each end's ring slid along the axis onto its join's cut plane
+# (`the bim end cuts of parts`) where it has one.
+function the bim profile rings of {bim linear record:linearValue} as {bim linear type record:linearType} in {bim model record:modelValue} at {integer:roundCorners} round corners cut by {bim end cut record:endCut}:
+    execute:
         set profileRings to an empty list of a cad vector3
-        set lift to the bim elevation of storey linearValue's levelId in modelValue
-        set first to a cad vector3 with x linearValue's start's x, y linearValue's start's y and z (linearValue's start's z + lift)
-        set last to a cad vector3 with x linearValue's finish's x, y linearValue's finish's y and z (linearValue's finish's z + lift)
-        set axisVector to the cad difference of last and first
-        set axisLength to the cad length of axisVector
-        set along to axisVector scaled by (1.0 / axisLength)
-        set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
-        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
-        if (the absolute value of along's z) < 0.999:
-            set square to the cad difference of upward and (along scaled by along's z)
-            set upward to square scaled by (1.0 / (the cad length of square))
-            set across to the cad cross of upward and along
-        else:
-            set upward to the cad cross of along and across
-        set c to the cosine of linearValue's angle
-        set sn to the sine of linearValue's angle
-        set widthAxis to the cad sum of (across scaled by c) and (upward scaled by sn)
-        set depthAxis to the cad difference of (upward scaled by c) and (across scaled by sn)
+        set linearFrame to the bim frame of linear linearValue in modelValue
         set profileCorners to an empty list of a cad vector2
         if linearType's round:
             loop step from 0 to roundCorners:
@@ -283,12 +272,23 @@ function the bim profile rings of {bim linear record:linearValue} as {bim linear
             append (a cad vector2 with x halfWidth and y halfDepth) to profileCorners
             append (a cad vector2 with x (0.0 - halfWidth) and y halfDepth) to profileCorners
         loop endCursor from 0 to 2:
-            set centre to first
+            set centre to linearFrame's first
+            set cutting to endCut's startCut
+            set planePoint to endCut's startPoint
+            set planeNormal to endCut's startNormal
             if endCursor = 1:
-                set centre to last
+                set centre to linearFrame's last
+                set cutting to endCut's finishCut
+                set planePoint to endCut's finishPoint
+                set planeNormal to endCut's finishNormal
+            set slope to the cad dot of linearFrame's along and planeNormal
             loop cursor from 0 to the length of profileCorners:
                 set corner to the item at cursor in profileCorners
-                append (the cad sum of centre and (the cad sum of (widthAxis scaled by corner's x) and (depthAxis scaled by corner's y))) to profileRings
+                set placed to the cad sum of centre and (the cad sum of (linearFrame's widthAxis scaled by corner's x) and (linearFrame's depthAxis scaled by corner's y))
+                if cutting and ((the absolute value of slope) > 0.05):
+                    set slide to (the cad dot of (the cad difference of planePoint and placed) and planeNormal) / slope
+                    set placed to the cad sum of placed and (linearFrame's along scaled by slide)
+                append placed to profileRings
         free profileCorners
         return profileRings
 
@@ -308,9 +308,14 @@ function the bim linear shape of {bim linear record:linearValue} in {bim model r
 # stringer, which the model does not store).
 function the bim linear shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
     execute:
+        return the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (a bim uncut end)
+
+# The same with its ends cut by its joins.
+function the bim linear shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} cut by {bim end cut record:endCut}:
+    execute:
         set triangles to an empty fast mesh
         set roundCorners to the bim round corners for radius (linearType's width * 0.5) within tolerance
-        set profileRings to the bim profile rings of linearValue as linearType in modelValue at roundCorners round corners
+        set profileRings to the bim profile rings of linearValue as linearType in modelValue at roundCorners round corners cut by endCut
         set count to (the length of profileRings) / 2
         set first to the item at 0 in profileRings
         set last to the item at count in profileRings
@@ -337,13 +342,22 @@ function the bim linear shape of {bim linear record:linearValue} typed {bim line
             append base to (triangles's triangles's values)
             append (base + 2) to (triangles's triangles's values)
             append (base + 3) to (triangles's triangles's values)
-        # The ends: the start faces back along the axis, the finish forward.
+        # The ends: the start faces back along the axis, the finish forward;
+        # a cut end faces out along its cut plane's normal.
         set backward to along scaled by -1.0
         loop endCursor from 0 to 2:
             set base to the length of (triangles's positions's values)
             set facing to backward
+            if endCut's startCut and (endCursor = 0):
+                set facing to endCut's startNormal
+                if (the cad dot of facing and along) > 0.0:
+                    set facing to facing scaled by -1.0
             if endCursor = 1:
                 set facing to along
+                if endCut's finishCut:
+                    set facing to endCut's finishNormal
+                    if (the cad dot of facing and along) < 0.0:
+                        set facing to facing scaled by -1.0
             loop cursor from 0 to count:
                 append (the item at ((endCursor * count) + cursor) in profileRings) to (triangles's positions's values)
                 append facing to (triangles's normals's values)
@@ -366,7 +380,12 @@ function the bim plan outline of linear {bim linear record:linearValue} in {bim 
 
 function the bim plan outline of linear {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue}:
     execute:
-        set profileRings to the bim profile rings of linearValue as linearType in modelValue
+        return the bim plan outline of linear linearValue typed linearType in modelValue cut by (a bim uncut end)
+
+# The same with its ends cut by its joins.
+function the bim plan outline of linear {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} cut by {bim end cut record:endCut}:
+    execute:
+        set profileRings to the bim profile rings of linearValue as linearType in modelValue at 24 round corners cut by endCut
         set flat to an empty list of a cad vector2
         loop cursor from 0 to the length of profileRings:
             set spot to the item at cursor in profileRings
@@ -454,9 +473,10 @@ function the bim curtain shape of {bim curtain record:curtainValue} in {bim mode
 function the bim shape of derived parts {a pointer to a list:partList} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
     execute:
         set combined to an empty fast mesh
+        set partCuts to the bim end cuts of parts partList in modelValue
         loop cursor from 0 to the length of partList:
             set part to the item at cursor in partList
-            set partShape to the bim linear shape of part's element typed part's kind in modelValue within tolerance
+            set partShape to the bim linear shape of part's element typed part's kind in modelValue within tolerance cut by (the item at cursor in (partCuts's values))
             set base to the length of (combined's positions's values)
             loop corner from 0 to the length of (partShape's positions's values):
                 append (the item at corner in (partShape's positions's values)) to (combined's positions's values)
@@ -503,7 +523,10 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
             if ((element's kind = bim face sketch) and levelFound's valid) and (inFolded = false):
                 set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
                 append (@intrinsic("construct", a bim scene mesh record, element's id, 0 as a 64 bit integer, the bim sketch mesh of element at elevation, bim mass category, the bim category colouring)) to (result's values)
-        # Linear elements, coloured by their material.
+        # Linear elements, coloured by their material, their ends shaped by
+        # their joins.
+        set modelParts to the bim linear parts of modelValue
+        set modelCuts to the bim end cuts of parts (modelParts's values) in modelValue
         loop cursor from 0 to the length of (modelValue's linears's values):
             set linearValue to the item at cursor in (modelValue's linears's values)
             set linearType to the bim type of linear linearValue in modelValue
@@ -512,7 +535,7 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
             set systemId to the bim system of element linearValue's id in modelValue
             if systemId != the bim refused id:
                 set linearColour to the bim colour of discipline (the item at (the bim system index of systemId in modelValue)'s position in (modelValue's systems's values))'s discipline
-            append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, the bim linear shape of linearValue in modelValue within tolerance, the bim category of linear role linearType's role, linearColour)) to (result's values)
+            append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (the item at cursor in (modelCuts's values)), the bim category of linear role linearType's role, linearColour)) to (result's values)
         # Fittings, derived at the network's nodes: each picks as the first
         # segment it joins and takes its colour.
         set servicesNetwork to the bim network of modelValue

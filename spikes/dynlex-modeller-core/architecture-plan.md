@@ -312,6 +312,10 @@ full placement, not a plan position alone.
 | 41 | **Area plans (NEN 2580)**: an Area plan drawing type showing per storey the gross area (BVO, outer faces), usable area (GO, the outer walls' inner faces), net area (NVO, the spaces) and lettable area (VVO), with their bounds and a table of storey and building totals | spaces, drawing types, annotation rules | test: a walled room gives BVO, GO and NVO exactly |
 | 42 | **Building system parts**: the facade system (formerly curtain wall) with its mullions, transoms and panels chosen one by one; panels of a layered planar type built layer by layer; a panel type for the whole system or one panel | the curtain generator, planar types | test: a sandwich panel gives a part per layer; parts are named by their place; types survive the file and IfcX |
 | 43 | **Rooms in 3D**: the spaces as see-through volumes in the 3D view, when the 3D view shows the space category | spaces, the 3D view | the rooms show and hide with the category |
+| 44 | **One join for linear elements**: every linear element (column, beam, mullion, transom, brace) joins another by one derived rule: equal ranks mitre, a lower rank butts against a higher one's side, an end on another's body butts (a tee); pipes, ducts and trays keep their fittings | linear elements, the services network, the building system generator | test: a corner mitres, a beam butts against a column, a tee butts, in line nothing is cut; transoms butt, mullions run through |
+| 45 | **Building system grid lines**: mullions and transoms moved off their even spacing, in whole millimetres, kept between their neighbours | the building system | test: a moved mullion widens one bay, narrows the next and survives the file and IfcX |
+| 46 | **Walls held at levels**: a wall dragged onto a level in the section stands on it (its foot) or is held there (its top), following the level when it moves | walls, levels, the section | test: a held top follows its level; a typed height frees it |
+| 47 | **View scale and display**: each view's scale and display (colour, hidden line, wireframe), set from a bar at the view's top right and kept with the view | views | test: the scale steps 1:1 to 1:1000; both survive the file and IfcX |
 
 Done in this round outside the numbering: a right-click context menu in the
 views, selected elements filled in the selection colour, the snaps as
@@ -332,6 +336,50 @@ Later the same day, from use:
   head at each end. A head holds the section's number and an arrow toward
   the side it looks at. Placing a section snaps and tracks from its first
   point.
+
+## 7d. Consolidation (from 2026-10-13)
+
+The maintainer asked for a consolidation round: no new features, a look at how the
+application is built and how it can be smaller. The guiding rule is **as few components
+as possible**. Several buttons may call one function with small differences underneath.
+
+Already brought together in the round before it:
+
+- **One join for all linear elements.** Columns, beams, mullions, transoms and braces
+  share one derived join (row 44). Pipes and ducts keep their fittings at the same
+  network nodes.
+- **One edit mode.** Tab edits any element by its control points: grid, wall and linear
+  ends, floor corners, a level's height. Sketches and meshes keep their richer edit
+  mode.
+- **One view record.** Plans, sections, 3D views, elevations and schedules are one record
+  with a kind. Elevations are 3D views with a fixed direction, not a new kind.
+
+To do, in this order:
+
+1. **One mechanism for extra element data.** Wall base and top level, building system
+   panels and grid lines, and a view's display each added a record field or table. Each
+   also needed every constructor and four file paths (.bim and IfcX, write and read).
+   They become rows of one table, keyed by element, setting code and value. The value is
+   a whole number, in millimetres or as a code, so the model carries no long decimals.
+   It has one writer and one reader per format. Later settings (the drawing standard,
+   pattern systems) use it too.
+2. **Smaller modules.** Split `bim_editor.dl` (6,900 lines) and `main.dl` (5,800 lines)
+   by concern:
+   - tools and gestures;
+   - selection and control points;
+   - the properties panel;
+   - the plan, section and 3D drawing;
+   - area plans.
+
+   Smaller units also shorten the compile, the main cost of each round.
+3. **Testable drawing.** The drawing code in `main.dl` (section grips, area plan tables,
+   view bars) moves into functions that a headless test can call.
+4. **Native .ifcx.** The native file becomes IfcX in a compact binary encoding, written
+   from the same element data. A warning lists values with needless decimals.
+5. **Then the queued features on top:**
+   - the country drawing standard, as one model setting;
+   - pattern systems as floors (hollow-core slabs, masonry bonds, timber-frame and
+     metal stud walls), as generators of the base elements.
 
 ## 8. Decisions taken on the way
 

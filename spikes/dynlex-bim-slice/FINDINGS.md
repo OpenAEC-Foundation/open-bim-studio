@@ -353,3 +353,45 @@ wall, which is O(openings) per examined wall.
     25.9 ms into 6.1 ms.
 - **Compile times** stay long (R-18). The editor takes 3 min 53 s at `-O2`, and each
   headless test 3–5 min at `-O0`.
+
+## Consolidation notes (2026-10-13)
+
+- **One join, many roles.** Mullions, transoms, beams and columns now share one derived
+  join (`the bim end cuts of parts`, `bim_network.dl`): each end is cut by a plane found
+  from where the elements lie. Nothing about joins is stored. The services network's
+  connectors and nodes already gave pipes and ducts their fittings; the new joins sit
+  next to it and use the same "derive, don't store" rule.
+- **A table per feature costs six to eight edits.** Wall base and top level, building
+  system panels and grid lines, and a view's display each needed the record or table,
+  every constructor, the `.bim` writer and reader, and the IfcX writer and reader. A
+  record's field can be set on a local copy (`set copy's field to …`) and the copy put
+  back, which avoids repeating whole constructors; the older code repeats them.
+  One generic mechanism for extra element data is the main consolidation target.
+- **Whole millimetres.** Moved grid lines are stored as whole millimetres, so the file
+  carries no long decimals. The same rule fits the wider wish to avoid needless
+  decimals while editing.
+- **DynLex names.** A local may not share a word with a pattern the function calls. This
+  session hit it again in `cuts`, `rank`, `frame`, `toward`, `reach`, `along` and
+  `display`.
+- **Two more DynLex traps.**
+  - A vector literal with commas (`a cad vector3 with x 0.0, y 0.0 and z 0.0`)
+    passed as an `@intrinsic("construct", …)` argument is split at its commas;
+    it needs brackets.
+  - A parameter named like a word of its own pattern (`bim kind {integer:kind} has
+    control points`) leaves calls unresolved, reported far from the cause.
+- **`main.dl` is compiled only by the application build.** A slip there costs a
+  40-minute `-O2` build. `build.sh dev` (`-O0`) type-checks it first.
+- **Element settings.** Building system panel types and moved grid lines now live in
+  one table of element settings (element, code, whole-number value), with one `.bim`
+  line kind and one IfcX attribute for all of them. Older files still read. The rule:
+  data read on every evaluation (a wall's base and top) stays a record field, since a
+  table scan per element would not scale; rarely read extra data goes in settings.
+- **Modules.**
+  - `main.dl` (5,800 lines) became four files: the plan panel, the 3D and section
+    panels, the application's parts, and the loop itself (1,560 lines).
+  - `bim_editor.dl` (6,900 lines) became three layers: the core, the properties
+    window, and what only the window drives (keys, two-letter commands, box
+    selection, files, the type library).
+  - Imports cannot be cyclic, so shared helpers (projection, edges) moved down to the
+    lowest panel module.
+  - Eight functions no longer called anywhere were removed.
