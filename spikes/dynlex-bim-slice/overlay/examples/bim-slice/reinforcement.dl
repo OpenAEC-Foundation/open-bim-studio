@@ -1,0 +1,337 @@
+# SPDX-License-Identifier: MPL-2.0
+# Parametric reinforcement, independent of editor, persistence and renderer.
+# Dimensions are metres. Cover is measured to the OUTSIDE of the outer steel.
+# Definitions are immutable; generated paths are disposable derived geometry.
+import lib/cadkernel/core.dl
+import lib/cadkernel/topology_list.dl
+import lib/text.dl
+
+class:
+    patterns:
+        [a|] reinforcement definition
+    members:
+        id as a 64 bit integer
+        levelId as a 64 bit integer
+        hostId as a 64 bit integer
+        # 0 straight bar, 1 rectangular cage, 2 orthogonal mesh, 3 L, 4 U.
+        kind as an integer
+        mark as a string
+        start as a cad vector3
+        finish as a cad vector3
+        width as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+        diameter as a 64 bit floating-point number
+        secondaryDiameter as a 64 bit floating-point number
+        spacing as a 64 bit floating-point number
+        crossSpacing as a 64 bit floating-point number
+        cover as a 64 bit floating-point number
+        bendRadius as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] reinforcement bar
+    members:
+        mark as a string
+        diameter as a 64 bit floating-point number
+        points as the type of (a cad topology list of a cad vector3)
+        # Analytic centreline length, independent of drawing tessellation.
+        length as a 64 bit floating-point number
+        closed as a boolean
+
+class:
+    patterns:
+        [a|] reinforcement result
+    members:
+        valid as a boolean
+        message as a string
+        bars as the type of (a cad topology list of a reinforcement bar)
+
+function a reinforcement refusal saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a reinforcement result, false, reason, a cad topology list of a reinforcement bar)
+
+function the reinforcement issue of {reinforcement definition:spec}:
+    execute:
+        if (((the cad length of spec's start) < 10000000.0) and ((the cad length of spec's finish) < 10000000.0)) = false:
+            return the string form of "Invalid reinforcement coordinates"
+        if (spec's kind < 0) or (spec's kind > 4):
+            return the string form of "Unknown reinforcement kind"
+        set extent to the cad distance from spec's start to spec's finish
+        # Comparisons also reject NaN and infinity.
+        if ((extent > 0.000001) and (extent < 100000.0)) = false:
+            return the string form of "A finite nonzero axis is required"
+        if ((spec's diameter > 0.0) and (spec's diameter < 1.0)) = false:
+            return the string form of "Invalid bar diameter"
+        if ((spec's cover >= 0.0) and (spec's cover < 100.0)) = false:
+            return the string form of "Invalid cover"
+        if spec's kind = 0:
+            return the string form of ""
+        if (spec's kind = 3) or (spec's kind = 4):
+            if ((spec's bendRadius > spec's diameter * 0.5) and (spec's bendRadius < 100.0)) = false:
+                return the string form of "Invalid centreline bend radius"
+            if ((spec's width > spec's bendRadius * 2.0) and (spec's width < 100000.0)) = false:
+                return the string form of "Bends do not fit the return leg"
+            if extent <= (2.0 * spec's bendRadius):
+                return the string form of "Bends do not fit the axis"
+            return the string form of ""
+        if ((spec's spacing > 0.000001) and (spec's spacing < 10000.0)) = false:
+            return the string form of "Invalid spacing"
+        if ((spec's secondaryDiameter > 0.0) and (spec's secondaryDiameter < 1.0)) = false:
+            return the string form of "Invalid secondary diameter"
+        if ((spec's width > 0.0) and (spec's width < 100000.0)) = false:
+            return the string form of "Invalid width"
+        if spec's kind = 1:
+            set inset to spec's cover + (spec's secondaryDiameter * 0.5)
+            if ((spec's depth > 0.0) and (spec's depth < 100000.0)) = false:
+                return the string form of "Invalid cage depth"
+            if ((spec's bendRadius >= spec's secondaryDiameter) and (spec's bendRadius < 100.0)) = false:
+                return the string form of "Invalid centreline bend radius"
+            set needed to (2.0 * inset) + (2.0 * spec's bendRadius)
+            if (spec's width <= needed) or (spec's depth <= needed):
+                return the string form of "Bends and cover do not fit the cage"
+            set innerNeeded to 2.0 * ((spec's cover + spec's secondaryDiameter) + spec's diameter)
+            set roundedInset to the maximum of ((spec's cover + spec's secondaryDiameter) + (spec's diameter * 0.5)) and (inset + spec's bendRadius)
+            set innerNeeded to the maximum of innerNeeded and (2.0 * (roundedInset + spec's diameter * 0.5))
+            if (spec's width <= innerNeeded) or (spec's depth <= innerNeeded):
+                return the string form of "Longitudinal bars do not fit the cage"
+        else:
+            if ((spec's crossSpacing > 0.000001) and (spec's crossSpacing < 10000.0)) = false:
+                return the string form of "Invalid cross spacing"
+            if (spec's width <= (2.0 * spec's cover + spec's diameter)) or (extent <= (2.0 * spec's cover + spec's secondaryDiameter)):
+                return the string form of "Cover does not fit the mesh"
+        if extent <= (2.0 * spec's cover + spec's secondaryDiameter):
+            return the string form of "Cover does not fit the axis"
+        if (extent / spec's spacing) > 10000.0:
+            return the string form of "Distribution exceeds 10000 intervals"
+        if spec's kind = 2:
+            if (spec's width / spec's crossSpacing) > 10000.0:
+                return the string form of "Cross distribution exceeds 10000 intervals"
+        return the string form of ""
+
+# Coordinate frame: x follows the axis; y is horizontal across it, or global
+# x for a vertical axis. z completes the right-handed orthonormal frame.
+function the reinforcement position {cad vector3:localSpot} in {reinforcement definition:spec}:
+    execute:
+        set delta to the cad difference of spec's finish and spec's start
+        set forward to delta scaled by (1.0 / (the cad length of delta))
+        set across to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and forward
+        if (the cad length of across) < 0.000001:
+            set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+        else:
+            set across to across scaled by (1.0 / (the cad length of across))
+        set upward to the cad cross of forward and across
+        return the cad sum of spec's start and (the cad sum of (forward scaled by localSpot's x) and (the cad sum of (across scaled by localSpot's y) and (upward scaled by localSpot's z)))
+
+function append reinforcement segment from {cad vector3:beginning} to {cad vector3:ending} diameter {a 64 bit floating-point number:barSize} marked {a string:label} into {a pointer to a reinforcement result:output}:
+    execute:
+        set vertices to a cad topology list of a cad vector3
+        append beginning to (vertices's values)
+        append ending to (vertices's values)
+        append (@intrinsic("construct", a reinforcement bar, label, barSize, vertices, the cad distance from beginning to ending, false)) to (output's bars's values)
+
+# Ceil(span / requested maximum). The final interval is shortened uniformly;
+# both boundary bars are present and actual spacing never exceeds the request.
+function the reinforcement intervals over {a 64 bit floating-point number:spanValue} at {a 64 bit floating-point number:stepValue}:
+    execute:
+        return (@intrinsic("call", "libc", "ceil", a 64 bit floating-point number, spanValue / stepValue)) as an integer
+
+# A bent bar from a 3D polyline, filleted with a constant centreline radius.
+# Tangency distances on neighbouring corners must fit each shared segment.
+function the reinforcement bent along {a pointer to a list:corners} radius {a 64 bit floating-point number:radiusValue} diameter {a 64 bit floating-point number:barSize} marked {a string:label}:
+    execute:
+        set count to the length of corners
+        if (count < 2) or (count > 4096):
+            return a reinforcement refusal saying (the string form of "A bar path needs 2..4096 points")
+        if (((radiusValue > 0.0) and (radiusValue < 10000.0)) and ((barSize > 0.0) and (barSize < 1.0))) = false:
+            return a reinforcement refusal saying (the string form of "Invalid bend parameters")
+        if radiusValue <= (barSize * 0.5):
+            return a reinforcement refusal saying (the string form of "Centreline radius must exceed bar radius")
+        set tangencies to an empty list of a 64 bit floating-point number
+        set angles to an empty list of a 64 bit floating-point number
+        append 0.0 to tangencies
+        append 0.0 to angles
+        set total to 0.0
+        loop cursor from 0 to (count - 1):
+            set spanValue to the cad distance from (the item at cursor in corners) to (the item at (cursor + 1) in corners)
+            if ((spanValue > 0.000001) and (spanValue < 100000.0)) = false:
+                free tangencies
+                free angles
+                return a reinforcement refusal saying (the string form of "Invalid bar segment")
+            set total to total + spanValue
+        loop cursor from 1 to (count - 1):
+            set incoming to the cad difference of (the item at cursor in corners) and (the item at (cursor - 1) in corners)
+            set outgoing to the cad difference of (the item at (cursor + 1) in corners) and (the item at cursor in corners)
+            set incoming to incoming scaled by (1.0 / (the cad length of incoming))
+            set outgoing to outgoing scaled by (1.0 / (the cad length of outgoing))
+            set cosine to the cad dot of incoming and outgoing
+            set sine to the cad length of (the cad cross of incoming and outgoing)
+            if cosine < -0.999999:
+                free tangencies
+                free angles
+                return a reinforcement refusal saying (the string form of "A reversing corner has no finite fillet")
+            set turn to @intrinsic("atan2", sine, cosine)
+            set tangentValue to radiusValue * (sine / (1.0 + cosine))
+            append tangentValue to tangencies
+            append turn to angles
+            set total to (total - 2.0 * tangentValue) + (radiusValue * turn)
+        append 0.0 to tangencies
+        append 0.0 to angles
+        loop cursor from 0 to (count - 1):
+            set used to (the item at cursor in tangencies) + (the item at (cursor + 1) in tangencies)
+            if used >= (the cad distance from (the item at cursor in corners) to (the item at (cursor + 1) in corners)):
+                free tangencies
+                free angles
+                return a reinforcement refusal saying (the string form of "Bends do not fit adjacent segments")
+        set vertices to a cad topology list of a cad vector3
+        append (the item at 0 in corners) to (vertices's values)
+        loop cursor from 1 to (count - 1):
+            set turn to the item at cursor in angles
+            if turn < 0.000001:
+                append (the item at cursor in corners) to (vertices's values)
+            else:
+                set incoming to the cad difference of (the item at cursor in corners) and (the item at (cursor - 1) in corners)
+                set outgoing to the cad difference of (the item at (cursor + 1) in corners) and (the item at cursor in corners)
+                set incoming to incoming scaled by (1.0 / (the cad length of incoming))
+                set outgoing to outgoing scaled by (1.0 / (the cad length of outgoing))
+                set normalValue to the cad cross of incoming and outgoing
+                set normalValue to normalValue scaled by (1.0 / (the cad length of normalValue))
+                set lateral to the cad cross of normalValue and incoming
+                set tangentSpot to the cad difference of (the item at cursor in corners) and (incoming scaled by (the item at cursor in tangencies))
+                set centre to the cad sum of tangentSpot and (lateral scaled by radiusValue)
+                set radial to lateral scaled by (0.0 - radiusValue)
+                set sweep to the cad cross of normalValue and radial
+                set samples to (@intrinsic("call", "libc", "ceil", a 64 bit floating-point number, turn / (3.141592653589793 / 24.0))) as an integer
+                loop sample from 0 to (samples + 1):
+                    set stepAngle to turn * ((sample as a 64 bit floating-point number) / (samples as a 64 bit floating-point number))
+                    append (the cad sum of centre and (the cad sum of (radial scaled by (the cosine of stepAngle)) and (sweep scaled by (the sine of stepAngle)))) to (vertices's values)
+        append (the item at (count - 1) in corners) to (vertices's values)
+        free tangencies
+        free angles
+        set bars to a cad topology list of a reinforcement bar
+        append (@intrinsic("construct", a reinforcement bar, label, barSize, vertices, total, false)) to (bars's values)
+        return @intrinsic("construct", a reinforcement result, true, the string form of "", bars)
+
+
+function the reinforcement of {reinforcement definition:spec}:
+    execute:
+        set issue to the reinforcement issue of spec
+        if issue != (the string form of ""):
+            return a reinforcement refusal saying issue
+        set output to @intrinsic("construct", a reinforcement result, true, the string form of "", a cad topology list of a reinforcement bar)
+        set sink to the address of output
+        set extent to the cad distance from spec's start to spec's finish
+        if spec's kind = 0:
+            append reinforcement segment from spec's start to spec's finish diameter spec's diameter marked spec's mark into sink
+            return output
+        if (spec's kind = 3) or (spec's kind = 4):
+            set corners to an empty list of a cad vector3
+            append spec's start to corners
+            append spec's finish to corners
+            append (the reinforcement position (a cad vector3 with x extent, y spec's width and z 0.0) in spec) to corners
+            if spec's kind = 4:
+                append (the reinforcement position (a cad vector3 with x 0.0, y spec's width and z 0.0) in spec) to corners
+            set bent to the reinforcement bent along corners radius spec's bendRadius diameter spec's diameter marked spec's mark
+            free corners
+            return bent
+        if spec's kind = 2:
+            set beginX to spec's cover + (spec's secondaryDiameter * 0.5)
+            set endX to extent - beginX
+            set beginY to spec's cover + (spec's diameter * 0.5)
+            set endY to spec's width - beginY
+            set countX to the reinforcement intervals over (endX - beginX) at spec's spacing
+            set countY to the reinforcement intervals over (endY - beginY) at spec's crossSpacing
+            loop cursor from 0 to (countY + 1):
+                set lateral to beginY + ((endY - beginY) * ((cursor as a 64 bit floating-point number) / (countY as a 64 bit floating-point number)))
+                set firstPoint to the reinforcement position (a cad vector3 with x spec's cover, y lateral and z (spec's cover + spec's diameter * 0.5)) in spec
+                set lastPoint to the reinforcement position (a cad vector3 with x (extent - spec's cover), y lateral and z (spec's cover + spec's diameter * 0.5)) in spec
+                append reinforcement segment from firstPoint to lastPoint diameter spec's diameter marked (spec's mark + (the string form of "-X")) into sink
+            loop cursor from 0 to (countX + 1):
+                set longitudinal to beginX + ((endX - beginX) * ((cursor as a 64 bit floating-point number) / (countX as a 64 bit floating-point number)))
+                set elevation to (spec's cover + spec's diameter) + (spec's secondaryDiameter * 0.5)
+                set firstPoint to the reinforcement position (a cad vector3 with x longitudinal, y spec's cover and z elevation) in spec
+                set lastPoint to the reinforcement position (a cad vector3 with x longitudinal, y (spec's width - spec's cover) and z elevation) in spec
+                append reinforcement segment from firstPoint to lastPoint diameter spec's secondaryDiameter marked (spec's mark + (the string form of "-Y")) into sink
+            return output
+        # Cage: four longitudinal bars inside rounded rectangular hoops.
+        set outerInset to spec's cover + spec's secondaryDiameter * 0.5
+        set barInset to (spec's cover + spec's secondaryDiameter) + spec's diameter * 0.5
+        # Keep longitudinal steel clear of the rounded inner hoop corner.
+        set barInset to the maximum of barInset and (outerInset + spec's bendRadius)
+        set halfWidth to spec's width * 0.5
+        set halfDepth to spec's depth * 0.5
+        loop corner from 0 to 4:
+            set lateral to halfWidth - barInset
+            set elevation to halfDepth - barInset
+            if corner < 2:
+                set lateral to 0.0 - lateral
+            if (the remainder of corner divided by 2) = 0:
+                set elevation to 0.0 - elevation
+            set firstPoint to the reinforcement position (a cad vector3 with x spec's cover, y lateral and z elevation) in spec
+            set lastPoint to the reinforcement position (a cad vector3 with x (extent - spec's cover), y lateral and z elevation) in spec
+            append reinforcement segment from firstPoint to lastPoint diameter spec's diameter marked (spec's mark + (the string form of "-L")) into sink
+        set count to the reinforcement intervals over (extent - 2.0 * outerInset) at spec's spacing
+        set yRadius to halfWidth - outerInset
+        set zRadius to halfDepth - outerInset
+        set bend to spec's bendRadius
+        set perimeter to 4.0 * ((yRadius + zRadius) - (2.0 * bend)) + ((2.0 * 3.141592653589793) * bend)
+        loop cursor from 0 to (count + 1):
+            set station to outerInset + ((extent - 2.0 * outerInset) * ((cursor as a 64 bit floating-point number) / (count as a 64 bit floating-point number)))
+            set vertices to a cad topology list of a cad vector3
+            loop corner from 0 to 4:
+                set centreY to yRadius - bend
+                set centreZ to zRadius - bend
+                if (corner = 1) or (corner = 2):
+                    set centreY to 0.0 - centreY
+                if corner >= 2:
+                    set centreZ to 0.0 - centreZ
+                loop sample from 0 to 9:
+                    set turn to ((corner as a 64 bit floating-point number) + ((sample as a 64 bit floating-point number) / 8.0)) * (3.141592653589793 * 0.5)
+                    set pointValue to a cad vector3 with x station, y (centreY + bend * (the cosine of turn)) and z (centreZ + bend * (the sine of turn))
+                    append (the reinforcement position pointValue in spec) to (vertices's values)
+            append (the item at 0 in (vertices's values)) to (vertices's values)
+            append (@intrinsic("construct", a reinforcement bar, spec's mark + (the string form of "-S"), spec's secondaryDiameter, vertices, perimeter, true)) to (output's bars's values)
+        return output
+
+function the reinforcement total length of {reinforcement result:generated}:
+    execute:
+        set measured to 0.0
+        loop cursor from 0 to the length of (generated's bars's values):
+            set itemValue to the item at cursor in (generated's bars's values)
+            set measured to measured + itemValue's length
+        return measured
+
+function the reinforcement millimetres of {a 64 bit floating-point number:amount}:
+    execute:
+        set scaled to (@intrinsic("call", "libc", "round", a 64 bit floating-point number, amount * 1000000.0)) as a 64 bit integer
+        set whole to scaled / (1000 as a 64 bit integer)
+        set fraction to the remainder of scaled divided by (1000 as a 64 bit integer)
+        set label to the string form of whole
+        if fraction > (0 as a 64 bit integer):
+            set padded to the string form of (fraction + (1000 as a 64 bit integer))
+            set digits to the substring of padded from 1 spanning 3 bytes
+            loop while (the character at ((the length of digits) - 1) in digits) = (48 as a byte):
+                set digits to the substring of digits from 0 spanning ((the length of digits) - 1) bytes
+            set label to (label + (the string form of ".")) + digits
+        return label
+
+function the reinforcement annotation of {reinforcement definition:spec}:
+    execute:
+        set diameterMM to the reinforcement millimetres of spec's diameter
+        set label to spec's mark + (the string form of " / D")
+        if spec's kind = 1:
+            set label to spec's mark + (the string form of " / 4D")
+        if spec's kind = 2:
+            set label to spec's mark + (the string form of " / X D")
+        set label to label + diameterMM
+        if (spec's kind = 1) or (spec's kind = 2):
+            set secondaryMM to the reinforcement millimetres of spec's secondaryDiameter
+            set spacingMM to the reinforcement millimetres of spec's spacing
+            if spec's kind = 2:
+                set crossMM to the reinforcement millimetres of spec's crossSpacing
+                set label to (label + (the string form of " @ max ")) + crossMM
+                set label to label + (the string form of " / Y D")
+            else:
+                set label to label + (the string form of " + D")
+            set label to label + secondaryMM
+            set label to (label + (the string form of " @ max ")) + spacingMM
+        return label
