@@ -316,6 +316,21 @@ full placement, not a plan position alone.
 | 45 | **Building system grid lines**: mullions and transoms moved off their even spacing, in whole millimetres, kept between their neighbours | the building system | test: a moved mullion widens one bay, narrows the next and survives the file and IfcX |
 | 46 | **Walls held at levels**: a wall dragged onto a level in the section stands on it (its foot) or is held there (its top), following the level when it moves | walls, levels, the section | test: a held top follows its level; a typed height frees it |
 | 47 | **View scale and display**: each view's scale and display (colour, hidden line, wireframe), set from a bar at the view's top right and kept with the view | views | test: the scale steps 1:1 to 1:1000; both survive the file and IfcX |
+| 48 | **Connections**: a linear element's end meets another as a connection with a kind (automatic, mitre, butt, through, open) chosen per end; automatic follows the ranks, and an end running through a corner reaches the other's far side | linear elements, element settings | test: chosen butt, the answering end, open and back to mitre, with their volumes |
+| 49 | **Building system lines unpinned, nested systems, opening rules**: a mullion or transom made a free linear element and pinned back; a system nested in a panel, filling it as the host changes; openings hosted by a system, cut and framed, replacing panels or ignored | the building system, openings | tests: unpin/pin back, nested placement, the three opening rules |
+| 50 | **Shape handles and a curved building system**: the system's ends, inner lines and top as control points (Tab edit mode and shape handles); a system curved like a wall, its mullions along the arc, transoms and panels faceted | the building system, edit mode | tests: handles move a mullion, stretch the system, raise its top; the arc's length, bays and round trips |
+| 51 | **Patterns, layers and point objects in building systems**: grid and running bond patterns; joints of any width and depth (none at 0); layers that follow a host system; point objects (wall ties, hangers) as rods at the grid's nodes; level systems for floors and ceilings; examples (timber frame, hollow-core floor, suspended ceiling, masonry with ties) | the building system | tests: running bond and brickwork counts; the examples' parts, heights and layers following their host |
+| 52 | **Tapered and twisted linear elements**: a linear element's profile at its finish scaled and turned from its start's | linear elements | test: a tapered beam's volume, a twisted one stays closed, both round trip |
+| 53 | **Planar layers past the outline, explode**: a planar type's layers reach past or stop short of the element's outline; a layered plate or straight wall explodes into one element per layer | plates, walls, planar types | test: three layer solids and their volumes; the exploded plates and walls |
+| 54 | **Views: section box, sketchy lines, shadows, hatch along objects, captions, outline** | the 3D view, plan and section | by hand in the application |
+| 55 | **Exchange and data: DWG/DXF/PDF import as sketch lines, IFC classes for every element, NL-SfB and OmniClass codes on types, type and instance properties apart** | import, properties | by hand; properties tests |
+| 56 | **Canvas first (UI proposal 03)**: a rail of browser sections on the left (the browser opens beside it on demand), ribbon sub-tabs and a ribbon that folds to its tabs, a toolbar floating over the canvas with the selection's actions, a closable properties panel with folding headings, a plan inset with the camera in the 3D view | the application chrome | by hand in the application |
+| 57 | **Merged joints**: a building system's joints as one body, its face with a hole per cell and rough opening; on a curved system cut every 5 degrees and bent onto the arc | the building system | test: brickwork mortar closed, its volume; curved joints closed and within half their depth of the arc |
+| 58 | **Zoom region (ZR)** and a foldable plan inset that moves the 3D camera where it is clicked | the plan and 3D view | test: ZR's two clicks; the inset by hand |
+| 59 | **Diamond edge cells**: halves along the edges and quarters in the corners, panels tapering to their points, so a diamond pattern covers its face | the building system | test: 7 whole, 9 halves, 2 quarters, closed, covering the face |
+| 60 | **Drag any element**: a slab, linear element, instance, mesh or sketch element pressed and dragged moves whole while the pointer goes, one undo step | the editor | test: a column mid-drag, released, undone |
+| 61 | **Level extents in 3D**: a level picked on its outline in the 3D view, its corners and sides' middles dragged; every level locked to the shared extent (the default) follows, an unlocked one keeps its own | levels, the 3D view | test: shared and own extents, handles, the file |
+| 62 | **3D cursor in perspective**: its ring and cross lie in the level plane | the 3D view | by hand |
 
 Done in this round outside the numbering: a right-click context menu in the
 views, selected elements filled in the selection colour, the snaps as
@@ -380,6 +395,53 @@ To do, in this order:
    - the country drawing standard, as one model setting;
    - pattern systems as floors (hollow-core slabs, masonry bonds, timber-frame and
      metal stud walls), as generators of the base elements.
+
+### 7e. Building systems as patterns (from 2026-10-13)
+
+The maintainer wants one building system for curtain walls, masonry and ceilings:
+
+- **A pattern** lays out the system's cells and joints:
+  - rectangular (today's grid);
+  - running bond (each row shifted half a bay, as half-brick masonry);
+  - stack bond;
+  - diamond;
+  - later herringbone.
+- **Cells and joints, in two scales:**
+  - cells are panels: glass, sandwich panels or bricks;
+  - joints are linear members: mullions and transoms, or mortar joints.
+  - A brick facade is a system with a fine grid, for example bricks of 210 x 50
+    with joints of 10 mm.
+- **Merged joints.** Joints can merge into one body, a continuous mortar joint or
+  frame, drawn without seams between its pieces.
+- **Ceilings.** The same system lies level over an outline: tiles as cells,
+  T-profiles as joints.
+
+- **Layers.** A system is a stack of layers across its face, each with its own
+  pattern and parts. For example a timber-frame wall: studs and rails with
+  insulation between them, then plywood sheathing.
+- **Three kinds of part per layer:**
+  - cells (panels, infill, bricks, tiles);
+  - linear members (mullions, studs, joints, T-bars);
+  - point objects (wall ties, hangers), placed by the pattern as components.
+- **Linear elements, underneath:**
+  - a profile that tapers along the length;
+  - a twist;
+  - so that a system can follow a curved or doubly curved face.
+- **Examples placed in the 3D model:**
+  - a timber-frame wall with insulation and plywood;
+  - a hollow-core floor of 1200 mm planks;
+  - a suspended ceiling with T-bars and hangers.
+
+It reuses what the system has: grid lines, panel types, connections, nested
+systems, opening rules, curvature. The pattern, the layers and the merge flag
+are element settings.
+
+In this order:
+1. Running bond and stack bond patterns, and merged joints.
+2. Layers, with cells, members and point objects per layer.
+3. Level systems (floors, ceilings) over an outline.
+4. The three examples.
+5. Tapered and twisted linear elements for curved faces.
 
 ## 8. Decisions taken on the way
 

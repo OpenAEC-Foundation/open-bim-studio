@@ -395,3 +395,28 @@ wall, which is O(openings) per examined wall.
   - Imports cannot be cyclic, so shared helpers (projection, edges) moved down to the
     lowest panel module.
   - Eight functions no longer called anywhere were removed.
+- **Connections.** Joins between linear elements are now detected as connection
+  records (which end meets which element, at an end or along its body) before any
+  cut is made. Each end can choose a kind (automatic, mitre, butt, through, open),
+  kept as an element setting. Later connection details (plates, bolts) can read the
+  same records.
+- **One building system, many systems.** Curtain walls, masonry, timber frames,
+  floors and ceilings share one generator:
+  - a pattern (grid or running bond);
+  - joints of a chosen width and depth (none at width 0);
+  - cells of a planar type, or none;
+  - point objects as short rods at the grid's nodes.
+  - Layers are building systems that follow a host's line, height and curve, offset
+    across its face; nested systems fill a host's panel.
+  - All of it is element settings. The record changed only for the curve.
+- **Openings in a building system.** An opening can be hosted by a system, which
+  follows its opening rule: cut and frame, replace panels, or ignore. Everything that
+  looks up an opening's host wall checks that the host is valid, so a system host
+  needed no other change.
+- **A third DynLex trap.** Reading a member of a call's result inside a larger
+  expression (`the length of ((the bim handles of …)'s values)`) gave a garbage value
+  at `-O0`. Binding the result to a local first works. Drafted as an issue in
+  `~/dynlex-issues/7-temporary-field-garbage.md`.
+- **Memory.** A second Claude session compiling in its own clone, plus two compiles
+  here, got one of them killed for memory. With another session active, compiles run
+  one at a time.

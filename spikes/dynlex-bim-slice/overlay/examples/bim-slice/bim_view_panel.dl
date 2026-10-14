@@ -1,0 +1,1363 @@
+# SPDX-License-Identifier: MPL-2.0
+# The 3D view and section panels: the orthographic 3D view, its GPU scene,
+# the view bar, the section drawing and its handles, the 3D cursor and the
+# gizmo (split from `main.dl`).
+import examples/bim-slice/bim_plan_panel.dl
+
+# ---------------------------------------------------------------- 3D view
+
+# The unit direction toward the sun: from the south-west, 42 degrees high.
+function the bim direction toward the sun:
+    execute:
+        set aim to a cad vector3 with x -0.52, y -0.58 and z 0.62
+        return aim scaled by (1.0 / (the cad length of aim))
+
+# ---------------------------------------------------------------- GPU scene
+
+# The 3D view's meshes as they were written to the GPU: positions relative to
+# `origin`, the model's bounding radius, and per element ordinal its id, in
+# ascending order, for highlighting the selection.
+class:
+    patterns:
+        [a|] bim gpu scene record
+    members:
+        origin as a cad vector3
+        radius as a 64 bit floating-point number
+        ids as the type of (a cad topology list of a 64 bit integer)
+        # The model's feature edges, as pairs of points, for the view modes
+        # that draw edges, and the model's extent.
+        edges as the type of (a cad topology list of a cad vector3)
+        low as a cad vector3
+        high as a cad vector3
+
+# The bar at a view's bottom right: its Graphics button (opening the view's
+# graphics menu), its scale (- 1:100 +, not for the 3D view) and its display
+# (Colour, Hidden, Wire). The button under `pixel`, for the bar ending at
+# `right` with its top at `top`: 0 to 2 a display, 10 a finer scale, 11 a
+# coarser one, 20 the graphics menu; -1 none. The menu's own choices are 12
+# sketchy lines, 13 shadows (3D) and 14 hatches along the elements.
+function the bim view bar hit at {cad vector2:pixel} ending at {a 64 bit floating-point number:right} and {a 64 bit floating-point number:top} scaled {boolean:withScale}:
+    execute:
+        if (pixel's y < top) or (pixel's y > (top + 18.0)):
+            return -1
+        loop button from 0 to 3:
+            set buttonRight to right - (52.0 * ((2 - button) as a 64 bit floating-point number))
+            if (pixel's x >= (buttonRight - 52.0)) and (pixel's x < buttonRight):
+                return button
+        if withScale:
+            if (pixel's x >= (right - 182.0)) and (pixel's x < (right - 164.0)):
+                return 11
+            if (pixel's x >= (right - 254.0)) and (pixel's x < (right - 236.0)):
+                return 10
+            if (pixel's x >= (right - 326.0)) and (pixel's x < (right - 262.0)):
+                return 20
+        else if (pixel's x >= (right - 226.0)) and (pixel's x < (right - 162.0)):
+            return 20
+        return -1
+
+function draw bim view bar ending at {a 64 bit floating-point number:right} and {a 64 bit floating-point number:top} scale {integer:scaleValue} display {integer:displayCode} scaled {boolean:withScale} sketchy {boolean:handDrawn} shadows {boolean:shadowed} using {bim text atlas record:typeface} in {graphics frame:frame}:
+    execute:
+        loop button from 0 to 3:
+            set buttonRight to right - (52.0 * ((2 - button) as a 64 bit floating-point number))
+            if button = displayCode:
+                draw a rectangle at x (buttonRight - 52.0) and y top with width 51 and height 18 in color red 70, green 110 and blue 200 in frame
+            else:
+                draw a rectangle at x (buttonRight - 52.0) and y top with width 51 and height 18 in color red 225, green 228 and blue 234 in frame
+            draw bim label (the bim name of display button) at ((buttonRight - 52.0) + 6.0) and (top + 13.0) using typeface in frame
+        if withScale:
+            draw a rectangle at x (right - 254.0) and y top with width 90 and height 18 in color red 225, green 228 and blue 234 in frame
+            draw bim label (the string form of "-") at (right - 248.0) and (top + 13.0) using typeface in frame
+            draw bim label ((the string form of "1:") + (the string form of scaleValue)) at (right - 230.0) and (top + 13.0) using typeface in frame
+            draw bim label (the string form of "+") at (right - 177.0) and (top + 13.0) using typeface in frame
+        # The Graphics button, opening the view's graphics menu.
+        set graphicsLeft to right - 226.0
+        if withScale:
+            set graphicsLeft to right - 326.0
+        draw a rectangle at x graphicsLeft and y top with width 64 and height 18 in color red 225, green 228 and blue 234 in frame
+        draw bim label (the string form of "Graphics") at (graphicsLeft + 5.0) and (top + 13.0) using typeface in frame
+
+# The 3D panel's mode for display `displayCode`, and back.
+function the bim view mode of display {integer:displayCode}:
+    execute:
+        if displayCode = bim hidden line display:
+            return bim hidden line view mode
+        if displayCode = bim wireframe display:
+            return bim wireframe view mode
+        return bim shaded view mode
+
+function the bim display of view mode {integer:modeCode}:
+    execute:
+        if modeCode = bim hidden line view mode:
+            return bim hidden line display
+        if modeCode = bim wireframe view mode:
+            return bim wireframe display
+        return bim colour display
+
+# A click `hit` on the bar of view `viewId`: a display or a step of scale,
+# kept with the view as one edit.
+function apply bim view bar {integer:hit} to view {a 64 bit integer:viewId} in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim view index of viewId in editor's documentValue's current
+        if found's valid = false:
+            return nothing
+        set viewValue to the item at found's position in (editor's documentValue's current's views's values)
+        set newScale to viewValue's scale
+        set newDisplay to viewValue's displayMode
+        if (hit >= 0) and (hit <= 2):
+            set newDisplay to hit
+        if hit = 10:
+            set newScale to the bim scale after viewValue's scale going up false
+        if hit = 11:
+            set newScale to the bim scale after viewValue's scale going up true
+        if hit = 14:
+            set turning to (bim view viewId hatches along objects in editor's documentValue's current) = false
+            begin bim transaction in (the address of (editor's documentValue))
+            set bim setting (bim view hatch setting) of viewId to (1 as a 64 bit integer) keeping turning in (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to viewValue's name + (the string form of ": hatches fixed in the world")
+            if turning:
+                set editor's message to viewValue's name + (the string form of ": hatches along the elements")
+            return nothing
+        if hit = 12:
+            set handDrawn to (bim view viewId is sketchy in editor's documentValue's current) = false
+            begin bim transaction in (the address of (editor's documentValue))
+            set bim setting (bim view sketchy setting) of viewId to (1 as a 64 bit integer) keeping handDrawn in (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to viewValue's name + (the string form of ": sketchy lines")
+            if handDrawn = false:
+                set editor's message to viewValue's name + (the string form of ": straight lines")
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        if set bim view viewId scale to newScale and display to newDisplay in (the address of (editor's documentValue's current)):
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to ((viewValue's name + (the string form of ": 1:")) + (the string form of newScale)) + ((the string form of ", ") + (the bim name of display newDisplay))
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+
+# The view modes of the 3D panel.
+function bim shaded view mode:
+    replacement:
+        0
+
+function bim shaded edges view mode:
+    replacement:
+        1
+
+function bim hidden line view mode:
+    replacement:
+        2
+
+function bim wireframe view mode:
+    replacement:
+        3
+
+function the bim name of view mode {integer:viewMode}:
+    execute:
+        if viewMode = bim shaded edges view mode:
+            return the string form of "Shaded with edges"
+        if viewMode = bim hidden line view mode:
+            return the string form of "Hidden line (white model)"
+        if viewMode = bim wireframe view mode:
+            return the string form of "Wireframe"
+        return the string form of "Shaded"
+
+# Whether tool `toolCode` draws on the active storey's plane in the 3D view.
+function bim tool {integer:toolCode} draws in 3D:
+    execute:
+        if (toolCode = bim line tool) or ((toolCode = bim rectangle tool) or (toolCode = bim push tool)):
+            return true
+        if (toolCode = bim text tool) or ((toolCode = bim move tool) or (toolCode = bim copy tool)):
+            return true
+        if (toolCode = bim place tool) or ((toolCode = bim wall tool) or (toolCode = bim grid tool)):
+            return true
+        if (((toolCode = bim solid tool) or (toolCode = bim linear tool)) or (toolCode = bim stair tool)) or ((toolCode = bim railing tool) or (toolCode = bim curtain tool)):
+            return true
+        if (toolCode = bim rotate tool) or ((toolCode = bim mirror tool) or (toolCode = bim offset tool)):
+            return true
+        if (toolCode = bim trim tool) or (toolCode = bim extend tool):
+            return true
+        return toolCode = bim opening tool
+
+function draw bim gesture in view of {bim editor record:editor} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set z to the bim storey elevation of editor
+        set snapPoint to editor's snap's point
+        set marker to the bim view point (snapPoint's x) (snapPoint's y) z in layout with camera
+        # The building system being placed, as it would stand.
+        if (editor's tool = bim curtain tool) and (editor's moveStage = 1):
+            set previewPairs to the bim system preview of editor to snapPoint
+            start triangles in frame
+            use vertex color red 0, green 120 and blue 215 in frame
+            set pairCursor to 0
+            loop while (pairCursor + 1) < the length of (previewPairs's values):
+                set fromSpot to the item at pairCursor in (previewPairs's values)
+                set toSpot to the item at (pairCursor + 1) in (previewPairs's values)
+                add bim stroke from (the bim view point (fromSpot's x) (fromSpot's y) (fromSpot's z) in layout with camera) to (the bim view point (toSpot's x) (toSpot's y) (toSpot's z) in layout with camera) wide 1.5 in frame
+                set pairCursor to pairCursor + 2
+            finish triangles in frame
+        start triangles in frame
+        use vertex color red 220, green 120 and blue 36 in frame
+        add bim stroke from (a cad vector2 with x (marker's x - 7.0) and y marker's y) to (a cad vector2 with x (marker's x + 7.0) and y marker's y) wide 1.5 in frame
+        add bim stroke from (a cad vector2 with x marker's x and y (marker's y - 7.0)) to (a cad vector2 with x marker's x and y (marker's y + 7.0)) wide 1.5 in frame
+        set chain to editor's sketchChain's values
+        if (the length of chain) > 0:
+            use vertex color red 30, green 34 and blue 44 in frame
+            loop corner from 1 to the length of chain:
+                set before to the item at (corner - 1) in chain
+                set after to the item at corner in chain
+                add bim stroke from (the bim view point (before's x) (before's y) z in layout with camera) to (the bim view point (after's x) (after's y) z in layout with camera) wide 1.5 in frame
+            set last to the item at ((the length of chain) - 1) in chain
+            use vertex color red 220, green 120 and blue 36 in frame
+            if editor's tool = bim line tool:
+                add bim stroke from (the bim view point (last's x) (last's y) z in layout with camera) to marker wide 1.5 in frame
+            if editor's tool = bim rectangle tool:
+                set origin to the item at 0 in chain
+                set ring to an empty list of a cad vector2
+                append (the bim view point (origin's x) (origin's y) z in layout with camera) to ring
+                append (the bim view point (snapPoint's x) (origin's y) z in layout with camera) to ring
+                append marker to ring
+                append (the bim view point (origin's x) (snapPoint's y) z in layout with camera) to ring
+                loop side from 0 to 4:
+                    add bim stroke from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by 4) in ring) wide 1.5 in frame
+                free ring
+        if (editor's tool = bim wall tool) and editor's chainActive:
+            add bim stroke from (the bim view point (editor's chainStart's x) (editor's chainStart's y) z in layout with camera) to marker wide 2.0 in frame
+        if (editor's tool = bim grid tool) and editor's gridActive:
+            use vertex color red 60, green 100 and blue 165 in frame
+            add bim stroke from (the bim view point (editor's gridStart's x) (editor's gridStart's y) 0.0 in layout with camera) to (the bim view point (snapPoint's x) (snapPoint's y) 0.0 in layout with camera) wide 1.5 in frame
+        if ((editor's tool = bim move tool) or (editor's tool = bim copy tool)) and (editor's moveStage = 2):
+            add bim stroke from (the bim view point (editor's moveBase's x) (editor's moveBase's y) z in layout with camera) to marker wide 1.5 in frame
+        # A solid part being drawn: its base on the storey, then, while its
+        # height is shown, the same outline at that height and the edges
+        # between.
+        if (editor's tool = bim solid tool) and (editor's moveStage >= 1):
+            set baseFirst to editor's solidCorner
+            set baseSecond to snapPoint
+            set partRise to 0.0
+            if editor's moveStage = 2:
+                set baseSecond to editor's solidReach
+                set partRise to the cad distance from editor's solidReach to snapPoint
+            set outline to an empty list of a cad vector2
+            if editor's solidKind = bim box solid:
+                append baseFirst to outline
+                append (a cad vector2 with x baseSecond's x and y baseFirst's y) to outline
+                append baseSecond to outline
+                append (a cad vector2 with x baseFirst's x and y baseSecond's y) to outline
+            else:
+                set partRadius to the cad distance from baseFirst to baseSecond
+                loop step from 0 to 32:
+                    set angleNow to (6.283185307179586 * (step as a 64 bit floating-point number)) / 32.0
+                    append (a cad vector2 with x (baseFirst's x + (partRadius * (the cosine of angleNow))) and y (baseFirst's y + (partRadius * (the sine of angleNow)))) to outline
+            set levels to 1
+            if partRise > 0.0:
+                set levels to 2
+            loop level from 0 to levels:
+                set partHeight to z + (partRise * (level as a 64 bit floating-point number))
+                loop side from 0 to the length of outline:
+                    set here to the item at side in outline
+                    set following to the item at (the remainder of (side + 1) divided by (the length of outline)) in outline
+                    add bim stroke from (the bim view point (here's x) (here's y) partHeight in layout with camera) to (the bim view point (following's x) (following's y) partHeight in layout with camera) wide 1.5 in frame
+            if (partRise > 0.0) and (editor's solidKind = bim box solid):
+                loop side from 0 to the length of outline:
+                    set here to the item at side in outline
+                    add bim stroke from (the bim view point (here's x) (here's y) z in layout with camera) to (the bim view point (here's x) (here's y) (z + partRise) in layout with camera) wide 1.5 in frame
+            free outline
+        finish triangles in frame
+        if editor's editMode:
+            draw bim edit points of editor in layout with camera in view true in frame
+
+# Writes `meshes` into the GPU's persistent mesh: each element's distinct
+# corners once (the shaders find each face's normal per pixel), coloured by
+# its own colour or its category's, faint where the 3D rules say halftone.
+function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor record:editor} in mode {integer:viewMode} to {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set vertexBound to 0
+        set indexCount to 0
+        set infinity to 1.0 / 0.0
+        set low to a cad vector3 with x infinity, y infinity and z infinity
+        set high to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+        loop cursor from 0 to the length of meshes:
+            set shape to (the item at cursor in meshes)'s shape
+            # A corner may be stored once per smooth group, so at most once
+            # per triangle corner.
+            set vertexBound to vertexBound + (the length of (shape's triangles's values))
+            set indexCount to indexCount + (the length of (shape's triangles's values))
+            loop point from 0 to the length of (shape's positions's values):
+                set p to the item at point in (shape's positions's values)
+                set low to a cad vector3 with x (the minimum of low's x and p's x), y (the minimum of low's y and p's y) and z (the minimum of low's z and p's z)
+                set high to a cad vector3 with x (the maximum of high's x and p's x), y (the maximum of high's y and p's y) and z (the maximum of high's z and p's z)
+        set ids to a cad topology list of a 64 bit integer
+        if vertexBound = 0:
+            prepare gpu mesh of 0 vertices and 0 indices in context
+            return @intrinsic("construct", a bim gpu scene record, (a cad vector3 with x 0.0, y 0.0 and z 0.0), 1.0, ids, a cad topology list of a cad vector3, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0))
+        set edges to a cad topology list of a cad vector3
+        set origin to (the cad sum of low and high) scaled by 0.5
+        set radius to the maximum of 1.0 and ((the cad length of (the cad difference of high and low)) * 0.5)
+        prepare gpu mesh of vertexBound vertices and indexCount indices in context
+        set base to 0
+        set slot to 0
+        set ordinal to -1
+        set previousId to (-1) as a 64 bit integer
+        set comparator to the function named "bim gpu corner ordering $ and $"
+        loop cursor from 0 to the length of meshes:
+            set entry to the item at cursor in meshes
+            if entry's elementId != previousId:
+                set ordinal to ordinal + 1
+                append entry's elementId to (ids's values)
+                set previousId to entry's elementId
+            set colour to the bim colour of category entry's category
+            if entry's colour's x >= 0.0:
+                set colour to entry's colour
+            set isFaint to false
+            if entry's category >= 0:
+                set isFaint to bim category entry's category is halftone in editor's modelRules
+            if viewMode = bim hidden line view mode:
+                set colour to a cad vector3 with x 242.0, y 242.0 and z 238.0
+            set red to the bim halftone of channel (colour's x as an integer) when isFaint
+            set green to the bim halftone of channel (colour's y as an integer) when isFaint
+            set blue to the bim halftone of channel (colour's z as an integer) when isFaint
+            set shape to entry's shape
+            set corners to an empty list of a bim gpu corner record
+            loop point from 0 to the length of (shape's positions's values):
+                set p to the item at point in (shape's positions's values)
+                append (@intrinsic("construct", a bim gpu corner record, p's x, p's y, p's z, point)) to corners
+            sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
+            # The corners welded by position (`remap`: each point's welded
+            # corner, counted from `base`).
+            set remap to an empty list of an integer
+            loop point from 0 to the length of corners:
+                append 0 to remap
+            set weldedSpots to an empty list of a cad vector3
+            set distinct to 0
+            loop point from 0 to the length of corners:
+                set here to the item at point in corners
+                set fresh to true
+                if point > 0:
+                    set before to the item at (point - 1) in corners
+                    set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
+                if fresh:
+                    append (a cad vector3 with x here's x, y here's y and z here's z) to weldedSpots
+                    set distinct to distinct + 1
+                replace item at index here's index in remap with (base + (distinct - 1))
+            # Smooth shading, as round surfaces need: each triangle corner
+            # takes the normals of the triangles at its welded corner that
+            # meet its own within 30 degrees (a crease beyond), averaged by
+            # area; a welded corner is stored once per distinct normal.
+            set triangleCorners to shape's triangles's values
+            set triangleCount to (the length of triangleCorners) / 3
+            set faceNormals to an empty list of a cad vector3
+            loop triangle from 0 to triangleCount:
+                set first to the item at (the item at (triangle * 3) in triangleCorners) in (shape's positions's values)
+                set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in (shape's positions's values)
+                set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in (shape's positions's values)
+                append (the cad cross of (the cad difference of second and first) and (the cad difference of third and first)) to faceNormals
+            # The triangles at each welded corner (counted, then listed).
+            set incidentStart to an empty list of an integer
+            loop weld from 0 to (distinct + 1):
+                append 0 to incidentStart
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                replace item at index (weld + 1) in incidentStart with ((the item at (weld + 1) in incidentStart) + 1)
+            loop weld from 1 to (distinct + 1):
+                replace item at index weld in incidentStart with ((the item at weld in incidentStart) + (the item at (weld - 1) in incidentStart))
+            set incidentFill to an empty list of an integer
+            set incident to an empty list of an integer
+            loop weld from 0 to distinct:
+                append (the item at weld in incidentStart) to incidentFill
+            loop corner from 0 to the length of triangleCorners:
+                append 0 to incident
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                replace item at index (the item at weld in incidentFill) in incident with (corner / 3)
+                replace item at index weld in incidentFill with ((the item at weld in incidentFill) + 1)
+            # The GPU corners made so far for each welded corner, as chains.
+            set chainHead to an empty list of an integer
+            loop weld from 0 to distinct:
+                append -1 to chainHead
+            set chainNext to an empty list of an integer
+            set chainNormal to an empty list of a cad vector3
+            set made to 0
+            loop corner from 0 to the length of triangleCorners:
+                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                set own to the item at (corner / 3) in faceNormals
+                set ownLength to the cad length of own
+                set summed to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                if ownLength > 1e-18:
+                    loop link from (the item at weld in incidentStart) to (the item at (weld + 1) in incidentStart):
+                        set other to the item at (the item at link in incident) in faceNormals
+                        set otherLength to the cad length of other
+                        if otherLength > 1e-18:
+                            if (the cad dot of own and other) > ((0.866 * ownLength) * otherLength):
+                                set summed to the cad sum of summed and other
+                set summedLength to the cad length of summed
+                set smoothNormal to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                if summedLength > 1e-18:
+                    set smoothNormal to summed scaled by (1.0 / summedLength)
+                set chosen to -1
+                set walker to the item at weld in chainHead
+                loop while (walker >= 0) and (chosen < 0):
+                    if (the cad dot of (the item at walker in chainNormal) and smoothNormal) > 0.9995:
+                        set chosen to walker
+                    set walker to the item at walker in chainNext
+                if chosen < 0:
+                    set chosen to made
+                    append smoothNormal to chainNormal
+                    append (the item at weld in chainHead) to chainNext
+                    replace item at index weld in chainHead with made
+                    set spot to the item at weld in weldedSpots
+                    put gpu mesh vertex (base + made) at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in (@intrinsic("dereference", context))
+                    set made to made + 1
+                put gpu mesh index slot as (base + chosen) in (@intrinsic("dereference", context))
+                set slot to slot + 1
+            free faceNormals
+            free incidentStart
+            free incidentFill
+            free incident
+            free chainHead
+            free chainNext
+            free chainNormal
+            free weldedSpots
+            # The feature edges, for the modes that draw them, between the
+            # welded corners.
+            if viewMode != bim shaded view mode:
+                set welded to an empty list of a cad vector3
+                set weldedCorners to an empty list of an integer
+                loop point from 0 to the length of corners:
+                    set here to the item at point in corners
+                    if (the length of welded) < ((the item at here's index in remap) - base) + 1:
+                        append (a cad vector3 with x here's x, y here's y and z here's z) to welded
+                loop corner from 0 to the length of (shape's triangles's values):
+                    append ((the item at (the item at corner in (shape's triangles's values)) in remap) - base) to weldedCorners
+                append bim feature edges of welded and weldedCorners to (edges's values)
+                free welded
+                free weldedCorners
+            set base to base + made
+            free corners
+            free remap
+        return @intrinsic("construct", a bim gpu scene record, origin, radius, ids, edges, low, high)
+
+# The camera's parallel view of the GPU scene in the 3D panel, as the mesh
+# shaders' parameters: the editor's view axes and scale, centred in the panel,
+# depth across four times the model's radius, the sun and the viewer's
+# direction, and the ordinals of up to nine selected elements (`selectedIds`).
+function set bim gpu camera {bim camera record:camera} in {bim screen layout record:layout} for {bim gpu scene record:scene} selecting {a pointer to a list:selectedIds} on {pointer:window}:
+    execute:
+        set context to @intrinsic("dereference", the gpu context of window)
+        set axes to the bim view axes of camera
+        set panelWidth to layout's width - layout's planRight
+        set panelHeight to layout's bottom - layout's top
+        set sx to (2.0 * camera's viewScale) / panelWidth
+        set sy to (2.0 * camera's viewScale) / panelHeight
+        set sz to 1.0 / (4.0 * scene's radius)
+        set shift to the cad difference of scene's origin and camera's target
+        set gpu parameter 0 to (axes's across's x * sx) in context
+        set gpu parameter 1 to (axes's across's y * sx) in context
+        set gpu parameter 2 to (axes's across's z * sx) in context
+        set gpu parameter 3 to ((the cad dot of shift and axes's across) * sx) in context
+        set gpu parameter 4 to (0.0 - (axes's up's x * sy)) in context
+        set gpu parameter 5 to (0.0 - (axes's up's y * sy)) in context
+        set gpu parameter 6 to (0.0 - (axes's up's z * sy)) in context
+        set gpu parameter 7 to (0.0 - ((the cad dot of shift and axes's up) * sy)) in context
+        set gpu parameter 8 to (axes's depth's x * sz) in context
+        set gpu parameter 9 to (axes's depth's y * sz) in context
+        set gpu parameter 10 to (axes's depth's z * sz) in context
+        set gpu parameter 11 to (0.5 + ((the cad dot of shift and axes's depth) * sz)) in context
+        set gpu parameter 12 to 0.0 in context
+        set gpu parameter 13 to 0.0 in context
+        set gpu parameter 14 to 0.0 in context
+        set gpu parameter 15 to 1.0 in context
+        set towardSun to the bim direction toward the sun
+        set gpu parameter 16 to towardSun's x in context
+        set gpu parameter 17 to towardSun's y in context
+        set gpu parameter 18 to towardSun's z in context
+        set gpu parameter 19 to (0.0 - axes's depth's x) in context
+        set gpu parameter 20 to (0.0 - axes's depth's y) in context
+        set gpu parameter 21 to (0.0 - axes's depth's z) in context
+        set slot to 0
+        loop cursor from 0 to the length of (scene's ids's values):
+            set sceneId to the item at cursor in (scene's ids's values)
+            loop wantedCursor from 0 to the length of selectedIds:
+                if ((the item at wantedCursor in selectedIds) = sceneId) and (slot < 9):
+                    set gpu parameter (22 + slot) to (cursor as a 64 bit floating-point number) in context
+                    set slot to slot + 1
+        loop while slot < 9:
+            set gpu parameter (22 + slot) to -1.0 in context
+            set slot to slot + 1
+
+# A ground plane through the lowest point of `meshes`, reaching beyond the
+# model and its shadow, and the shadow of every triangle facing the sun cast
+# on it along `towardSun`. Shadows are opaque, so where they overlap they do
+# not darken twice; the model drawn after them hides the part beneath it.
+function draw bim ground and shadows of {a pointer to a list:meshes} toward {cad vector3:towardSun} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim depth recording record:recording}:
+    execute:
+        set groundLevel to 1.0 / 0.0
+        loop cursor from 0 to the length of meshes:
+            set points to (the item at cursor in meshes)'s shape's positions's values
+            loop pointCursor from 0 to the length of points:
+                set groundLevel to the minimum of groundLevel and (the item at pointCursor in points)'s z
+        set shadowLevel to groundLevel + 0.01
+        set lowX to 1.0 / 0.0
+        set lowY to lowX
+        set highX to 0.0 - lowX
+        set highY to highX
+        set cast to an empty list of a cad vector3
+        loop cursor from 0 to the length of meshes:
+            set entry to the item at cursor in meshes
+            set points to entry's shape's positions's values
+            set normals to entry's shape's normals's values
+            set corners to entry's shape's triangles's values
+            set corner to 0
+            loop while corner < the length of corners:
+                if (the cad dot of (the item at (the item at corner in corners) in normals) and towardSun) > 0.0:
+                    loop vertex from 0 to 3:
+                        set point to the item at (the item at (corner + vertex) in corners) in points
+                        set drop to (point's z - groundLevel) / towardSun's z
+                        set shadowX to point's x - (towardSun's x * drop)
+                        set shadowY to point's y - (towardSun's y * drop)
+                        append (a cad vector3 with x shadowX, y shadowY and z shadowLevel) to cast
+                        set lowX to the minimum of lowX and shadowX
+                        set lowY to the minimum of lowY and shadowY
+                        set highX to the maximum of highX and shadowX
+                        set highY to the maximum of highY and shadowY
+                set corner to corner + 3
+        if (the length of cast) = 0:
+            free cast
+            return nothing
+        set margin to 0.5 * (the maximum of (highX - lowX) and (highY - lowY))
+        set southWest to the bim view pixel of (a cad vector3 with x (lowX - margin), y (lowY - margin) and z groundLevel) in layout with camera
+        set southEast to the bim view pixel of (a cad vector3 with x (highX + margin), y (lowY - margin) and z groundLevel) in layout with camera
+        set northEast to the bim view pixel of (a cad vector3 with x (highX + margin), y (highY + margin) and z groundLevel) in layout with camera
+        set northWest to the bim view pixel of (a cad vector3 with x (lowX - margin), y (highY + margin) and z groundLevel) in layout with camera
+        set groundColour to the bim packed colour 234, 236 and 228
+        set shadowColour to the bim packed colour 192, 196 and 188
+        record bim triangle southWest, southEast and northEast within the view of layout coloured groundColour on recording
+        record bim triangle southWest, northEast and northWest within the view of layout coloured groundColour on recording
+        set cursor to 0
+        loop while cursor < the length of cast:
+            set first to the bim view pixel of (the item at cursor in cast) in layout with camera
+            set second to the bim view pixel of (the item at (cursor + 1) in cast) in layout with camera
+            set third to the bim view pixel of (the item at (cursor + 2) in cast) in layout with camera
+            record bim triangle first, second and third within the view of layout coloured shadowColour on recording
+            set cursor to cursor + 3
+        free cast
+
+# The selected opening outlined, and the selected space's floor filled, in
+# the 3D view.
+# The scene's feature edges in the 3D panel, as thin lines; when
+# `depthTested`, at the depth the mesh has there (a hair nearer), so the mesh
+# hides the edges behind it.
+function draw bim edges of {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} hidden {boolean:depthTested} in {graphics frame:frame}:
+    execute:
+        set segments to scene's edges's values
+        if (the length of segments) = 0:
+            return nothing
+        set axes to the bim view axes of camera
+        set middle to the bim view middle of layout
+        set viewScale to camera's viewScale
+        set depthFactor to 16.0 / scene's radius
+        if depthTested:
+            enable depth testing in frame
+        start triangles in frame
+        if depthTested:
+            use vertex color red 28, green 32 and blue 40 in frame
+        else:
+            use vertex color red 40, green 70 and blue 120 in frame
+        set cursor to 0
+        loop while (cursor + 1) < the length of segments:
+            set here to the cad difference of (the item at cursor in segments) and axes's centre
+            set there to the cad difference of (the item at (cursor + 1) in segments) and axes's centre
+            set cursor to cursor + 2
+            set hx to middle's x + ((the cad dot of here and axes's across) * viewScale)
+            set hy to middle's y - ((the cad dot of here and axes's up) * viewScale)
+            set tx to middle's x + ((the cad dot of there and axes's across) * viewScale)
+            set ty to middle's y - ((the cad dot of there and axes's up) * viewScale)
+            set inside to (((the minimum of hx and tx) > layout's planRight) and ((the maximum of hx and tx) < layout's width)) and (((the minimum of hy and ty) > layout's top) and ((the maximum of hy and ty) < layout's bottom))
+            set span to the square root of (((tx - hx) * (tx - hx)) + ((ty - hy) * (ty - hy)))
+            if inside and (span > 0.5):
+                set hz to 0.012 - ((the cad dot of here and axes's depth) * depthFactor)
+                set tz to 0.012 - ((the cad dot of there and axes's depth) * depthFactor)
+                set nx to (0.0 - (ty - hy)) * (0.6 / span)
+                set ny to (tx - hx) * (0.6 / span)
+                add a vertex at x (hx + nx), y (hy + ny) and z hz to frame
+                add a vertex at x (tx + nx), y (ty + ny) and z tz to frame
+                add a vertex at x (tx - nx), y (ty - ny) and z tz to frame
+                add a vertex at x (hx + nx), y (hy + ny) and z hz to frame
+                add a vertex at x (tx - nx), y (ty - ny) and z tz to frame
+                add a vertex at x (hx - nx), y (hy - ny) and z hz to frame
+        finish triangles in frame
+        if depthTested:
+            disable depth testing in frame
+
+# The grid lines in the 3D panel: dash-dot, depth tested against the model
+# as the edges are, so that a grid line passes behind the elements in front
+# of it. Orthographic projection is affine, so a dash's ends on screen map
+# back along the line by the same fractions.
+function draw bim grid lines in view of {bim editor record:editor} around {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        if (bim category bim grid category is visible in editor's modelRules) = false:
+            return nothing
+        set faded to bim category bim grid category is halftone in editor's modelRules
+        set shade to the bim halftone of channel 0 when faded
+        set axes to the bim view axes of camera
+        set depthFactor to 16.0 / (the maximum of scene's radius and 1e-6)
+        set gridValues to editor's documentValue's current's grids's values
+        enable depth testing in frame
+        start triangles in frame
+        use vertex color red shade, green shade and blue shade in frame
+        loop cursor from 0 to the length of gridValues:
+            set gridValue to the item at cursor in gridValues
+            set first to the bim view point (gridValue's start's x) (gridValue's start's y) 0.0 in layout with camera
+            set second to the bim view point (gridValue's finish's x) (gridValue's finish's y) 0.0 in layout with camera
+            set span to the cad distance from first to second
+            if span > 30.0:
+                set ux to (second's x - first's x) / span
+                set uy to (second's y - first's y) / span
+                set dashes to an empty list of a cad vector2
+                append bim dash dot from (a cad vector2 with x (first's x + (ux * 11.0)) and y (first's y + (uy * 11.0))) to (a cad vector2 with x (second's x - (ux * 11.0)) and y (second's y - (uy * 11.0))) into dashes
+                set startOffset to the cad difference of (a cad vector3 with x gridValue's start's x, y gridValue's start's y and z 0.0) and axes's centre
+                set finishOffset to the cad difference of (a cad vector3 with x gridValue's finish's x, y gridValue's finish's y and z 0.0) and axes's centre
+                set startDepth to 0.012 - ((the cad dot of startOffset and axes's depth) * depthFactor)
+                set finishDepth to 0.012 - ((the cad dot of finishOffset and axes's depth) * depthFactor)
+                set nx to (0.0 - uy) * 0.5
+                set ny to ux * 0.5
+                set dashCursor to 0
+                loop while (dashCursor + 1) < the length of dashes:
+                    set here to the item at dashCursor in dashes
+                    set there to the item at (dashCursor + 1) in dashes
+                    set inside to (((the minimum of here's x and there's x) > layout's planRight) and ((the maximum of here's x and there's x) < layout's width)) and (((the minimum of here's y and there's y) > layout's top) and ((the maximum of here's y and there's y) < layout's bottom))
+                    if inside:
+                        set hereFraction to (the cad distance from first to here) / span
+                        set thereFraction to (the cad distance from first to there) / span
+                        set hz to startDepth + ((finishDepth - startDepth) * hereFraction)
+                        set tz to startDepth + ((finishDepth - startDepth) * thereFraction)
+                        add a vertex at x (here's x + nx), y (here's y + ny) and z hz to frame
+                        add a vertex at x (there's x + nx), y (there's y + ny) and z tz to frame
+                        add a vertex at x (there's x - nx), y (there's y - ny) and z tz to frame
+                        add a vertex at x (here's x + nx), y (here's y + ny) and z hz to frame
+                        add a vertex at x (there's x - nx), y (there's y - ny) and z tz to frame
+                        add a vertex at x (here's x - nx), y (here's y - ny) and z hz to frame
+                    set dashCursor to dashCursor + 2
+                free dashes
+        finish triangles in frame
+        disable depth testing in frame
+
+# The levels in the 3D panel: each a dashed rectangle at its elevation
+# around the model, with its name and height; the active storey darker.
+function draw bim levels of {bim editor record:editor} around {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if scene's high's x < scene's low's x:
+            return nothing
+        set automatic to the bim automatic level extent around scene
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            set z to levelValue's elevation
+            set extent to the bim level extent of levelValue's id in modelValue around automatic
+            set corners to an empty list of a cad vector2
+            append (the bim view point (extent's low's x) (extent's low's y) z in layout with camera) to corners
+            append (the bim view point (extent's high's x) (extent's low's y) z in layout with camera) to corners
+            append (the bim view point (extent's high's x) (extent's high's y) z in layout with camera) to corners
+            append (the bim view point (extent's low's x) (extent's high's y) z in layout with camera) to corners
+            set chosenLevel to (editor's selectionKind = bim level picked) and (editor's selectionId = levelValue's id)
+            set pairs to an empty list of a cad vector2
+            loop side from 0 to 4:
+                set edgeStart to the item at side in corners
+                set edgeEnd to the item at (the remainder of (side + 1) divided by 4) in corners
+                set insideStart to ((edgeStart's x > layout's planRight) and (edgeStart's x < layout's width)) and ((edgeStart's y > layout's top) and (edgeStart's y < layout's bottom))
+                set insideEnd to ((edgeEnd's x > layout's planRight) and (edgeEnd's x < layout's width)) and ((edgeEnd's y > layout's top) and (edgeEnd's y < layout's bottom))
+                if insideStart and insideEnd:
+                    if chosenLevel:
+                        append edgeStart to pairs
+                        append edgeEnd to pairs
+                    else:
+                        append bim dash dot from edgeStart to edgeEnd into pairs
+            set shade to 150
+            if levelValue's id = editor's levelId:
+                set shade to 60
+            if chosenLevel:
+                record bim strokes pairs coloured 0, 120 and 215 wide 2.0 on canvas
+                # Its handles: the corners and the middles of the sides.
+                set squares to an empty list of a cad vector2
+                loop handleCursor from 0 to 8:
+                    set handleSpot to the bim level handle handleCursor of extent
+                    set handlePixel to the bim view point (handleSpot's x) (handleSpot's y) z in layout with camera
+                    append (a cad vector2 with x (handlePixel's x - 4.0) and y (handlePixel's y - 4.0)) to squares
+                    append (a cad vector2 with x (handlePixel's x + 4.0) and y (handlePixel's y - 4.0)) to squares
+                    append (a cad vector2 with x (handlePixel's x + 4.0) and y (handlePixel's y + 4.0)) to squares
+                    append (a cad vector2 with x (handlePixel's x - 4.0) and y (handlePixel's y - 4.0)) to squares
+                    append (a cad vector2 with x (handlePixel's x + 4.0) and y (handlePixel's y + 4.0)) to squares
+                    append (a cad vector2 with x (handlePixel's x - 4.0) and y (handlePixel's y + 4.0)) to squares
+                record bim triangles squares coloured 0, 120 and 215 on canvas
+                free squares
+            else:
+                record bim strokes pairs coloured shade, (shade + 20) and (shade + 50) wide 1.0 on canvas
+            free pairs
+            set anchor to the item at 0 in corners
+            if ((anchor's x > layout's planRight) and (anchor's x < (layout's width - 150.0))) and ((anchor's y > (layout's top + 14.0)) and (anchor's y < layout's bottom)):
+                set heightText to the bim area text of z
+                if z >= 0.0:
+                    set heightText to (the string form of "+") + heightText
+                record bim text ((levelValue's name + (the string form of "  ")) + heightText) at (anchor's x + 4.0) and (anchor's y - 4.0) coloured shade, (shade + 20) and (shade + 50) on canvas
+            free corners
+
+# The levels' extent when none is set: what the 3D view shows, 1.5 m around.
+function the bim automatic level extent around {bim gpu scene record:scene}:
+    execute:
+        set extentLow to a cad vector2 with x (scene's low's x - 1.5) and y (scene's low's y - 1.5)
+        set extentHigh to a cad vector2 with x (scene's high's x + 1.5) and y (scene's high's y + 1.5)
+        return @intrinsic("construct", a bim plan extent record, scene's high's x >= scene's low's x, extentLow, extentHigh)
+
+# The level whose outline passes within six pixels of `pixel` in the 3D
+# view, or the refused id.
+function the bim level near pixel {cad vector2:pixel} of {bim editor record:editor} around {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set best to the bim refused id
+        if scene's high's x < scene's low's x:
+            return best
+        set bestGap to 6.0
+        set automatic to the bim automatic level extent around scene
+        set modelValue to editor's documentValue's current
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            set extent to the bim level extent of levelValue's id in modelValue around automatic
+            loop side from 0 to 4:
+                set fromSpot to the bim level handle side of extent
+                set toSpot to the bim level handle (the remainder of (side + 1) divided by 4) of extent
+                set first to the bim view point (fromSpot's x) (fromSpot's y) (levelValue's elevation) in layout with camera
+                set second to the bim view point (toSpot's x) (toSpot's y) (levelValue's elevation) in layout with camera
+                set gap to the cad distance from pixel to the segment from first to second
+                if gap < bestGap:
+                    set bestGap to gap
+                    set best to levelValue's id
+        return best
+
+# The handle of the selected level within seven pixels of `pixel` in the 3D
+# view (as `the bim level handle` numbers them), or -1.
+function the bim level grip at {cad vector2:pixel} of {bim editor record:editor} around {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        if (editor's selectionKind != bim level picked) or (scene's high's x < scene's low's x):
+            return -1
+        set modelValue to editor's documentValue's current
+        set found to the bim level index of editor's selectionId in modelValue
+        if found's valid = false:
+            return -1
+        set levelValue to the item at found's position in (modelValue's levels's values)
+        set extent to the bim level extent of levelValue's id in modelValue around (the bim automatic level extent around scene)
+        set nearest to -1
+        set nearestGap to 7.0
+        loop handleCursor from 0 to 8:
+            set handleSpot to the bim level handle handleCursor of extent
+            set handlePixel to the bim view point (handleSpot's x) (handleSpot's y) (levelValue's elevation) in layout with camera
+            set gap to the cad distance from pixel to handlePixel
+            if gap < nearestGap:
+                set nearestGap to gap
+                set nearest to handleCursor
+        return nearest
+
+# The grid whose line at datum level passes within six pixels of `pixel` in
+# the 3D panel, or the refused id.
+function the bim grid near pixel {cad vector2:pixel} of {bim editor record:editor} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set best to the bim refused id
+        if (bim category bim grid category is visible in editor's modelRules) = false:
+            return best
+        set bestGap to 6.0
+        set gridValues to editor's documentValue's current's grids's values
+        loop cursor from 0 to the length of gridValues:
+            set gridValue to the item at cursor in gridValues
+            set first to the bim view point (gridValue's start's x) (gridValue's start's y) 0.0 in layout with camera
+            set second to the bim view point (gridValue's finish's x) (gridValue's finish's y) 0.0 in layout with camera
+            set gap to the cad distance from pixel to the segment from first to second
+            if gap < bestGap:
+                set bestGap to gap
+                set best to gridValue's id
+        return best
+
+# Imported polylines (pairs of points) in the 3D panel, as thin lines.
+function draw bim curves {a pointer to a list:pairs} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set kept to an empty list of a cad vector2
+        set cursor to 0
+        loop while (cursor + 1) < the length of pairs:
+            set here to the item at cursor in pairs
+            set there to the item at (cursor + 1) in pairs
+            set cursor to cursor + 2
+            set first to the bim view point (here's x) (here's y) (here's z) in layout with camera
+            set second to the bim view point (there's x) (there's y) (there's z) in layout with camera
+            set insideFirst to ((first's x > layout's planRight) and (first's x < layout's width)) and ((first's y > layout's top) and (first's y < layout's bottom))
+            set insideSecond to ((second's x > layout's planRight) and (second's x < layout's width)) and ((second's y > layout's top) and (second's y < layout's bottom))
+            if insideFirst and insideSecond:
+                append first to kept
+                append second to kept
+        record bim strokes kept coloured 70, 110 and 170 wide 1.2 on canvas
+        free kept
+
+function draw bim selection in view of {bim editor record:editor} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set modelValue to editor's documentValue's current
+        # The chosen part of a building system, outlined on its face.
+        set chosenPart to the bim chosen part of editor
+        if chosenPart's valid:
+            set lowSpot to the bim point chosenPart's box's low's x metres along chosenPart's curtain
+            set highSpot to the bim point chosenPart's box's high's x metres along chosenPart's curtain
+            set bottom to chosenPart's elevation + chosenPart's box's low's y
+            set top to chosenPart's elevation + chosenPart's box's high's y
+            set partCorners to an empty list of a cad vector2
+            append (the bim view point (lowSpot's x) (lowSpot's y) bottom in layout with camera) to partCorners
+            append (the bim view point (highSpot's x) (highSpot's y) bottom in layout with camera) to partCorners
+            append (the bim view point (highSpot's x) (highSpot's y) top in layout with camera) to partCorners
+            append (the bim view point (lowSpot's x) (lowSpot's y) top in layout with camera) to partCorners
+            start triangles in frame
+            use vertex color red 255, green 140, blue 0 and alpha 70 in frame
+            add a vertex at x (the item at 0 in partCorners)'s x and y (the item at 0 in partCorners)'s y to frame
+            add a vertex at x (the item at 1 in partCorners)'s x and y (the item at 1 in partCorners)'s y to frame
+            add a vertex at x (the item at 2 in partCorners)'s x and y (the item at 2 in partCorners)'s y to frame
+            add a vertex at x (the item at 0 in partCorners)'s x and y (the item at 0 in partCorners)'s y to frame
+            add a vertex at x (the item at 2 in partCorners)'s x and y (the item at 2 in partCorners)'s y to frame
+            add a vertex at x (the item at 3 in partCorners)'s x and y (the item at 3 in partCorners)'s y to frame
+            use vertex color red 255, green 140 and blue 0 in frame
+            loop side from 0 to 4:
+                add bim stroke from (the item at side in partCorners) to (the item at (the remainder of (side + 1) divided by 4) in partCorners) wide 2.5 in frame
+            finish triangles in frame
+            free partCorners
+        # Everything chosen together, outlined.
+        if (the length of (editor's chosenSketches's values)) > 0:
+            set chosenOutlines to the bim selection outlines of editor in plan false
+            start triangles in frame
+            use vertex color red 0, green 120 and blue 215 in frame
+            loop outlineCursor from 0 to the length of chosenOutlines:
+                set chosenOutline to the item at outlineCursor in chosenOutlines
+                if bim element chosenOutline's id is chosen by editor:
+                    set edgeCursor to 0
+                    loop while (edgeCursor + 1) < the length of (chosenOutline's segments's values):
+                        set edgeFrom to the item at edgeCursor in (chosenOutline's segments's values)
+                        set edgeTo to the item at (edgeCursor + 1) in (chosenOutline's segments's values)
+                        add bim stroke from (the bim view point (edgeFrom's x) (edgeFrom's y) (edgeFrom's z) in layout with camera) to (the bim view point (edgeTo's x) (edgeTo's y) (edgeTo's z) in layout with camera) wide 2.0 in frame
+                        set edgeCursor to edgeCursor + 2
+            finish triangles in frame
+        if editor's selectionKind = bim opening picked:
+            set found to the bim opening index of editor's selectionId in modelValue
+            if found's valid = false:
+                return nothing
+            set openingValue to the item at found's position in (modelValue's openings's values)
+            set hostFound to the bim wall index of openingValue's hostId in modelValue
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if (hostFound's valid and typeFound's valid) = false:
+                return nothing
+            set host to the item at hostFound's position in (modelValue's walls's values)
+            set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+            set levelFound to the bim level index of host's levelId in modelValue
+            set elevation to 0.0
+            if levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+            set halfWidth to (the bim rough width of openingType) * 0.5
+            set span to the bim span of host at openingValue's offset reaching halfWidth
+            set low to elevation + openingType's sill
+            set high to elevation + (the bim head height of openingType)
+            set corners to an empty list of a cad vector2
+            append (the bim view point (span's left's x) (span's left's y) low in layout with camera) to corners
+            append (the bim view point (span's right's x) (span's right's y) low in layout with camera) to corners
+            append (the bim view point (span's right's x) (span's right's y) high in layout with camera) to corners
+            append (the bim view point (span's left's x) (span's left's y) high in layout with camera) to corners
+            start triangles in frame
+            use vertex color red 0, green 120 and blue 215 in frame
+            loop side from 0 to 4:
+                add bim stroke from (the item at side in corners) to (the item at (the remainder of (side + 1) divided by 4) in corners) wide 3.0 in frame
+            finish triangles in frame
+            free corners
+        if editor's selectionKind = bim grid picked:
+            set found to the bim grid index of editor's selectionId in modelValue
+            if found's valid:
+                set gridValue to the item at found's position in (modelValue's grids's values)
+                set corners to an empty list of a cad vector2
+                append (the bim view point (gridValue's start's x) (gridValue's start's y) (gridValue's low) in layout with camera) to corners
+                append (the bim view point (gridValue's finish's x) (gridValue's finish's y) (gridValue's low) in layout with camera) to corners
+                append (the bim view point (gridValue's finish's x) (gridValue's finish's y) (gridValue's high) in layout with camera) to corners
+                append (the bim view point (gridValue's start's x) (gridValue's start's y) (gridValue's high) in layout with camera) to corners
+                # The plane, see-through, then its outline.
+                start triangles in frame
+                set gpu colour to 36, 120, 220 and 56 in (the gpu context of frame's window)
+                loop corner from 0 to 2:
+                    add a vertex at x (the item at 0 in corners)'s x and y (the item at 0 in corners)'s y to frame
+                    add a vertex at x (the item at (corner + 1) in corners)'s x and y (the item at (corner + 1) in corners)'s y to frame
+                    add a vertex at x (the item at (corner + 2) in corners)'s x and y (the item at (corner + 2) in corners)'s y to frame
+                finish triangles in frame
+                start triangles in frame
+                use vertex color red 0, green 120 and blue 215 in frame
+                loop side from 0 to 4:
+                    add bim stroke from (the item at side in corners) to (the item at (the remainder of (side + 1) divided by 4) in corners) wide 2.0 in frame
+                finish triangles in frame
+                free corners
+        if editor's selectionKind = bim space picked:
+            set chosen to the bim selected space of editor
+            if chosen's valid = false:
+                return nothing
+            set levelFound to the bim level index of chosen's space's levelId in modelValue
+            set elevation to 0.0
+            if levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+            set rings to an empty list of the type of (an empty list of a cad vector2)
+            append (chosen's space's outline's values) to rings
+            set mesh to the cad triangulation of rings rings
+            free rings
+            if (the length of (the triangles of mesh)) > 0:
+                enable depth testing in frame
+                start triangles in frame
+                use vertex color red 120, green 170 and blue 235 in frame
+                loop cursor from 0 to the length of (the triangles of mesh):
+                    set face to the item at cursor in (the triangles of mesh)
+                    loop vertex from 0 to 3:
+                        set corner to the item at (the first of face) in (the points of mesh)
+                        if vertex = 1:
+                            set corner to the item at (the second of face) in (the points of mesh)
+                        if vertex = 2:
+                            set corner to the item at (the third of face) in (the points of mesh)
+                        set placed to the bim view pixel of (a cad vector3 with x corner's x, y corner's y and z (elevation + 0.01)) in layout with camera
+                        add a vertex at x placed's x, y placed's y and z placed's z to frame
+                finish triangles in frame
+                disable depth testing in frame
+            free cad triangulation mesh
+
+# The spaces of every storey of `modelValue`, for the rooms in the 3D view.
+function the bim rooms of {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set found to a cad topology list of a bim space record
+        loop levelCursor from 0 to the length of (modelValue's levels's values):
+            set storeyValue to the item at levelCursor in (modelValue's levels's values)
+            set storeySpaces to the bim spaces of modelValue on level storeyValue's id using index
+            loop spaceCursor from 0 to the length of (storeySpaces's values):
+                append (the item at spaceCursor in (storeySpaces's values)) to (found's values)
+        return found
+
+# Adds the triangle of `first`, `second` and `third` (model coordinates) to
+# the triangles under way, depth tested.
+function add bim room triangle {cad vector3:first}, {cad vector3:second} and {cad vector3:third} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set placed to the bim view pixel of first in layout with camera
+        add a vertex at x placed's x, y placed's y and z placed's z to frame
+        set placed to the bim view pixel of second in layout with camera
+        add a vertex at x placed's x, y placed's y and z placed's z to frame
+        set placed to the bim view pixel of third in layout with camera
+        add a vertex at x placed's x, y placed's y and z placed's z to frame
+
+# The rooms in the 3D view, when the 3D view shows the space category: each
+# space a see-through volume from its storeyValue's floor to the storeyValue's height,
+# with its outline at the floor and the ceiling.
+function draw bim rooms {a pointer to a list:roomList} of {bim editor record:editor} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set modelValue to editor's documentValue's current
+        enable depth testing in frame
+        loop roomCursor from 0 to the length of roomList:
+            set roomSpace to the item at roomCursor in roomList
+            set levelFound to the bim level index of roomSpace's levelId in modelValue
+            if levelFound's valid:
+                set storeyValue to the item at levelFound's position in (modelValue's levels's values)
+                set low to storeyValue's elevation + 0.02
+                set high to (storeyValue's elevation + storeyValue's height) - 0.02
+                set roomOutline to roomSpace's outline's values
+                set count to the length of roomOutline
+                set rings to an empty list of the type of (an empty list of a cad vector2)
+                append roomOutline to rings
+                set mesh to the cad triangulation of rings rings
+                free rings
+                start triangles in frame
+                use vertex color red 90, green 160, blue 235 and alpha 46 in frame
+                loop faceCursor from 0 to the length of (the triangles of mesh):
+                    set face to the item at faceCursor in (the triangles of mesh)
+                    set cornerA to the item at (the first of face) in (the points of mesh)
+                    set cornerB to the item at (the second of face) in (the points of mesh)
+                    set cornerC to the item at (the third of face) in (the points of mesh)
+                    add bim room triangle (a cad vector3 with x cornerA's x, y cornerA's y and z low), (a cad vector3 with x cornerB's x, y cornerB's y and z low) and (a cad vector3 with x cornerC's x, y cornerC's y and z low) in layout with camera in frame
+                    add bim room triangle (a cad vector3 with x cornerA's x, y cornerA's y and z high), (a cad vector3 with x cornerB's x, y cornerB's y and z high) and (a cad vector3 with x cornerC's x, y cornerC's y and z high) in layout with camera in frame
+                loop corner from 0 to count:
+                    set here to the item at corner in roomOutline
+                    set following to the item at (the remainder of (corner + 1) divided by count) in roomOutline
+                    add bim room triangle (a cad vector3 with x here's x, y here's y and z low), (a cad vector3 with x following's x, y following's y and z low) and (a cad vector3 with x following's x, y following's y and z high) in layout with camera in frame
+                    add bim room triangle (a cad vector3 with x here's x, y here's y and z low), (a cad vector3 with x following's x, y following's y and z high) and (a cad vector3 with x here's x, y here's y and z high) in layout with camera in frame
+                finish triangles in frame
+                free cad triangulation mesh
+                start triangles in frame
+                use vertex color red 40, green 110 and blue 200 in frame
+                loop corner from 0 to count:
+                    set here to the item at corner in roomOutline
+                    set following to the item at (the remainder of (corner + 1) divided by count) in roomOutline
+                    add bim stroke from (the bim view point (here's x) (here's y) low in layout with camera) to (the bim view point (following's x) (following's y) low in layout with camera) wide 1.0 in frame
+                    add bim stroke from (the bim view point (here's x) (here's y) high in layout with camera) to (the bim view point (following's x) (following's y) high in layout with camera) wide 1.0 in frame
+                finish triangles in frame
+        disable depth testing in frame
+
+# The handles of the selection in the 3D view, as squares on top of the
+# solids.
+function draw bim grips {a pointer to a list:handles} in view of {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        if (the length of handles) = 0:
+            return nothing
+        start triangles in frame
+        loop cursor from 0 to the length of handles:
+            set placed to the bim view pixel of (the item at cursor in handles)'s location in layout with camera
+            set pixel to a cad vector2 with x placed's x and y placed's y
+            set inside to ((pixel's x > (layout's planRight + 6.0)) and (pixel's x < (layout's width - 6.0))) and ((pixel's y > (layout's top + 6.0)) and (pixel's y < (layout's bottom - 6.0)))
+            if inside:
+                use vertex color red 255, green 255 and blue 255 in frame
+                add bim square at pixel sized 8.0 in frame
+                use vertex color red 0, green 120 and blue 215 in frame
+                add bim square at pixel sized 6.0 in frame
+        finish triangles in frame
+
+# The handle within 8 pixels of `pixel` in the 3D view, or -1.
+function the bim grip near {cad vector2:pixel} among {a pointer to a list:handles} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set best to -1
+        set bestDistance to 8.0
+        loop cursor from 0 to the length of handles:
+            set placed to the bim view pixel of (the item at cursor in handles)'s location in layout with camera
+            set gap to the cad distance from pixel to (a cad vector2 with x placed's x and y placed's y)
+            if gap <= bestDistance:
+                set best to cursor
+                set bestDistance to gap
+        return best
+
+# Where `ray` meets the level plane at height `z`, in plan; the ray's
+# origin's plan position when it runs level.
+function the bim plane hit of {bim ray record:ray} at height {a 64 bit floating-point number:z}:
+    execute:
+        if (the absolute value of ray's direction's z) < 1e-9:
+            return a cad vector2 with x ray's origin's x and y ray's origin's y
+        set travel to (z - ray's origin's z) / ray's direction's z
+        return a cad vector2 with x (ray's origin's x + (ray's direction's x * travel)) and y (ray's origin's y + (ray's direction's y * travel))
+
+# The 3D cursor at `spot` (pixels), as in Blender: a red and white ring with
+# a cross.
+function draw bim cursor mark at {cad vector2:spot} in {graphics frame:frame}:
+    execute:
+        start triangles in frame
+        loop step from 0 to 16:
+            set fromAngle to (6.283185307179586 * (step as a 64 bit floating-point number)) / 16.0
+            set tillAngle to (6.283185307179586 * ((step + 1) as a 64 bit floating-point number)) / 16.0
+            if (the remainder of step divided by 2) = 0:
+                use vertex color red 220, green 40 and blue 40 in frame
+            else:
+                use vertex color red 255, green 255 and blue 255 in frame
+            add bim stroke from (a cad vector2 with x (spot's x + (10.0 * (the cosine of fromAngle))) and y (spot's y + (10.0 * (the sine of fromAngle)))) to (a cad vector2 with x (spot's x + (10.0 * (the cosine of tillAngle))) and y (spot's y + (10.0 * (the sine of tillAngle)))) wide 2.0 in frame
+        use vertex color red 30, green 30 and blue 30 in frame
+        add bim stroke from (a cad vector2 with x (spot's x - 16.0) and y spot's y) to (a cad vector2 with x (spot's x - 5.0) and y spot's y) wide 1.0 in frame
+        add bim stroke from (a cad vector2 with x (spot's x + 5.0) and y spot's y) to (a cad vector2 with x (spot's x + 16.0) and y spot's y) wide 1.0 in frame
+        add bim stroke from (a cad vector2 with x spot's x and y (spot's y - 16.0)) to (a cad vector2 with x spot's x and y (spot's y - 5.0)) wide 1.0 in frame
+        add bim stroke from (a cad vector2 with x spot's x and y (spot's y + 5.0)) to (a cad vector2 with x spot's x and y (spot's y + 16.0)) wide 1.0 in frame
+        finish triangles in frame
+
+# The 3D cursor in the 3D view at `centre` (model, height absolute): the
+# same ring and cross, lying in the level plane through it, so that it is
+# seen in perspective; about 10 pixels across its widest.
+function draw bim cursor mark in view at {cad vector3:centre} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set middle to the bim view point (centre's x) (centre's y) (centre's z) in layout with camera
+        set widest to 0.0
+        loop step from 0 to 16:
+            set probeAngle to (6.283185307179586 * (step as a 64 bit floating-point number)) / 16.0
+            set probe to the bim view point (centre's x + (the cosine of probeAngle)) (centre's y + (the sine of probeAngle)) (centre's z) in layout with camera
+            set widest to the maximum of widest and (the cad distance from probe to middle)
+        if widest < 1e-6:
+            draw bim cursor mark at middle in frame
+            return nothing
+        set radius to 10.0 / widest
+        start triangles in frame
+        loop step from 0 to 24:
+            set fromAngle to (6.283185307179586 * (step as a 64 bit floating-point number)) / 24.0
+            set tillAngle to (6.283185307179586 * ((step + 1) as a 64 bit floating-point number)) / 24.0
+            if (the remainder of (step / 3) divided by 2) = 0:
+                use vertex color red 220, green 40 and blue 40 in frame
+            else:
+                use vertex color red 255, green 255 and blue 255 in frame
+            set fromPixel to the bim view point (centre's x + (radius * (the cosine of fromAngle))) (centre's y + (radius * (the sine of fromAngle))) (centre's z) in layout with camera
+            set tillPixel to the bim view point (centre's x + (radius * (the cosine of tillAngle))) (centre's y + (radius * (the sine of tillAngle))) (centre's z) in layout with camera
+            add bim stroke from fromPixel to tillPixel wide 2.0 in frame
+        use vertex color red 30, green 30 and blue 30 in frame
+        loop arm from 0 to 4:
+            set armX to 0.0
+            set armY to 0.0
+            if arm = 0:
+                set armX to 1.0
+            if arm = 1:
+                set armX to -1.0
+            if arm = 2:
+                set armY to 1.0
+            if arm = 3:
+                set armY to -1.0
+            set innerPixel to the bim view point (centre's x + ((radius * 0.5) * armX)) (centre's y + ((radius * 0.5) * armY)) (centre's z) in layout with camera
+            set outerPixel to the bim view point (centre's x + ((radius * 1.6) * armX)) (centre's y + ((radius * 1.6) * armY)) (centre's z) in layout with camera
+            add bim stroke from innerPixel to outerPixel wide 1.0 in frame
+        finish triangles in frame
+
+# The gizmo on the selection in the 3D view, as in Blender: X (red), Y
+# (green) and Z (blue) arrows move it along an axis, the square between X
+# and Y moves it freely across its plane, the ring about the vertical turns
+# it. Its handles in pixels for a centre at `centre` (model, height
+# absolute).
+class:
+    patterns:
+        [a|] bim gizmo record
+    members:
+        middle as a cad vector2
+        xTip as a cad vector2
+        yTip as a cad vector2
+        zTip as a cad vector2
+        ring as the type of (a cad topology list of a cad vector2)
+        square as the type of (a cad topology list of a cad vector2)
+
+# The gizmo's handles, as `the bim gizmo handle of` names them.
+function bim gizmo x handle:
+    replacement:
+        1
+function bim gizmo y handle:
+    replacement:
+        2
+function bim gizmo ring handle:
+    replacement:
+        3
+function bim gizmo z handle:
+    replacement:
+        4
+function bim gizmo plane handle:
+    replacement:
+        5
+
+function the bim gizmo at {cad vector3:centre} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set reach to 70.0 / camera's viewScale
+        set ringRadius to 50.0 / camera's viewScale
+        set middle to the bim view point (centre's x) (centre's y) (centre's z) in layout with camera
+        set xTip to the bim view point (centre's x + reach) (centre's y) (centre's z) in layout with camera
+        set yTip to the bim view point (centre's x) (centre's y + reach) (centre's z) in layout with camera
+        set zTip to the bim view point (centre's x) (centre's y) (centre's z + reach) in layout with camera
+        set ringPoints to a cad topology list of a cad vector2
+        loop step from 0 to 33:
+            set turn to (6.283185307179586 * (step as a 64 bit floating-point number)) / 32.0
+            append (the bim view point (centre's x + (ringRadius * (the cosine of turn))) (centre's y + (ringRadius * (the sine of turn))) (centre's z) in layout with camera) to (ringPoints's values)
+        set nearShare to reach * 0.22
+        set farShare to reach * 0.42
+        set squarePoints to a cad topology list of a cad vector2
+        append (the bim view point (centre's x + nearShare) (centre's y + nearShare) (centre's z) in layout with camera) to (squarePoints's values)
+        append (the bim view point (centre's x + farShare) (centre's y + nearShare) (centre's z) in layout with camera) to (squarePoints's values)
+        append (the bim view point (centre's x + farShare) (centre's y + farShare) (centre's z) in layout with camera) to (squarePoints's values)
+        append (the bim view point (centre's x + nearShare) (centre's y + farShare) (centre's z) in layout with camera) to (squarePoints's values)
+        return @intrinsic("construct", a bim gizmo record, middle, xTip, yTip, zTip, ringPoints, squarePoints)
+
+# An arrow head at `tip`, pointing away from `base`, `headLength` pixels long.
+function add bim arrow head from {cad vector2:base} to {cad vector2:tip} sized {a 64 bit floating-point number:headLength} in {graphics frame:frame}:
+    execute:
+        set run to the cad distance from base to tip
+        if run > 1.0:
+            set ux to (tip's x - base's x) / run
+            set uy to (tip's y - base's y) / run
+            add a vertex at x (tip's x + (ux * headLength)) and y (tip's y + (uy * headLength)) to frame
+            add a vertex at x (tip's x - ((uy * headLength) * 0.6)) and y (tip's y + ((ux * headLength) * 0.6)) to frame
+            add a vertex at x (tip's x + ((uy * headLength) * 0.6)) and y (tip's y - ((ux * headLength) * 0.6)) to frame
+
+# An arrow from `base` to `tip`: drawn twice, first wider in a dark edge so
+# that it stands out on any background.
+function draw bim arrow from {cad vector2:base} to {cad vector2:tip} coloured {cad vector3:tint} lit {boolean:lit} in {graphics frame:frame}:
+    execute:
+        use vertex color red 25, green 25 and blue 30 in frame
+        add bim stroke from base to tip wide 5.0 in frame
+        add bim arrow head from base to tip sized 13.0 in frame
+        set shade to tint
+        if lit:
+            set shade to a cad vector3 with x 255.0, y 225.0 and z 80.0
+        use vertex color red (shade's x as an integer), green (shade's y as an integer) and blue (shade's z as an integer) in frame
+        add bim stroke from base to tip wide 3.0 in frame
+        add bim arrow head from base to tip sized 10.0 in frame
+
+function draw bim gizmo {bim gizmo record:gizmoShape} active {integer:activeAxis} in {graphics frame:frame}:
+    execute:
+        start triangles in frame
+        # The ring, dark edge first.
+        loop pass from 0 to 2:
+            set breadth to 4.5
+            if pass = 0:
+                use vertex color red 25, green 25 and blue 30 in frame
+            else if activeAxis = bim gizmo ring handle:
+                set breadth to 2.5
+                use vertex color red 255, green 225 and blue 80 in frame
+            else:
+                set breadth to 2.5
+                use vertex color red 235, green 235 and blue 245 in frame
+            loop step from 0 to ((the length of (gizmoShape's ring's values)) - 1):
+                add bim stroke from (the item at step in (gizmoShape's ring's values)) to (the item at (step + 1) in (gizmoShape's ring's values)) wide breadth in frame
+        # The plane square: filled, with a dark edge.
+        set corners to gizmoShape's square's values
+        if activeAxis = bim gizmo plane handle:
+            use vertex color red 255, green 225 and blue 80 in frame
+        else:
+            use vertex color red 230, green 200 and blue 70 in frame
+        add a vertex at x (the item at 0 in corners)'s x and y (the item at 0 in corners)'s y to frame
+        add a vertex at x (the item at 1 in corners)'s x and y (the item at 1 in corners)'s y to frame
+        add a vertex at x (the item at 2 in corners)'s x and y (the item at 2 in corners)'s y to frame
+        add a vertex at x (the item at 0 in corners)'s x and y (the item at 0 in corners)'s y to frame
+        add a vertex at x (the item at 2 in corners)'s x and y (the item at 2 in corners)'s y to frame
+        add a vertex at x (the item at 3 in corners)'s x and y (the item at 3 in corners)'s y to frame
+        use vertex color red 25, green 25 and blue 30 in frame
+        loop step from 0 to 4:
+            add bim stroke from (the item at step in corners) to (the item at (the remainder of (step + 1) divided by 4) in corners) wide 1.5 in frame
+        draw bim arrow from gizmoShape's middle to gizmoShape's zTip coloured (a cad vector3 with x 70.0, y 120.0 and z 235.0) lit (activeAxis = bim gizmo z handle) in frame
+        draw bim arrow from gizmoShape's middle to gizmoShape's xTip coloured (a cad vector3 with x 225.0, y 55.0 and z 55.0) lit (activeAxis = bim gizmo x handle) in frame
+        draw bim arrow from gizmoShape's middle to gizmoShape's yTip coloured (a cad vector3 with x 70.0, y 190.0 and z 70.0) lit (activeAxis = bim gizmo y handle) in frame
+        finish triangles in frame
+
+# Whether `pixel` lies inside the four corners `corners` (in order).
+function bim pixel {cad vector2:pixel} lies in quad {a pointer to a list:corners}:
+    execute:
+        set leftCount to 0
+        set rightCount to 0
+        loop step from 0 to 4:
+            set first to the item at step in corners
+            set second to the item at (the remainder of (step + 1) divided by 4) in corners
+            set crossed to ((second's x - first's x) * (pixel's y - first's y)) - ((second's y - first's y) * (pixel's x - first's x))
+            if crossed > 0.0:
+                set leftCount to leftCount + 1
+            if crossed < 0.0:
+                set rightCount to rightCount + 1
+        return (leftCount = 0) or (rightCount = 0)
+
+# The gizmo handle under `pixel` (see `bim gizmo x handle`), 0 for none; the
+# arrows come first, then the square, then the ring.
+function the bim gizmo handle of {bim gizmo record:gizmoShape} at {cad vector2:pixel}:
+    execute:
+        if (the cad distance from pixel to the segment from gizmoShape's middle to gizmoShape's xTip) <= 7.0:
+            return bim gizmo x handle
+        if (the cad distance from pixel to the segment from gizmoShape's middle to gizmoShape's yTip) <= 7.0:
+            return bim gizmo y handle
+        if (the cad distance from pixel to the segment from gizmoShape's middle to gizmoShape's zTip) <= 7.0:
+            return bim gizmo z handle
+        if bim pixel pixel lies in quad (gizmoShape's square's values):
+            return bim gizmo plane handle
+        loop step from 0 to ((the length of (gizmoShape's ring's values)) - 1):
+            if (the cad distance from pixel to the segment from (the item at step in (gizmoShape's ring's values)) to (the item at (step + 1) in (gizmoShape's ring's values))) <= 6.0:
+                return bim gizmo ring handle
+        return 0
+
+# ---------------------------------------------------------------- section box
+
+# The centre of face `faceIndex` of the box from `low` to `high` (faces 0
+# and 1 its x sides, 2 and 3 its y sides, 4 and 5 its bottom and top).
+function the bim box face centre {integer:faceIndex} from {cad vector3:low} to {cad vector3:high}:
+    execute:
+        set middle to (the cad sum of low and high) scaled by 0.5
+        if faceIndex = 0:
+            return a cad vector3 with x low's x, y middle's y and z middle's z
+        if faceIndex = 1:
+            return a cad vector3 with x high's x, y middle's y and z middle's z
+        if faceIndex = 2:
+            return a cad vector3 with x middle's x, y low's y and z middle's z
+        if faceIndex = 3:
+            return a cad vector3 with x middle's x, y high's y and z middle's z
+        if faceIndex = 4:
+            return a cad vector3 with x middle's x, y middle's y and z low's z
+        return a cad vector3 with x middle's x, y middle's y and z high's z
+
+# The outward direction of face `faceIndex`.
+function the bim box face normal {integer:faceIndex}:
+    execute:
+        set sign to 1.0
+        if (the remainder of faceIndex divided by 2) = 0:
+            set sign to -1.0
+        if faceIndex < 2:
+            return a cad vector3 with x sign, y 0.0 and z 0.0
+        if faceIndex < 4:
+            return a cad vector3 with x 0.0, y sign and z 0.0
+        return a cad vector3 with x 0.0, y 0.0 and z sign
+
+# The section box from `low` to `high` in the 3D view: its edges, and a
+# handle on each face (the one `litFace` lit).
+function draw bim section box from {cad vector3:low} to {cad vector3:high} lit {integer:litFace} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        set corners to an empty list of a cad vector2
+        loop cornerIndex from 0 to 8:
+            set cornerX to low's x
+            if (the remainder of cornerIndex divided by 2) = 1:
+                set cornerX to high's x
+            set cornerY to low's y
+            if (the remainder of (cornerIndex / 2) divided by 2) = 1:
+                set cornerY to high's y
+            set cornerZ to low's z
+            if cornerIndex >= 4:
+                set cornerZ to high's z
+            append (the bim view point cornerX cornerY cornerZ in layout with camera) to corners
+        start triangles in frame
+        use vertex color red 0, green 120 and blue 215 in frame
+        loop cornerIndex from 0 to 8:
+            # Each corner joins the corners one bit away along x, y and z.
+            if (the remainder of cornerIndex divided by 2) = 0:
+                add bim stroke from (the item at cornerIndex in corners) to (the item at (cornerIndex + 1) in corners) wide 1.5 in frame
+            if (the remainder of (cornerIndex / 2) divided by 2) = 0:
+                add bim stroke from (the item at cornerIndex in corners) to (the item at (cornerIndex + 2) in corners) wide 1.5 in frame
+            if cornerIndex < 4:
+                add bim stroke from (the item at cornerIndex in corners) to (the item at (cornerIndex + 4) in corners) wide 1.5 in frame
+        loop faceIndex from 0 to 6:
+            set centre to the bim box face centre faceIndex from low to high
+            set spot to the bim view point (centre's x) (centre's y) (centre's z) in layout with camera
+            use vertex color red 25, green 25 and blue 30 in frame
+            add bim square at spot sized 11.0 in frame
+            if faceIndex = litFace:
+                use vertex color red 255, green 225 and blue 80 in frame
+            else:
+                use vertex color red 0, green 120 and blue 215 in frame
+            add bim square at spot sized 8.0 in frame
+        finish triangles in frame
+        free corners
+
+# The face of the box whose handle lies within 9 pixels of `pixel`, or -1.
+function the bim box face at {cad vector2:pixel} from {cad vector3:low} to {cad vector3:high} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        loop faceIndex from 0 to 6:
+            set centre to the bim box face centre faceIndex from low to high
+            if (the cad distance from pixel to (the bim view point (centre's x) (centre's y) (centre's z) in layout with camera)) <= 9.0:
+                return faceIndex
+        return -1
+
+# The graphics menu of a view, standing on the bar's Graphics button at
+# `left`, its foot at `foot`: for a plan or section (`flat`) sketchy lines
+# and hatches along the elements, for the 3D view its shadows, each ticked
+# when on. The choice under `pixel` (12 sketchy, 13 shadows, 14 hatches
+# along), or -1.
+function the bim graphics choice at {cad vector2:pixel} from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat}:
+    execute:
+        set rows to 1
+        if isFlat:
+            set rows to 2
+        set menuTop to foot - (24.0 * (rows as a 64 bit floating-point number))
+        if (((pixel's x < left) or (pixel's x > (left + 190.0))) or (pixel's y < menuTop)) or (pixel's y >= foot):
+            return -1
+        set row to ((pixel's y - menuTop) / 24.0) as an integer
+        if isFlat = false:
+            return 13
+        if row = 0:
+            return 12
+        return 14
+
+function draw bim graphics menu from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat} sketchy {boolean:handDrawn} along {boolean:alongObjects} shadows {boolean:shadowed} using {bim text atlas record:typeface} in {graphics frame:frame}:
+    execute:
+        set labels to an empty list of a string
+        set ticks to an empty list of a boolean
+        if isFlat:
+            append (the string form of "Sketchy lines") to labels
+            append handDrawn to ticks
+            append (the string form of "Hatch along elements") to labels
+            append alongObjects to ticks
+        else:
+            append (the string form of "Shadows") to labels
+            append shadowed to ticks
+        set menuTop to foot - (24.0 * ((the length of labels) as a 64 bit floating-point number))
+        draw a rectangle at x left and y menuTop with width 190 and height (foot - menuTop) in color red 250, green 251 and blue 253 in frame
+        draw a rectangle at x left and y menuTop with width 190 and height 1 in color red 180, green 186 and blue 196 in frame
+        loop cursor from 0 to the length of labels:
+            set rowTop to menuTop + (24.0 * (cursor as a 64 bit floating-point number))
+            draw a rectangle at x (left + 8.0) and y (rowTop + 6.0) with width 12 and height 12 in color red 120, green 126 and blue 136 in frame
+            if the item at cursor in ticks:
+                draw a rectangle at x (left + 10.0) and y (rowTop + 8.0) with width 8 and height 8 in color red 0, green 120 and blue 215 in frame
+            else:
+                draw a rectangle at x (left + 9.0) and y (rowTop + 7.0) with width 10 and height 10 in color red 250, green 251 and blue 253 in frame
+            draw bim label (the item at cursor in labels) at (left + 28.0) and (rowTop + 17.0) using typeface in frame
+        free labels
+        free ticks

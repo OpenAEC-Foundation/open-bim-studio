@@ -46,6 +46,9 @@ cp /usr/share/doc/fonts-noto-core/copyright "$stage/payload/fonts/LICENSE-NotoSa
 # The drawing font, osifont (LGPL-3.0 with the GPL font exception).
 cp "$root/examples/bim-slice/fonts/osifont.ttf" "$stage/payload/fonts/"
 cp "$root/examples/bim-slice/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
+# The script that reads 2D drawings (DXF, DWG, PDF) for Collaborate > Import.
+mkdir -p "$stage/payload/import"
+cp "$root/examples/bim-slice/import/drawing_to_lines.py" "$stage/payload/import/"
 
 # Bundle every resolved library outside the system directories; refuse when
 # one does not resolve at all.

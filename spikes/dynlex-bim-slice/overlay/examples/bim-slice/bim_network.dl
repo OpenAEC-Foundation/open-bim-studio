@@ -232,7 +232,7 @@ function the bim fittings of {bim network record:network} in {bim model record:m
                         # in the segment's storey coordinates.
                         set stubFrom to a cad vector3 with x connector's spot's x, y connector's spot's y and z (connector's spot's z - lift)
                         set stubTo to the cad sum of stubFrom and (connector's direction scaled by (0.0 - stubLength))
-                        set stubElement to @intrinsic("construct", a bim linear record, connector's elementId, the bim refused id, segment's levelId, stubFrom, stubTo, segment's angle)
+                        set stubElement to @intrinsic("construct", a bim linear record, connector's elementId, the bim refused id, segment's levelId, stubFrom, stubTo, segment's angle, 0.0, (a cad vector2 with x 1.0 and y 1.0))
                         set stubType to @intrinsic("construct", a bim linear type record, the bim refused id, the string form of "Fitting", segmentType's role, segmentType's width * 1.15, segmentType's depth * 1.15, segmentType's round, segmentType's material)
                         append (@intrinsic("construct", a bim stair part record, stubElement, stubType)) to (stubs's values)
                 set systemId to the bim system of element leading's elementId in modelValue
@@ -328,18 +328,103 @@ function the bim side reach of {bim linear type record:linearType} framed {bim l
             return linearType's width * 0.5
         return ((the absolute value of (the cad dot of towardSide and sideFrame's widthAxis)) * (linearType's width * 0.5)) + ((the absolute value of (the cad dot of towardSide and sideFrame's depthAxis)) * (linearType's depth * 0.5))
 
-# The cuts of each of `partList` (`bim stair part record`s: an element and
-# its type), in order, from the joins among them.
-function the bim end cuts of parts {a pointer to a list:partList} in {bim model record:modelValue}:
+# ---------------------------------------------------------------- connections
+
+# How an end of a linear element meets another element. Automatic follows the
+# ranks (equal ranks mitre, the lower butts against the higher); the others
+# are chosen per end: mitre, butt (cut against the other's side), through
+# (runs on; the other butts against it) and open (left square, no cut).
+# Later kinds (plates, bolts, notches) take the next codes.
+function bim automatic connection:
+    replacement:
+        0
+function bim mitre connection:
+    replacement:
+        1
+function bim butt connection:
+    replacement:
+        2
+function bim through connection:
+    replacement:
+        3
+function bim open connection:
+    replacement:
+        4
+function bim connection kind count:
+    replacement:
+        5
+
+function the bim name of connection {integer:connectionKind}:
     execute:
-        set cutList to a cad topology list of a bim end cut record
-        set frameList to a cad topology list of a bim linear frame record
-        loop cursor from 0 to the length of partList:
-            append (the bim frame of linear (the item at cursor in partList)'s element in modelValue) to (frameList's values)
+        if connectionKind = bim mitre connection:
+            return the string form of "Mitre"
+        if connectionKind = bim butt connection:
+            return the string form of "Butt"
+        if connectionKind = bim through connection:
+            return the string form of "Through"
+        if connectionKind = bim open connection:
+            return the string form of "Open"
+        return the string form of "Automatic"
+
+# The connection chosen at end `endIndex` (0 start, 1 finish) of element
+# `elementId`: an element setting, automatic when it has none.
+function the bim connection at end {integer:endIndex} of {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        set reading to the bim setting ((bim connection setting) + endIndex) of elementId in modelValue
+        if reading's found:
+            return reading's value as an integer
+        return bim automatic connection
+
+# What an end chosen `chosen` does where it meets an end chosen `facing`
+# (`towardEnd`) or the body: automatic answers the other's choice, else the
+# ranks decide.
+function the bim join of {integer:chosen} against {integer:facing} toward end {boolean:towardEnd} ranked {integer:ownRank} under {integer:otherRank}:
+    execute:
+        set resolved to chosen
+        if resolved = bim automatic connection:
+            if towardEnd and (facing = bim mitre connection):
+                set resolved to bim mitre connection
+            else if towardEnd and (facing = bim butt connection):
+                set resolved to bim through connection
+            else if towardEnd and (facing = bim through connection):
+                set resolved to bim butt connection
+            else if towardEnd and (facing = bim open connection):
+                set resolved to bim open connection
+            else if towardEnd and (otherRank = ownRank):
+                set resolved to bim mitre connection
+            else if otherRank >= ownRank:
+                set resolved to bim butt connection
+            else:
+                set resolved to bim through connection
+        if (towardEnd = false) and (resolved = bim mitre connection):
+            set resolved to bim butt connection
+        return resolved
+
+# Where one end of a linear part meets another: part `ownPart`'s end
+# `ownEnd` (0 start, 1 finish) touches part `otherPart` at its end
+# `otherEnd`, or along its body when that is -1, at `point`; `kind` is
+# what the end does there.
+class:
+    patterns:
+        [a|] bim connection record
+    members:
+        ownPart as an integer
+        ownEnd as an integer
+        otherPart as an integer
+        otherEnd as an integer
+        point as a cad vector3
+        kind as an integer
+
+# The connections of the ends of `partList` (`bim stair part record`s: an
+# element and its type), with `frameList` their frames: each end meets the
+# first part it touches, end to end at an angle or on its body. Connecting
+# roles (pipes, ducts, trays) have fittings instead.
+function the bim connections of parts {a pointer to a list:partList} framed {a pointer to a list:frameList} in {bim model record:modelValue}:
+    execute:
+        set connectionList to a cad topology list of a bim connection record
         loop cursor from 0 to the length of partList:
             set part to the item at cursor in partList
-            set ownFrame to the item at cursor in (frameList's values)
-            set endCut to a bim uncut end
+            set ownFrame to the item at cursor in frameList
             if ((bim role part's kind's role connects) = false) and (ownFrame's length > 1e-9):
                 set ownRank to the bim join rank of role part's kind's role upright ((the absolute value of ownFrame's along's z) > 0.99)
                 loop endCursor from 0 to 2:
@@ -348,59 +433,104 @@ function the bim end cuts of parts {a pointer to a list:partList} in {bim model 
                     if endCursor = 1:
                         set spot to ownFrame's last
                         set outward to ownFrame's along
-                    set planeFound to false
-                    set planePoint to spot
-                    set planeNormal to outward
+                    set chosen to the bim connection at end endCursor of part's element's id in modelValue
+                    set met to false
                     loop otherCursor from 0 to the length of partList:
                         set other to the item at otherCursor in partList
-                        set otherFrame to the item at otherCursor in (frameList's values)
-                        if ((planeFound = false) and (otherCursor != cursor)) and ((otherFrame's length > 1e-9) and ((bim role other's kind's role connects) = false)):
+                        set otherFrame to the item at otherCursor in frameList
+                        if ((met = false) and (otherCursor != cursor)) and ((otherFrame's length > 1e-9) and ((bim role other's kind's role connects) = false)):
                             set otherRank to the bim join rank of role other's kind's role upright ((the absolute value of otherFrame's along's z) > 0.99)
                             set atFirst to (the cad distance from spot to otherFrame's first) <= 0.001
                             set atLast to (the cad distance from spot to otherFrame's last) <= 0.001
                             set offset to the cad difference of spot and otherFrame's first
                             set alongReach to the cad dot of offset and otherFrame's along
                             set beside to the cad difference of offset and (otherFrame's along scaled by alongReach)
-                            set besideLength to the cad length of beside
                             set facing to the cad difference of outward and (otherFrame's along scaled by (the cad dot of outward and otherFrame's along))
-                            set facingLength to the cad length of facing
                             if atFirst or atLast:
                                 # Two ends meeting: in line they need no cut.
-                                set otherOutward to otherFrame's along
-                                if atFirst:
-                                    set otherOutward to otherFrame's along scaled by -1.0
-                                set bend to the cad sum of outward and otherOutward
-                                if (the cad length of bend) > 1e-6:
-                                    if otherRank = ownRank:
-                                        set mitre to the cad difference of outward and otherOutward
-                                        set planeFound to true
-                                        set planePoint to spot
-                                        set planeNormal to mitre scaled by (1.0 / (the cad length of mitre))
-                                    else if (otherRank > ownRank) and (facingLength > 1e-6):
-                                        set towardSide to facing scaled by (1.0 / facingLength)
-                                        set planeFound to true
-                                        set planePoint to the cad difference of spot and (towardSide scaled by (the bim side reach of other's kind framed otherFrame toward towardSide))
-                                        set planeNormal to towardSide
-                            else if (((alongReach > 0.001) and (alongReach < (otherFrame's length - 0.001))) and (facingLength > 1e-6)) and (otherRank >= ownRank):
-                                # An end on the body of an element of at least its
-                                # ownRank: butt against its side; a higher ownRank runs
-                                # on through.
-                                set towardSide to facing scaled by (1.0 / facingLength)
-                                if besideLength <= ((the bim side reach of other's kind framed otherFrame toward towardSide) + 0.001):
-                                    set axisPoint to the cad sum of otherFrame's first and (otherFrame's along scaled by alongReach)
-                                    set planeFound to true
-                                    set planePoint to the cad difference of axisPoint and (towardSide scaled by (the bim side reach of other's kind framed otherFrame toward towardSide))
-                                    set planeNormal to towardSide
-                    if planeFound:
-                        if endCursor = 0:
-                            set endCut's startCut to true
-                            set endCut's startPoint to planePoint
-                            set endCut's startNormal to planeNormal
-                        else:
-                            set endCut's finishCut to true
-                            set endCut's finishPoint to planePoint
-                            set endCut's finishNormal to planeNormal
-            append endCut to (cutList's values)
+                                set otherEnd to 0
+                                set otherOutward to otherFrame's along scaled by -1.0
+                                if atLast:
+                                    set otherEnd to 1
+                                    set otherOutward to otherFrame's along
+                                if (the cad length of (the cad sum of outward and otherOutward)) > 1e-6:
+                                    set met to true
+                                    set otherChosen to the bim connection at end otherEnd of other's element's id in modelValue
+                                    append (@intrinsic("construct", a bim connection record, cursor, endCursor, otherCursor, otherEnd, spot, the bim join of chosen against otherChosen toward end true ranked ownRank under otherRank)) to (connectionList's values)
+                            else if ((alongReach > 0.001) and (alongReach < (otherFrame's length - 0.001))) and ((the cad length of facing) > 1e-6):
+                                # An end on the body of another element.
+                                set towardSide to facing scaled by (1.0 / (the cad length of facing))
+                                if (the cad length of beside) <= ((the bim side reach of other's kind framed otherFrame toward towardSide) + 0.001):
+                                    set met to true
+                                    append (@intrinsic("construct", a bim connection record, cursor, endCursor, otherCursor, -1, spot, the bim join of chosen against (bim automatic connection) toward end false ranked ownRank under otherRank)) to (connectionList's values)
+        return connectionList
+
+# The frames of `partList`, in order.
+function the bim frames of parts {a pointer to a list:partList} in {bim model record:modelValue}:
+    execute:
+        set frameList to a cad topology list of a bim linear frame record
+        loop cursor from 0 to the length of partList:
+            append (the bim frame of linear (the item at cursor in partList)'s element in modelValue) to (frameList's values)
+        return frameList
+
+# The cuts of each of `partList`, in order, from their connections: a mitre
+# halves the angle; a butt cuts against the other's near side; an end running
+# through a corner reaches the other's far side; open ends stay square.
+function the bim end cuts of parts {a pointer to a list:partList} in {bim model record:modelValue}:
+    execute:
+        set cutList to a cad topology list of a bim end cut record
+        set frameList to the bim frames of parts partList in modelValue
+        set connectionList to the bim connections of parts partList framed (frameList's values) in modelValue
+        loop cursor from 0 to the length of partList:
+            append (a bim uncut end) to (cutList's values)
+        loop cursor from 0 to the length of (connectionList's values):
+            set joint to the item at cursor in (connectionList's values)
+            set ownFrame to the item at joint's ownPart in (frameList's values)
+            set otherFrame to the item at joint's otherPart in (frameList's values)
+            set outward to ownFrame's along scaled by -1.0
+            if joint's ownEnd = 1:
+                set outward to ownFrame's along
+            set planeFound to false
+            set planePoint to joint's point
+            set planeNormal to outward
+            if joint's kind = bim mitre connection:
+                set otherOutward to otherFrame's along scaled by -1.0
+                if joint's otherEnd = 1:
+                    set otherOutward to otherFrame's along
+                set halving to the cad difference of outward and otherOutward
+                if (the cad length of halving) > 1e-9:
+                    set planeFound to true
+                    set planeNormal to halving scaled by (1.0 / (the cad length of halving))
+            else if joint's kind = bim butt connection:
+                set facing to the cad difference of outward and (otherFrame's along scaled by (the cad dot of outward and otherFrame's along))
+                if (the cad length of facing) > 1e-6:
+                    set towardSide to facing scaled by (1.0 / (the cad length of facing))
+                    set alongReach to the cad dot of (the cad difference of joint's point and otherFrame's first) and otherFrame's along
+                    set axisPoint to the cad sum of otherFrame's first and (otherFrame's along scaled by alongReach)
+                    set planeFound to true
+                    set planePoint to the cad difference of axisPoint and (towardSide scaled by (the bim side reach of (the item at joint's otherPart in partList)'s kind framed otherFrame toward towardSide))
+                    set planeNormal to towardSide
+            else if (joint's kind = bim through connection) and (joint's otherEnd >= 0):
+                # At a corner the end running through reaches the other's far
+                # side, so the butting end leaves no gap.
+                set facing to the cad difference of outward and (otherFrame's along scaled by (the cad dot of outward and otherFrame's along))
+                if (the cad length of facing) > 0.2:
+                    set towardSide to facing scaled by (1.0 / (the cad length of facing))
+                    set farReach to (the bim side reach of (the item at joint's otherPart in partList)'s kind framed otherFrame toward towardSide) / (the cad length of facing)
+                    set planeFound to true
+                    set planePoint to the cad sum of joint's point and (outward scaled by farReach)
+                    set planeNormal to outward
+            if planeFound:
+                set endCut to the item at joint's ownPart in (cutList's values)
+                if joint's ownEnd = 0:
+                    set endCut's startCut to true
+                    set endCut's startPoint to planePoint
+                    set endCut's startNormal to planeNormal
+                else:
+                    set endCut's finishCut to true
+                    set endCut's finishPoint to planePoint
+                    set endCut's finishNormal to planeNormal
+                replace item at index joint's ownPart in (cutList's values) with endCut
         return cutList
 
 # The parts (`bim stair part record`s) of every linear element of
