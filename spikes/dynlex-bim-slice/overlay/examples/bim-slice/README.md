@@ -17,6 +17,7 @@ and the measurements.
 | `bim_spaces.dl` | Spaces derived from the walls through the kernel's 2D arrangement, identified by their bounding walls; exported as `IfcSpace`. |
 | `bim_scene.dl` | The 3D scene: one mesh per wall or slab, cached per build, and picking of walls, slabs, openings and spaces along a ray. A space's floor is picked only when it lies clearly in front of the slab it stands on. |
 | `bim_file.dl` | The native file format: the model as text, one record per line, keeping every id and writing numbers that read back exactly; reading refuses malformed files, naming the fault. |
+| `bim_ifcx_binary.dl` | IfcX in a compact binary encoding, the editor's own file (`.ifcxb`): the IfcX JSON document as CBOR (RFC 8949) with string references (tags 256 and 25) and decimal fractions (tag 4), read back into the same JSON values; `tests/verify_ifcx_binary.py` checks it with an independent reader. |
 | `bim_editor.dl` | Editor core driven by abstract events: tools, inference snapping, numeric input during a gesture, dragging with joins, undo. |
 | `bim_view.dl` | Categories (walls, floors, doors, windows, spaces, grids, dimensions) and view rules: per view (plan, section, 3D) each category visible or hidden, and halftone, starting from the view kind's template. |
 | `bim_hatch.dl` | Hatching of cut faces as geometry: a wall's cut divided into its type's layers (bands parallel to the wall in plan, or where a section crosses it), and per material a fill, hatch lines or a zigzag, clipped to the cut. |
@@ -116,7 +117,7 @@ installer again replaces it; `~/.local/share/bim-slice/uninstall` removes it.
 | Delete | Delete the selected wall, opening or slab, or else the wall under the pointer; a wall goes with its openings |
 | Z / Y | Undo / redo |
 | X | Export `bim-slice.ifc` to the working directory |
-| Ctrl+S / Ctrl+O | Save the model / open it again: the file named on the command line (`./build/bim-slice model.bim`, opened at start when it exists), or `bim-slice.bim`. Opening clears the undo history |
+| Ctrl+S / Ctrl+O | Save the model / open it again: the file named on the command line (opened at start when it exists; `.ifcx` is saved as IfcX JSON, `.ifcxb` as binary IfcX, and an older `.bim` file is saved next to itself as `.ifcxb`), or `open-bim-studio.ifcxb`. Opening reads JSON and binary IfcX alike and clears the undo history |
 | Escape | Cancel what is under way (a wall chain, typed input, a grid or section being placed, the visibility panel) and clear the selection; it never closes the editor |
 | Ctrl+Q | Quit (as does the window's close button) |
 | C | Section tool: click two points; the right panel shows the section |

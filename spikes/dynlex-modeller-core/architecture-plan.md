@@ -331,6 +331,7 @@ full placement, not a plan position alone.
 | 60 | **Drag any element**: a slab, linear element, instance, mesh or sketch element pressed and dragged moves whole while the pointer goes, one undo step | the editor | test: a column mid-drag, released, undone |
 | 61 | **Level extents in 3D**: a level picked on its outline in the 3D view, its corners and sides' middles dragged; every level locked to the shared extent (the default) follows, an unlocked one keeps its own | levels, the 3D view | test: shared and own extents, handles, the file |
 | 62 | **3D cursor in perspective**: its ring and cross lie in the level plane | the 3D view | by hand |
+| 63 | **Native binary IfcX (.ifcxb)**: the IfcX document as CBOR (string references, decimal fractions, shortest exact numbers) compressed with gzip through zlib, the editor's own file; opening and import read JSON, CBOR and compressed CBOR alike | the file | test: the bytes of a small document, a model saved and opened as the same model at about 11% of its JSON, broken files refused; `verify_ifcx_binary.py` reads it independently |
 
 Done in this round outside the numbering: a right-click context menu in the
 views, selected elements filled in the selection colour, the snaps as
@@ -391,6 +392,8 @@ To do, in this order:
    view bars) moves into functions that a headless test can call.
 4. **Native .ifcx.** The native file becomes IfcX in a compact binary encoding, written
    from the same element data. A warning lists values with needless decimals.
+   Done (step 63, `.ifcxb`; the warning is `bim_checks.dl`). Measured on the test
+   model: JSON 174 kB, CBOR 108 kB, CBOR compressed 20 kB.
 5. **Then the queued features on top:**
    - the country drawing standard, as one model setting;
    - pattern systems as floors (hollow-core slabs, masonry bonds, timber-frame and
