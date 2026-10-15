@@ -25,8 +25,14 @@
 #                  are left out)
 #   instancing     IfcMappedItem (IfcCartesianTransformationOperator3D,
 #                  uniform and not), each mapped representation meshed once
-#   colour         IfcStyledItem surface colours on items and on mapped
-#                  representations; otherwise the category's colour
+#   storeys        IfcBuildingStorey at its placement's height; each
+#                  element in the storey that contains it, through
+#                  IfcRelContainedInSpatialStructure or the whole it is a
+#                  part of (IfcRelAggregates)
+#   colour         each item in its IfcStyledItem surface colour, else in
+#                  the colour of the item it is part of (a mapped item, a
+#                  boolean result), else the category's; an element is one
+#                  mesh per colour, as a wall shown in layers is
 #
 # openings       IfcRelVoidsElement: a host made of extrusions has its
 #                extruded openings cut away by the kernel's booleans; other
@@ -91,6 +97,38 @@ local function the bim ifc axes at {cad vector3:location} along {cad vector3:wan
         set yUnit to the cad cross of zUnit and xUnit
         return @intrinsic("construct", a bim ifc frame record, location, xUnit, yUnit, zUnit)
 
+# ---------------------------------------------------------------- painted meshes
+
+# Triangles grouped by surface colour: one group per colour, red, green and
+# blue in 0..255 packed, or -1 for the category's colour.
+class:
+    patterns:
+        [a|] bim ifc painted mesh record
+    members:
+        colours as the type of (an empty list of an integer)
+        groups as the type of (an empty list of a fast mesh record)
+
+function an empty bim ifc painted mesh:
+    execute:
+        return @intrinsic("construct", a bim ifc painted mesh record, an empty list of an integer, an empty list of a fast mesh record)
+
+# The group of `painted` in `colour`, added when there is none yet. A group
+# shares its lists with `painted`: triangles added to it land there.
+function the bim ifc group in {integer:colour} of {a pointer to a bim ifc painted mesh record:painted}:
+    execute:
+        loop cursor from 0 to the length of (painted's colours):
+            if (the item at cursor in (painted's colours)) = colour:
+                return the item at cursor in (painted's groups)
+        set colourGroup to an empty fast mesh
+        append colour to (painted's colours)
+        append colourGroup to (painted's groups)
+        return colourGroup
+
+function free bim ifc painted {a pointer to a bim ifc painted mesh record:painted}:
+    execute:
+        free (painted's colours)
+        free (painted's groups)
+
 # ---------------------------------------------------------------- the reader
 
 class:
@@ -103,9 +141,11 @@ class:
         # Placements already evaluated, by instance id.
         placementKnown as the type of (an empty list of a boolean)
         placementFrames as the type of (an empty list of a bim ifc frame record)
-        # Mapped representations already meshed (in their own coordinates).
+        # Mapped representations already meshed (in their own coordinates),
+        # by representation and the colour they inherit.
         mappedIds as the type of (an empty list of an integer)
-        mappedMeshes as the type of (an empty list of a fast mesh record)
+        mappedColours as the type of (an empty list of an integer)
+        mappedMeshes as the type of (an empty list of a bim ifc painted mesh record)
         # The surface colour styled onto an item, by item id: red, green and
         # blue in 0..255 packed, or -1.
         itemColours as the type of (an empty list of an integer)
@@ -323,6 +363,14 @@ local function add bim ifc mesh {fast mesh record:source} through {bim ifc frame
             set third to the bim ifc placed (the item at (the item at (cursor + 2) in corners) in (source's positions's values)) through frame
             add bim ifc triangle first second third to target
             set cursor to cursor + 3
+
+# Appends each group of `source` through `frame` to the group of `target` in
+# the same colour.
+local function add bim ifc painted {bim ifc painted mesh record:source} through {bim ifc frame record:frame} to {a pointer to a bim ifc painted mesh record:target}:
+    execute:
+        loop cursor from 0 to the length of (source's colours):
+            set colourGroup to the bim ifc group in (the item at cursor in (source's colours)) of target
+            add bim ifc mesh (the item at cursor in (source's groups)) through frame to (the address of colourGroup)
 
 # ---------------------------------------------------------------- curves
 
@@ -1005,11 +1053,34 @@ local function add bim ifc cap of {a pointer to a list:segmentEnds} on plane at 
                             set tail to the item at ((best * 2) + 1) in segmentEnds
                         set growing to true
                 if ((the length of loopPoints) >= 3) and ((the cad distance from tail to (the item at 0 in loopPoints)) < 1e-7):
-                    set flatLoop to an empty list of a cad vector2
+                    set flatPoints to an empty list of a cad vector2
                     loop cursor from 0 to the length of loopPoints:
                         set offset to the cad difference of (the item at cursor in loopPoints) and capAxes's origin
-                        append (a cad vector2 with x (the cad dot of offset and capAxes's xAxis) and y (the cad dot of offset and capAxes's yAxis)) to flatLoop
-                    append flatLoop to loops
+                        append (a cad vector2 with x (the cad dot of offset and capAxes's xAxis) and y (the cad dot of offset and capAxes's yAxis)) to flatPoints
+                    # A point where a straight edge of the cut was split (where
+                    # a face's diagonal crossed the plane) lies on its
+                    # neighbours' line only up to rounding, which can leave the
+                    # ring a sliver the triangulation refuses: it is left out.
+                    set flatLoop to an empty list of a cad vector2
+                    set pointCount to the length of flatPoints
+                    loop cursor from 0 to pointCount:
+                        set before to the item at (the remainder of ((cursor + pointCount) - 1) divided by pointCount) in flatPoints
+                        set here to the item at cursor in flatPoints
+                        set after to the item at (the remainder of (cursor + 1) divided by pointCount) in flatPoints
+                        set inX to here's x - before's x
+                        set inY to here's y - before's y
+                        set outX to after's x - here's x
+                        set outY to after's y - here's y
+                        set bend to (inX * outY) - (inY * outX)
+                        set reach to (the square root of ((inX * inX) + (inY * inY))) * (the square root of ((outX * outX) + (outY * outY)))
+                        set straight to (the absolute value of bend) <= (1e-9 * reach)
+                        if (straight and (((inX * outX) + (inY * outY)) > 0.0)) = false:
+                            append here to flatLoop
+                    free flatPoints
+                    if (the length of flatLoop) >= 3:
+                        append flatLoop to loops
+                    else:
+                        free flatLoop
                 free loopPoints
         free used
         if (the length of loops) > 0:
@@ -1087,12 +1158,39 @@ local function add bim ifc face set {integer:setId} through {bim ifc frame recor
             free bim step instance faceValue
         free bim step instance setValue
 
-# Appends the geometry of representation item `itemId` through `frame`.
-function add bim ifc item {integer:itemId} through {bim ifc frame record:frame} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+# The colour item `itemId` is drawn in: its own styled colour, else
+# `inherited` (the colour of the item it is part of, -1 at the top).
+local function the bim ifc colour of item {integer:itemId} inheriting {integer:inherited} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        if (itemId >= 0) and (itemId < (the length of (reader's itemColours))):
+            set own to the item at itemId in (reader's itemColours)
+            if own >= 0:
+                return own
+        return inherited
+
+# Appends the geometry of representation item `itemId` through `frame` to
+# `painted`, in the item's colour (`inherited` when it has none of its own).
+# Items made of other items pass that colour on to them.
+function add bim ifc item {integer:itemId} through {bim ifc frame record:frame} coloured {integer:inherited} to {a pointer to a bim ifc painted mesh record:painted} in {a pointer to a bim ifc reader record:reader}:
     execute:
         if (bim step file (reader's stepFile) holds itemId) = false:
             return nothing
+        set colour to the bim ifc colour of item itemId inheriting inherited in reader
         set itemValue to the bim step instance itemId in (reader's stepFile)
+        set typeName to itemValue's typeName
+        if typeName = (the string form of "IFCMAPPEDITEM"):
+            add bim ifc mapped item itemValue through frame coloured colour to painted in reader
+        else if ((typeName = (the string form of "IFCBOOLEANCLIPPINGRESULT")) or (typeName = (the string form of "IFCBOOLEANRESULT"))):
+            add bim ifc boolean itemValue through frame coloured colour to painted in reader
+        else:
+            set colourGroup to the bim ifc group in colour of painted
+            add bim ifc solid itemValue numbered itemId through frame to (the address of colourGroup) in reader
+        free bim step instance itemValue
+
+# Appends the triangles of item `itemValue` (number `itemId`), one not made
+# of other items, through `frame`.
+local function add bim ifc solid {bim step instance record:itemValue} numbered {integer:itemId} through {bim ifc frame record:frame} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+    execute:
         set typeName to itemValue's typeName
         if (((typeName = (the string form of "IFCPOLYGONALFACESET")) or (typeName = (the string form of "IFCTRIANGULATEDFACESET"))) or (typeName = (the string form of "IFCTRIANGULATEDIRREGULARNETWORK"))):
             set pool to the bim ifc coordinate list (the bim step reference of (the bim step argument 0 of itemValue) in itemValue) in reader
@@ -1160,13 +1258,8 @@ function add bim ifc item {integer:itemId} through {bim ifc frame record:frame} 
                 add bim ifc face set (the bim step reference of (the bim step member cursor of shells in itemValue) in itemValue) through frame to shape in reader
         else if (((typeName = (the string form of "IFCCLOSEDSHELL")) or (typeName = (the string form of "IFCOPENSHELL"))) or (typeName = (the string form of "IFCCONNECTEDFACESET"))):
             add bim ifc face set itemId through frame to shape in reader
-        else if typeName = (the string form of "IFCMAPPEDITEM"):
-            add bim ifc mapped item itemValue through frame to shape in reader
-        else if ((typeName = (the string form of "IFCBOOLEANCLIPPINGRESULT")) or (typeName = (the string form of "IFCBOOLEANRESULT"))):
-            add bim ifc boolean itemValue through frame to shape in reader
         else:
             note bim ifc skipped typeName in reader
-        free bim step instance itemValue
 
 # The points list node `indexNode` names (1-based), through PnIndex `remap`
 # when it is set.
@@ -1182,9 +1275,10 @@ local function the bim ifc indexed points {integer:indexNode} of {bim step insta
                 append (the item at index in pool) to pickedPoints
         return pickedPoints
 
-# An IfcMappedItem: its representation meshed once in its own coordinates,
-# then placed through MappingOrigin and MappingTarget.
-local function add bim ifc mapped item {bim step instance record:itemValue} through {bim ifc frame record:frame} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+# An IfcMappedItem: its representation meshed once in its own coordinates
+# for each colour it inherits, then placed through MappingOrigin and
+# MappingTarget.
+local function add bim ifc mapped item {bim step instance record:itemValue} through {bim ifc frame record:frame} coloured {integer:colour} to {a pointer to a bim ifc painted mesh record:painted} in {a pointer to a bim ifc reader record:reader}:
     execute:
         set mapId to the bim step reference of (the bim step argument 0 of itemValue) in itemValue
         set targetFrame to the bim ifc operator axes (the bim step reference of (the bim step argument 1 of itemValue) in itemValue) in reader
@@ -1196,26 +1290,28 @@ local function add bim ifc mapped item {bim step instance record:itemValue} thro
         free bim step instance mapValue
         set cached to -1
         loop cursor from 0 to the length of (reader's mappedIds):
-            if (the item at cursor in (reader's mappedIds)) = representationId:
+            if ((the item at cursor in (reader's mappedIds)) = representationId) and ((the item at cursor in (reader's mappedColours)) = colour):
                 set cached to cursor
         if cached < 0:
-            set local to an empty fast mesh
-            add bim ifc representation representationId through (the bim ifc identity axes) to (the address of local) in reader
+            set local to an empty bim ifc painted mesh
+            add bim ifc representation representationId through (the bim ifc identity axes) coloured colour to (the address of local) in reader
             append representationId to (reader's mappedIds)
+            append colour to (reader's mappedColours)
             append local to (reader's mappedMeshes)
             set cached to (the length of (reader's mappedIds)) - 1
         set mappedAxes to the bim ifc axes (the bim ifc axes originFrame within targetFrame) within frame
-        add bim ifc mesh (the item at cached in (reader's mappedMeshes)) through mappedAxes to shape
+        add bim ifc painted (the item at cached in (reader's mappedMeshes)) through mappedAxes to painted
 
-# The items of shape representation `representationId` through `frame`.
-function add bim ifc representation {integer:representationId} through {bim ifc frame record:frame} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+# The items of shape representation `representationId` through `frame`, each
+# in its colour (`inherited` for those without one).
+function add bim ifc representation {integer:representationId} through {bim ifc frame record:frame} coloured {integer:inherited} to {a pointer to a bim ifc painted mesh record:painted} in {a pointer to a bim ifc reader record:reader}:
     execute:
         if (bim step file (reader's stepFile) holds representationId) = false:
             return nothing
         set representationValue to the bim step instance representationId in (reader's stepFile)
         set items to the bim step argument 3 of representationValue
         loop cursor from 0 to the bim step count of items in representationValue:
-            add bim ifc item (the bim step reference of (the bim step member cursor of items in representationValue) in representationValue) through frame to shape in reader
+            add bim ifc item (the bim step reference of (the bim step member cursor of items in representationValue) in representationValue) through frame coloured inherited to painted in reader
         free bim step instance representationValue
 
 # An IfcRevolvedAreaSolid: the profile turned about its axis in steps of at
@@ -1265,14 +1361,15 @@ local function the bim ifc rotation of {cad vector3:pointToTurn} by {a 64 bit fl
         return the cad sum of axisPoint and rotatedOffset
 
 # A boolean result: its first operand, clipped where the second is a half
-# space; any other second operand is left out.
-local function add bim ifc boolean {bim step instance record:itemValue} through {bim ifc frame record:frame} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+# space; any other second operand is left out. The operands pass `colour` on;
+# each group of the first is clipped and capped in its own colour.
+local function add bim ifc boolean {bim step instance record:itemValue} through {bim ifc frame record:frame} coloured {integer:colour} to {a pointer to a bim ifc painted mesh record:painted} in {a pointer to a bim ifc reader record:reader}:
     execute:
         set operation to the bim step raw text of (the bim step argument 0 of itemValue) in itemValue
         set firstId to the bim step reference of (the bim step argument 1 of itemValue) in itemValue
         set secondId to the bim step reference of (the bim step argument 2 of itemValue) in itemValue
-        set first to an empty fast mesh
-        add bim ifc item firstId through frame to (the address of first) in reader
+        set first to an empty bim ifc painted mesh
+        add bim ifc item firstId through frame coloured colour to (the address of first) in reader
         set secondType to the bim step type of secondId in (reader's stepFile)
         if (operation = (the string form of "DIFFERENCE")) and (((secondType = (the string form of "IFCHALFSPACESOLID")) or (secondType = (the string form of "IFCPOLYGONALBOUNDEDHALFSPACE"))) or (secondType = (the string form of "IFCBOXEDHALFSPACE"))):
             set halfValue to the bim step instance secondId in (reader's stepFile)
@@ -1299,13 +1396,18 @@ local function add bim ifc boolean {bim step instance record:itemValue} through 
             free bim step instance halfValue
             # Keep the side opposite to the removed normal: clip away where
             # the removed normal points.
-            clip bim ifc mesh (the address of first) by plane at planeFrame's origin facing removedNormal bounded hasBoundary by boundary in boundaryFrame
+            # Clipping replaces a group's lists, so each group is put back.
+            loop groupCursor from 0 to the length of (first's groups):
+                set colourGroup to the item at groupCursor in (first's groups)
+                clip bim ifc mesh (the address of colourGroup) by plane at planeFrame's origin facing removedNormal bounded hasBoundary by boundary in boundaryFrame
+                replace item at index groupCursor in (first's groups) with colourGroup
             free boundary
         else if operation = (the string form of "UNION"):
-            add bim ifc item secondId through frame to (the address of first) in reader
+            add bim ifc item secondId through frame coloured colour to (the address of first) in reader
         else:
             note bim ifc skipped ((the string form of "boolean with ") + secondType) in reader
-        add bim ifc mesh first through (the bim ifc identity axes) to shape
+        add bim ifc painted first through (the bim ifc identity axes) to painted
+        free bim ifc painted (the address of first)
 
 # ---------------------------------------------------------------- units and styles
 
@@ -1409,40 +1511,20 @@ local function gather bim ifc colours for {a pointer to a bim ifc reader record:
                     replace item at index itemId in (reader's itemColours) with styledColour
         free styledItems
 
-# The colour styled onto representation `representationId`: on one of its
-# items, or on an item of the representation one of them maps; -1 if none.
-local function the bim ifc colour of representation {integer:representationId} in {a pointer to a bim ifc reader record:reader} at depth {integer:nesting}:
+# A packed colour as a scene mesh's colour; -1 colours it by its category.
+local function the bim ifc mesh colour of {integer:packed}:
     execute:
-        if (nesting > 4) or ((bim step file (reader's stepFile) holds representationId) = false):
-            return -1
-        set representationValue to the bim step instance representationId in (reader's stepFile)
-        set items to the bim step argument 3 of representationValue
-        set result to -1
-        loop cursor from 0 to the bim step count of items in representationValue:
-            set itemId to the bim step reference of (the bim step member cursor of items in representationValue) in representationValue
-            if (result < 0) and ((itemId >= 0) and (itemId < (the length of (reader's itemColours)))):
-                set result to the item at itemId in (reader's itemColours)
-            if (result < 0) and (bim step instance itemId is a "IFCMAPPEDITEM" in (reader's stepFile)):
-                set mappedValue to the bim step instance itemId in (reader's stepFile)
-                set mapValue to the bim step instance (the bim step reference of (the bim step argument 0 of mappedValue) in mappedValue) in (reader's stepFile)
-                set result to the bim ifc colour of representation (the bim step reference of (the bim step argument 1 of mapValue) in mapValue) in reader at depth (nesting + 1)
-                free bim step instance mapValue
-                free bim step instance mappedValue
-            if (result < 0) and ((bim step instance itemId is a "IFCBOOLEANCLIPPINGRESULT" in (reader's stepFile)) or (bim step instance itemId is a "IFCBOOLEANRESULT" in (reader's stepFile))):
-                set clipped to the bim step instance itemId in (reader's stepFile)
-                set firstId to the bim step reference of (the bim step argument 1 of clipped) in clipped
-                free bim step instance clipped
-                if (firstId >= 0) and (firstId < (the length of (reader's itemColours))):
-                    set result to the item at firstId in (reader's itemColours)
-        free bim step instance representationValue
-        return result
+        if packed < 0:
+            return the bim category colouring
+        return a cad vector3 with x ((packed / 65536) as a 64 bit floating-point number), y ((the remainder of (packed / 256) divided by 256) as a 64 bit floating-point number) and z ((the remainder of packed divided by 256) as a 64 bit floating-point number)
 
 # ---------------------------------------------------------------- openings
 
 # The solids of representation `representationId` through `frame` as kernel
-# bodies, appended to `bodies`, when every item is an extrusion of a profile
-# with one outer ring and no holes; false (nothing appended) otherwise.
-local function append bim ifc extrusion bodies of {integer:representationId} through {bim ifc frame record:frame} to {a pointer to a list:bodyList} in {a pointer to a bim ifc reader record:reader}:
+# bodies, appended to `bodies` and the colour of each item to `bodyColours`,
+# when every item is an extrusion of a profile with one outer ring and no
+# holes; false (nothing appended) otherwise.
+local function append bim ifc extrusion bodies of {integer:representationId} through {bim ifc frame record:frame} to {a pointer to a list:bodyList} colouring {a pointer to a list:bodyColours} in {a pointer to a bim ifc reader record:reader}:
     execute:
         if (bim step file (reader's stepFile) holds representationId) = false:
             return false
@@ -1450,6 +1532,7 @@ local function append bim ifc extrusion bodies of {integer:representationId} thr
         set items to the bim step argument 3 of representationValue
         set accepted to (the bim step count of items in representationValue) > 0
         set made to an empty list of the type of (an empty cad body)
+        set madeColours to an empty list of an integer
         loop cursor from 0 to the bim step count of items in representationValue:
             set itemId to the bim step reference of (the bim step member cursor of items in representationValue) in representationValue
             if accepted and (bim step instance itemId is a "IFCEXTRUDEDAREASOLID" in (reader's stepFile)):
@@ -1479,6 +1562,7 @@ local function append bim ifc extrusion bodies of {integer:representationId} thr
                     free pieces
                     if extruded's valid:
                         append extruded's value to made
+                        append (the bim ifc colour of item itemId inheriting -1 in reader) to madeColours
                     else:
                         set accepted to false
                 loop ringCursor from 0 to the length of rings:
@@ -1491,19 +1575,25 @@ local function append bim ifc extrusion bodies of {integer:representationId} thr
         if accepted:
             loop cursor from 0 to the length of made:
                 append (the item at cursor in made) to bodyList
+                append (the item at cursor in madeColours) to bodyColours
         free made
+        free madeColours
         return accepted
 
 # Appends the body of a host (representation `bodyId` through `frame`) with
-# its openings `openingIds` cut away, when the host and each opening are
-# extrusions the kernel can cut; false (nothing appended) otherwise.
-local function add bim ifc voided body {integer:bodyId} through {bim ifc frame record:frame} cutting {a pointer to a list:openingIds} to {a pointer to a fast mesh record:shape} in {a pointer to a bim ifc reader record:reader}:
+# its openings `openingIds` cut away, each item in its colour, when the host
+# and each opening are extrusions the kernel can cut; false (nothing
+# appended) otherwise.
+local function add bim ifc voided body {integer:bodyId} through {bim ifc frame record:frame} cutting {a pointer to a list:openingIds} to {a pointer to a bim ifc painted mesh record:painted} in {a pointer to a bim ifc reader record:reader}:
     execute:
         set hostBodies to an empty list of the type of (an empty cad body)
-        if (append bim ifc extrusion bodies of bodyId through frame to hostBodies in reader) = false:
+        set hostColours to an empty list of an integer
+        if (append bim ifc extrusion bodies of bodyId through frame to hostBodies colouring hostColours in reader) = false:
             free hostBodies
+            free hostColours
             return false
         set cutters to an empty list of the type of (an empty cad body)
+        set cutterColours to an empty list of an integer
         loop cursor from 0 to the length of openingIds:
             set openingValue to the bim step instance (the item at cursor in openingIds) in (reader's stepFile)
             set openingPlacement to the bim step reference of (the bim step argument 5 of openingValue) in openingValue
@@ -1511,8 +1601,9 @@ local function add bim ifc voided body {integer:bodyId} through {bim ifc frame r
             free bim step instance openingValue
             set openingBody to the bim ifc body of shape openingShape in (reader's stepFile)
             if openingBody >= 0:
-                ignore (append bim ifc extrusion bodies of openingBody through (the bim ifc object axes openingPlacement in reader) to cutters in reader)
+                ignore (append bim ifc extrusion bodies of openingBody through (the bim ifc object axes openingPlacement in reader) to cutters colouring cutterColours in reader)
         loop hostCursor from 0 to the length of hostBodies:
+            set hostGroup to the bim ifc group in (the item at hostCursor in hostColours) of painted
             set cutBody to the item at hostCursor in hostBodies
             loop cutterCursor from 0 to the length of cutters:
                 set difference to the cad combination of cutBody and (the item at cutterCursor in cutters) using cad difference operation within 1e-7
@@ -1521,9 +1612,11 @@ local function add bim ifc voided body {integer:bodyId} through {bim ifc frame r
             set tessellated to the cad mesh of cutBody with maximum angle 0.3 within 0.0005
             loop face from 0 to the length of tessellated's triangles:
                 set corners to the item at face in tessellated's triangles
-                add bim ifc triangle (the item at corners's first in tessellated's positions) (the item at corners's second in tessellated's positions) (the item at corners's third in tessellated's positions) to shape
+                add bim ifc triangle (the item at corners's first in tessellated's positions) (the item at corners's second in tessellated's positions) (the item at corners's third in tessellated's positions) to (the address of hostGroup)
         free hostBodies
+        free hostColours
         free cutters
+        free cutterColours
         return true
 
 # ---------------------------------------------------------------- products
@@ -1621,6 +1714,39 @@ local function the bim ifc slot of {integer:hostId} among {a pointer to a list:s
                 set probe to (probe + 1) bitwise and mask
         return probe
 
+# For each relation of type `typeName`, the instances its argument
+# `membersArgument` lists recorded as in the one its argument
+# `containerArgument` names, in `containerOf` (by instance number), unless
+# an earlier relation put them in one already.
+local function record bim ifc containers of type {a string:typeName} holding {integer:membersArgument} in {integer:containerArgument} in {bim step file record:stepFile} into {a pointer to a list:containerOf}:
+    execute:
+        set relations to the bim step instances of type typeName in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set container to the bim step reference of (the bim step argument containerArgument of relation) in relation
+            set members to the bim step argument membersArgument of relation
+            loop memberCursor from 0 to the bim step count of members in relation:
+                set member to the bim step reference of (the bim step member memberCursor of members in relation) in relation
+                if (member >= 0) and (member < (the length of containerOf)):
+                    if (the item at member in containerOf) < 0:
+                        replace item at index member in containerOf with container
+            free bim step instance relation
+        free relations
+
+# The storey (its index in `storeyAt`'s numbering) that instance
+# `instanceId` is in, followed up through what contains it or what it is a
+# part of; -1 when it is in none.
+local function the bim ifc storey of {integer:instanceId} among {a pointer to a list:containerOf} and {a pointer to a list:storeyAt}:
+    execute:
+        set climbed to instanceId
+        loop step from 0 to 12:
+            if (climbed < 0) or (climbed >= (the length of storeyAt)):
+                return -1
+            if (the item at climbed in storeyAt) >= 0:
+                return the item at climbed in storeyAt
+            set climbed to the item at climbed in containerOf
+        return -1
+
 # The IFC file at `path` as imported elements.
 function the bim ifc import of {a string:path}:
     execute:
@@ -1632,8 +1758,8 @@ function the bim ifc elements of {bim step file record:stepFile}:
     execute:
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
         if stepFile's valid = false:
-            return @intrinsic("construct", a bim import record, false, stepFile's message, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3)
-        set reader to @intrinsic("construct", a bim ifc reader record, stepFile, 1.0, 1.0, an empty list of a boolean, an empty list of a bim ifc frame record, an empty list of an integer, an empty list of a fast mesh record, an empty list of an integer, an empty list of a string)
+            return @intrinsic("construct", a bim import record, false, stepFile's message, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys)
+        set reader to @intrinsic("construct", a bim ifc reader record, stepFile, 1.0, 1.0, an empty list of a boolean, an empty list of a bim ifc frame record, an empty list of an integer, an empty list of an integer, an empty list of a bim ifc painted mesh record, an empty list of an integer, an empty list of a string)
         set r to the address of reader
         gather bim ifc units for r
         gather bim ifc colours for r
@@ -1665,6 +1791,29 @@ function the bim ifc elements of {bim step file record:stepFile}:
             replace item at index voidCursor in voidNext with (the item at hostSlot in slotHeads)
             replace item at index hostSlot in slotHosts with (the item at voidCursor in voidHosts)
             replace item at index hostSlot in slotHeads with voidCursor
+        # The storeys (IfcBuildingStorey), at the height their placement puts
+        # them, and what each instance is in: the structure containing it
+        # (IfcRelContainedInSpatialStructure), else the whole it is a part of
+        # (IfcRelAggregates).
+        set storeys to no bim import storeys
+        set instanceCount to the length of (stepFile's starts)
+        set storeyAt to an empty list of an integer
+        set containerOf to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to storeyAt
+            append -1 to containerOf
+        set storeyIds to the bim step instances of type (the string form of "IFCBUILDINGSTOREY") in stepFile
+        loop storeyCursor from 0 to the length of storeyIds:
+            set storeyId to the item at storeyCursor in storeyIds
+            set storeyValue to the bim step instance storeyId in stepFile
+            set storeyFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of storeyValue) in storeyValue) in r
+            replace item at index storeyId in storeyAt with (the length of (storeys's names's values))
+            append (the bim step string of (the bim step argument 2 of storeyValue) in storeyValue) to (storeys's names's values)
+            append storeyFrame's origin's z to (storeys's elevations's values)
+            free bim step instance storeyValue
+        free storeyIds
+        record bim ifc containers of type (the string form of "IFCRELCONTAINEDINSPATIALSTRUCTURE") holding 4 in 5 in stepFile into containerOf
+        record bim ifc containers of type (the string form of "IFCRELAGGREGATES") holding 5 in 4 in stepFile into containerOf
         # Which types can be products with a body: decided once per type.
         set productTypes to an empty list of a boolean
         loop typeCursor from 0 to the length of (stepFile's typeNames):
@@ -1697,7 +1846,7 @@ function the bim ifc elements of {bim step file record:stepFile}:
                         set bodyId to the bim ifc body of shape shapeId in stepFile
                     if bodyId >= 0:
                         set frame to the bim ifc object axes placementId in r
-                        set elementMesh to an empty fast mesh
+                        set painted to an empty bim ifc painted mesh
                         set openingIds to an empty list of an integer
                         set voidAt to the item at (the bim ifc slot of identifier among slotHosts) in slotHeads
                         loop while voidAt >= 0:
@@ -1705,27 +1854,32 @@ function the bim ifc elements of {bim step file record:stepFile}:
                             set voidAt to the item at voidAt in voidNext
                         set cut to false
                         if (the length of openingIds) > 0:
-                            set cut to add bim ifc voided body bodyId through frame cutting openingIds to (the address of elementMesh) in r
+                            set cut to add bim ifc voided body bodyId through frame cutting openingIds to (the address of painted) in r
                             if cut:
                                 set voidedCount to voidedCount + 1
                         if cut = false:
-                            add bim ifc representation bodyId through frame to (the address of elementMesh) in r
+                            add bim ifc representation bodyId through frame coloured -1 to (the address of painted) in r
                         free openingIds
-                        set cornerCount to the length of (elementMesh's positions's values)
+                        # One scene mesh per colour, all with the element's id.
+                        set elementId to (the bim imported id base) + (element as a 64 bit integer)
+                        set category to the bim category of step class className
+                        set cornerCount to 0
+                        loop groupCursor from 0 to the length of (painted's groups):
+                            set colourGroup to the item at groupCursor in (painted's groups)
+                            set groupCorners to the length of (colourGroup's positions's values)
+                            if groupCorners > 0:
+                                loop corner from 0 to groupCorners:
+                                    set point to the item at corner in (colourGroup's positions's values)
+                                    set low to a cad vector3 with x (the minimum of low's x and point's x), y (the minimum of low's y and point's y) and z (the minimum of low's z and point's z)
+                                    set high to a cad vector3 with x (the maximum of high's x and point's x), y (the maximum of high's y and point's y) and z (the maximum of high's z and point's z)
+                                append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, colourGroup, category, the bim ifc mesh colour of (the item at groupCursor in (painted's colours)))) to (meshes's values)
+                                set cornerCount to cornerCount + groupCorners
+                        free bim ifc painted (the address of painted)
                         if cornerCount > 0:
-                            loop corner from 0 to cornerCount:
-                                set point to the item at corner in (elementMesh's positions's values)
-                                set low to a cad vector3 with x (the minimum of low's x and point's x), y (the minimum of low's y and point's y) and z (the minimum of low's z and point's z)
-                                set high to a cad vector3 with x (the maximum of high's x and point's x), y (the maximum of high's y and point's y) and z (the maximum of high's z and point's z)
                             set triangles to triangles + (cornerCount / 3)
-                            set meshColour to the bim category colouring
-                            set packed to the bim ifc colour of representation bodyId in r at depth 0
-                            if packed >= 0:
-                                set meshColour to a cad vector3 with x ((packed / 65536) as a 64 bit floating-point number), y ((the remainder of (packed / 256) divided by 256) as a 64 bit floating-point number) and z ((the remainder of packed divided by 256) as a 64 bit floating-point number)
-                            set elementId to (the bim imported id base) + (element as a 64 bit integer)
-                            append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, elementMesh, the bim category of step class className, meshColour)) to (meshes's values)
                             set label to ((the bim ifc class name of className) + (the string form of " ")) + (((the bim step string of (the bim step argument 0 of productValue) in productValue) + (the string form of " ")) + (the bim step string of (the bim step argument 2 of productValue) in productValue))
                             append label to (labels's values)
+                            append (the bim ifc storey of identifier among containerOf and storeyAt) to (storeys's ofElements's values)
                             set element to element + 1
                     free bim step instance productValue
         set message to ((the string form of "openings cut in ") + (the string form of voidedCount)) + (the string form of " hosts")
@@ -1737,7 +1891,9 @@ function the bim ifc elements of {bim step file record:stepFile}:
         free slotHosts
         free slotHeads
         free productTypes
-        return @intrinsic("construct", a bim import record, true, message, meshes, labels, triangles, low, high, a cad topology list of a cad vector3)
+        free storeyAt
+        free containerOf
+        return @intrinsic("construct", a bim import record, true, message, meshes, labels, triangles, low, high, a cad topology list of a cad vector3, storeys)
 
 # IFCWALLSTANDARDCASE written as IfcWallStandardCase is not known without
 # the schema; the class is shown as IfcWallstandardcase (Ifc and the rest

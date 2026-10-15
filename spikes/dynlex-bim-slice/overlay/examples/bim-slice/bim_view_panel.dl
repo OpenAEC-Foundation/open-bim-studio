@@ -15,8 +15,8 @@ function the bim direction toward the sun:
 # ---------------------------------------------------------------- GPU scene
 
 # The 3D view's meshes as they were written to the GPU: positions relative to
-# `origin`, the model's bounding radius, and per element ordinal its id, in
-# ascending order, for highlighting the selection.
+# `origin`, the bounding radius of the model with its ground, and per element
+# ordinal its id, in ascending order, for highlighting the selection.
 class:
     patterns:
         [a|] bim gpu scene record
@@ -24,11 +24,13 @@ class:
         origin as a cad vector3
         radius as a 64 bit floating-point number
         ids as the type of (a cad topology list of a 64 bit integer)
-        # The model's feature edges, as pairs of points, for the view modes
-        # that draw edges, and the model's extent.
-        edges as the type of (a cad topology list of a cad vector3)
+        # The model's extent.
         low as a cad vector3
         high as a cad vector3
+        # The ground and the shadows: the mesh's first indices, drawn only
+        # when the view looks down on them.
+        groundIndexCount as an integer
+        indexCount as an integer
 
 # The bar at a view's bottom right: its Graphics button (opening the view's
 # graphics menu), its scale (- 1:100 +, not for the 3D view) and its display
@@ -268,8 +270,11 @@ function draw bim gesture in view of {bim editor record:editor} in {bim screen l
 
 # Writes `meshes` into the GPU's persistent mesh: each element's distinct
 # corners once (the shaders find each face's normal per pixel), coloured by
-# its own colour or its category's, faint where the 3D rules say halftone.
-function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor record:editor} in mode {integer:viewMode} to {pointer:window}:
+# its own colour or its category's, faint where the 3D rules say halftone;
+# and, for the view modes that draw them, its feature edges as lines between
+# those corners. When `withShadows`, the ground and the shadows on it come
+# first, unlit (element ordinal -2), for models of up to 150,000 triangles.
+function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor record:editor} in mode {integer:viewMode} shadowed {boolean:withShadows} to {pointer:window}:
     execute:
         set context to the gpu context of window
         set vertexBound to 0
@@ -290,16 +295,31 @@ function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor re
         set ids to a cad topology list of a 64 bit integer
         if vertexBound = 0:
             prepare gpu mesh of 0 vertices and 0 indices in context
-            return @intrinsic("construct", a bim gpu scene record, (a cad vector3 with x 0.0, y 0.0 and z 0.0), 1.0, ids, a cad topology list of a cad vector3, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0))
-        set edges to a cad topology list of a cad vector3
+            return @intrinsic("construct", a bim gpu scene record, (a cad vector3 with x 0.0, y 0.0 and z 0.0), 1.0, ids, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0), 0, 0)
+        set groundCorners to an empty list of a cad vector3
+        set groundColours to an empty list of a cad vector3
+        if withShadows and (indexCount <= 450000):
+            append bim ground and shadows of meshes toward (the bim direction toward the sun) to groundCorners colouring groundColours
+        set groundCount to the length of groundCorners
+        # The depth range reaches over the ground too.
         set origin to (the cad sum of low and high) scaled by 0.5
-        set radius to the maximum of 1.0 and ((the cad length of (the cad difference of high and low)) * 0.5)
-        prepare gpu mesh of vertexBound vertices and indexCount indices in context
-        set base to 0
-        set slot to 0
+        set reach to (the cad length of (the cad difference of high and low)) * 0.5
+        loop corner from 0 to groundCount:
+            set reach to the maximum of reach and (the cad length of (the cad difference of (the item at corner in groundCorners) and origin))
+        set radius to the maximum of 1.0 and reach
+        prepare gpu mesh of (vertexBound + groundCount) vertices and (indexCount + groundCount) indices in context
+        loop corner from 0 to groundCount:
+            set spot to the item at corner in groundCorners
+            set groundColour to the item at (corner / 3) in groundColours
+            put gpu mesh vertex corner at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element -2 coloured (groundColour's x as an integer), (groundColour's y as an integer) and (groundColour's z as an integer) in (@intrinsic("dereference", context))
+            put gpu mesh index corner as corner in (@intrinsic("dereference", context))
+        free groundCorners
+        free groundColours
+        set edgeVertices to an empty list of an integer
+        set base to groundCount
+        set slot to groundCount
         set ordinal to -1
         set previousId to (-1) as a 64 bit integer
-        set comparator to the function named "bim gpu corner ordering $ and $"
         loop cursor from 0 to the length of meshes:
             set entry to the item at cursor in meshes
             if entry's elementId != previousId:
@@ -317,47 +337,29 @@ function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor re
             set red to the bim halftone of channel (colour's x as an integer) when isFaint
             set green to the bim halftone of channel (colour's y as an integer) when isFaint
             set blue to the bim halftone of channel (colour's z as an integer) when isFaint
-            set shape to entry's shape
-            set corners to an empty list of a bim gpu corner record
-            loop point from 0 to the length of (shape's positions's values):
-                set p to the item at point in (shape's positions's values)
-                append (@intrinsic("construct", a bim gpu corner record, p's x, p's y, p's z, point)) to corners
-            sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
-            # The corners welded by position (`remap`: each point's welded
-            # corner, counted from `base`).
-            set remap to an empty list of an integer
-            loop point from 0 to the length of corners:
-                append 0 to remap
-            set weldedSpots to an empty list of a cad vector3
-            set distinct to 0
-            loop point from 0 to the length of corners:
-                set here to the item at point in corners
-                set fresh to true
-                if point > 0:
-                    set before to the item at (point - 1) in corners
-                    set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
-                if fresh:
-                    append (a cad vector3 with x here's x, y here's y and z here's z) to weldedSpots
-                    set distinct to distinct + 1
-                replace item at index here's index in remap with (base + (distinct - 1))
+            # The corners welded by position: each triangle corner as the
+            # spot it lies on.
+            set welds to the bim welding of entry's shape
+            set spots to welds's spots
+            set triangleCorners to welds's corners
+            set distinct to the length of spots
             # Smooth shading, as round surfaces need: each triangle corner
             # takes the normals of the triangles at its welded corner that
             # meet its own within 30 degrees (a crease beyond), averaged by
             # area; a welded corner is stored once per distinct normal.
-            set triangleCorners to shape's triangles's values
             set triangleCount to (the length of triangleCorners) / 3
             set faceNormals to an empty list of a cad vector3
             loop triangle from 0 to triangleCount:
-                set first to the item at (the item at (triangle * 3) in triangleCorners) in (shape's positions's values)
-                set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in (shape's positions's values)
-                set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in (shape's positions's values)
+                set first to the item at (the item at (triangle * 3) in triangleCorners) in spots
+                set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in spots
+                set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in spots
                 append (the cad cross of (the cad difference of second and first) and (the cad difference of third and first)) to faceNormals
             # The triangles at each welded corner (counted, then listed).
             set incidentStart to an empty list of an integer
             loop weld from 0 to (distinct + 1):
                 append 0 to incidentStart
             loop corner from 0 to the length of triangleCorners:
-                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                set weld to the item at corner in triangleCorners
                 replace item at index (weld + 1) in incidentStart with ((the item at (weld + 1) in incidentStart) + 1)
             loop weld from 1 to (distinct + 1):
                 replace item at index weld in incidentStart with ((the item at weld in incidentStart) + (the item at (weld - 1) in incidentStart))
@@ -368,18 +370,21 @@ function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor re
             loop corner from 0 to the length of triangleCorners:
                 append 0 to incident
             loop corner from 0 to the length of triangleCorners:
-                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                set weld to the item at corner in triangleCorners
                 replace item at index (the item at weld in incidentFill) in incident with (corner / 3)
                 replace item at index weld in incidentFill with ((the item at weld in incidentFill) + 1)
-            # The GPU corners made so far for each welded corner, as chains.
+            # The GPU corners made so far for each welded corner, as chains,
+            # and the first of them, where the welded corner's edges end.
             set chainHead to an empty list of an integer
+            set spotVertex to an empty list of an integer
             loop weld from 0 to distinct:
                 append -1 to chainHead
+                append -1 to spotVertex
             set chainNext to an empty list of an integer
             set chainNormal to an empty list of a cad vector3
             set made to 0
             loop corner from 0 to the length of triangleCorners:
-                set weld to (the item at (the item at corner in triangleCorners) in remap) - base
+                set weld to the item at corner in triangleCorners
                 set own to the item at (corner / 3) in faceNormals
                 set ownLength to the cad length of own
                 set summed to a cad vector3 with x 0.0, y 0.0 and z 0.0
@@ -402,10 +407,12 @@ function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor re
                     set walker to the item at walker in chainNext
                 if chosen < 0:
                     set chosen to made
+                    if (the item at weld in chainHead) < 0:
+                        replace item at index weld in spotVertex with (base + made)
                     append smoothNormal to chainNormal
                     append (the item at weld in chainHead) to chainNext
                     replace item at index weld in chainHead with made
-                    set spot to the item at weld in weldedSpots
+                    set spot to the item at weld in spots
                     put gpu mesh vertex (base + made) at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in (@intrinsic("dereference", context))
                     set made to made + 1
                 put gpu mesh index slot as (base + chosen) in (@intrinsic("dereference", context))
@@ -417,25 +424,20 @@ function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor re
             free chainHead
             free chainNext
             free chainNormal
-            free weldedSpots
-            # The feature edges, for the modes that draw them, between the
-            # welded corners.
+            # The feature edges, for the modes that draw them, as lines
+            # between the GPU corners of their welded corners.
             if viewMode != bim shaded view mode:
-                set welded to an empty list of a cad vector3
-                set weldedCorners to an empty list of an integer
-                loop point from 0 to the length of corners:
-                    set here to the item at point in corners
-                    if (the length of welded) < ((the item at here's index in remap) - base) + 1:
-                        append (a cad vector3 with x here's x, y here's y and z here's z) to welded
-                loop corner from 0 to the length of (shape's triangles's values):
-                    append ((the item at (the item at corner in (shape's triangles's values)) in remap) - base) to weldedCorners
-                append bim feature edges of welded and weldedCorners to (edges's values)
-                free welded
-                free weldedCorners
+                set pairs to an empty list of an integer
+                append bim feature edge pairs of spots and triangleCorners to pairs
+                loop pairCursor from 0 to the length of pairs:
+                    append (the item at (the item at pairCursor in pairs) in spotVertex) to edgeVertices
+                free pairs
             set base to base + made
-            free corners
-            free remap
-        return @intrinsic("construct", a bim gpu scene record, origin, radius, ids, edges, low, high)
+            free spotVertex
+            free bim welding (the address of welds)
+        set gpu mesh edges to edgeVertices in context
+        free edgeVertices
+        return @intrinsic("construct", a bim gpu scene record, origin, radius, ids, low, high, groundCount, groundCount + indexCount)
 
 # The camera's parallel view of the GPU scene in the 3D panel, as the mesh
 # shaders' parameters: the editor's view axes and scale, centred in the panel,
@@ -487,9 +489,11 @@ function set bim gpu camera {bim camera record:camera} in {bim screen layout rec
 
 # A ground plane through the lowest point of `meshes`, reaching beyond the
 # model and its shadow, and the shadow of every triangle facing the sun cast
-# on it along `towardSun`. Shadows are opaque, so where they overlap they do
-# not darken twice; the model drawn after them hides the part beneath it.
-function draw bim ground and shadows of {a pointer to a list:meshes} toward {cad vector3:towardSun} in {bim screen layout record:layout} with {bim camera record:camera} on {a pointer to a bim depth recording record:recording}:
+# on it along `towardSun`, as triangles in the world: three corners each in
+# `corners`, facing up, and the colour of each in `colours`. They depend on
+# the model and the sun only, so the GPU keeps them while the camera moves.
+# Shadows are opaque, so where they overlap they do not darken twice.
+function append bim ground and shadows of {a pointer to a list:meshes} toward {cad vector3:towardSun} to {a pointer to a list:corners} colouring {a pointer to a list:colours}:
     execute:
         set groundLevel to 1.0 / 0.0
         loop cursor from 0 to the length of meshes:
@@ -506,12 +510,12 @@ function draw bim ground and shadows of {a pointer to a list:meshes} toward {cad
             set entry to the item at cursor in meshes
             set points to entry's shape's positions's values
             set normals to entry's shape's normals's values
-            set corners to entry's shape's triangles's values
+            set triangleCorners to entry's shape's triangles's values
             set corner to 0
-            loop while corner < the length of corners:
-                if (the cad dot of (the item at (the item at corner in corners) in normals) and towardSun) > 0.0:
+            loop while corner < the length of triangleCorners:
+                if (the cad dot of (the item at (the item at corner in triangleCorners) in normals) and towardSun) > 0.0:
                     loop vertex from 0 to 3:
-                        set point to the item at (the item at (corner + vertex) in corners) in points
+                        set point to the item at (the item at (corner + vertex) in triangleCorners) in points
                         set drop to (point's z - groundLevel) / towardSun's z
                         set shadowX to point's x - (towardSun's x * drop)
                         set shadowY to point's y - (towardSun's y * drop)
@@ -525,69 +529,279 @@ function draw bim ground and shadows of {a pointer to a list:meshes} toward {cad
             free cast
             return nothing
         set margin to 0.5 * (the maximum of (highX - lowX) and (highY - lowY))
-        set southWest to the bim view pixel of (a cad vector3 with x (lowX - margin), y (lowY - margin) and z groundLevel) in layout with camera
-        set southEast to the bim view pixel of (a cad vector3 with x (highX + margin), y (lowY - margin) and z groundLevel) in layout with camera
-        set northEast to the bim view pixel of (a cad vector3 with x (highX + margin), y (highY + margin) and z groundLevel) in layout with camera
-        set northWest to the bim view pixel of (a cad vector3 with x (lowX - margin), y (highY + margin) and z groundLevel) in layout with camera
-        set groundColour to the bim packed colour 234, 236 and 228
-        set shadowColour to the bim packed colour 192, 196 and 188
-        record bim triangle southWest, southEast and northEast within the view of layout coloured groundColour on recording
-        record bim triangle southWest, northEast and northWest within the view of layout coloured groundColour on recording
+        set southWest to a cad vector3 with x (lowX - margin), y (lowY - margin) and z groundLevel
+        set southEast to a cad vector3 with x (highX + margin), y (lowY - margin) and z groundLevel
+        set northEast to a cad vector3 with x (highX + margin), y (highY + margin) and z groundLevel
+        set northWest to a cad vector3 with x (lowX - margin), y (highY + margin) and z groundLevel
+        set groundColour to a cad vector3 with x 234.0, y 236.0 and z 228.0
+        set shadowColour to a cad vector3 with x 192.0, y 196.0 and z 188.0
+        append southWest to corners
+        append southEast to corners
+        append northEast to corners
+        append groundColour to colours
+        append southWest to corners
+        append northEast to corners
+        append northWest to corners
+        append groundColour to colours
+        # Each shadow turned to face up, so that culling back faces keeps it.
         set cursor to 0
-        loop while cursor < the length of cast:
-            set first to the bim view pixel of (the item at cursor in cast) in layout with camera
-            set second to the bim view pixel of (the item at (cursor + 1) in cast) in layout with camera
-            set third to the bim view pixel of (the item at (cursor + 2) in cast) in layout with camera
-            record bim triangle first, second and third within the view of layout coloured shadowColour on recording
+        loop while (cursor + 2) < the length of cast:
+            set first to the item at cursor in cast
+            set second to the item at (cursor + 1) in cast
+            set third to the item at (cursor + 2) in cast
+            set turn to ((second's x - first's x) * (third's y - first's y)) - ((second's y - first's y) * (third's x - first's x))
+            append first to corners
+            if turn >= 0.0:
+                append second to corners
+                append third to corners
+            else:
+                append third to corners
+                append second to corners
+            append shadowColour to colours
             set cursor to cursor + 3
         free cast
 
 # The selected opening outlined, and the selected space's floor filled, in
 # the 3D view.
-# The scene's feature edges in the 3D panel, as thin lines; when
-# `depthTested`, at the depth the mesh has there (a hair nearer), so the mesh
-# hides the edges behind it.
-function draw bim edges of {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} hidden {boolean:depthTested} in {graphics frame:frame}:
+# ---------------------------------------------------------------- view cube
+
+# The view cube at the 3D panel's top right turns with the camera. Each face
+# is split three by three: its middle looks from that side, its border
+# strips from the edge between two sides, its corner squares from the corner
+# of three, 26 directions in all. Plan north is +y, east +x.
+class:
+    patterns:
+        [a|] bim view cube hit record
+    members:
+        found as a boolean
+        # From the model toward the camera, each part -1, 0 or 1.
+        direction as a cad vector3
+
+function the bim view cube half size:
+    replacement:
+        34.0
+
+# Where a face's split lies, from its middle (0) to its edge (1).
+function the bim view cube border:
+    replacement:
+        0.6
+
+function the bim view cube middle in {bim screen layout record:layout}:
     execute:
-        set segments to scene's edges's values
-        if (the length of segments) = 0:
-            return nothing
+        return a cad vector2 with x (layout's width - 78.0) and y (layout's top + 82.0)
+
+# The world axis `axisIndex` (0 x, 1 y, 2 z) as a vector of length `length`.
+local function the bim cube axis {integer:axisIndex} sized {a 64 bit floating-point number:length}:
+    execute:
+        if axisIndex = 0:
+            return a cad vector3 with x length, y 0.0 and z 0.0
+        if axisIndex = 1:
+            return a cad vector3 with x 0.0, y length and z 0.0
+        return a cad vector3 with x 0.0, y 0.0 and z length
+
+# A direction of the cube on screen, in pixels from the cube's middle.
+local function the bim cube offset of {cad vector3:direction} through {bim view axes record:axes}:
+    execute:
+        set halfSize to the bim view cube half size
+        return a cad vector2 with x ((the cad dot of direction and axes's across) * halfSize) and y (0.0 - ((the cad dot of direction and axes's up) * halfSize))
+
+# The face of the cube on axis `axisIndex` toward `sign` (1 or -1): its name.
+local function the bim cube face name {integer:axisIndex} toward {a 64 bit floating-point number:sign}:
+    execute:
+        if axisIndex = 0:
+            if sign > 0.0:
+                return the string form of "EAST"
+            return the string form of "WEST"
+        if axisIndex = 1:
+            if sign > 0.0:
+                return the string form of "NORTH"
+            return the string form of "SOUTH"
+        if sign > 0.0:
+            return the string form of "TOP"
+        return the string form of "BOTTOM"
+
+# The direction the cube offers under `pixel`, seen with `camera`.
+function the bim view cube hit at {cad vector2:pixel} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
         set axes to the bim view axes of camera
-        set middle to the bim view middle of layout
-        set viewScale to camera's viewScale
-        set depthFactor to 16.0 / scene's radius
-        if depthTested:
-            enable depth testing in frame
+        set middle to the bim view cube middle in layout
+        set none to @intrinsic("construct", a bim view cube hit record, false, (a cad vector3 with x 0.0, y 0.0 and z 0.0))
+        set reach to (the bim view cube half size) * 1.8
+        if (the cad distance from pixel to middle) > reach:
+            return none
+        set wanted to a cad vector2 with x (pixel's x - middle's x) and y (pixel's y - middle's y)
+        loop axisIndex from 0 to 3:
+            loop side from 0 to 2:
+                set sign to 1.0
+                if side = 1:
+                    set sign to -1.0
+                set normal to the bim cube axis axisIndex sized sign
+                # Only faces turned toward the viewer can be hit; they do not
+                # overlap on screen.
+                if (the cad dot of normal and axes's depth) < -0.02:
+                    set acrossAxis to the bim cube axis (the remainder of (axisIndex + 1) divided by 3) sized 1.0
+                    set alongAxis to the bim cube axis (the remainder of (axisIndex + 2) divided by 3) sized 1.0
+                    set centre to the bim cube offset of normal through axes
+                    set u to the bim cube offset of acrossAxis through axes
+                    set v to the bim cube offset of alongAxis through axes
+                    set determinant to (u's x * v's y) - (u's y * v's x)
+                    if (the absolute value of determinant) > 1e-9:
+                        set rx to wanted's x - centre's x
+                        set ry to wanted's y - centre's y
+                        set s to ((rx * v's y) - (ry * v's x)) / determinant
+                        set t to ((u's x * ry) - (u's y * rx)) / determinant
+                        if ((s >= -1.0) and (s <= 1.0)) and ((t >= -1.0) and (t <= 1.0)):
+                            set direction to normal
+                            if s > (the bim view cube border):
+                                set direction to the cad sum of direction and acrossAxis
+                            if s < (0.0 - (the bim view cube border)):
+                                set direction to the cad difference of direction and acrossAxis
+                            if t > (the bim view cube border):
+                                set direction to the cad sum of direction and alongAxis
+                            if t < (0.0 - (the bim view cube border)):
+                                set direction to the cad difference of direction and alongAxis
+                            return @intrinsic("construct", a bim view cube hit record, true, direction)
+        return none
+
+# The camera turned to look from `direction` (toward the camera) at its
+# target, its pitch held within what orbiting allows; looking straight down
+# or up keeps the camera's turn.
+function the bim camera {bim camera record:current} looking from {cad vector3:direction}:
+    execute:
+        set magnitude to the cad length of direction
+        if magnitude < 1e-12:
+            return current
+        set unit to direction scaled by (1.0 / magnitude)
+        set turned to current
+        set turned's pitch to (@intrinsic("call", "libc", "asin", a 64 bit floating-point number, unit's z)) clamped between -1.5 and 1.5
+        if ((unit's x * unit's x) + (unit's y * unit's y)) > 1e-12:
+            set turned's yaw to @intrinsic("atan2", 0.0 - unit's x, 0.0 - unit's y)
+        return turned
+
+# Draws the view cube: the faces turned toward the viewer, each split three
+# by three, the part under `pixel` lit, with the side's name in its middle.
+function draw bim view cube in {bim screen layout record:layout} with {bim camera record:camera} at {cad vector2:pixel} using {bim text atlas record:typeface} in {graphics frame:frame}:
+    execute:
+        set axes to the bim view axes of camera
+        set middle to the bim view cube middle in layout
+        set hover to the bim view cube hit at pixel in layout with camera
+        set border to the bim view cube border
+        set cuts to an empty list of a 64 bit floating-point number
+        append -1.0 to cuts
+        append (0.0 - border) to cuts
+        append border to cuts
+        append 1.0 to cuts
         start triangles in frame
-        if depthTested:
-            use vertex color red 28, green 32 and blue 40 in frame
-        else:
-            use vertex color red 40, green 70 and blue 120 in frame
-        set cursor to 0
-        loop while (cursor + 1) < the length of segments:
-            set here to the cad difference of (the item at cursor in segments) and axes's centre
-            set there to the cad difference of (the item at (cursor + 1) in segments) and axes's centre
-            set cursor to cursor + 2
-            set hx to middle's x + ((the cad dot of here and axes's across) * viewScale)
-            set hy to middle's y - ((the cad dot of here and axes's up) * viewScale)
-            set tx to middle's x + ((the cad dot of there and axes's across) * viewScale)
-            set ty to middle's y - ((the cad dot of there and axes's up) * viewScale)
-            set inside to (((the minimum of hx and tx) > layout's planRight) and ((the maximum of hx and tx) < layout's width)) and (((the minimum of hy and ty) > layout's top) and ((the maximum of hy and ty) < layout's bottom))
-            set span to the square root of (((tx - hx) * (tx - hx)) + ((ty - hy) * (ty - hy)))
-            if inside and (span > 0.5):
-                set hz to 0.012 - ((the cad dot of here and axes's depth) * depthFactor)
-                set tz to 0.012 - ((the cad dot of there and axes's depth) * depthFactor)
-                set nx to (0.0 - (ty - hy)) * (0.6 / span)
-                set ny to (tx - hx) * (0.6 / span)
-                add a vertex at x (hx + nx), y (hy + ny) and z hz to frame
-                add a vertex at x (tx + nx), y (ty + ny) and z tz to frame
-                add a vertex at x (tx - nx), y (ty - ny) and z tz to frame
-                add a vertex at x (hx + nx), y (hy + ny) and z hz to frame
-                add a vertex at x (tx - nx), y (ty - ny) and z tz to frame
-                add a vertex at x (hx - nx), y (hy - ny) and z hz to frame
+        loop axisIndex from 0 to 3:
+            loop side from 0 to 2:
+                set sign to 1.0
+                if side = 1:
+                    set sign to -1.0
+                set normal to the bim cube axis axisIndex sized sign
+                set facing to 0.0 - (the cad dot of normal and axes's depth)
+                if facing > 0.02:
+                    set acrossAxis to the bim cube axis (the remainder of (axisIndex + 1) divided by 3) sized 1.0
+                    set alongAxis to the bim cube axis (the remainder of (axisIndex + 2) divided by 3) sized 1.0
+                    set centre to the bim cube offset of normal through axes
+                    set u to the bim cube offset of acrossAxis through axes
+                    set v to the bim cube offset of alongAxis through axes
+                    loop i from 0 to 3:
+                        loop j from 0 to 3:
+                            # This part's direction, to light it under the pointer.
+                            set direction to normal
+                            if i = 0:
+                                set direction to the cad difference of direction and acrossAxis
+                            if i = 2:
+                                set direction to the cad sum of direction and acrossAxis
+                            if j = 0:
+                                set direction to the cad difference of direction and alongAxis
+                            if j = 2:
+                                set direction to the cad sum of direction and alongAxis
+                            # Lighter toward the viewer, so the cube reads as solid.
+                            set shade to 200.0 + (40.0 * facing)
+                            set red to shade
+                            set green to shade + 4.0
+                            set blue to shade + 12.0
+                            if (i != 1) or (j != 1):
+                                set red to red - 14.0
+                                set green to green - 14.0
+                                set blue to blue - 10.0
+                            if hover's found and ((the cad distance from hover's direction to direction) < 1e-9):
+                                set red to 120.0
+                                set green to 170.0
+                                set blue to 235.0
+                            use vertex color red ((the minimum of 255.0 and red) as an integer), green ((the minimum of 255.0 and green) as an integer) and blue ((the minimum of 255.0 and blue) as an integer) in frame
+                            set s0 to the item at i in cuts
+                            set s1 to the item at (i + 1) in cuts
+                            set t0 to the item at j in cuts
+                            set t1 to the item at (j + 1) in cuts
+                            set cornerA to a cad vector2 with x ((middle's x + centre's x) + ((u's x * s0) + (v's x * t0))) and y ((middle's y + centre's y) + ((u's y * s0) + (v's y * t0)))
+                            set cornerB to a cad vector2 with x ((middle's x + centre's x) + ((u's x * s1) + (v's x * t0))) and y ((middle's y + centre's y) + ((u's y * s1) + (v's y * t0)))
+                            set cornerC to a cad vector2 with x ((middle's x + centre's x) + ((u's x * s1) + (v's x * t1))) and y ((middle's y + centre's y) + ((u's y * s1) + (v's y * t1)))
+                            set cornerD to a cad vector2 with x ((middle's x + centre's x) + ((u's x * s0) + (v's x * t1))) and y ((middle's y + centre's y) + ((u's y * s0) + (v's y * t1)))
+                            add a vertex at x cornerA's x and y cornerA's y to frame
+                            add a vertex at x cornerB's x and y cornerB's y to frame
+                            add a vertex at x cornerC's x and y cornerC's y to frame
+                            add a vertex at x cornerA's x and y cornerA's y to frame
+                            add a vertex at x cornerC's x and y cornerC's y to frame
+                            add a vertex at x cornerD's x and y cornerD's y to frame
+                    # The face's outline.
+                    use vertex color red 90, green 100 and blue 118 in frame
+                    loop corner from 0 to 4:
+                        set cs to 1.0
+                        set ct to 1.0
+                        if (corner = 1) or (corner = 2):
+                            set cs to -1.0
+                        if corner >= 2:
+                            set ct to -1.0
+                        set ns to 1.0
+                        set nt to 1.0
+                        if (corner = 0) or (corner = 1):
+                            set ns to -1.0
+                        if (corner = 1) or (corner = 2):
+                            set nt to -1.0
+                        set edgeStart to a cad vector2 with x ((middle's x + centre's x) + ((u's x * cs) + (v's x * ct))) and y ((middle's y + centre's y) + ((u's y * cs) + (v's y * ct)))
+                        set edgeEnd to a cad vector2 with x ((middle's x + centre's x) + ((u's x * ns) + (v's x * nt))) and y ((middle's y + centre's y) + ((u's y * ns) + (v's y * nt)))
+                        add bim stroke from edgeStart to edgeEnd wide 1.0 in frame
         finish triangles in frame
-        if depthTested:
-            disable depth testing in frame
+        # The names of the faces seen well enough to read.
+        loop axisIndex from 0 to 3:
+            loop side from 0 to 2:
+                set sign to 1.0
+                if side = 1:
+                    set sign to -1.0
+                set normal to the bim cube axis axisIndex sized sign
+                if (0.0 - (the cad dot of normal and axes's depth)) > 0.35:
+                    set faceName to the bim cube face name axisIndex toward sign
+                    set centre to the bim cube offset of normal through axes
+                    set nameWidth to the bim text width of faceName in typeface
+                    draw bim label faceName at ((middle's x + centre's x) - (nameWidth * 0.5)) and ((middle's y + centre's y) + 4.0) using typeface in frame
+        free cuts
+
+# The GPU scene in the 3D panel, through the camera set for it: its ground
+# and shadows when the camera looks down on them, then its faces, except in
+# a wireframe.
+function draw bim model of {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} mode {integer:viewMode} on {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set panelWidth to layout's width - layout's planRight
+        set panelHeight to layout's bottom - layout's top
+        if (camera's pitch > 0.05) and (scene's groundIndexCount > 0):
+            draw gpu mesh indices from 0 counting scene's groundIndexCount within layout's planRight, layout's top, panelWidth and panelHeight in context
+        if viewMode != bim wireframe view mode:
+            draw gpu mesh indices from scene's groundIndexCount counting (scene's indexCount - scene's groundIndexCount) within layout's planRight, layout's top, panelWidth and panelHeight in context
+
+# The GPU scene's feature edges in the 3D panel, as thin lines drawn from
+# the GPU's copy, through the camera the mesh is drawn with; when `hidden`,
+# only where the faces drawn before them leave them in view.
+function draw bim edges in {bim screen layout record:layout} hidden {boolean:hidden} on {pointer:window}:
+    execute:
+        set panelWidth to layout's width - layout's planRight
+        set panelHeight to layout's bottom - layout's top
+        if hidden:
+            draw gpu mesh edges within layout's planRight, layout's top, panelWidth and panelHeight coloured 28, 32 and 40 hidden true in (the gpu context of window)
+        else:
+            draw gpu mesh edges within layout's planRight, layout's top, panelWidth and panelHeight coloured 40, 70 and 120 hidden false in (the gpu context of window)
 
 # The grid lines in the 3D panel: dash-dot, depth tested against the model
 # as the edges are, so that a grid line passes behind the elements in front

@@ -43,7 +43,7 @@ and the measurements.
 From the repository root:
 
 ```sh
-for pair in screen_vertex:vertex canvas_vertex:vertex flat_fragment:fragment text_fragment:fragment mesh_vertex:vertex mesh_fragment:fragment; do
+for pair in screen_vertex:vertex canvas_vertex:vertex flat_fragment:fragment text_fragment:fragment mesh_vertex:vertex mesh_fragment:fragment edge_fragment:fragment; do
   ./build/dynlex lib/vulkan/shaders/${pair%%:*}.dl --emit-spirv --shader-stage=${pair##*:} -o build/shaders/${pair%%:*}.spv
 done
 ./build/dynlex examples/bim-slice/main.dl -O2 -o build/bim-slice
@@ -61,7 +61,10 @@ When `$BIM_SLICE_HOME` is set, it loads `$BIM_SLICE_HOME/fonts` and
 and GLFW directly, with no C graphics runtime.
 - The 3D view is a persistent GPU mesh. Each element's distinct corners are
   stored once, and the camera, the lighting and the highlight of the selection
-  are shader parameters.
+  are shader parameters. Its feature edges (Hidden and Wire) are a second
+  index list of lines between the same vertices, drawn through the same
+  camera; the faces are pushed back by a depth bias so that the edges on them
+  stay in front.
 - The recorded plan is a persistent GPU buffer, drawn shifted while it is
   panned.
 - Everything else streams through one buffer that grows as needed. `./build/bim-slice --generate 500000` builds an imaginary tower of at least that many walls (99 storeys of 50 x 50 rooms, with facade windows and a slab per storey) for testing at scale; `./build/bim-slice --example` opens an
@@ -70,18 +73,17 @@ for instance 500000 500000.
 
 ### Importing IFC
 
-IFC is imported in two steps for now: IfcOpenShell triangulates the file, and the
-editor opens the result as read-only elements in their categories (3D view only;
-not yet cut in the plan or section):
+`--import model.ifc` (or Collaborate > Import > IFC) reads IFC directly
+(`bim_ifc_read.dl`) as read-only elements in their categories, shown in the 3D
+view only (not yet cut in the plan or section). Each element is drawn in the
+surface colours styled onto its items, one mesh per colour, and belongs to
+the storey that contains it. `--import model.bimmesh` opens a file converted
+by `import/ifc_to_mesh.py` through IfcOpenShell; `--import a.ifcx b.ifcx`
+composes IfcX layers.
 
-```sh
-python3 examples/bim-slice/import/ifc_to_mesh.py model.ifc model.bimmesh
-./build/bim-slice --import model.bimmesh
-```
-
-`ifc_to_mesh.py` needs `ifcopenshell` (0.9 was used). The 3D view streams at most
-1,050,000 vertices per frame, leaves out faces turned away from the viewer, and
-casts shadows for models of up to 150,000 triangles.
+The 3D view keeps the model, its feature edges and, for models of up to
+150,000 triangles, the ground with the shadows on it on the GPU; moving the
+camera only sets the shaders' parameters.
 
 ### Installer
 
@@ -122,7 +124,9 @@ installer again replaces it; `~/.local/share/bim-slice/uninstall` removes it.
 | B | Add a 0.25 m slab under the selected space, following its outline |
 | I | Grid tool: click the start and the end; grids running north-south are numbered 1, 2, 3..., the others lettered A, B, C... Grids show in the plan with heads at both ends, in the section where it crosses them, and in 3D as outlined planes; they export as `IfcGrid` |
 | L | Visibility panel: per category, check boxes for visibility in the plan, the section and the 3D view, and halftone in the plan. The rules are saved with the model |
-| Page Up / Page Down | Make the storey above or below active; Page Up on the top storey adds a storey on it. The plan cuts the active storey and outlines the walls of the storey below |
+| Page Up / Page Down | Make the storey above or below active; Page Up on the top storey adds a storey on it. The plan cuts the active storey and outlines the walls of the storey below. Over the 3D view with a storey isolated: isolate the storey above or below |
+| View > Isolate storey | Show in the 3D view only what belongs to one storey: native elements by their level, imported ones by the storey that contains them (IFC and IfcX). It starts at the active level; again shows all |
+| View cube (3D view, top right) | Turns with the camera; a click on a face's middle looks from that side, on a border strip from that edge, on a corner square from that corner |
 | S | Select tool: drag a wall end, and the walls that share it follow; or drag a wall by its body, and the ends of the walls joined to it (at its ends and in T joins) follow; drag a selected wall's orange middle handle to bend it into an arc (at most a half circle; back onto the chord to straighten it) |
 | Delete | Delete the selected wall, opening or slab, or else the wall under the pointer; a wall goes with its openings |
 | Z / Y | Undo / redo |

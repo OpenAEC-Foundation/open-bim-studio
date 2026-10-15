@@ -3,7 +3,8 @@
 # read as layers, flattened and composed as the buildingSMART IFC5 reference
 # implementation does, and every composed mesh becomes a read-only imported
 # element (as `bim_import.dl` makes them), placed by the `usd::xformop`
-# transforms along its path and coloured by its `diffuseColor`.
+# transforms along its path, coloured by its `diffuseColor` and contained in
+# the `IfcBuildingStorey` it lies under.
 #
 # - Flattening: the nodes of every layer, in order, merge by path; a later
 #   child, inheritance or attribute of the same name wins, and a null child
@@ -388,9 +389,10 @@ class:
         high as a cad vector3
         problem as a string
         curves as the type of (a cad topology list of a cad vector3)
+        storeys as a bim import storeys record
 
 # Adds the mesh `mesh` (a `usd::usdgeom::mesh` value) placed by `matrix`.
-local function gather bim ifcx mesh {a pointer to a JSON value:meshValue} placed by {a pointer to a list:matrix} as {integer:category} coloured {cad vector3:colour} labelled {a string:label} into {a pointer to a bim ifcx gathering record:gathering}:
+local function gather bim ifcx mesh {a pointer to a JSON value:meshValue} placed by {a pointer to a list:matrix} as {integer:category} coloured {cad vector3:colour} in storey {integer:storeyIndex} labelled {a string:label} into {a pointer to a bim ifcx gathering record:gathering}:
     execute:
         if (bim ifcx json meshValue has kind the JSON object kind) = false:
             return nothing
@@ -443,10 +445,13 @@ local function gather bim ifcx mesh {a pointer to a JSON value:meshValue} placed
         set elementId to (the bim imported id base) + ((the length of (gathering's meshes's values)) as a 64 bit integer)
         append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, shape, category, colour)) to (gathering's meshes's values)
         append label to (gathering's labels's values)
+        append storeyIndex to (gathering's storeys's ofElements's values)
 
 # Walks the composed node `reference` at instance path `instancePath` under
-# a parent placed by `parentMatrix`, gathering every mesh below it.
-local function walk bim ifcx {a string:reference} at {a string:instancePath} under {a pointer to a list:parentMatrix} owned by {a string:ownerLabel} as {integer:ownerCategory} coloured {cad vector3:ownerColour} in {a pointer to a bim ifcx layers record:layers} into {a pointer to a bim ifcx gathering record:gathering} at depth {integer:depth}:
+# a parent placed by `parentMatrix`, gathering every mesh below it; each in
+# the storey (an IfcBuildingStorey node) it lies under, `ownerStorey` when no
+# storey lies between.
+local function walk bim ifcx {a string:reference} at {a string:instancePath} under {a pointer to a list:parentMatrix} owned by {a string:ownerLabel} as {integer:ownerCategory} coloured {cad vector3:ownerColour} in storey {integer:ownerStorey} in {a pointer to a bim ifcx layers record:layers} into {a pointer to a bim ifcx gathering record:gathering} at depth {integer:depth}:
     execute:
         if depth > 64:
             set gathering's problem to the string form of "the composition is deeper than 64 levels"
@@ -469,6 +474,7 @@ local function walk bim ifcx {a string:reference} at {a string:instancePath} und
         set ownLabel to ownerLabel
         set ownCategory to ownerCategory
         set ownColour to ownerColour
+        set ownStorey to ownerStorey
         set classValue to the bim ifcx attribute (the string form of "bsi::ifc::class") of node
         set classified to false
         if bim ifcx json classValue has kind the JSON object kind:
@@ -481,6 +487,14 @@ local function walk bim ifcx {a string:reference} at {a string:instancePath} und
                 set nameValue to the bim ifcx attribute (the string form of "bsi::ifc::prop::Name") of node
                 if bim ifcx json nameValue has kind the JSON text kind:
                     set ownLabel to ((the text of code) + (the string form of " ")) + (the text of nameValue)
+                # A storey at the height its placement puts it.
+                if (the text of code) = (the string form of "IfcBuildingStorey"):
+                    set ownStorey to the length of (gathering's storeys's names's values)
+                    set storeyName to instancePath
+                    if bim ifcx json nameValue has kind the JSON text kind:
+                        set storeyName to the text of nameValue
+                    append storeyName to (gathering's storeys's names's values)
+                    append (the item at 14 in matrix) to (gathering's storeys's elevations's values)
         set colourValue to the bim ifcx attribute (the string form of "bsi::ifc::presentation::diffuseColor") of node
         set hasColour to false
         if bim ifcx json colourValue has kind the JSON array kind:
@@ -505,11 +519,11 @@ local function walk bim ifcx {a string:reference} at {a string:instancePath} und
                             append (a cad vector3 with x px, y py and z pz) to (gathering's curves's values)
         set meshValue to the bim ifcx attribute (the string form of "usd::usdgeom::mesh") of node
         if meshValue != (0 as a pointer to a JSON value):
-            gather bim ifcx mesh meshValue placed by matrix as ownCategory coloured ownColour labelled ownLabel into gathering
+            gather bim ifcx mesh meshValue placed by matrix as ownCategory coloured ownColour in storey ownStorey labelled ownLabel into gathering
         loop cursor from 0 to the length of (node's children's values):
             set child to the item at cursor in (node's children's values)
             if (the length of child's target) > 0:
-                walk bim ifcx child's target at ((instancePath + (the string form of "/")) + child's name) under matrix owned by ownLabel as ownCategory coloured ownColour in layers into gathering at depth (depth + 1)
+                walk bim ifcx child's target at ((instancePath + (the string form of "/")) + child's name) under matrix owned by ownLabel as ownCategory coloured ownColour in storey ownStorey in layers into gathering at depth (depth + 1)
         free matrix
 
 # The elements of the IfcX files at `paths`, read as layers in order, or a
@@ -553,7 +567,7 @@ function the bim ifcx import of files {a pointer to a list:paths}:
                 if position >= 0:
                     replace item at index position in referenced with true
         set infinity to 1.0 / 0.0
-        set gatheringValue to @intrinsic("construct", a bim ifcx gathering record, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, (a cad vector3 with x infinity, y infinity and z infinity), (a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)), the string form of "", a cad topology list of a cad vector3)
+        set gatheringValue to @intrinsic("construct", a bim ifcx gathering record, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, (a cad vector3 with x infinity, y infinity and z infinity), (a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)), the string form of "", a cad topology list of a cad vector3, no bim import storeys)
         set gathering to the address of gatheringValue
         set identity to an empty list of a 64 bit floating-point number
         loop cursor from 0 to 16:
@@ -564,7 +578,7 @@ function the bim ifcx import of files {a pointer to a list:paths}:
         loop cursor from 0 to the length of (layers's nodes's values):
             if (the item at cursor in referenced) = false:
                 set rootPath to (the item at cursor in (layers's nodes's values))'s path
-                walk bim ifcx rootPath at rootPath under identity owned by (the string form of "IfcX ") + rootPath as bim other category coloured (the bim category colouring) in layers into gathering at depth 0
+                walk bim ifcx rootPath at rootPath under identity owned by (the string form of "IfcX ") + rootPath as bim other category coloured (the bim category colouring) in storey -1 in layers into gathering at depth 0
         free identity
         free referenced
         loop cursor from 0 to the length of documents:
@@ -572,12 +586,12 @@ function the bim ifcx import of files {a pointer to a list:paths}:
         free documents
         if (the length of gatheringValue's problem) > 0:
             return a bim ifcx refusal saying gatheringValue's problem
-        return @intrinsic("construct", a bim import record, true, the string form of "", gatheringValue's meshes, gatheringValue's labels, gatheringValue's triangleCount, gatheringValue's low, gatheringValue's high, gatheringValue's curves)
+        return @intrinsic("construct", a bim import record, true, the string form of "", gatheringValue's meshes, gatheringValue's labels, gatheringValue's triangleCount, gatheringValue's low, gatheringValue's high, gatheringValue's curves, gatheringValue's storeys)
 
 local function a bim ifcx refusal saying {a string:reason}:
     execute:
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
-        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3)
+        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys)
 
 # The elements of the one IfcX file at `path`.
 function the bim ifcx import of file {a string:path}:

@@ -1786,7 +1786,6 @@ function draw bim folded components in plan of {bim editor record:editor} among 
         set cutHeight to (the bim storey elevation of editor) + (the bim plan cut height of editor)
         set cutLines to an empty list of a cad vector2
         set belowLines to an empty list of a cad vector2
-        set comparator to the function named "bim gpu corner ordering $ and $"
         loop cursor from 0 to the length of sceneMeshes:
             set entry to the item at cursor in sceneMeshes
             set placementFound to the bim instance index of entry's elementId in modelValue
@@ -1814,30 +1813,8 @@ function draw bim folded components in plan of {bim editor record:editor} among 
                         append (the bim pixel of (the item at 1 in crossings) through transform) to cutLines
                     free crossings
                     set triangle to triangle + 3
-                # The feature edges, between corners welded by position.
-                set corners to an empty list of a bim gpu corner record
-                loop point from 0 to the length of points:
-                    set spot to the item at point in points
-                    append (@intrinsic("construct", a bim gpu corner record, spot's x, spot's y, spot's z, point)) to corners
-                sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
-                set remap to an empty list of an integer
-                loop point from 0 to the length of corners:
-                    append 0 to remap
-                set welded to an empty list of a cad vector3
-                loop point from 0 to the length of corners:
-                    set here to the item at point in corners
-                    set fresh to true
-                    if point > 0:
-                        set before to the item at (point - 1) in corners
-                        set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
-                    if fresh:
-                        append (a cad vector3 with x here's x, y here's y and z here's z) to welded
-                    replace item at index here's index in remap with ((the length of welded) - 1)
-                set weldedCorners to an empty list of an integer
-                loop corner from 0 to the length of triangleCorners:
-                    append (the item at (the item at corner in triangleCorners) in remap) to weldedCorners
                 set features to an empty list of a cad vector3
-                append bim feature edges of welded and weldedCorners to features
+                append bim feature edges of entry's shape to features
                 set featureCursor to 0
                 loop while (featureCursor + 1) < the length of features:
                     set from to the item at featureCursor in features
@@ -1851,10 +1828,6 @@ function draw bim folded components in plan of {bim editor record:editor} among 
                         append (the bim pixel of (a cad vector2 with x onto's x and y onto's y) through transform) to belowLines
                     set featureCursor to featureCursor + 2
                 free features
-                free weldedCorners
-                free welded
-                free remap
-                free corners
         record bim strokes belowLines coloured 80, 80 and 80 wide 0.7 on canvas
         record bim strokes cutLines coloured 0, 0 and 0 wide 1.4 on canvas
         free belowLines
@@ -2342,10 +2315,66 @@ function record bim triangle {cad vector3:first}, {cad vector3:second} and {cad 
             record bim depth triangle anchor, middle and last coloured packed on recording
         free outline
 
-# Appends to `edges` the feature edges of one element's welded corners
-# `points` and triangles `corners`: an edge used by one triangle, or between
-# two whose faces turn by more than 15 degrees.
-function append bim feature edges of {a pointer to a list:points} and {a pointer to a list:corners} to {a pointer to a list:edges}:
+# A mesh's points welded by position: `spots` its distinct positions,
+# `remap` for each point the spot it lies on, and `corners` its triangles'
+# corners as spots.
+class:
+    patterns:
+        [a|] bim welding record
+    members:
+        spots as the type of (an empty list of a cad vector3)
+        remap as the type of (an empty list of an integer)
+        corners as the type of (an empty list of an integer)
+
+function the bim welding of {fast mesh record:shape}:
+    execute:
+        set points to shape's positions's values
+        set sorted to an empty list of a bim gpu corner record
+        loop point from 0 to the length of points:
+            set spot to the item at point in points
+            append (@intrinsic("construct", a bim gpu corner record, spot's x, spot's y, spot's z, point)) to sorted
+        set comparator to the function named "bim gpu corner ordering $ and $"
+        sort native array at ((the data of sorted) as a pointer) with ((the length of sorted) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
+        set remapped to an empty list of an integer
+        loop point from 0 to the length of sorted:
+            append 0 to remapped
+        set distinctSpots to an empty list of a cad vector3
+        loop point from 0 to the length of sorted:
+            set here to the item at point in sorted
+            set fresh to true
+            if point > 0:
+                set before to the item at (point - 1) in sorted
+                set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
+            if fresh:
+                append (a cad vector3 with x here's x, y here's y and z here's z) to distinctSpots
+            replace item at index here's index in remapped with ((the length of distinctSpots) - 1)
+        free sorted
+        set spotCorners to an empty list of an integer
+        loop corner from 0 to the length of (shape's triangles's values):
+            append (the item at (the item at corner in (shape's triangles's values)) in remapped) to spotCorners
+        return @intrinsic("construct", a bim welding record, distinctSpots, remapped, spotCorners)
+
+function free bim welding {a pointer to a bim welding record:welded}:
+    execute:
+        free (welded's spots)
+        free (welded's remap)
+        free (welded's corners)
+
+# Appends to `edges` the feature edges of `shape`, as pairs of points.
+function append bim feature edges of {fast mesh record:shape} to {a pointer to a list:edges}:
+    execute:
+        set welds to the bim welding of shape
+        set pairs to an empty list of an integer
+        append bim feature edge pairs of (welds's spots) and (welds's corners) to pairs
+        loop cursor from 0 to the length of pairs:
+            append (the item at (the item at cursor in pairs) in (welds's spots)) to edges
+        free pairs
+        free bim welding (the address of welds)
+
+# Appends to `pairs` the feature edges of one element's welded corners
+# `points` and triangles `corners`, as pairs of corner numbers: an edge used
+# by one triangle, or between two whose faces turn by more than 15 degrees.
+function append bim feature edge pairs of {a pointer to a list:points} and {a pointer to a list:corners} to {a pointer to a list:pairs}:
     execute:
         set records to an empty list of a bim gpu edge record
         set normals to an empty list of a cad vector3
@@ -2384,8 +2413,8 @@ function append bim feature edges of {a pointer to a list:points} and {a pointer
                 set other to the item at (cursor + 1) in records
                 set keep to (the cad dot of (the item at here's triangle in normals) and (the item at other's triangle in normals)) < 0.966
             if keep:
-                append (the item at here's first in points) to edges
-                append (the item at here's second in points) to edges
+                append here's first to pairs
+                append here's second to pairs
             set cursor to groupEnd
         free records
         free normals

@@ -420,3 +420,82 @@ wall, which is O(openings) per examined wall.
 - **Memory.** A second Claude session compiling in its own clone, plus two compiles
   here, got one of them killed for memory. With another session active, compiles run
   one at a time.
+
+## A real building, its colours, and a 3D view that the camera does not rebuild (2026-10-15)
+
+**Model.** Sixty5, Strijp-S, Eindhoven: a residential building completed in 2020,
+published as IFC2x3 per discipline under CC BY 4.0 in the buildingSMART community
+sample files
+([source](https://github.com/buildingsmart-community/Community-Sample-Test-Files/tree/main/IFC%202.3.0.1%20(IFC%202x3)/SDK%20-%20S1),
+mirrored per file at
+[huggingface.co/datasets/sylvainHellin/ifc-bench](https://huggingface.co/datasets/sylvainHellin/ifc-bench/tree/main/projects/sixty5)).
+The architecture file is 342,657,851 bytes. *Measured* with IfcOpenShell 0.9.0: 19
+storeys; one typical storey (`02 tweede verdieping`) holds 1,320 elements, among them
+527 walls, 95 doors, 67 windows and 66 furnishing elements. Not added to
+`reference/`: the benchmark set there is fixed, and this note does not change it.
+
+**Import.** *Measured* on the hardware above, through the 3D view's import message,
+two runs each, the DynLex STEP reader at `-O2`: 16,506 elements, 1,668,688
+triangles, 16.77 s and 16.77 s before this session's changes, 16.88 s and 16.97 s
+after (about 1% more, for the colour groups and the storey bookkeeping). Peak
+resident memory 1.41 GB (`/usr/bin/time -v`, before the changes). A profile of the
+import (60 stack samples) is 70% `the cad triangulation of`, before and after alike.
+
+**Colours per item.** Furnishing elements showed black: a kitchen block's items are
+styled black paint, red granite and pine, and the reader gave each element the first
+colour it met. It now draws each item in its own `IfcStyledItem` colour, else in the
+colour of the item it is part of (a mapped item, a boolean result), else in the
+category's, and an element becomes one scene mesh per colour, as a wall shown in
+layers already was. `tests/ifc_read.dl` covers an item set of three colours, a
+mapped item styled as a whole (with its cache kept per inherited colour) and a
+boolean styled as a whole.
+
+**A cut cap left out.** The same test exposed a fault older than these changes: a wall
+clipped by a half space at y = −8 m lost the cap on its cut (14 triangles and 133
+litres instead of 200); the identical wall at y = −5 m kept it. The cut's ring has a
+point where each side face's diagonal crossed the plane; at −8 m rounding left those
+points just off their neighbours' line, and the triangulation produced nothing. Such
+points are now dropped before triangulating (*measured*: all four variants closed at
+200 litres; the cap is 2 triangles instead of 6).
+
+**Zooming hitched.** *Measured* by sampling the editor's stack under `gdb` (SIGINT
+every 70 ms while scrolling the wheel in and out, 84 samples per run) on the storey
+above (130,944 triangles):
+- Before: 36% of samples in work the camera caused: the ground and shadows were
+  projected again on the CPU for every triangle at each camera change (models up to
+  150,000 triangles get shadows), and the recording was streamed to the GPU vertex by
+  vertex every frame.
+- With shadows switched off the same work was absent, which settled the cause.
+- After: the ground and shadows are triangles in the world, computed when the shown
+  meshes change and kept in the GPU mesh as its first indices (unlit, element ordinal
+  −2), drawn only when the camera looks down. 74 of 83 samples wait on the GPU or the
+  display; none is in the projection or the stream.
+
+**Edges.** *Measured* on the whole model in the wireframe mode, the status bar's frame
+time: 80 ms before, 21.5 ms after. The feature edges were projected and streamed on
+the CPU every frame; they are now a second index list of lines between the GPU mesh's
+own vertices, drawn through the same camera. The faces are pushed back by a depth bias
+(constant 2, slope 1.5) so that hidden-line edges lie in front of them. Welding by
+position and finding feature edges were written twice (the GPU upload and the plan's
+folded components); both now use one welding and one edge function.
+
+**Storeys.** Imported elements now carry the storey that contains them: IFC through
+`IfcRelContainedInSpatialStructure`, else the whole they are a part of
+(`IfcRelAggregates`), followed up to an `IfcBuildingStorey` at its placement's height;
+IfcX through the `IfcBuildingStorey` node above them. *Isolate storey* (View) keeps in
+the 3D view what belongs to one storey, native elements by their level and imported
+ones by their storey, matched by elevation; Page Up and Page Down over the 3D view step
+through the storeys. On Sixty5 it showed `00 begane grond` merged with the native
+`Ground floor` at 0, and stepped to `02 tweede verdieping`.
+
+**Smaller findings.**
+- `shaders/mesh_fragment.spv` was older than its source (changed 2026-10-12, binary
+  2026-10-09); rebuilt. The shaders build with the compiler that carries the shader
+  extensions (`~/dynlex-shader`, run from its checkout so that its `lib/shader.dl`
+  is found).
+- A view cube was added to the 3D view (26 directions).
+- DynLex: a local named like a word of a pattern called in its own assignment
+  (`set part to the bim ifc part in …`) leaves the call unresolved; `the bim ifc
+  part`, `size`, `length`, `a`, `from` all had to be renamed. Compiling
+  `tests/ifc_read.dl` at `-O0` takes 13 to 18 minutes and the application at `-O2` 51
+  minutes, before and after these changes alike.
