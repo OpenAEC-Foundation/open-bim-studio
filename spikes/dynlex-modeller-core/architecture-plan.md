@@ -332,6 +332,9 @@ full placement, not a plan position alone.
 | 61 | **Level extents in 3D**: a level picked on its outline in the 3D view, its corners and sides' middles dragged; every level locked to the shared extent (the default) follows, an unlocked one keeps its own | levels, the 3D view | test: shared and own extents, handles, the file |
 | 62 | **3D cursor in perspective**: its ring and cross lie in the level plane | the 3D view | by hand |
 | 63 | **Native binary IfcX (.ifcxb)**: the IfcX document as CBOR (string references, decimal fractions, shortest exact numbers) compressed with gzip through zlib, the editor's own file; opening and import read JSON, CBOR and compressed CBOR alike | the file | test: the bytes of a small document, a model saved and opened as the same model at about 11% of its JSON, broken files refused; `verify_ifcx_binary.py` reads it independently |
+| 64 | **Reinforcement and steel connections merged** from the reinforcement session (bars, cages, meshes, area reinforcement; butt, mitre and complex nodes) into the split editor | model, editor, 3D, plan, schedule, files | its ten tests in the full bundle |
+| 65 | **Drawing standard on the drawings**: NEN 47, DIN 1356, BS 1192 / ISO 128 and US NCS set dimension ends, level marks and text, section heads and the decimal comma | plan and section drawing | test: drawing_standard |
+| 66 | **IFC import in DynLex** (IFC2X3, IFC4, IFC4X3): STEP read natively, geometry of every product with a body (face sets, breps, extrusions, revolutions, swept disks, mapped items, clipping, openings cut by the kernel), colours | import, 3D | test: step, ifc_read; reference models compared with IfcOpenShell |
 
 Done in this round outside the numbering: a right-click context menu in the
 views, selected elements filled in the selection colour, the snaps as
@@ -395,7 +398,9 @@ To do, in this order:
    Done (step 63, `.ifcxb`; the warning is `bim_checks.dl`). Measured on the test
    model: JSON 174 kB, CBOR 108 kB, CBOR compressed 20 kB.
 5. **Then the queued features on top:**
-   - the country drawing standard, as one model setting;
+   - the country drawing standard, as one model setting (step 65: dimension ends,
+     level marks, section heads, decimals; text heights and other area standards
+     than NEN 2580 not yet);
    - pattern systems as floors (hollow-core slabs, masonry bonds, timber-frame and
      metal stud walls), as generators of the base elements.
 
