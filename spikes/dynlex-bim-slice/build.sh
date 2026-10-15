@@ -3,6 +3,7 @@
 #
 #   DYNLEX_ROOT=/path/to/dynlex-cadkernel ./build.sh app        optimised editor (build/open-bim-studio)
 #   DYNLEX_ROOT=... ./build.sh dev                               unoptimised editor with debug info
+#   DYNLEX_ROOT=... ./build.sh run-dev [ARGS...]                  run the independent development build
 #   DYNLEX_ROOT=... ./build.sh run [ARGS...]                     run the editor (--example, FILE, --import ...)
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
 #   DYNLEX_ROOT=... ./build.sh bundle [NAME...]                  the same tests compiled once as one program
@@ -48,10 +49,16 @@ case "$command" in
         build/dynlex examples/bim-slice/main.dl -O2 -o "$out/open-bim-studio"
         echo "built $out/open-bim-studio" ;;
     dev)
-        build/dynlex examples/bim-slice/main.dl -O0 -g -o "$out/open-bim-studio-dev"
+        debug_flags=()
+        if [ "${BIM_DEBUG:-1}" != 0 ]; then debug_flags+=(-g); fi
+        build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
         echo "built $out/open-bim-studio-dev" ;;
     run)
         exec "$out/open-bim-studio" "$@" ;;
+    run-dev)
+        # The current native entry point expects at least one argument.
+        if [ "$#" -eq 0 ]; then set -- --example; fi
+        exec "$out/open-bim-studio-dev" "$@" ;;
     test)
         names=("$@")
         if [ ${#names[@]} -eq 0 ]; then
@@ -65,11 +72,14 @@ case "$command" in
             if ! build/dynlex "examples/bim-slice/tests/$name.dl" -O0 -o "$out/tests/$name" > "$out/tests/$name.diag" 2>&1 || [ -s "$out/tests/$name.diag" ]; then
                 echo "$name DIAG"; head -5 "$out/tests/$name.diag"; status=1; continue
             fi
-            "$out/tests/$name" > "$out/tests/$name.out" 2>&1 || true
+            if ! (ulimit -c 0; stdbuf -oL "$out/tests/$name") > "$out/tests/$name.out" 2>&1; then
+                echo "$name RUNTIME FAIL"; head -10 "$out/tests/$name.out"; status=1; continue
+            fi
             if diff -q "$out/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" > /dev/null; then
                 echo "$name PASS"
             else
-                echo "$name FAIL"; diff "$out/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" | head -10; status=1
+                echo "$name FAIL"; diff "$out/tests/$name.out" "examples/bim-slice/tests/$name.expected.txt" | head -10 || true
+                status=1
             fi
         done
         exit $status ;;

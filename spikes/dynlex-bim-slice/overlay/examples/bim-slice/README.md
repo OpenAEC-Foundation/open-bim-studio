@@ -18,6 +18,13 @@ and the measurements.
 | `bim_scene.dl` | The 3D scene: one mesh per wall or slab, cached per build, and picking of walls, slabs, openings and spaces along a ray. A space's floor is picked only when it lies clearly in front of the slab it stands on. |
 | `bim_file.dl` | The native file format: the model as text, one record per line, keeping every id and writing numbers that read back exactly; reading refuses malformed files, naming the fault. |
 | `bim_ifcx_binary.dl` | IfcX in a compact binary encoding, the editor's own file (`.ifcxb`): the IfcX JSON document as CBOR (RFC 8949) with string references (tags 256 and 25) and decimal fractions (tag 4), read back into the same JSON values; `tests/verify_ifcx_binary.py` checks it with an independent reader. |
+| `reinforcement.dl` | Parametric reinforcement, apart from the editor and the file: straight, L and U bars, rectangular cages with closed hoops, end zones and extra bars, as definitions in metres with cover to the outside of the steel; the bar paths are derived from them. |
+| `reinforcement_library.dl` | Bar identification data (NL-R1): diameters and marks, not a design resistance table (see `REINFORCEMENT-LIBRARY.md`). |
+| `reinforcement_area.dl` | Area reinforcement and meshes on a floor or wall surface, flat or bent to a signed radius, bars in two directions on one or both faces. |
+| `bim_reinforcement.dl` | Reinforcement in the model: stored in transactions, hosted on a beam, column, wall or floor whose shape it follows, tagged, scheduled and drawn from the same derived paths. |
+| `connections.dl` | Modular steel connections: a node of 2 to 6 member ends, each trimmed by its own void, with plates, bolts and screws as separate parts; independent of the editor. |
+| `bim_connections.dl` | Connections in the model: built from selected member ends, moving with them, their parts named linear elements under the node's id. |
+| `bim_connection_geometry.dl` | The voids of a connection carried out on the members' solids (holes through plates and profiles). |
 | `bim_editor.dl` | Editor core driven by abstract events: tools, inference snapping, numeric input during a gesture, dragging with joins, undo. |
 | `bim_view.dl` | Categories (walls, floors, doors, windows, spaces, grids, dimensions) and view rules: per view (plan, section, 3D) each category visible or hidden, and halftone, starting from the view kind's template. |
 | `bim_hatch.dl` | Hatching of cut faces as geometry: a wall's cut divided into its type's layers (bands parallel to the wall in plan, or where a section crosses it), and per material a fill, hatch lines or a zigzag, clipped to the cut. |

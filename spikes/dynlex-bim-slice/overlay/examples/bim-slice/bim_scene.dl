@@ -17,6 +17,9 @@ import examples/bim-slice/bim_view.dl
 import examples/bim-slice/bim_component.dl
 import examples/bim-slice/bim_stair.dl
 import examples/bim-slice/bim_network.dl
+import examples/bim-slice/bim_reinforcement.dl
+import examples/bim-slice/bim_connections.dl
+import examples/bim-slice/bim_connection_geometry.dl
 
 class:
     patterns:
@@ -252,8 +255,9 @@ function the bim profile rings of {bim linear record:linearValue} as {bim linear
 
 # The same, each end's ring slid along the axis onto its join's cut plane
 # (`the bim end cuts of parts`) where it has one.
-function the bim profile rings of {bim linear record:linearValue} as {bim linear type record:linearType} in {bim model record:modelValue} at {integer:roundCorners} round corners cut by {bim end cut record:endCut}:
+function the bim profile rings of {bim linear record:linearValue} as {bim linear type record:linearType} in {bim model record:modelValue} at {integer:roundCorners} round corners cut by {bim end cut record:automaticCuts}:
     execute:
+        set endCut to the bim explicit cuts of linearValue's id after automaticCuts in modelValue
         set profileRings to an empty list of a cad vector3
         set linearFrame to the bim frame of linear linearValue in modelValue
         set profileCorners to an empty list of a cad vector2
@@ -322,8 +326,9 @@ function the bim linear shape of {bim linear record:linearValue} typed {bim line
         return the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (a bim uncut end)
 
 # The same with its ends cut by its joins.
-function the bim linear shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} cut by {bim end cut record:endCut}:
+function the bim linear shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} cut by {bim end cut record:automaticCuts}:
     execute:
+        set endCut to the bim explicit cuts of linearValue's id after automaticCuts in modelValue
         if (the absolute value of linearValue's twist) <= 1e-9:
             return the bim swept shape of linearValue typed linearType in modelValue within tolerance cut by endCut
         # A twisted element: short pieces of at most 15 degrees each, every
@@ -372,6 +377,14 @@ function the bim swept shape of {bim linear record:linearValue} typed {bim linea
         set triangles to an empty fast mesh
         set roundCorners to the bim round corners for radius (linearType's width * 0.5) within tolerance
         set profileRings to the bim profile rings of linearValue as linearType in modelValue at roundCorners round corners cut by endCut
+        set holes to the bim connection perforations of linearValue's id in modelValue
+        if (the length of (holes's values)) > 0:
+            set stockValue to the connection stock from profileRings
+            free profileRings
+            if stockValue's valid = false:
+                return triangles
+            set drilled to the connection stock stockValue's value perforated by (holes's values)
+            return the bim component mesh of drilled within 0.001
         set count to (the length of profileRings) / 2
         set first to the item at 0 in profileRings
         set last to the item at count in profileRings
@@ -755,6 +768,44 @@ function the bim shape of derived parts {a pointer to a list:partList} in {bim m
                 append (base + (the item at corner in (partShape's triangles's values))) to (combined's triangles's values)
         return combined
 
+# Reinforcement segments do not participate in structural member joins.
+function the bim reinforcement shape of {reinforcement definition:spec} in {bim model record:modelValue}:
+    execute:
+        set derived to the bim parts of reinforcement (the bim hostbound reinforcement spec in modelValue) in modelValue
+        return the bim independent shapes of (derived's values) in modelValue
+
+function the bim independent shapes of {a pointer to a list:parts} in {bim model record:modelValue}:
+    execute:
+        set combined to an empty fast mesh
+        loop cursor from 0 to the length of parts:
+            set partValue to the item at cursor in parts
+            set partShape to the bim linear shape of partValue's element typed partValue's kind in modelValue within 0.002 cut by (a bim uncut end)
+            if partValue's kind's name = (the string form of "Connection plate"):
+                set nodeFound to the bim connection index of partValue's element's id in modelValue
+                if nodeFound's valid:
+                    set spec to the item at nodeFound's position in (modelValue's connections's values)
+                    set generated to the bim connection evaluation of spec in modelValue
+                    set holes to an empty list of a connection void
+                    loop voidCursor from 0 to the length of (generated's voids's values):
+                        set cutValue to the item at voidCursor in (generated's voids's values)
+                        if cutValue's kind = 1:
+                            append cutValue to holes
+                    if (the length of holes) > 0:
+                        set vertices to the bim profile rings of partValue's element as partValue's kind in modelValue
+                        set stockValue to the connection stock from vertices
+                        free vertices
+                        if stockValue's valid:
+                            set partShape to the bim component mesh of (the connection stock stockValue's value perforated by holes) within 0.001
+                    free holes
+            set base to the length of (combined's positions's values)
+            loop corner from 0 to the length of (partShape's positions's values):
+                append (the item at corner in (partShape's positions's values)) to (combined's positions's values)
+                append (the item at corner in (partShape's normals's values)) to (combined's normals's values)
+            loop corner from 0 to the length of (partShape's triangles's values):
+                append (base + (the item at corner in (partShape's triangles's values))) to (combined's triangles's values)
+        return combined
+
+
 # The meshes of the sketch faces of `modelValue`, free and in instances.
 function the bim sketch meshes of {bim model record:modelValue}:
     execute:
@@ -764,9 +815,41 @@ function the bim sketch meshes of {bim model record:modelValue}:
 # fine enough to leave the true surface by at most `tolerance`.
 function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
     execute:
+        set noPrevious to an empty list of a bim scene mesh record
+        set built to the bim sketch meshes of modelValue within tolerance reusing noPrevious
+        free noPrevious
+        return built
+
+# Only supply meshes from the same unchanged model revision. Fixed-detail
+# reinforcement and boolean cuts do not depend on camera magnification.
+function the bim retained mesh index of {a 64 bit integer:wanted} among {a pointer to a list:previous}:
+    execute:
+        loop slot from 0 to the length of previous:
+            set entry to the item at slot in previous
+            if (entry's elementId = wanted) and (entry's serial = 0):
+                return slot
+        return -1
+
+function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} reusing {a pointer to a list:previous}:
+    execute:
         set result to a cad topology list of a bim scene mesh record
-        # Components with solid parts: their B-rep, meshed once per
-        # component and placed per instance; their faces are in it.
+        loop cursor from 0 to the length of (modelValue's connections's values):
+            set spec to the item at cursor in (modelValue's connections's values)
+            set retainedSlot to the bim retained mesh index of spec's id among previous
+            if retainedSlot >= 0:
+                append (the item at retainedSlot in previous) to (result's values)
+            else:
+                set derived to the bim parts of connection spec in modelValue
+                append (@intrinsic("construct", a bim scene mesh record, spec's id, 0 as a 64 bit integer, the bim independent shapes of (derived's values) in modelValue, bim other category, the bim material colour of (the string form of "steel"))) to (result's values)
+        loop cursor from 0 to the length of (modelValue's reinforcements's values):
+            set spec to the item at cursor in (modelValue's reinforcements's values)
+            set retainedSlot to the bim retained mesh index of spec's id among previous
+            if retainedSlot >= 0:
+                append (the item at retainedSlot in previous) to (result's values)
+            else:
+                append (@intrinsic("construct", a bim scene mesh record, spec's id, 0 as a 64 bit integer, the bim reinforcement shape of spec in modelValue, bim other category, the bim material colour of (the string form of "steel"))) to (result's values)
+        # Components with solid parts: mesh their B-rep once per component
+        # and place it per instance.
         set foldedIds to an empty list of a 64 bit integer
         set componentTolerance to 0.002
         if tolerance > 0.0:
@@ -805,7 +888,15 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
             set systemId to the bim system of element linearValue's id in modelValue
             if systemId != the bim refused id:
                 set linearColour to the bim colour of discipline (the item at (the bim system index of systemId in modelValue)'s position in (modelValue's systems's values))'s discipline
-            append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (the item at cursor in (modelCuts's values)), the bim category of linear role linearType's role, linearColour)) to (result's values)
+            set retainedSlot to -1
+            if (the length of previous) > 0:
+                set perforations to the bim connection perforations of linearValue's id in modelValue
+                if (linearType's round = false) or ((the length of (perforations's values)) > 0):
+                    set retainedSlot to the bim retained mesh index of linearValue's id among previous
+            if retainedSlot >= 0:
+                append (the item at retainedSlot in previous) to (result's values)
+            else:
+                append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (the item at cursor in (modelCuts's values)), the bim category of linear role linearType's role, linearColour)) to (result's values)
         # Fittings, derived at the network's nodes: each picks as the first
         # segment it joins and takes its colour.
         set servicesNetwork to the bim network of modelValue
@@ -1115,6 +1206,10 @@ function the bim pick along {bim ray record:ray} among {a pointer to a list:mesh
                     set entryKind to bim curtain picked
                 if (the bim linear index of entry's elementId in modelValue)'s valid:
                     set entryKind to bim linear picked
+                if (the bim reinforcement index of entry's elementId in modelValue)'s valid:
+                    set entryKind to 30
+                if (the bim connection index of entry's elementId in modelValue)'s valid:
+                    set entryKind to 31
             set points to entry's shape's positions's values
             set corners to entry's shape's triangles's values
             set cursor to 0
