@@ -49,6 +49,8 @@ class Modeller:
         self.folder: Path | None = None
         self.display: str | None = os.environ.get("DISPLAY")
         self.processes: list[subprocess.Popen] = []
+        self.modeller: subprocess.Popen | None = None
+        self.log: Path | None = None
         self.counter = 0
 
     # -- reaching it ---------------------------------------------------
@@ -65,8 +67,10 @@ class Modeller:
     def launch(self, binary: str | None, display: str | None, example: bool,
                width: int, height: int) -> dict:
         binary = binary or os.environ.get("OPEN_BIM_STUDIO_BINARY") or shutil.which("open-bim-studio")
-        if not binary or not Path(binary).exists():
+        if not binary or not Path(binary).expanduser().exists():
             raise ToolError("no modeller binary: give `binary` or set OPEN_BIM_STUDIO_BINARY")
+        # The modeller runs in a folder of its own, so a relative path is made absolute here.
+        binary = str(Path(binary).expanduser().resolve())
         display = display or os.environ.get("OPEN_BIM_STUDIO_DISPLAY") or ":97"
         work = Path(tempfile.mkdtemp(prefix="open-bim-studio-mcp-"))
         folder = work / "api"
@@ -80,8 +84,12 @@ class Modeller:
             time.sleep(1.5)
         environment = dict(os.environ, DISPLAY=display)
         arguments = [binary] + (["--example"] if example else []) + ["--api", str(folder)]
-        self.processes.append(subprocess.Popen(arguments, cwd=str(work), env=environment,
-                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        # The modeller's output goes to a log, to say why it stopped.
+        self.log = work / "modeller.log"
+        with open(self.log, "wb") as log:
+            self.modeller = subprocess.Popen(arguments, cwd=str(work), env=environment,
+                                             stdout=log, stderr=subprocess.STDOUT)
+        self.processes.append(self.modeller)
         self.folder = folder
         self.display = display
         deadline = time.time() + 60
@@ -89,8 +97,25 @@ class Modeller:
             try:
                 return self.request("ping", timeout=2.0)
             except ToolError:
+                self.check_running()
                 time.sleep(0.5)
-        raise ToolError("the modeller started but its API did not answer within 60 s")
+        raise ToolError(f"the modeller started but its API did not answer within 60 s (log: {self.log})")
+
+    def check_running(self) -> None:
+        """Fails at once when the modeller this server launched has stopped."""
+        if self.modeller is None or self.modeller.poll() is None:
+            return
+        tail = ""
+        if self.log is not None and self.log.exists():
+            lines = self.log.read_text(errors="replace").splitlines()
+            tail = "\n".join(line for line in lines[-8:] if "DRI3" not in line)
+        message = f"the modeller stopped (exit code {self.modeller.returncode})"
+        if tail:
+            message += ":\n" + tail
+        if "shader" in tail or "font" in tail:
+            message += ("\nA modeller built in a tree finds its fonts and shaders through "
+                        "OPEN_BIM_STUDIO_HOME (fonts/, shaders/).")
+        raise ToolError(message)
 
     def close(self) -> None:
         for process in reversed(self.processes):
@@ -100,6 +125,7 @@ class Modeller:
             except subprocess.TimeoutExpired:
                 process.kill()
         self.processes.clear()
+        self.modeller = None
 
     # -- the API ---------------------------------------------------------
     def request(self, verb: str, *arguments: object, timeout: float = 15.0) -> dict:
@@ -116,6 +142,7 @@ class Modeller:
         os.replace(temporary, self.folder / "request")
         deadline = time.time() + timeout
         while time.time() < deadline:
+            self.check_running()
             if response.exists():
                 text = response.read_text()
                 first, _, body = text.partition("\n")
@@ -202,7 +229,8 @@ def tool(name: str, description: str, properties: dict | None = None, required: 
 
 
 @tool("launch", "Start the modeller in its own nested X server (Xephyr) with its automation API on, "
-      "and connect to it. Safe: nothing appears on the desktop.",
+      "and connect to it. Safe: nothing appears on the desktop. A modeller not installed finds its fonts "
+      "and shaders through the environment variable OPEN_BIM_STUDIO_HOME.",
       {"binary": {"type": "string", "description": "path to the modeller (default: OPEN_BIM_STUDIO_BINARY or open-bim-studio on PATH)"},
        "display": {"type": "string", "description": "X display, default :97"},
        "example": {"type": "boolean", "description": "open the example house (default true)"},
@@ -259,7 +287,8 @@ def press_button_tool(arguments: dict) -> dict:
     return text_result(MODELLER.request("button", arguments["label"]))
 
 
-@tool("key", "Type a key or command code (as the keyboard would: 87 W, 27 Esc, 258 Tab, 257 Enter, 90 undo).",
+@tool("key", "Type a key or command code (as the keyboard would: 87 W, 256 Esc, 258 Tab, 257 Enter, 90 undo). "
+      "Esc cancels what is under way and clears the selection; the tool returns to Select.",
       {"code": {"type": "integer"}}, ["code"])
 def key_tool(arguments: dict) -> dict:
     return text_result(MODELLER.request("key", int(arguments["code"])))
@@ -289,11 +318,16 @@ def properties_tool(arguments: dict) -> dict:
 
 
 @tool("set_property", "Type `value` into property `code` of the selection (as typing in the properties panel; "
-      "a 'click' property takes no value).",
+      "a 'click' property takes no value). Lengths are in the project's length unit, as the panel shows "
+      "them (millimetres by default: a 2.8 m height is 2800).",
       {"code": {"type": "integer"}, "value": {"type": "string"}}, ["code"])
 def set_property_tool(arguments: dict) -> dict:
+    code = int(arguments["code"])
+    rows = MODELLER.request("properties").get("rows", [])
+    if not any(int(row.get("code", 0)) == code for row in rows if int(row.get("code", 0)) > 0):
+        raise ToolError(f"the selection has no property with code {code} (see `properties`)")
     extra = [arguments["value"]] if arguments.get("value") not in (None, "") else []
-    return text_result(MODELLER.request("property", int(arguments["code"]), *extra))
+    return text_result(MODELLER.request("property", code, *extra))
 
 
 def rectangle_arguments(arguments: dict) -> list[float]:
@@ -345,10 +379,17 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(MODELLER.request("fit"))
 
 
+RIBBON_TABS = ("BIM", "MEP", "Sketch", "Modify", "Annotate", "View", "Manage", "Collaborate",
+               "Reinforcement", "Connections")
+
+
 @tool("ribbon_tab", "Show ribbon tab `index` (0 BIM, 1 MEP, 2 Sketch, 3 Modify, 4 Annotate, 5 View, 6 Manage, "
       "7 Collaborate, 8 Reinforcement, 9 Connections).", {"index": {"type": "integer"}}, ["index"])
 def tab_tool(arguments: dict) -> dict:
-    return text_result(MODELLER.request("tab", int(arguments["index"])))
+    index = int(arguments["index"])
+    if not 0 <= index < len(RIBBON_TABS):
+        raise ToolError(f"no ribbon tab {index}: the tabs are 0 to {len(RIBBON_TABS) - 1}")
+    return text_result({**MODELLER.request("tab", index), "tab": RIBBON_TABS[index]})
 
 
 # -- the protocol ----------------------------------------------------------

@@ -57,13 +57,18 @@ Its tools:
 | `undo`, `redo`, `fit_view`, `ribbon_tab` | the rest |
 
 `launch` finds the modeller from its `binary` argument, the environment
-variable `OPEN_BIM_STUDIO_BINARY`, or `open-bim-studio` on the PATH.
+variable `OPEN_BIM_STUDIO_BINARY`, or `open-bim-studio` on the PATH. A modeller that is
+not installed finds its fonts and shaders through `OPEN_BIM_STUDIO_HOME`
+(a folder with `fonts/` and `shaders/`). The modeller's output goes to
+`modeller.log` in the folder `launch` makes; when the modeller stops, the
+next tool call fails at once and shows the end of that log.
 
 A first session:
 
 1. `launch` (or `connect` with the folder);
 2. `screenshot` to see it;
 3. `press_button` "Wall", then `click` at (0, 0) and (6, 0) and (6, 4);
-4. `key` 27 (Esc), `elements`, `select` a wall, `properties`,
-   `set_property` with the Height row's code and "2.8";
+4. `key` 256 (Esc), `elements`, `select` a wall, `properties`,
+   `set_property` with the Height row's code and "2800" (lengths are in the
+   project's unit, millimetres by default);
 5. `screenshot` again.
