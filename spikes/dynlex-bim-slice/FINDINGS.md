@@ -488,6 +488,16 @@ ones by their storey, matched by elevation; Page Up and Page Down over the 3D vi
 through the storeys. On Sixty5 it showed `00 begane grond` merged with the native
 `Ground floor` at 0, and stepped to `02 tweede verdieping`.
 
+**Imports in the plan (2026-10-16).** *Storeys from IFC* (Collaborate > Import)
+adds a storey to the model for each imported storey it lacks, so each gets a plan;
+the plan cuts the imported elements of its storey at the cut height, with their
+edges below the cut thin and grey, through the same function as folded
+components. *Observed* on Sixty5 in the running build: the storeys were added
+(`03 derde verdieping` at 10,900 mm, 3,200 mm up to the next) and Page Up showed
+its plan with walls, kitchens and sanitary items; zooming that plan reported a
+frame time of 16 ms. The cut is drawn as lines, not filled, and sections do not
+show imports.
+
 **Smaller findings.**
 - `shaders/mesh_fragment.spv` was older than its source (changed 2026-10-12, binary
   2026-10-09); rebuilt. The shaders build with the compiler that carries the shader
