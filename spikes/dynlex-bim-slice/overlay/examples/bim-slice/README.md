@@ -74,10 +74,14 @@ for instance 500000 500000.
 ### Importing IFC
 
 `--import model.ifc` (or Collaborate > Import > IFC) reads IFC directly
-(`bim_ifc_read.dl`) as read-only elements in their categories, shown in the 3D
-view only (not yet cut in the plan or section). Each element is drawn in the
-surface colours styled onto its items, one mesh per colour, and belongs to
-the storey that contains it. `--import model.bimmesh` opens a file converted
+(`bim_ifc_read.dl`) as read-only elements in their categories. Each element is
+drawn in the surface colours styled onto its items, one mesh per colour, and
+belongs to the storey that contains it. Collaborate > Import > Storeys from IFC
+adds a storey to the model for each imported storey it lacks (undoable), so
+each gets a plan; the plan cuts the imported elements of its storey at its cut
+height, with their edges below the cut thin and grey, as it draws folded
+components (lines only: the cut is not filled; the section does not show
+imports yet). `--import model.bimmesh` opens a file converted
 by `import/ifc_to_mesh.py` through IfcOpenShell; `--import a.ifcx b.ifcx`
 composes IfcX layers.
 
