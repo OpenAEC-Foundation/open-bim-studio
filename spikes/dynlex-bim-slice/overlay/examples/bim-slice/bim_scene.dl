@@ -20,6 +20,7 @@ import examples/bim-slice/bim_network.dl
 import examples/bim-slice/bim_reinforcement.dl
 import examples/bim-slice/bim_connections.dl
 import examples/bim-slice/bim_connection_geometry.dl
+import examples/bim-slice/bim_profiles.dl
 
 class:
     patterns:
@@ -97,11 +98,21 @@ function the bim scene meshes of {bim evaluation record:evaluation} after {a poi
                     else:
                         set triangles to an empty fast mesh
                         append bim mesh of geometry to (the address of triangles)
-                        # At the fine detail level a slab shows its material.
+                        # At the fine detail level a slab shows its material;
+                        # a wall shows its outside layer's at every level, as
+                        # Revit's shaded view (masonry looks like masonry).
                         set colouring to the bim category colouring
                         set slabFound to the bim slab index of geometry's id in evaluation's modelValue
                         if layered and slabFound's valid:
                             set colouring to the bim material colour of (the bim material of plate (the item at slabFound's position in (evaluation's modelValue's slabs's values)) in evaluation's modelValue)
+                        if category = bim wall category:
+                            set shownWall to the bim wall index of geometry's id in evaluation's modelValue
+                            if shownWall's valid:
+                                set shownType to the bim wall type index of (the item at shownWall's position in (evaluation's modelValue's walls's values))'s typeId in evaluation's modelValue
+                                if shownType's valid:
+                                    set typeLayers to (the item at shownType's position in (evaluation's modelValue's wallTypes's values))'s layers's values
+                                    if (the length of typeLayers) > 0:
+                                        set colouring to the bim material colour of (the item at 0 in typeLayers)'s material
                         append (@intrinsic("construct", a bim scene mesh record, geometry's id, geometry's serial, triangles, category, colouring)) to (result's values)
         return result
 
@@ -260,18 +271,16 @@ function the bim profile rings of {bim linear record:linearValue} as {bim linear
         set endCut to the bim explicit cuts of linearValue's id after automaticCuts in modelValue
         set profileRings to an empty list of a cad vector3
         set linearFrame to the bim frame of linear linearValue in modelValue
+        # The outline of its profile (`bim_profiles.dl`): a rectangle or a
+        # circle, or an I, L, U, T, C or Z shape, a hollow section's outside.
         set profileCorners to an empty list of a cad vector2
-        if linearType's round:
-            loop step from 0 to roundCorners:
-                set turn to (6.283185307179586 * (step as a 64 bit floating-point number)) / (roundCorners as a 64 bit floating-point number)
-                append (a cad vector2 with x ((linearType's width * 0.5) * (the cosine of turn)) and y ((linearType's width * 0.5) * (the sine of turn))) to profileCorners
-        else:
-            set halfWidth to linearType's width * 0.5
-            set halfDepth to linearType's depth * 0.5
-            append (a cad vector2 with x (0.0 - halfWidth) and y (0.0 - halfDepth)) to profileCorners
-            append (a cad vector2 with x halfWidth and y (0.0 - halfDepth)) to profileCorners
-            append (a cad vector2 with x halfWidth and y halfDepth) to profileCorners
-            append (a cad vector2 with x (0.0 - halfWidth) and y halfDepth) to profileCorners
+        set profileShapes to the bim rings of profile (the bim profile of linear type linearType in modelValue) at roundCorners round corners
+        set outerRing to the item at 0 in profileShapes
+        loop cursor from 0 to the length of outerRing:
+            append (the item at cursor in outerRing) to profileCorners
+        loop shapeCursor from 0 to the length of profileShapes:
+            free (the item at shapeCursor in profileShapes)
+        free profileShapes
         loop endCursor from 0 to 2:
             set centre to linearFrame's first
             set cutting to endCut's startCut
@@ -370,6 +379,34 @@ function the bim linear shape of {bim linear record:linearValue} typed {bim line
                 append (base + (the item at corner in (pieceShape's triangles's values))) to (combined's triangles's values)
         return combined
 
+# Profile point `flat` (in the profile's coordinates) of `linear` placed at
+# its start (`endIndex` 0) or finish (1), as `the bim profile rings of`
+# places its corners: scaled by the taper and turned by the twist at the
+# finish, slid along the axis onto a cut end's plane.
+function the bim placed profile point {cad vector2:flat} of {bim linear record:linearValue} framed {bim linear frame record:linearFrame} at end {integer:endIndex} cut by {bim end cut record:endCut}:
+    execute:
+        set centre to linearFrame's first
+        set cutting to endCut's startCut
+        set planePoint to endCut's startPoint
+        set planeNormal to endCut's startNormal
+        set stretchedX to flat's x
+        set stretchedY to flat's y
+        set corner to flat
+        if endIndex = 1:
+            set centre to linearFrame's last
+            set cutting to endCut's finishCut
+            set planePoint to endCut's finishPoint
+            set planeNormal to endCut's finishNormal
+            set stretchedX to flat's x * linearValue's taper's x
+            set stretchedY to flat's y * linearValue's taper's y
+            set corner to a cad vector2 with x ((stretchedX * (the cosine of linearValue's twist)) - (stretchedY * (the sine of linearValue's twist))) and y ((stretchedX * (the sine of linearValue's twist)) + (stretchedY * (the cosine of linearValue's twist)))
+        set pointPlaced to the cad sum of centre and (the cad sum of (linearFrame's widthAxis scaled by corner's x) and (linearFrame's depthAxis scaled by corner's y))
+        set slope to the cad dot of linearFrame's along and planeNormal
+        if cutting and ((the absolute value of slope) > 0.05):
+            set slide to (the cad dot of (the cad difference of planePoint and pointPlaced) and planeNormal) / slope
+            set pointPlaced to the cad sum of pointPlaced and (linearFrame's along scaled by slide)
+        return pointPlaced
+
 # One straight sweep of `linearType`'s profile along `linear`, its finish's
 # profile scaled and turned by the element's taper and twist.
 function the bim swept shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} cut by {bim end cut record:endCut}:
@@ -391,39 +428,56 @@ function the bim swept shape of {bim linear record:linearValue} typed {bim linea
         set along to the cad difference of last and first
         set along to along scaled by (1.0 / (the cad length of along))
         set twisted to (the absolute value of linearValue's twist) > 1e-9
-        loop cursor from 0 to count:
-            set following to the remainder of (cursor + 1) divided by count
-            set a to the item at cursor in profileRings
-            set b to the item at following in profileRings
-            set c to the item at (count + following) in profileRings
-            set d to the item at (count + cursor) in profileRings
-            set side to the cad cross of (the cad difference of b and a) and along
-            set side to side scaled by (1.0 / (the maximum of 1e-12 and (the cad length of side)))
-            set base to the length of (triangles's positions's values)
-            append a to (triangles's positions's values)
-            append b to (triangles's positions's values)
-            append c to (triangles's positions's values)
-            append d to (triangles's positions's values)
-            loop corner from 0 to 4:
-                append side to (triangles's normals's values)
-            if twisted:
-                # A twisted side is not flat: a fan about its centre keeps
-                # it from cutting into the solid along one diagonal.
-                append ((the cad sum of (the cad sum of a and b) and (the cad sum of c and d)) scaled by 0.25) to (triangles's positions's values)
-                append side to (triangles's normals's values)
+        # Each ring of the profile (its outline, a hollow section's hole
+        # too) placed at both ends, and its sides between them.
+        set linearFrame to the bim frame of linear linearValue in modelValue
+        set profileShapes to the bim rings of profile (the bim profile of linear type linearType in modelValue) at roundCorners round corners
+        loop shapeCursor from 0 to the length of profileShapes:
+            set shapeRing to the item at shapeCursor in profileShapes
+            set ringCount to the length of shapeRing
+            set placedRing to an empty list of a cad vector3
+            loop endCursor from 0 to 2:
+                loop cursor from 0 to ringCount:
+                    append (the bim placed profile point (the item at cursor in shapeRing) of linearValue framed linearFrame at end endCursor cut by endCut) to placedRing
+            loop cursor from 0 to ringCount:
+                set following to the remainder of (cursor + 1) divided by ringCount
+                set a to the item at cursor in placedRing
+                set b to the item at following in placedRing
+                set c to the item at (ringCount + following) in placedRing
+                set d to the item at (ringCount + cursor) in placedRing
+                set side to the cad cross of (the cad difference of b and a) and along
+                set side to side scaled by (1.0 / (the maximum of 1e-12 and (the cad length of side)))
+                set base to the length of (triangles's positions's values)
+                append a to (triangles's positions's values)
+                append b to (triangles's positions's values)
+                append c to (triangles's positions's values)
+                append d to (triangles's positions's values)
                 loop corner from 0 to 4:
-                    append (base + corner) to (triangles's triangles's values)
-                    append (base + ((the remainder of (corner + 1) divided by 4))) to (triangles's triangles's values)
-                    append (base + 4) to (triangles's triangles's values)
-            else:
-                append base to (triangles's triangles's values)
-                append (base + 1) to (triangles's triangles's values)
-                append (base + 2) to (triangles's triangles's values)
-                append base to (triangles's triangles's values)
-                append (base + 2) to (triangles's triangles's values)
-                append (base + 3) to (triangles's triangles's values)
-        # The ends: the start faces back along the axis, the finish forward;
-        # a cut end faces out along its cut plane's normal.
+                    append side to (triangles's normals's values)
+                if twisted:
+                    # A twisted side is not flat: a fan about its centre keeps
+                    # it from cutting into the solid along one diagonal.
+                    append ((the cad sum of (the cad sum of a and b) and (the cad sum of c and d)) scaled by 0.25) to (triangles's positions's values)
+                    append side to (triangles's normals's values)
+                    loop corner from 0 to 4:
+                        append (base + corner) to (triangles's triangles's values)
+                        append (base + ((the remainder of (corner + 1) divided by 4))) to (triangles's triangles's values)
+                        append (base + 4) to (triangles's triangles's values)
+                else:
+                    append base to (triangles's triangles's values)
+                    append (base + 1) to (triangles's triangles's values)
+                    append (base + 2) to (triangles's triangles's values)
+                    append base to (triangles's triangles's values)
+                    append (base + 2) to (triangles's triangles's values)
+                    append (base + 3) to (triangles's triangles's values)
+            free placedRing
+        # The ends: the profile triangulated (its holes left open), the start
+        # facing back along the axis, the finish forward; a cut end faces out
+        # along its cut plane's normal.
+        set holeRings to an empty list of the type of (an empty list of a cad vector2)
+        loop shapeCursor from 1 to the length of profileShapes:
+            append (the bim profile reversed ring (the item at shapeCursor in profileShapes)) to holeRings
+        set flat to the cad triangulation of (the item at 0 in profileShapes) with holes holeRings
         set backward to along scaled by -1.0
         loop endCursor from 0 to 2:
             set base to the length of (triangles's positions's values)
@@ -438,17 +492,25 @@ function the bim swept shape of {bim linear record:linearValue} typed {bim linea
                     set facing to endCut's finishNormal
                     if (the cad dot of facing and along) < 0.0:
                         set facing to facing scaled by -1.0
-            loop cursor from 0 to count:
-                append (the item at ((endCursor * count) + cursor) in profileRings) to (triangles's positions's values)
+            loop cursor from 0 to the length of (the points of flat):
+                append (the bim placed profile point (the item at cursor in (the points of flat)) of linearValue framed linearFrame at end endCursor cut by endCut) to (triangles's positions's values)
                 append facing to (triangles's normals's values)
-            loop cursor from 1 to (count - 1):
-                append base to (triangles's triangles's values)
+            loop face from 0 to the length of (the triangles of flat):
+                set triple to the item at face in (the triangles of flat)
+                append (base + (the first of triple)) to (triangles's triangles's values)
                 if endCursor = 1:
-                    append (base + cursor) to (triangles's triangles's values)
-                    append (base + (cursor + 1)) to (triangles's triangles's values)
+                    append (base + (the second of triple)) to (triangles's triangles's values)
+                    append (base + (the third of triple)) to (triangles's triangles's values)
                 else:
-                    append (base + (cursor + 1)) to (triangles's triangles's values)
-                    append (base + cursor) to (triangles's triangles's values)
+                    append (base + (the third of triple)) to (triangles's triangles's values)
+                    append (base + (the second of triple)) to (triangles's triangles's values)
+        free cad triangulation flat
+        loop shapeCursor from 0 to the length of holeRings:
+            free (the item at shapeCursor in holeRings)
+        free holeRings
+        loop shapeCursor from 0 to the length of profileShapes:
+            free (the item at shapeCursor in profileShapes)
+        free profileShapes
         free profileRings
         return triangles
 
@@ -470,7 +532,17 @@ function the bim plan outline of linear {bim linear record:linearValue} typed {b
         loop cursor from 0 to the length of profileRings:
             set spot to the item at cursor in profileRings
             append (a cad vector2 with x spot's x and y spot's y) to flat
+        # Standing upright, it is seen from above as its profile (an H, an
+        # L, a hollow section's outside), not its hull.
+        set ringCount to (the length of profileRings) / 2
+        set rise to the cad difference of (the item at ringCount in profileRings) and (the item at 0 in profileRings)
         free profileRings
+        if (ringCount >= 3) and ((the absolute value of rise's z) >= (0.99 * (the cad length of rise))):
+            set footprint to an empty list of a cad vector2
+            loop cursor from 0 to ringCount:
+                append (the item at cursor in flat) to footprint
+            free flat
+            return footprint
         # The hull, by gift wrapping (few points).
         set hull to an empty list of a cad vector2
         set lowest to 0
@@ -543,8 +615,156 @@ function the bim railing shape of {bim railing record:railingValue} in {bim mode
         set railingParts to the bim parts of railing railingValue in modelValue
         return the bim shape of derived parts (railingParts's values) in modelValue within tolerance
 
-# The same for a curtain wall.
+# The same for a curtain wall: its parts, then the panels its contour cuts.
 function the bim curtain shape of {bim curtain record:curtainValue} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set combined to the bim framed shape of curtainValue in modelValue within tolerance
+        set cutPanels to the bim contour panels of curtainValue in modelValue
+        if (the length of (cutPanels's values)) = 0:
+            return combined
+        set placement to the bim placed system curtainValue in modelValue
+        set noHoles to an empty list of the type of (an empty list of a cad vector2)
+        loop panelCursor from 0 to the length of (cutPanels's values):
+            set cutPanel to the item at panelCursor in (cutPanels's values)
+            # Its layers stacked across the face as an uncut panel's, or
+            # glass.
+            set layerStarts to an empty list of a 64 bit floating-point number
+            set layerDepths to an empty list of a 64 bit floating-point number
+            set layered to the bim wall type index of cutPanel's typeId in modelValue
+            if layered's valid:
+                set planarType to the item at layered's position in (modelValue's wallTypes's values)
+                set reached to (the bim thickness of planarType) * -0.5
+                loop layerCursor from 0 to the length of (planarType's layers's values):
+                    set layer to the item at layerCursor in (planarType's layers's values)
+                    append reached to layerStarts
+                    append layer's thickness to layerDepths
+                    set reached to reached + layer's thickness
+            else:
+                append ((the bim glass thickness) * -0.5) to layerStarts
+                append (the bim glass thickness) to layerDepths
+            loop layerCursor from 0 to the length of layerStarts:
+                set built to the fast prism over (cutPanel's outline's values) with holes noHoles from (the item at layerCursor in layerStarts) rising (the item at layerCursor in layerDepths) within 0.0001
+                if built's reason = fast prism built:
+                    set local to an empty fast mesh
+                    append fast mesh of built's shape to (the address of local)
+                    set placedPanel to the bim face mesh of local on placement's curtain lifted placement's lift in modelValue
+                    set base to the length of (combined's positions's values)
+                    loop corner from 0 to the length of (placedPanel's positions's values):
+                        append (the item at corner in (placedPanel's positions's values)) to (combined's positions's values)
+                        append (the item at corner in (placedPanel's normals's values)) to (combined's normals's values)
+                    loop corner from 0 to the length of (placedPanel's triangles's values):
+                        append (base + (the item at corner in (placedPanel's triangles's values))) to (combined's triangles's values)
+            free layerStarts
+            free layerDepths
+        return combined
+
+# A piece of a building system's shape all of one material, so that the 3D
+# view colours each: its frame (or a masonry's mortar joints) in the
+# system's material, its panels (bricks, boards, glass) in theirs.
+class:
+    patterns:
+        [a|] bim material shape record
+    members:
+        material as a string
+        shape as a fast mesh record
+
+# Mesh `addition` added to `target`.
+function append bim triangles {fast mesh record:addition} onto {a pointer to a fast mesh record:target}:
+    execute:
+        set base to the length of (target's positions's values)
+        loop corner from 0 to the length of (addition's positions's values):
+            append (the item at corner in (addition's positions's values)) to (target's positions's values)
+            append (the item at corner in (addition's normals's values)) to (target's normals's values)
+        loop corner from 0 to the length of (addition's triangles's values):
+            append (base + (the item at corner in (addition's triangles's values))) to (target's triangles's values)
+
+# Mesh `addition` added to the piece of `material` in `pieceList`, or as a
+# new piece.
+function add bim coloured piece {fast mesh record:addition} of {a string:material} to {a pointer to a list:pieceList}:
+    execute:
+        loop cursor from 0 to the length of pieceList:
+            set existing to the item at cursor in pieceList
+            if existing's material = material:
+                append bim triangles addition onto (the address of (existing's shape))
+                replace item at index cursor in pieceList with existing
+                return nothing
+        set fresh to an empty fast mesh
+        append bim triangles addition onto (the address of fresh)
+        append (@intrinsic("construct", a bim material shape record, material, fresh)) to pieceList
+
+# The shape of building system `curtainValue` (as `the bim curtain shape
+# of`) in pieces of one material each: its parts grouped by their
+# materials, its merged joints in the system's, the panels its contour cuts
+# in their layers' (glass when untyped).
+function the bim curtain pieces of {bim curtain record:curtainValue} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set pieceList to a cad topology list of a bim material shape record
+        set curtainParts to the bim parts of curtain wall curtainValue in modelValue
+        set merging to ((the bim setting (bim merged joints setting) of curtainValue's id in modelValue)'s value) = (1 as a 64 bit integer)
+        set placement to the bim placed system curtainValue in modelValue
+        set jointsMerged to merging
+        if (the bim system path of placement's curtain)'s curved and (bim system placement's curtain's id lies level in modelValue):
+            set jointsMerged to false
+        set kept to a cad topology list of a bim stair part record
+        set materials to an empty list of a string
+        loop cursor from 0 to the length of (curtainParts's values):
+            set part to the item at cursor in (curtainParts's values)
+            set isJoint to (part's kind's name = (the string form of "Mullion")) or (part's kind's name = (the string form of "Transom"))
+            if (jointsMerged and isJoint) = false:
+                append part to (kept's values)
+                set known to false
+                loop materialCursor from 0 to the length of materials:
+                    if (the item at materialCursor in materials) = part's kind's material:
+                        set known to true
+                if known = false:
+                    append part's kind's material to materials
+        loop materialCursor from 0 to the length of materials:
+            set wanted to the item at materialCursor in materials
+            set group to a cad topology list of a bim stair part record
+            loop cursor from 0 to the length of (kept's values):
+                set part to the item at cursor in (kept's values)
+                if part's kind's material = wanted:
+                    append part to (group's values)
+            add bim coloured piece (the bim shape of derived parts (group's values) in modelValue within tolerance) of wanted to (pieceList's values)
+        if jointsMerged:
+            set jointBody to the bim merged joints of placement's curtain lifted placement's lift among (kept's values) in modelValue
+            add bim coloured piece jointBody of curtainValue's material to (pieceList's values)
+        free materials
+        set cutPanels to the bim contour panels of curtainValue in modelValue
+        set noHoles to an empty list of the type of (an empty list of a cad vector2)
+        loop panelCursor from 0 to the length of (cutPanels's values):
+            set cutPanel to the item at panelCursor in (cutPanels's values)
+            set layerStarts to an empty list of a 64 bit floating-point number
+            set layerDepths to an empty list of a 64 bit floating-point number
+            set layerMaterials to an empty list of a string
+            set layered to the bim wall type index of cutPanel's typeId in modelValue
+            if layered's valid:
+                set planarType to the item at layered's position in (modelValue's wallTypes's values)
+                set reached to (the bim thickness of planarType) * -0.5
+                loop layerCursor from 0 to the length of (planarType's layers's values):
+                    set layer to the item at layerCursor in (planarType's layers's values)
+                    append reached to layerStarts
+                    append layer's thickness to layerDepths
+                    append layer's material to layerMaterials
+                    set reached to reached + layer's thickness
+            else:
+                append ((the bim glass thickness) * -0.5) to layerStarts
+                append (the bim glass thickness) to layerDepths
+                append (the string form of "glass") to layerMaterials
+            loop layerCursor from 0 to the length of layerStarts:
+                set built to the fast prism over (cutPanel's outline's values) with holes noHoles from (the item at layerCursor in layerStarts) rising (the item at layerCursor in layerDepths) within 0.0001
+                if built's reason = fast prism built:
+                    set local to an empty fast mesh
+                    append fast mesh of built's shape to (the address of local)
+                    add bim coloured piece (the bim face mesh of local on placement's curtain lifted placement's lift in modelValue) of (the item at layerCursor in layerMaterials) to (pieceList's values)
+            free layerStarts
+            free layerDepths
+            free layerMaterials
+        return pieceList
+
+# A curtain wall's parts together, its joints merged into one body when it
+# says so.
+function the bim framed shape of {bim curtain record:curtainValue} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance}:
     execute:
         set curtainParts to the bim parts of curtain wall curtainValue in modelValue
         set merging to ((the bim setting (bim merged joints setting) of curtainValue's id in modelValue)'s value) = (1 as a 64 bit integer)
@@ -653,6 +873,47 @@ function the bim mesh {fast mesh record:shape} sliced every {a 64 bit floating-p
         free waitingFacing
         return slicedMesh
 
+# Mesh `local`, in building system `curtainValue`'s face coordinates (x
+# along its line, y up its face, z across it toward its exterior; lying
+# level: across the line to its left, z up), put in place `lift` higher. On
+# a curved line it is cut every 5 degrees along it, then bent onto the arc.
+function the bim face mesh of {fast mesh record:local} on {bim curtain record:curtainValue} lifted {a 64 bit floating-point number:lift} in {bim model record:modelValue}:
+    execute:
+        set placed to an empty fast mesh
+        set wallLength to the maximum of 1e-9 and (the bim system length of curtainValue)
+        set flat to bim system curtainValue's id lies level in modelValue
+        set flatHeight to ((the bim setting (bim system level setting) of curtainValue's id in modelValue)'s value as a 64 bit floating-point number) / 1000.0
+        set ux to (curtainValue's finish's x - curtainValue's start's x) / wallLength
+        set uy to (curtainValue's finish's y - curtainValue's start's y) / wallLength
+        set shaped to local
+        set course to the bim system path of curtainValue
+        set bending to course's curved and (flat = false)
+        if bending:
+            # A curved line: cut every 5 degrees along it, then bent
+            # onto the arc.
+            set shaped to the bim mesh local sliced every (the maximum of 0.02 and (course's radius * 0.08726646259971647))
+        # Into place: along the line, up the face (or across it lying
+        # level), the depth across (or up).
+        loop cursor from 0 to the length of (shaped's positions's values):
+            set spot to the item at cursor in (shaped's positions's values)
+            set facing to the item at cursor in (shaped's normals's values)
+            if flat:
+                append (a cad vector3 with x ((curtainValue's start's x + (ux * spot's x)) - (uy * spot's y)), y ((curtainValue's start's y + (uy * spot's x)) + (ux * spot's y)) and z ((flatHeight + lift) + spot's z)) to (placed's positions's values)
+                append (a cad vector3 with x ((ux * facing's x) - (uy * facing's y)), y ((uy * facing's x) + (ux * facing's y)) and z facing's z) to (placed's normals's values)
+            else if bending:
+                set onLine to the bim system point at spot's x of curtainValue
+                set bearing to the bim system heading at spot's x of curtainValue
+                set bearingCosine to the cosine of bearing
+                set bearingSine to the sine of bearing
+                append (a cad vector3 with x (onLine's x + (bearingSine * spot's z)), y (onLine's y - (bearingCosine * spot's z)) and z (lift + spot's y)) to (placed's positions's values)
+                append (a cad vector3 with x ((bearingCosine * facing's x) + (bearingSine * facing's z)), y ((bearingSine * facing's x) - (bearingCosine * facing's z)) and z facing's y) to (placed's normals's values)
+            else:
+                append (a cad vector3 with x ((curtainValue's start's x + (ux * spot's x)) + (uy * spot's z)), y ((curtainValue's start's y + (uy * spot's x)) - (ux * spot's z)) and z (lift + spot's y)) to (placed's positions's values)
+                append (a cad vector3 with x ((ux * facing's x) + (uy * facing's z)), y ((uy * facing's x) - (ux * facing's z)) and z facing's y) to (placed's normals's values)
+        loop cursor from 0 to the length of (shaped's triangles's values):
+            append (the item at cursor in (shaped's triangles's values)) to (placed's triangles's values)
+        return placed
+
 # A building system's joints as one body: its face (out to the
 # joints' outer edges) with a hole for every cell (each of `cellParts` read
 # back to its rectangle on the face) and every rough opening, as deep as its
@@ -670,12 +931,16 @@ function the bim merged joints of {bim curtain record:curtainValue} lifted {a 64
         set ux to (curtainValue's finish's x - curtainValue's start's x) / wallLength
         set uy to (curtainValue's finish's y - curtainValue's start's y) / wallLength
         set half to jointWidth * 0.5
-        # The face, in its own coordinates (along the line, up the face).
-        set outline to an empty list of a cad vector2
-        append (a cad vector2 with x (0.0 - half) and y (0.0 - half)) to outline
-        append (a cad vector2 with x (wallLength + half) and y (0.0 - half)) to outline
-        append (a cad vector2 with x (wallLength + half) and y (curtainValue's height + half)) to outline
-        append (a cad vector2 with x (0.0 - half) and y (curtainValue's height + half)) to outline
+        # The face, in its own coordinates (along the line, up the face):
+        # its contour, or its rectangle out to the joints' outer edges.
+        set outline to the bim face contour of curtainValue's id in modelValue
+        if (the length of outline) < 3:
+            free outline
+            set outline to an empty list of a cad vector2
+            append (a cad vector2 with x (0.0 - half) and y (0.0 - half)) to outline
+            append (a cad vector2 with x (wallLength + half) and y (0.0 - half)) to outline
+            append (a cad vector2 with x (wallLength + half) and y (curtainValue's height + half)) to outline
+            append (a cad vector2 with x (0.0 - half) and y (curtainValue's height + half)) to outline
         set holes to an empty list of the type of (an empty list of a cad vector2)
         set seen to an empty list of a cad vector2
         loop cursor from 0 to the length of cellParts:
@@ -721,32 +986,7 @@ function the bim merged joints of {bim curtain record:curtainValue} lifted {a 64
         if built's reason = fast prism built:
             set local to an empty fast mesh
             append fast mesh of built's shape to (the address of local)
-            set course to the bim system path of curtainValue
-            set bending to course's curved and (flat = false)
-            if bending:
-                # A curved line: cut every 5 degrees along it, then bent
-                # onto the arc.
-                set local to the bim mesh local sliced every (the maximum of 0.02 and (course's radius * 0.08726646259971647))
-            # Into place: along the line, up the face (or across it lying
-            # level), the depth across (or up).
-            loop cursor from 0 to the length of (local's positions's values):
-                set spot to the item at cursor in (local's positions's values)
-                set facing to the item at cursor in (local's normals's values)
-                if flat:
-                    append (a cad vector3 with x ((curtainValue's start's x + (ux * spot's x)) - (uy * spot's y)), y ((curtainValue's start's y + (uy * spot's x)) + (ux * spot's y)) and z ((flatHeight + lift) + spot's z)) to (jointMesh's positions's values)
-                    append (a cad vector3 with x ((ux * facing's x) - (uy * facing's y)), y ((uy * facing's x) + (ux * facing's y)) and z facing's z) to (jointMesh's normals's values)
-                else if bending:
-                    set onLine to the bim system point at spot's x of curtainValue
-                    set bearing to the bim system heading at spot's x of curtainValue
-                    set bearingCosine to the cosine of bearing
-                    set bearingSine to the sine of bearing
-                    append (a cad vector3 with x (onLine's x + (bearingSine * spot's z)), y (onLine's y - (bearingCosine * spot's z)) and z (lift + spot's y)) to (jointMesh's positions's values)
-                    append (a cad vector3 with x ((bearingCosine * facing's x) + (bearingSine * facing's z)), y ((bearingSine * facing's x) - (bearingCosine * facing's z)) and z facing's y) to (jointMesh's normals's values)
-                else:
-                    append (a cad vector3 with x ((curtainValue's start's x + (ux * spot's x)) + (uy * spot's z)), y ((curtainValue's start's y + (uy * spot's x)) - (ux * spot's z)) and z (lift + spot's y)) to (jointMesh's positions's values)
-                    append (a cad vector3 with x ((ux * facing's x) + (uy * facing's z)), y ((uy * facing's x) - (ux * facing's z)) and z facing's y) to (jointMesh's normals's values)
-            loop cursor from 0 to the length of (local's triangles's values):
-                append (the item at cursor in (local's triangles's values)) to (jointMesh's triangles's values)
+            set jointMesh to the bim face mesh of local on curtainValue lifted lift in modelValue
         free outline
         free holes
         free seen
@@ -919,7 +1159,12 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
         # material.
         loop cursor from 0 to the length of (modelValue's curtains's values):
             set curtainValue to the item at cursor in (modelValue's curtains's values)
-            append (@intrinsic("construct", a bim scene mesh record, curtainValue's id, 0 as a 64 bit integer, the bim curtain shape of curtainValue in modelValue within tolerance, bim wall category, the bim material colour of curtainValue's material)) to (result's values)
+            # In pieces of one material each: a masonry's bricks apart from
+            # its joints, glass apart from its frame.
+            set curtainPieces to the bim curtain pieces of curtainValue in modelValue within tolerance
+            loop pieceCursor from 0 to the length of (curtainPieces's values):
+                set curtainPiece to the item at pieceCursor in (curtainPieces's values)
+                append (@intrinsic("construct", a bim scene mesh record, curtainValue's id, 0 as a 64 bit integer, curtainPiece's shape, bim wall category, the bim material colour of curtainPiece's material)) to (result's values)
         # Free meshes.
         loop cursor from 0 to the length of (modelValue's meshes's values):
             set meshValue to the item at cursor in (modelValue's meshes's values)
@@ -1182,6 +1427,76 @@ local function the bim flat of {cad vector3:point} dropping {integer:dropAxis}:
             return a cad vector2 with x point's x and y point's z
         return a cad vector2 with x point's x and y point's y
 
+# What a click on scene mesh `entry` picks: its element's pick kind.
+function the bim pick kind of {bim scene mesh record:entry} in {bim model record:modelValue}:
+    execute:
+        if entry's elementId >= (the bim imported id base):
+            return bim imported picked
+        set entryKind to bim wall picked
+        if (the bim slab index of entry's elementId in modelValue)'s valid:
+            set entryKind to bim slab picked
+        if entry's category = bim mass category:
+            set entryKind to bim sketch picked
+            if (the bim mesh index of entry's elementId in modelValue)'s valid:
+                set entryKind to bim mesh picked
+        if (the bim stair index of entry's elementId in modelValue)'s valid:
+            set entryKind to bim stair picked
+        if (the bim railing index of entry's elementId in modelValue)'s valid:
+            set entryKind to bim railing picked
+        if (the bim curtain index of entry's elementId in modelValue)'s valid:
+            set entryKind to bim curtain picked
+        if (the bim linear index of entry's elementId in modelValue)'s valid:
+            set entryKind to bim linear picked
+        if (the bim reinforcement index of entry's elementId in modelValue)'s valid:
+            set entryKind to 30
+        if (the bim connection index of entry's elementId in modelValue)'s valid:
+            set entryKind to 31
+        return entryKind
+
+# The face of the model seen first along a ray: the element it belongs to
+# (its pick kind and id), where the ray meets it (in the model, the storey's
+# elevation included) and the face's unit normal, toward the ray's origin.
+class:
+    patterns:
+        [a|] bim face pick record
+    members:
+        found as a boolean
+        kind as an integer
+        id as a 64 bit integer
+        spot as a cad vector3
+        normal as a cad vector3
+
+function the bim face along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue}:
+    execute:
+        set nearest to 1.0 / 0.0
+        set chosenKind to bim nothing picked
+        set chosenId to the bim refused id
+        set chosenNormal to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        loop meshCursor from 0 to the length of meshes:
+            set entry to the item at meshCursor in meshes
+            set points to entry's shape's positions's values
+            set corners to entry's shape's triangles's values
+            set cursor to 0
+            loop while cursor < the length of corners:
+                set first to the item at (the item at cursor in corners) in points
+                set second to the item at (the item at (cursor + 1) in corners) in points
+                set third to the item at (the item at (cursor + 2) in corners) in points
+                set triangleDistance to the bim ray distance to first, second and third along ray
+                if triangleDistance < nearest:
+                    set crossed to the cad cross of (the cad difference of second and first) and (the cad difference of third and first)
+                    set crossedLength to the cad length of crossed
+                    if crossedLength > 1e-12:
+                        set nearest to triangleDistance
+                        set chosenKind to the bim pick kind of entry in modelValue
+                        set chosenId to entry's elementId
+                        set chosenNormal to crossed scaled by (1.0 / crossedLength)
+                set cursor to cursor + 3
+        if chosenKind = bim nothing picked:
+            return @intrinsic("construct", a bim face pick record, false, bim nothing picked, the bim refused id, ray's origin, chosenNormal)
+        if (the cad dot of chosenNormal and ray's direction) > 0.0:
+            set chosenNormal to chosenNormal scaled by -1.0
+        return @intrinsic("construct", a bim face pick record, true, chosenKind, chosenId, (the cad sum of ray's origin and (ray's direction scaled by nearest)), chosenNormal)
+
 # The nearest wall, slab, opening or space along `ray`. `meshes` are the scene
 # meshes of `modelValue`'s evaluation and `spaces` its spaces.
 function the bim pick along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue} with {a pointer to a list:spaces}:
@@ -1189,27 +1504,7 @@ function the bim pick along {bim ray record:ray} among {a pointer to a list:mesh
         set best to no bim pick
         loop meshCursor from 0 to the length of meshes:
             set entry to the item at meshCursor in meshes
-            set entryKind to bim imported picked
-            if entry's elementId < (the bim imported id base):
-                set entryKind to bim wall picked
-                if (the bim slab index of entry's elementId in modelValue)'s valid:
-                    set entryKind to bim slab picked
-                if entry's category = bim mass category:
-                    set entryKind to bim sketch picked
-                    if (the bim mesh index of entry's elementId in modelValue)'s valid:
-                        set entryKind to bim mesh picked
-                if (the bim stair index of entry's elementId in modelValue)'s valid:
-                    set entryKind to bim stair picked
-                if (the bim railing index of entry's elementId in modelValue)'s valid:
-                    set entryKind to bim railing picked
-                if (the bim curtain index of entry's elementId in modelValue)'s valid:
-                    set entryKind to bim curtain picked
-                if (the bim linear index of entry's elementId in modelValue)'s valid:
-                    set entryKind to bim linear picked
-                if (the bim reinforcement index of entry's elementId in modelValue)'s valid:
-                    set entryKind to 30
-                if (the bim connection index of entry's elementId in modelValue)'s valid:
-                    set entryKind to 31
+            set entryKind to the bim pick kind of entry in modelValue
             set points to entry's shape's positions's values
             set corners to entry's shape's triangles's values
             set cursor to 0

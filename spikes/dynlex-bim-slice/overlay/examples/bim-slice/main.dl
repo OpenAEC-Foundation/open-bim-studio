@@ -43,6 +43,8 @@ import examples/bim-slice/bim_svg.dl
 import examples/bim-slice/bim_drawing_rules.dl
 import lib/cadkernel/triangulate2.dl
 import examples/bim-slice/bim_app_parts.dl
+import examples/bim-slice/bim_api.dl
+import examples/bim-slice/bim_ifc_native.dl
 
 # An installed copy finds its font and shaders under OPEN_BIM_STUDIO_HOME; a build
 # run from the repository root uses the repository's font and the shaders in
@@ -99,6 +101,19 @@ set filePath to the string form of "open-bim-studio.ifcxb"
 # bim_ifc_read.dl) or a BIM-MESH file (written from IFC by
 # import/ifc_to_mesh.py) as read-only imported elements; --import with IfcX
 # files composes them, in order, as layers of one IFC5 model.
+# --api FOLDER (anywhere on the command line) lets other programs drive the
+# editor through that folder (`bim_api.dl`, the MCP server in mcp/);
+# Collaborate > Automation > API / MCP switches it on or off, in
+# open-bim-studio-api by default.
+set apiFolder to the string form of "open-bim-studio-api"
+set apiOn to false
+set apiArguments to the command line arguments
+loop apiCursor from 0 to (arguments' length - 1):
+    if (the argument at apiCursor in apiArguments) = (the string form of "--api"):
+        set apiFolder to the argument at (apiCursor + 1) in apiArguments
+        set apiOn to true
+if apiOn:
+    ignore @intrinsic("call", "libc", "mkdir", integer, the data of apiFolder, 493)
 set imported to the bim import of (the string form of "")
 set importGeneration to 0
 set importMessage to the string form of ""
@@ -112,11 +127,14 @@ if (arguments' length > 1) and ((the argument at 0 in arguments) = (the string f
         set imported to the bim ifcx import of files layerPaths
         free layerPaths
     else if bim path importFirst is step ifc:
-        set imported to the bim ifc import of importFirst
+        # Its walls and floors become the model's own (Tab, grips, joins).
+        set nativeCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
+        set imported to the bim ifc import of importFirst made native in (the address of (editor's documentValue)) counting (the address of nativeCounts)
+        set importMessage to the bim ifc native text of nativeCounts
     else:
         set imported to the bim import of importFirst
     if imported's valid:
-        set importMessage to (((the string form of "Imported ") + (the string form of (the length of (imported's labels's values)))) + (the string form of " elements, ")) + ((the string form of imported's triangleCount) + (the string form of " triangles, "))
+        set importMessage to ((importMessage + (the string form of "Imported ")) + ((the string form of (the length of (imported's labels's values))) + (the string form of " elements, "))) + ((the string form of imported's triangleCount) + (the string form of " triangles, "))
         set importMessage to (importMessage + (the string form of ((the length of (imported's curves's values)) / 2))) + (the string form of " curve segments in ")
         set importMessage to (importMessage + (the string form of (((the bim microseconds now) - importStarted) / (1000 as a 64 bit integer)))) + (the string form of " ms")
     else:
@@ -129,7 +147,7 @@ else if (arguments' length > 1) and ((the argument at 0 in arguments) = (the str
     ignore add bim generated tower of wantedWalls walls with 50 rooms a side to (the address of editor)
     set fitting to true
 else if arguments' length > 0:
-    if (the argument at 0 in arguments) != (the string form of "--example"):
+    if ((the argument at 0 in arguments) != (the string form of "--example")) and ((the argument at 0 in arguments) != (the string form of "--api")):
         set filePath to the argument at 0 in arguments
         if (the bim file content at filePath)'s valid:
             open bim editor from filePath in (the address of editor)
@@ -150,8 +168,17 @@ else if arguments' length > 0:
             set baseY to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of (the argument at 2 in arguments), 0 as a pointer)
             set base to a cad vector2 with x baseX and y baseY
         add bim example building to (the address of editor) at base
+        # Its piles, and a structural plan and a pile plan in the browser.
+        add bim example structure to (the address of editor) at base
         set fitting to true
 set camera to @intrinsic("construct", a bim camera record, a cad vector2 with x 3.0 and y 2.0, 60.0, 0.6, 0.9, (a cad vector3 with x 3.0, y 2.0 and z 1.5), 42.0)
+# ZP's views: the camera of each view stood at in turn (the last 50), the
+# view last stood at, the camera last frame and how many frames it has
+# stood still.
+set zoomHistory to an empty list of a bim camera record
+set settledCamera to camera
+set lastFrameCamera to camera
+set cameraQuiet to 0
 # A left press in the 3D view orbits when the pointer moves more than a few
 # pixels before release (with Shift held it pans), and selects otherwise; in
 # the section it selects.
@@ -187,6 +214,7 @@ set planBoxStart to a cad vector2 with x 0.0 and y 0.0
 set previousMiddle to false
 set viewGripActive to false
 set gripElevation to 0.0
+set gripSpot to a cad vector3 with x 0.0, y 0.0 and z 0.0
 set meshes to a cad topology list of a bim scene mesh record
 set sketchMeshes to a cad topology list of a bim scene mesh record
 # Which grid heads in the 3D view stand behind an element, for the view key
@@ -274,7 +302,7 @@ set browserOpen to false
 set browserGroup to -1
 set ribbonFolded to false
 set ribbonSubs to an empty list of an integer
-loop subCursor from 0 to 8:
+loop subCursor from 0 to 12:
     append 0 to ribbonSubs
 set propertiesShown to true
 # The plan inset at the 3D view's lower left, recorded again only when the
@@ -502,6 +530,11 @@ loop while window remains open:
             if picked's kind = bim sketch picked:
                 set reach to picked's distance + 0.01
                 move bim editor pointer to (a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))) within 0.0001 in (the address of editor)
+        else if bim editor sketches upright editor:
+            # A building system's contour is drawn on its face.
+            set sketchHit to the bim sketch hit along ray for editor
+            if sketchHit's found:
+                move bim editor sketch pointer to sketchHit's spot within (8.0 / camera's viewScale) in (the address of editor)
         else if (the absolute value of ray's direction's z) > 1e-9:
             set reach to ((the bim storey elevation of editor) - ray's origin's z) / ray's direction's z
             set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
@@ -545,6 +578,21 @@ loop while window remains open:
                         set meshLineHoverZ to hoverZ
             if underPointer's kind = bim sketch picked:
                 set onPlane to a cad vector2 with x (ray's origin's x + (underPointer's distance * ray's direction's x)) and y (ray's origin's y + (underPointer's distance * ray's direction's y))
+            # Trim, extend and align pick the wall seen under the pointer: the
+            # pointer lies on its centreline under where the ray hits it, not
+            # on the storey's plane behind it.
+            if ((editor's tool = bim trim tool) or (editor's tool = bim extend tool)) or (editor's tool = bim align tool):
+                if underPointer's kind = bim wall picked:
+                    set seenSegment to the bim segment of underPointer's id in editor's documentValue's current
+                    set seenX to seenSegment's finish's x - seenSegment's start's x
+                    set seenY to seenSegment's finish's y - seenSegment's start's y
+                    set seenLength to (seenX * seenX) + (seenY * seenY)
+                    if seenSegment's valid and (seenLength > 1e-12):
+                        set hitX to ray's origin's x + (underPointer's distance * ray's direction's x)
+                        set hitY to ray's origin's y + (underPointer's distance * ray's direction's y)
+                        set along to (((hitX - seenSegment's start's x) * seenX) + ((hitY - seenSegment's start's y) * seenY)) / seenLength
+                        set along to the maximum of 0.0 and (the minimum of 1.0 and along)
+                        set onPlane to a cad vector2 with x (seenSegment's start's x + (along * seenX)) and y (seenSegment's start's y + (along * seenY))
             move bim editor pointer to onPlane within (8.0 / camera's viewScale) in (the address of editor)
     set panelClicked to false
     # A click on the open context menu runs its command or begins typing its
@@ -684,6 +732,13 @@ loop while window remains open:
             set propertiesShown to propertiesShown = false
         else if chromeCommand = bim ui fold command:
             set ribbonFolded to ribbonFolded = false
+        else if chromeCommand = bim ui api command:
+            set apiOn to apiOn = false
+            if apiOn:
+                ignore @intrinsic("call", "libc", "mkdir", integer, the data of apiFolder, 493)
+                set editor's message to (the string form of "Automation API on: requests in ") + apiFolder
+            else:
+                set editor's message to the string form of "Automation API off"
         else if (chromeCommand >= bim ui subtab command) and (chromeCommand < ((bim ui subtab command) + 20)):
             replace item at index ribbonTab in ribbonSubs with (chromeCommand - (bim ui subtab command))
         else if (chromeCommand >= bim ui rail command) and (chromeCommand < ((bim ui rail command) + 20)):
@@ -727,6 +782,11 @@ loop while window remains open:
         # when it is not open yet).
         set openKind to -1
         set openDetail to 0 as a 64 bit integer
+        # A view chosen in the browser: its properties show (the
+        # selection cleared), and it opens.
+        if ((uiHit's action = bim browser plan) or (uiHit's action = bim browser model view)) or (uiHit's action = bim browser section view):
+            set editor's propertiesViewId to uiHit's actionId
+            select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
         if uiHit's action = bim browser plan:
             set openKind to bim plan tab
             set openDetail to uiHit's actionId
@@ -795,6 +855,10 @@ loop while window remains open:
             choose bim editor plate type uiHit's actionId in (the address of editor)
         if uiHit's action = bim browser building system:
             select bim editor (bim curtain picked) numbered uiHit's actionId in (the address of editor)
+        if uiHit's action = bim browser system type:
+            choose bim editor system type (uiHit's actionId as an integer) in (the address of editor)
+        if uiHit's action = bim browser stair type:
+            choose bim editor stair type (uiHit's actionId as an integer) in (the address of editor)
         if uiHit's wallType >= (0 as a 64 bit integer):
             choose bim editor wall type uiHit's wallType in (the address of editor)
         if uiHit's storey >= (0 as a 64 bit integer):
@@ -815,6 +879,13 @@ loop while window remains open:
             set menuChoice to the bim graphics choice at pixel from (layout's width - 234.0) above (viewLayout's bottom - 26.0) flat false
             if menuChoice = 13:
                 set shadowsOn to shadowsOn = false
+            # Edges turns shaded with edges on, or back to shaded.
+            if menuChoice = 15:
+                if viewMode = bim shaded edges view mode:
+                    set viewMode to bim shaded view mode
+                else:
+                    set viewMode to bim shaded edges view mode
+                set editor's message to (the string form of "3D view: ") + (the bim name of view mode viewMode)
         if menuChoice >= 0:
             set panelClicked to true
         set graphicsMenu to 0
@@ -1134,6 +1205,13 @@ loop while window remains open:
     if (gizmoAxis > 0) and (leftDown = false):
         finish bim editor gizmo drag in (the address of editor)
         set gizmoAxis to 0
+    # AL in the 3D view aligns faces: the reference face first, then each
+    # face to bring into its plane.
+    if (((leftDown and (previousLeft = false)) and (overView and (drawingInView = false))) and (panelClicked = false)) and (editor's tool = bim align tool):
+        set alignFace to the bim face along (the bim view ray through pixel in viewLayout with camera) among (shownMeshes's values) in editor's documentValue's current
+        if alignFace's found:
+            align bim editor face alignFace in (the address of editor)
+            set panelClicked to true
     if ((leftDown and (previousLeft = false)) and (overView and (drawingInView = false))) and (panelClicked = false):
         # A handle of the selection drags it across its storey's plane;
         # elsewhere the press orbits or selects.
@@ -1141,6 +1219,7 @@ loop while window remains open:
         set gripIndex to the bim grip near pixel among (handles's values) in viewLayout with camera
         if gripIndex >= 0:
             set gripElevation to (the item at gripIndex in (handles's values))'s location's z
+            set gripSpot to (the item at gripIndex in (handles's values))'s location
             start bim editor drag of (the item at gripIndex in (handles's values)) in (the address of editor)
             set viewGripActive to true
         else:
@@ -1149,7 +1228,16 @@ loop while window remains open:
             set viewPressPixel to pixel
     if viewGripActive and leftDown:
         set ray to the bim view ray through pixel in viewLayout with camera
-        if (the absolute value of ray's direction's z) > 1e-9:
+        if bim editor drags a handle upright editor:
+            # A transom or a building system's top follows the pointer up
+            # and down a plane through the grip, upright and facing the view.
+            set facingX to ray's direction's x
+            set facingY to ray's direction's y
+            set facingLength to the square root of ((facingX * facingX) + (facingY * facingY))
+            if facingLength > 1e-9:
+                set reach to (((gripSpot's x - ray's origin's x) * facingX) + ((gripSpot's y - ray's origin's y) * facingY)) / ((facingX * ray's direction's x) + (facingY * ray's direction's y))
+                raise bim editor handle drag to (ray's origin's z + (reach * ray's direction's z)) in (the address of editor)
+        else if (the absolute value of ray's direction's z) > 1e-9:
             set reach to (gripElevation - ray's origin's z) / ray's direction's z
             set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
             move bim editor pointer to onPlane within (8.0 / camera's viewScale) in (the address of editor)
@@ -1200,27 +1288,15 @@ loop while window remains open:
                     select bim editor bim grid picked numbered gridPicked in (the address of editor)
                 else if (the bim level near pixel viewPressPixel of editor around gpuScene in viewLayout with camera) != the bim refused id:
                     select bim editor bim level picked numbered (the bim level near pixel viewPressPixel of editor around gpuScene in viewLayout with camera) in (the address of editor)
-                else if ((picked's kind = bim curtain picked) and (editor's selectionKind = bim curtain picked)) and (picked's id = editor's selectionId):
-                    # A click on the selected building system chooses the
-                    # part where the sight meets its plane.
+                else if picked's kind = bim curtain picked:
+                    # A click on a building system chooses the part seen
+                    # there (Esc: the whole system).
                     set partRay to the bim view ray through viewPressPixel in viewLayout with camera
+                    set partSpot to the cad sum of partRay's origin and (partRay's direction scaled by picked's distance)
                     set systemFound to the bim curtain index of picked's id in editor's documentValue's current
                     if systemFound's valid:
-                        set pickedSystem to the item at systemFound's position in (editor's documentValue's current's curtains's values)
-                        set systemRun to the maximum of 1e-9 and (the cad distance from pickedSystem's start to pickedSystem's finish)
-                        set sux to (pickedSystem's finish's x - pickedSystem's start's x) / systemRun
-                        set suy to (pickedSystem's finish's y - pickedSystem's start's y) / systemRun
-                        set facing to (partRay's direction's x * suy) - (partRay's direction's y * sux)
-                        if (the absolute value of facing) > 1e-9:
-                            set partReach to (((pickedSystem's start's x - partRay's origin's x) * suy) - ((pickedSystem's start's y - partRay's origin's y) * sux)) / facing
-                            set hitX to partRay's origin's x + (partReach * partRay's direction's x)
-                            set hitY to partRay's origin's y + (partReach * partRay's direction's y)
-                            set hitZ to partRay's origin's z + (partReach * partRay's direction's z)
-                            set systemLevel to 0.0
-                            set systemLevelFound to the bim level index of pickedSystem's levelId in editor's documentValue's current
-                            if systemLevelFound's valid:
-                                set systemLevel to (the item at systemLevelFound's position in (editor's documentValue's current's levels's values))'s elevation
-                            choose bim editor part of system pickedSystem's id at (((hitX - pickedSystem's start's x) * sux) + ((hitY - pickedSystem's start's y) * suy)) and (hitZ - systemLevel) in (the address of editor)
+                        set systemLevel to the bim elevation of level (the item at systemFound's position in (editor's documentValue's current's curtains's values))'s levelId in editor's documentValue's current
+                        choose bim editor part of system picked's id seen at (a cad vector3 with x partSpot's x, y partSpot's y and z (partSpot's z - systemLevel)) in (the address of editor)
                 else:
                     select bim editor picked's kind numbered picked's id in (the address of editor)
             set viewPressActive to false
@@ -1253,7 +1329,10 @@ loop while window remains open:
         set contextOpen to false
     if rightDown and ((the cad distance from pixel to rightPressPixel) > 4.0):
         set rightDragged to true
-    if ((rightDown = false) and previousRight) and ((rightDragged = false) and (overPlan or overView)):
+    # With Shift held the right button only places the 3D cursor (as in
+    # Blender): no menu, the selection kept, so that G moves it next.
+    set cursorClick to (key 340 is down in window) or (key 344 is down in window)
+    if (((rightDown = false) and previousRight) and ((rightDragged = false) and (overPlan or overView))) and (cursorClick = false):
         if editor's selectionKind = bim nothing picked:
             if overPlan:
                 select bim editor element at editor's pointerLocation in (the address of editor)
@@ -1388,6 +1467,32 @@ loop while window remains open:
                 set storeyStep to 2
             else:
                 set editor's message to the string form of "All storeys shown"
+    # ZP: the view before the last zoom or pan (a view counts once the
+    # camera has stood still for a quarter of a second).
+    set cameraMoved to (((camera's centre's x != lastFrameCamera's centre's x) or (camera's centre's y != lastFrameCamera's centre's y)) or ((camera's scale != lastFrameCamera's scale) or (camera's viewScale != lastFrameCamera's viewScale))) or ((camera's yaw != lastFrameCamera's yaw) or (camera's pitch != lastFrameCamera's pitch))
+    set cameraUnsettled to (((camera's centre's x != settledCamera's centre's x) or (camera's centre's y != settledCamera's centre's y)) or ((camera's scale != settledCamera's scale) or (camera's viewScale != settledCamera's viewScale))) or ((camera's yaw != settledCamera's yaw) or (camera's pitch != settledCamera's pitch))
+    if cameraMoved:
+        set cameraQuiet to 0
+    else if cameraUnsettled:
+        set cameraQuiet to cameraQuiet + 1
+        if cameraQuiet >= 15:
+            append settledCamera to zoomHistory
+            if (the length of zoomHistory) > 50:
+                remove item 0 from zoomHistory
+            set settledCamera to camera
+    set lastFrameCamera to camera
+    loop zoomCursor from 0 to the length of pressedCodes:
+        if (the item at zoomCursor in pressedCodes) = 2138:
+            if cameraUnsettled:
+                set camera to settledCamera
+            else if (the length of zoomHistory) > 0:
+                set camera to the item at ((the length of zoomHistory) - 1) in zoomHistory
+                remove item ((the length of zoomHistory) - 1) from zoomHistory
+            else:
+                set editor's message to the string form of "Zoom previous: no earlier view"
+            set settledCamera to camera
+            set lastFrameCamera to camera
+            set cameraQuiet to 0
     if storeyIsolated and overView:
         set pageCursor to 0
         loop while pageCursor < the length of pressedCodes:
@@ -1428,11 +1533,12 @@ loop while window remains open:
             set pickedIfc to the bim ifc file picked
             if (the length of pickedIfc) > 0:
                 set ifcStarted to the bim microseconds now
-                set freshImport to the bim ifc import of pickedIfc
+                set pickedCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
+                set freshImport to the bim ifc import of pickedIfc made native in (the address of (editor's documentValue)) counting (the address of pickedCounts)
                 if freshImport's valid:
                     set imported to freshImport
                     set importGeneration to importGeneration + 1
-                    set editor's message to ((((the string form of "Imported ") + (the string form of (the length of (imported's labels's values)))) + (the string form of " IFC elements, ")) + ((the string form of imported's triangleCount) + (the string form of " triangles in "))) + ((the string form of (((the bim microseconds now) - ifcStarted) / (1000 as a 64 bit integer))) + (the string form of " ms"))
+                    set editor's message to (the bim ifc native text of pickedCounts) + (((((the string form of "Imported ") + (the string form of (the length of (imported's labels's values)))) + (the string form of " IFC elements, ")) + ((the string form of imported's triangleCount) + (the string form of " triangles in "))) + ((the string form of (((the bim microseconds now) - ifcStarted) / (1000 as a 64 bit integer))) + (the string form of " ms")))
                     set fitting to true
                 else:
                     set editor's message to (the string form of "IFC import refused: ") + freshImport's message
@@ -1622,6 +1728,13 @@ loop while window remains open:
     set previousLeft to leftDown
     set previousRight to rightDown
     set previousCursor to cursorPosition
+    # A request of the automation API, one a frame.
+    if apiOn:
+        set apiWindow to serve bim api in apiFolder for (the address of editor)
+        if apiWindow's verb = (the string form of "fit"):
+            set fitting to true
+        if (apiWindow's verb = (the string form of "tab")) and ((apiWindow's number >= 0) and (apiWindow's number <= 10)):
+            set ribbonTab to apiWindow's number
     refresh bim editor (the address of editor)
     # Round shapes are meshed for the 3D view's zoom: a chord leaves the
     # true surface by at most half a pixel, in steps of a factor of 2, so
@@ -1972,6 +2085,8 @@ loop while window remains open:
     set status to (status + (the string form of editor's documentValue's revision)) + (the string form of "   spaces ")
     set status to (status + (the string form of (the length of (editor's spaces's values)))) + (the string form of "   frame ")
     set status to (status + (the string form of frameMicroseconds)) + (the string form of " us   ")
+    if apiOn:
+        set status to (status + (the string form of "API ")) + (apiFolder + (the string form of "   "))
     set typeFound to the bim opening type index of editor's openingTypeId in editor's documentValue's current
     if typeFound's valid:
         set currentType to the item at typeFound's position in (editor's documentValue's current's openingTypes's values)
@@ -2005,11 +2120,11 @@ loop while window remains open:
                 draw a rectangle at x layout's planRight and y splitAt with width (layout's width - layout's planRight) and height 3 in color red dividerShade, green 205 and blue 215 in frame
     # An open graphics menu, over its view.
     if graphicsMenu = 1:
-        draw bim graphics menu from (layout's planRight - 334.0) above (layout's bottom - 26.0) flat true sketchy (bim view editor's planViewId is sketchy in editor's documentValue's current) along (bim view editor's planViewId hatches along objects in editor's documentValue's current) shadows false using typeface in frame
+        draw bim graphics menu from (layout's planRight - 334.0) above (layout's bottom - 26.0) flat true sketchy (bim view editor's planViewId is sketchy in editor's documentValue's current) along (bim view editor's planViewId hatches along objects in editor's documentValue's current) shadows false edges false using typeface in frame
     if graphicsMenu = 2:
-        draw bim graphics menu from (layout's width - 334.0) above (lowerLayout's bottom - 26.0) flat true sketchy (bim view editor's sectionViewId is sketchy in editor's documentValue's current) along (bim view editor's sectionViewId hatches along objects in editor's documentValue's current) shadows false using typeface in frame
+        draw bim graphics menu from (layout's width - 334.0) above (lowerLayout's bottom - 26.0) flat true sketchy (bim view editor's sectionViewId is sketchy in editor's documentValue's current) along (bim view editor's sectionViewId hatches along objects in editor's documentValue's current) shadows false edges false using typeface in frame
     if graphicsMenu = 3:
-        draw bim graphics menu from (layout's width - 234.0) above (viewLayout's bottom - 26.0) flat false sketchy false along false shadows shadowsOn using typeface in frame
+        draw bim graphics menu from (layout's width - 234.0) above (viewLayout's bottom - 26.0) flat false sketchy false along false shadows shadowsOn edges (viewMode = bim shaded edges view mode) using typeface in frame
     # The chrome, over the edges of the panels; what a click there hits is
     # handled at the next press.
     set prompt to editor's message

@@ -582,6 +582,11 @@ function the bim signature of {bim wall record:wallValue} in {bim model record:m
         set levelFound to the bim level index of wallValue's levelId in modelValue
         if levelFound's valid:
             set written to (written + (the string form of ";e")) + (the bim number text of (the item at levelFound's position in (modelValue's levels's values))'s elevation)
+        # Its contour (see `the bim face contour of`).
+        set contour to the bim face contour of wallValue's id in modelValue
+        loop cursor from 0 to the length of contour:
+            set written to (written + (the string form of ";c")) + (the bim point text of (the item at cursor in contour))
+        free contour
         set hostedOpenings to the bim openings of wallValue in modelValue through hostedIndex
         loop cursor from 0 to the length of hostedOpenings:
             set openingValue to the item at cursor in hostedOpenings
@@ -665,6 +670,35 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
     execute:
         return the bim solid of wallValue in modelValue using index through (an empty bim hosted index) preferring fast preferringFast
 
+# The prism of a straight wall's contour (in metres along it and up from
+# its storey at `storeyElevation`) through its thickness, a little wider; a
+# corner at either end reaches past it, so that the wall's joins stay.
+local function the bim profile prism of {a pointer to a list:contour} along {bim wall record:wallValue} wide {a 64 bit floating-point number:breadth} from {a 64 bit floating-point number:storeyElevation}:
+    execute:
+        set direction to the bim direction of wallValue
+        set wallLength to the bim centreline length of wallValue
+        set reach to (breadth * 0.5) + 0.05
+        set flat to an empty list of a cad vector2
+        loop cursor from 0 to the length of contour:
+            set corner to the item at cursor in contour
+            set alongValue to corner's x
+            if alongValue <= 0.001:
+                set alongValue to 0.0 - (breadth + 0.05)
+            if alongValue >= (wallLength - 0.001):
+                set alongValue to wallLength + (breadth + 0.05)
+            append (a cad vector2 with x alongValue and y corner's y) to flat
+        set flatProfile to the bim profile along flat
+        free flat
+        # The plane's normal (its x axis by its y axis) runs to the right of
+        # the wall's line; the prism starts `reach` to its left.
+        set rightX to direction's y
+        set rightY to 0.0 - direction's x
+        set planeOrigin to a cad vector3 with x (wallValue's start's x - (rightX * reach)), y (wallValue's start's y - (rightY * reach)) and z storeyElevation
+        set plane to a cad plane with origin planeOrigin, x axis (a cad vector3 with x direction's x, y direction's y and z 0.0) and y axis (a cad vector3 with x 0.0, y 0.0 and z 1.0)
+        set extruded to the cad extrusion of flatProfile on plane along (a cad vector3 with x (rightX * (2.0 * reach)), y (rightY * (2.0 * reach)) and z 0.0)
+        free flatProfile
+        return extruded
+
 function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index} through {bim hosted index record:hostedIndex} preferring fast {boolean:preferringFast}:
     execute:
         set footprint to the bim footprint of wallValue in modelValue using index
@@ -684,6 +718,11 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
             set arc to the bim arc of wallValue
             if arc's radius <= (breadth * 0.5):
                 return a bim solid failure 1
+        # A wall with a contour (its profile, drawn as a boundary sketch) is
+        # the general solid cut to the contour across its thickness.
+        set contour to the bim face contour of wallValue's id in modelValue
+        set profiled to ((the length of contour) >= 3) and (curved = false)
+        set fastWanted to preferringFast and (profiled = false)
         set hosted to an empty list of a bim opening record
         set fastOpenings to an empty list of a fast opening record
         set ownOpenings to the bim openings of wallValue in modelValue through hostedIndex
@@ -705,7 +744,7 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
             append openingValue to hosted
             append (@intrinsic("construct", a fast opening record, openingValue's offset, the bim rough width of openingType, openingType's sill - wallValue's baseOffset, the bim rough height of openingType)) to fastOpenings
         free ownOpenings
-        if preferringFast:
+        if fastWanted:
             loop outer from 1 to the length of fastOpenings:
                 set moving to the item at outer in fastOpenings
                 set slot to outer
@@ -786,6 +825,14 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
                 return a bim solid failure 3
             set body to voided's value
         free hosted
+        if profiled:
+            set profilePrism to the bim profile prism of contour along wallValue wide breadth from (elevation - wallValue's baseOffset)
+            if profilePrism's valid = false:
+                return a bim solid failure 2
+            set cut to the cad combination of body and profilePrism's value using cad intersection operation within 1e-9
+            if cut's valid = false:
+                return a bim solid failure 2
+            set body to cut's value
         return @intrinsic("construct", a bim solid record, 0, body, false, an empty fast polyhedron)
 
 # ---------------------------------------------------------------- shaped walls

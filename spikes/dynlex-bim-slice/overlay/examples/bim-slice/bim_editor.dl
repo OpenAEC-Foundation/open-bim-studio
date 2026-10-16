@@ -4,6 +4,7 @@
 # window drives: box selection, the files it opens and saves, the type
 # library and the keys and two-letter commands.
 import examples/bim-slice/bim_editor_properties.dl
+import examples/bim-slice/bim_library.dl
 
 # ---------------------------------------------------------------- checks
 
@@ -396,6 +397,9 @@ function open bim editor from {a string:path} in {a pointer to a bim editor reco
                 replace item at index entry's category in (editor's modelRules's rules's values) with rule
         if parsed's unitCode >= 0:
             set editor's lengthUnit to parsed's unitCode
+        # The project's own length unit, kept in the file's settings.
+        if (the bim setting (bim project length unit setting) of (0 as a 64 bit integer) in modelValue)'s found:
+            set editor's lengthUnit to the bim project length unit of modelValue
         set editor's planViewId to the bim refused id
         set editor's sectionViewId to the bim refused id
         set editor's hasSection to false
@@ -593,6 +597,8 @@ function the bim two letter command of {integer:first} then {integer:second}:
             return 70
         if pair = 9082:
             return 2130
+        if pair = 9080:
+            return 2138
         if pair = 8279:
             return 2010
         if pair = 7777:
@@ -726,6 +732,8 @@ function the bim name of command {integer:code}:
             return the string form of "Align (AL)"
         if code = 2130:
             return the string form of "Zoom region (ZR)"
+        if code = 2138:
+            return the string form of "Zoom previous (ZP)"
         if code = 2025:
             return the string form of "Array (AY)"
         if code = 2026:
@@ -758,7 +766,7 @@ function resolve bim editor letter {integer:code} at {a 64 bit integer:now} in {
                 append combined to result
                 return result
             append waited to result
-        if editor's grabbing or (editor's propertyCode >= 0):
+        if (editor's grabbing or (editor's propertyCode >= 0)) or (bim editor sketches a boundary (@intrinsic("dereference", editor))):
             append code to result
             return result
         set immediate to (code = 71) and (editor's selectionKind != bim nothing picked)
@@ -947,6 +955,13 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         if editor's propertyCode >= 0:
             type bim editor property key code in editor
             return nothing
+        # The boundary sketch takes the keys; a command from the ribbon or
+        # with Control leaves it as it was first.
+        if bim editor sketches a boundary (@intrinsic("dereference", editor)):
+            if code < 1000:
+                type bim editor boundary key code in editor
+                return nothing
+            leave bim editor boundary sketch in editor
         if editor's editMode:
             if (code = 258) or (code = bim escape key code):
                 set editor's editMode to false
@@ -1139,6 +1154,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's moveStage to 1
                 set editor's message to the string form of "Copy: click the base point"
             return nothing
+        # ZP (2138) is the window's: the view before the last zoom or pan.
+        if code = 2138:
+            return nothing
         # ZR zooms the plan onto a region clicked corner to corner.
         if code = 2130:
             set editor's chainActive to false
@@ -1153,6 +1171,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set editor's numeric to the string form of ""
             set editor's tool to bim align tool
             set editor's moveStage to 0
+            set editor's alignFaceSet to false
             set editor's message to the string form of "Align: click the reference: a straight wall, a grid or a line (in a section: a level or a height)"
             return nothing
         if (code >= 2010) and (code <= 2014):
@@ -1190,6 +1209,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         # The project's length units (Manage tab).
         if (code >= 2050) and (code <= 2052):
             set editor's lengthUnit to code - 2050
+            begin bim transaction in (the address of (editor's documentValue))
+            set bim project setting (bim project length unit setting) to ((code - 2050) as a 64 bit integer) unless (0 as a 64 bit integer) in (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
             set editor's message to (the string form of "Units: ") + (the bim name of unit editor's lengthUnit)
             return nothing
         if code = 2015:
@@ -1217,8 +1239,60 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         if code = 2119:
             make bim editor plan view automatic in editor
             return nothing
-        # 2128 places the building system examples beside the building.
-        if code = 2128:
+        # 2136 exports the project's types as a library (IfcX), 2137 imports
+        # one: every type the project lacks is added.
+        if code = 2136:
+            set libraryPath to the bim file picked with (the string form of "--save --confirm-overwrite --filename=library.ifcx --title='Export the library (IfcX)' --file-filter='IfcX | *.ifcx *.ifcxb'")
+            if (the length of libraryPath) = 0:
+                return nothing
+            if write bim library of editor's documentValue's current to libraryPath:
+                set editor's message to (the string form of "Library exported to ") + libraryPath
+            else:
+                set editor's message to (the string form of "Could not write ") + libraryPath
+            return nothing
+        if code = 2137:
+            set libraryPath to the bim file picked with (the string form of "--title='Import a library (IfcX)' --file-filter='IfcX | *.ifcx *.ifcxb'")
+            if (the length of libraryPath) = 0:
+                return nothing
+            set libraryReading to the bim library read from libraryPath
+            if libraryReading's valid = false:
+                set editor's message to (the string form of "Library not read: ") + libraryReading's message
+                return nothing
+            begin bim transaction in (the address of (editor's documentValue))
+            set addedTypes to add bim library libraryReading's library to (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to ((the string form of "Library imported: ") + (the string form of addedTypes)) + (the string form of " types added")
+            return nothing
+        # 2135 loads the European steel profiles as linear types.
+        if code = 2135:
+            begin bim transaction in (the address of (editor's documentValue))
+            set steelTypes to add bim eu steel profiles to (the address of (editor's documentValue's current))
+            if (the length of (steelTypes's values)) = 0:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "EU steel profiles: already loaded (the type selector of columns and beams lists them)"
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to ((the string form of "EU steel profiles: ") + (the string form of (the length of (steelTypes's values)))) + (the string form of " types (IPE, IPN, HEA, HEB, HEM, UPN, UPE, L, T, SHS, RHS, CHS) for beams and columns")
+            return nothing
+        # 2134 loads the NL door library (Dutch standard doors) and draws the
+        # first of them.
+        if code = 2134:
+            begin bim transaction in (the address of (editor's documentValue))
+            set libraryDoors to add bim nl door library to (the address of (editor's documentValue's current))
+            if (the length of (libraryDoors's values)) = 0:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "NL door library: already loaded (choose a door in the type selector)"
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's doorTypeId to the item at 4 in (libraryDoors's values)
+            set editor's openingTypeId to editor's doorTypeId
+            set editor's tool to bim opening tool
+            set editor's chainActive to false
+            set editor's message to ((the string form of "NL door library: ") + (the string form of (the length of (libraryDoors's values)))) + (the string form of " door types (type selector); click a wall to place a door")
+            return nothing
+        # 2133 places the building system examples beside the building (2128
+        # is the window's IFC import).
+        if code = 2133:
             set buildingExtent to the bim plan extent of editor's documentValue's current
             set exampleOrigin to a cad vector2 with x 0.0 and y -10.0
             if buildingExtent's valid:
@@ -1415,6 +1489,11 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 if cornerIndex >= 0:
                     remove bim editor slab corner cornerIndex of chosen's slab in editor
                     return nothing
+            # A building system's part is pinned to it: the whole system
+            # goes only when it is chosen whole (Esc).
+            if (editor's selectionKind = bim curtain picked) and (editor's partCode >= 0):
+                set editor's message to the string form of "Delete: this part belongs to its building system; unpin it first, or Esc for the whole system"
+                return nothing
             set doomedKind to bim nothing picked
             set doomedId to the bim refused id
             if ((((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim opening picked)) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim grid picked)) or (((((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)) or (editor's selectionKind = bim mesh picked)) or (editor's selectionKind = bim linear picked)) or (((editor's selectionKind = bim stair picked) or (editor's selectionKind = bim railing picked)) or (editor's selectionKind = bim curtain picked))):
