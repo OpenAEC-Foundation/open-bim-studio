@@ -46,6 +46,14 @@ cp /usr/share/doc/fonts-noto-core/copyright "$stage/payload/fonts/LICENSE-NotoSa
 # The drawing font, osifont (LGPL-3.0 with the GPL font exception).
 cp "$root/examples/bim-slice/fonts/osifont.ttf" "$stage/payload/fonts/"
 cp "$root/examples/bim-slice/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
+# The interface fonts of the OpenAEC style, Inter and JetBrains Mono, with
+# their licences (SIL OFL 1.1).
+for style_font in Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf JetBrainsMono-Regular.ttf Inter-OFL.txt JetBrainsMono-OFL.txt; do
+    cp "$root/examples/bim-slice/fonts/$style_font" "$stage/payload/fonts/"
+done
+# The interface's icons (CC BY-SA 4.0, see icons/README.md).
+mkdir -p "$stage/payload/icons"
+cp "$root/examples/bim-slice/icons/ui-icons.txt" "$root/examples/bim-slice/icons/README.md" "$stage/payload/icons/"
 # The script that reads 2D drawings (DXF, DWG, PDF) for Collaborate > Import.
 mkdir -p "$stage/payload/import"
 cp "$root/examples/bim-slice/import/drawing_to_lines.py" "$stage/payload/import/"
