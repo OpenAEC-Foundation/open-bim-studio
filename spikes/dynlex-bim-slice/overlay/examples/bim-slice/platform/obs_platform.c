@@ -58,6 +58,41 @@ static wchar_t *obs_platform_wide(const char *text) {
 }
 #endif
 
+/* The folder of the running program, its parts separated by '/', written
+ * to `buffer` of `size` bytes with its terminating zero: its length, or -1
+ * when it cannot be found or does not fit. */
+int64_t obs_platform_executable_folder(char *buffer, int64_t size) {
+	if (size <= 1)
+		return -1;
+#ifdef _WIN32
+	static wchar_t widePath[32768];
+	DWORD wideLength = GetModuleFileNameW(NULL, widePath, 32768);
+	if (wideLength == 0 || wideLength >= 32768)
+		return -1;
+	int written = WideCharToMultiByte(CP_UTF8, 0, widePath, -1, buffer, (int)size, NULL, NULL);
+	if (written <= 0)
+		return -1;
+	int64_t length = (int64_t)written - 1;
+	for (int64_t cursor = 0; cursor < length; cursor++)
+		if (buffer[cursor] == '\\')
+			buffer[cursor] = '/';
+#else
+	ssize_t read = readlink("/proc/self/exe", buffer, (size_t)(size - 1));
+	if (read <= 0)
+		return -1;
+	buffer[read] = 0;
+	int64_t length = (int64_t)read;
+#endif
+	int64_t lastSlash = -1;
+	for (int64_t cursor = 0; cursor < length; cursor++)
+		if (buffer[cursor] == '/')
+			lastSlash = cursor;
+	if (lastSlash <= 0)
+		return -1;
+	buffer[lastSlash] = 0;
+	return lastSlash;
+}
+
 /* Sets environment variable `name` to `value` in this process: 0 when it
  * was set. */
 int64_t obs_platform_set_environment(const char *name, const char *value) {
