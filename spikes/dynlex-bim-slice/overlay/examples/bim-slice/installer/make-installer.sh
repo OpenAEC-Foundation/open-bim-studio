@@ -19,6 +19,8 @@ set -euo pipefail
 binary=$(realpath "$1")
 output=$2
 variant=${3:-release}
+version=${BIM_VERSION:-development}
+source_commit=${BIM_SOURCE_COMMIT:-unknown}
 case "$variant" in
     release) name=open-bim-studio; title="Open BIM Studio" ;;
     dev) name=open-bim-studio-dev; title="Open BIM Studio (dev)" ;;
@@ -97,7 +99,7 @@ chmod +x "$stage/payload/uninstall"
 
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 digest=$(sha256sum "$binary" | cut -c1-16)
-printf '%s\nbuilt %s\nbinary sha256 %s\n' "$title" "$built" "$digest" > "$stage/payload/VERSION"
+printf '%s\nversion %s\nsource %s\nbuilt %s\nbinary sha256 %s\n' "$title" "$version" "$source_commit" "$built" "$digest" > "$stage/payload/VERSION"
 
 tar -C "$stage/payload" -czf "$stage/payload.tar.gz" .
 
