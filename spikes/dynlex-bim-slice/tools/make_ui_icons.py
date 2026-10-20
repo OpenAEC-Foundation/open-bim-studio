@@ -115,6 +115,8 @@ ICONS = [
     (87, "quantity", "bim:quantity"),
     (88, "revision", "bim:revision"),
     (89, "ramp", "bim:ramp"),
+    (90, "home", "b2:nav.home"),
+    (91, "fit selection", "b2:view.fit-selection"),
 ]
 
 NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
