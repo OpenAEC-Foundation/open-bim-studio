@@ -37,7 +37,8 @@ scale (R-12, R-20), GPU instancing.
   wall joins), `bim_evaluate.dl` (geometry through the kernel, incremental),
   `bim_drawing.dl` (plan, section, dimensions), `bim_ifc.dl` (IFC4 export),
   `bim_ifcx.dl` and `bim_ifcx_read.dl` (IFC5 export and import), `bim_editor.dl`
-  (editor core), `bim_ui.dl` (ribbon and panels), `main.dl` (the editor). Headless tests,
+  (editor core), `bim_ui.dl` (ribbon and panels), `bim_ui_files.dl` (start screen, File
+  menu, Settings and the unsaved-changes dialog), `main.dl` (the editor). Headless tests,
   timing programs and the GUI driver are in `tests/`. IFC4 output is checked with
   IfcOpenShell; IFC5 output with an independent composition in Python.
 - `overlay/lib/fastkernel/` — direct polyhedral walls and prisms.
