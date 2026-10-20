@@ -3,6 +3,7 @@
 #
 #   DYNLEX_ROOT=/path/to/dynlex-cadkernel ./build.sh app        optimised editor (build/open-bim-studio)
 #   DYNLEX_ROOT=... ./build.sh dev                               unoptimised editor with debug info
+#   DYNLEX_ROOT=... ./build.sh dev-test NAME [NAME...]            editor and up to 3 headless checks in one compile
 #   DYNLEX_ROOT=... ./build.sh run-dev [ARGS...]                  run the independent development build
 #   DYNLEX_ROOT=... ./build.sh run [ARGS...]                     run the editor (--example, FILE, --import ...)
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
@@ -57,10 +58,49 @@ case "$command" in
     app)
         build/dynlex examples/bim-slice/main.dl -O2 -o "$out/open-bim-studio"
         echo "built $out/open-bim-studio" ;;
-    dev)
+    dev|dev-test)
         debug_flags=()
         if [ "${BIM_DEBUG:-1}" != 0 ]; then debug_flags+=(-g); fi
-        build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
+        if [ "$command" = dev-test ]; then
+            if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
+                echo 'dev-test requires 1 to 3 explicit test names' >&2; exit 2
+            fi
+            mkdir -p "$out/tests"
+            python3 "$here/tools/bundle_tests.py" make examples/bim-slice/tests app_checks "$@"
+            # Keep test definitions dormant during normal app use. Only the
+            # generated footer becomes a callable, editor-independent entry.
+            awk '
+                /^print \(the string form of "=== / && !footer {
+                    print "function run bim app checks:"
+                    print "    execute:"
+                    footer = 1
+                }
+                { if (footer) print "        " $0; else print }
+            ' examples/bim-slice/tests/app_checks.dl > examples/bim-slice/tests/app_checks.tmp
+            mv examples/bim-slice/tests/app_checks.tmp examples/bim-slice/tests/app_checks.dl
+            # Modify the staged copy only; run before any window/font/GPU setup.
+            awk '
+                BEGIN { print "import examples/bim-slice/tests/app_checks.dl" }
+                /^set startedAt to / {
+                    print "set appCheckArguments to the command line arguments"
+                    print "if appCheckArguments\047 length > 0:"
+                    print "    if (the argument at 0 in appCheckArguments) = (the string form of \"--self-test\"):"
+                    print "        run bim app checks"
+                    print "        @intrinsic(\"call\", \"libc\", \"exit\", nothing, 0)"
+                }
+                { print }
+            ' examples/bim-slice/main.dl > examples/bim-slice/main.tmp
+            mv examples/bim-slice/main.tmp examples/bim-slice/main.dl
+            if ! build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev" > "$out/tests/app.diag" 2>&1 || [ -s "$out/tests/app.diag" ]; then
+                echo 'app DIAG'; head -20 "$out/tests/app.diag"; exit 1
+            fi
+            if ! (ulimit -c 0; "$out/open-bim-studio-dev" --self-test) > "$out/tests/app_checks.out" 2>&1; then
+                echo 'app checks RUNTIME FAIL'; head -20 "$out/tests/app_checks.out"; exit 1
+            fi
+            python3 "$here/tools/bundle_tests.py" split "$out/tests/app_checks.out" examples/bim-slice/tests/app_checks.expected.txt "$out/tests/app_checks"
+        else
+            build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
+        fi
         echo "built $out/open-bim-studio-dev" ;;
     run)
         exec "$out/open-bim-studio" "$@" ;;
