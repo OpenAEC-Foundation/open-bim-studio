@@ -47,6 +47,7 @@ import examples/bim-slice/bim_api.dl
 import examples/bim-slice/bim_ifc_native.dl
 import examples/bim-slice/bim_loading.dl
 import examples/bim-slice/bim_ifc_promote.dl
+import examples/bim-slice/bim_section_box.dl
 
 # When the start began, for the time until the editor answers.
 set startedAt to the bim microseconds now
@@ -146,6 +147,9 @@ set imported to the bim import of (the string form of "")
 # number changes (an element made editable, undone, redone).
 set importedFull to imported
 set promotedSeen to 0
+# The IFC file the import shown was read from: a model linked to another
+# (opened, or the link undone) has its own read again.
+set linkedLoaded to the string form of ""
 set importGeneration to 0
 set importMessage to the string form of ""
 # --import reads its files on a thread of its own (`bim_loading.dl`); the
@@ -304,6 +308,10 @@ set shadowsOn to true
 set graphicsMenu to 0
 set sectionBoxLow to a cad vector3 with x 0.0, y 0.0 and z 0.0
 set sectionBoxHigh to a cad vector3 with x 1.0, y 1.0 and z 1.0
+# The box as the model keeps it (bim_section_box.dl): read again when the
+# model's stored box changes (a model opened, an undo), written as one
+# undoable step whenever the box is turned on or off, dragged or fitted.
+set boxKeySeen to the string form of ""
 set boxDragFace to -1
 # A selected level's extent handle being dragged in the 3D view: the sides
 # it moves (bits, 0 none) and the level.
@@ -490,6 +498,14 @@ loop while window remains open:
             set landedText to the bim ifc native text of nativeCounts
         set landed to importJob's imported
         if landed's valid:
+            # An IFC file read is linked to the model (one undoable step),
+            # so that opening the model reads it again.
+            if importJob's kind = bim step import kind:
+                set linkedLoaded to the item at 0 in (importJob's paths)
+                if (the bim linked ifc of editor's documentValue's current) != linkedLoaded:
+                    begin bim transaction in (the address of (editor's documentValue))
+                    link bim ifc linkedLoaded to (the address of (editor's documentValue's current))
+                    commit bim transaction in (the address of (editor's documentValue))
             set importedFull to landed
             set imported to the bim import of importedFull without promoted in editor's documentValue's current
             set promotedSeen to the bim promoted count of editor's documentValue's current
@@ -1302,6 +1318,10 @@ loop while window remains open:
                 set sectionBoxHigh to a cad vector3 with x sectionBoxHigh's x, y sectionBoxHigh's y and z faceValue
     if (boxDragFace >= 0) and (leftDown = false):
         set boxDragFace to -1
+        begin bim transaction in (the address of (editor's documentValue))
+        keep bim section box sectionBoxOn from sectionBoxLow to sectionBoxHigh in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        set boxKeySeen to the bim stored section box key of editor's documentValue's current
     # The gizmo: a press on an arrow drags the selection along X, Y or Z, on
     # its square across the plane (in 10 mm steps), on its ring turns it
     # about its middle (in whole degrees).
@@ -1611,7 +1631,29 @@ loop while window remains open:
                 set promotedMade to promote every bim import element of importedFull into (the address of (editor's documentValue's current))
                 commit bim transaction in (the address of (editor's documentValue))
                 set editor's message to ((the string form of "Made editable: ") + (the string form of promotedMade)) + (the string form of " imported elements")
+    # A model linked to an IFC file other than the one shown (just opened)
+    # has it read, on the import's thread.
+    set linkWanted to the bim linked ifc of editor's documentValue's current
+    if ((the length of linkWanted) > 0) and ((linkWanted != linkedLoaded) and (importRunning = false)):
+        set linkedLoaded to linkWanted
+        set linkPaths to an empty list of a string
+        append linkWanted to linkPaths
+        set importJob to a bim import job of linkPaths on gpuDevice
+        free linkPaths
+        if start bim import job (the address of importJob):
+            set importRunning to true
+            set importLanding to false
+            set importAfterSteps to 0
     set promotedNow to the bim promoted count of editor's documentValue's current
+    # The section box the model keeps, when that changed (opened, undone).
+    set boxKeyNow to the bim stored section box key of editor's documentValue's current
+    if boxKeyNow != boxKeySeen:
+        set storedBox to the bim stored section box of editor's documentValue's current
+        set sectionBoxOn to storedBox's shown
+        if storedBox's shown:
+            set sectionBoxLow to storedBox's low
+            set sectionBoxHigh to storedBox's high
+        set boxKeySeen to boxKeyNow
     if promotedNow != promotedSeen:
         set imported to the bim import of importedFull without promoted in editor's documentValue's current
         set promotedSeen to promotedNow
@@ -1626,6 +1668,26 @@ loop while window remains open:
                 set editor's message to the string form of "Section box: drag a face's handle to cut the model"
             else:
                 set editor's message to the string form of "Section box off"
+            begin bim transaction in (the address of (editor's documentValue))
+            keep bim section box sectionBoxOn from sectionBoxLow to sectionBoxHigh in (the address of (editor's documentValue's current))
+            commit bim transaction in (the address of (editor's documentValue))
+            set boxKeySeen to the bim stored section box key of editor's documentValue's current
+        # 2172 fits the section box round the selection (30 cm wider).
+        if (the item at boxCursor in pressedCodes) = 2172:
+            set boxChosen to the bim selected ids of editor
+            set fitted to the bim fitted section box around boxChosen among (meshes's values) and (imported's meshes's values) widened by 0.3
+            free boxChosen
+            if fitted's shown:
+                set sectionBoxOn to true
+                set sectionBoxLow to fitted's low
+                set sectionBoxHigh to fitted's high
+                begin bim transaction in (the address of (editor's documentValue))
+                keep bim section box sectionBoxOn from sectionBoxLow to sectionBoxHigh in (the address of (editor's documentValue's current))
+                commit bim transaction in (the address of (editor's documentValue))
+                set boxKeySeen to the bim stored section box key of editor's documentValue's current
+                set editor's message to the string form of "Section box round the selection"
+            else:
+                set editor's message to the string form of "Select something to fit the section box round"
     # 2131 isolates a storey in the 3D view, or shows all again: first the
     # storey nearest the active level; with it isolated, Page Up and Page
     # Down over the 3D view step to the storey above or below.
