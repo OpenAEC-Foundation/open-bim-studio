@@ -45,6 +45,10 @@ import lib/cadkernel/triangulate2.dl
 import examples/bim-slice/bim_app_parts.dl
 import examples/bim-slice/bim_api.dl
 import examples/bim-slice/bim_ifc_native.dl
+import examples/bim-slice/bim_loading.dl
+
+# When the start began, for the time until the editor answers.
+set startedAt to the bim microseconds now
 
 # An installed copy finds its font and shaders under OPEN_BIM_STUDIO_HOME; a build
 # run from the repository root uses the repository's font and the shaders in
@@ -70,8 +74,24 @@ if installHome != (0 as a pointer to a byte):
     set drawingFontPath to homeText + (the string form of "/fonts/osifont.ttf")
     set shaderDirectory to homeText + (the string form of "/shaders")
     set drawingScript to homeText + (the string form of "/import/drawing_to_lines.py")
+# The start-up's steps, counted on the loading screen: the window, the fonts,
+# the editor; then, behind the editor, those of a file given with --import
+# (`bim_loading.dl`).
+set startArguments to the command line arguments
+set loadSteps to 3
+# DynLex's `and` evaluates both sides, so the first argument is read only
+# when there is one.
+set startFirst to the string form of ""
+if startArguments' length > 0:
+    set startFirst to the argument at 0 in startArguments
+if (startArguments' length > 1) and (startFirst = (the string form of "--import")):
+    set loadSteps to 5
+    if bim path (the argument at 1 in startArguments) is step ifc:
+        set loadSteps to 7
 set window to a new window with width 1440 and height 900 using shaders in shaderDirectory
 set the title of window to (the string form of "Open BIM Studio")
+set windowAt to the bim microseconds now
+draw bim loading bar at step 1 of loadSteps on window
 set loading to the bim text atlas from regular font at fontPath and bold font at boldFontPath and drawing font at drawingFontPath for window
 if loading's valid = false:
     set loading to the bim text atlas from regular font at (the string form of "tests/games/fonts/LiberationMono-Regular.ttf") and bold font at (the string form of "") for window
@@ -80,6 +100,8 @@ if loading's valid = false:
     close window
     return 1
 set typeface to loading's atlas
+set fontsAt to the bim microseconds now
+draw bim loading screen at step 2 of loadSteps saying (the string form of "Preparing the editor") with typeface on window
 
 set editor to a new bim editor
 set arguments to the command line arguments
@@ -91,6 +113,9 @@ loop browserGroup from 0 to the bim browser group count:
 set browserScroll to 0.0
 set propertiesScroll to 0.0
 set propertiesSelection to the bim refused id
+# The active tab the properties last followed (`the bim view shown by tab`).
+set propertiesTabKind to -1
+set propertiesTabDetail to the bim refused id
 set typeSelectorOpen to false
 # Millimetres, as Dutch building drawings use; a file keeps its own units.
 set editor's lengthUnit to bim millimetre unit
@@ -117,30 +142,36 @@ if apiOn:
 set imported to the bim import of (the string form of "")
 set importGeneration to 0
 set importMessage to the string form of ""
-if (arguments' length > 1) and ((the argument at 0 in arguments) = (the string form of "--import")):
-    set importStarted to the bim microseconds now
+# --import reads its files on a thread of its own (`bim_loading.dl`); the
+# editor runs meanwhile, and takes what was read when the thread is done.
+set noPaths to an empty list of a string
+append (the string form of "") to noPaths
+# The import's thread makes the GPU's buffers on the window's device.
+set gpuDevice to the gpu device of (@intrinsic("dereference", the gpu context of window))
+set importJob to a bim import job of noPaths on gpuDevice
+free noPaths
+set importRunning to false
+set importLanding to false
+# The steps before the import's on its card: the start-up's three for
+# --import, none for an import chosen in the editor.
+set importAfterSteps to 3
+set firstArgument to the string form of ""
+if arguments' length > 0:
+    set firstArgument to the argument at 0 in arguments
+if (arguments' length > 1) and (firstArgument = (the string form of "--import")):
     set importFirst to the argument at 1 in arguments
+    set layerPaths to an empty list of a string
+    append importFirst to layerPaths
     if bim path importFirst is ifcx:
-        set layerPaths to an empty list of a string
-        loop argumentCursor from 1 to arguments' length:
+        loop argumentCursor from 2 to arguments' length:
             append (the argument at argumentCursor in arguments) to layerPaths
-        set imported to the bim ifcx import of files layerPaths
-        free layerPaths
-    else if bim path importFirst is step ifc:
-        # Its walls and floors become the model's own (Tab, grips, joins).
-        set nativeCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
-        set imported to the bim ifc import of importFirst made native in (the address of (editor's documentValue)) counting (the address of nativeCounts)
-        set importMessage to the bim ifc native text of nativeCounts
+    set importJob to a bim import job of layerPaths on gpuDevice
+    free layerPaths
+    if start bim import job (the address of importJob):
+        set importRunning to true
     else:
-        set imported to the bim import of importFirst
-    if imported's valid:
-        set importMessage to ((importMessage + (the string form of "Imported ")) + ((the string form of (the length of (imported's labels's values))) + (the string form of " elements, "))) + ((the string form of imported's triangleCount) + (the string form of " triangles, "))
-        set importMessage to (importMessage + (the string form of ((the length of (imported's curves's values)) / 2))) + (the string form of " curve segments in ")
-        set importMessage to (importMessage + (the string form of (((the bim microseconds now) - importStarted) / (1000 as a 64 bit integer)))) + (the string form of " ms")
-    else:
-        set importMessage to (the string form of "Import refused: ") + imported's message
-    set fitting to true
-else if (arguments' length > 1) and ((the argument at 0 in arguments) = (the string form of "--generate")):
+        set importMessage to the string form of "Import refused: no thread could be started for it"
+else if (arguments' length > 1) and (firstArgument = (the string form of "--generate")):
     # --generate N builds an imaginary tower of at least N walls (see
     # `add bim generated tower`), for testing at scale.
     set wantedWalls to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at 1 in arguments))
@@ -229,10 +260,26 @@ set meshedRevision to (-1) as a 64 bit integer
 set roomSpaces to a cad topology list of a bim space record
 set roomRevision to (-1) as a 64 bit integer
 set meshedTier to -1
+# How often the 3D view's model was written to the GPU, and how long the
+# last time took (shown in the status bar).
+set uploadCount to 0
+set uploadMilliseconds to 0 as a 64 bit integer
 set shownMeshes to a cad topology list of a bim scene mesh record
 set shownMeshesKey to the string form of "none"
-set uploadedKey to the string form of "nothing uploaded"
-set gpuScene to @intrinsic("construct", a bim gpu scene record, (a cad vector3 with x 0.0, y 0.0 and z 0.0), 1.0, a cad topology list of a 64 bit integer, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0), 0, 0)
+# What the GPU's slots were written for (the import and the native
+# elements with their colours, the ground and shadows after both), and the
+# shown elements' flags.
+set importUploadKey to the string form of "nothing uploaded"
+set nativeUploadKey to the string form of "nothing uploaded"
+set groundUploadKey to the string form of "nothing uploaded"
+set flagsKey to the string form of "nothing shown"
+# The round shapes queued to be meshed again for the zoom (their positions
+# among the sketch meshes, the largest on screen first), the next to take,
+# and how many to take at a time.
+set lodQueue to an empty list of an integer
+set lodQueueNext to 0
+set lodChunk to 16
+set gpuScene to an empty bim gpu scene
 set viewMode to bim shaded view mode
 # The gizmo drag under way: its handle (0 none), where it began on the level
 # plane through the selection, about which point it turns.
@@ -272,8 +319,6 @@ set gizmoHeight to 0.0
 set gizmoPressPixel to a cad vector2 with x 0.0 and y 0.0
 set gizmoRiseDirection to a cad vector2 with x 0.0 and y -1.0
 set gizmoRiseScale to 1.0
-set uploadedMode to bim shaded view mode
-set uploadedShadows to true
 set planCanvas to a new bim canvas
 # Counts every rebuild of the scene meshes, including those during a drag,
 # which leave the document's revision unchanged.
@@ -301,6 +346,8 @@ set ribbonTab to 0
 set browserOpen to false
 set browserGroup to -1
 set ribbonFolded to false
+# The first group the ribbon shows when it has to scroll (a narrow window).
+set ribbonFirstGroup to 0
 set ribbonSubs to an empty list of an integer
 loop subCursor from 0 to 12:
     append 0 to ribbonSubs
@@ -394,9 +441,71 @@ add bim type library to (the address of editor)
 # view.
 prepare bim editor views in (the address of editor)
 replace item at index 0 in tabDetails with editor's planViewId
+set editorAt to the bim microseconds now
+set firstFrame to true
+set startupMessage to the string form of ""
+# The frames since anything happened that could change what is drawn, and
+# the input as it was at the last frame (`the bim input mark of`).
+set quietFrames to 0
+set watchedKeys to an empty list of an integer
+loop cursor from 0 to the length of codes:
+    append (the item at cursor in codes) to watchedKeys
+set inputMark to the bim input mark of window over watchedKeys
+set markedRevision to editor's documentValue's revision
 loop while window remains open:
+    # With nothing changing, the loop sleeps until the window's next event
+    # instead of drawing the same frame again; presenting waits for the
+    # display (vsync) otherwise. A thread's progress, a letter waiting for
+    # its second and the automation API wake it a few times a second; work
+    # queued (the zoom queue) keeps it drawing.
+    if (quietFrames >= 20) and (lodQueueNext >= (the length of lodQueue)):
+        set keepAwake to (importRunning or apiOn) or (editor's pendingLetter != 0)
+        set idleFor to 1.0
+        if importRunning:
+            set idleFor to 0.25
+        if apiOn or (editor's pendingLetter != 0):
+            set idleFor to 0.1
+        set sleeping to true
+        loop while sleeping:
+            wait for gpu window events up to idleFor
+            set sleeping to ((keepAwake = false) and ((window remains open) = true)) and ((the bim input mark of window over watchedKeys) = inputMark)
     # A storey made or a file opened gets its plan view.
     prepare bim editor views in (the address of editor)
+    # The import's thread done: one frame shows its last step, the next adds
+    # the walls and floors it found to the model (one undoable step), takes
+    # its imported elements and installs the GPU buffers it wrote.
+    if importRunning and importLanding:
+        set importRunning to false
+        set importLanding to false
+        set landingStarted to the bim microseconds now
+        set landedText to the string form of ""
+        if importJob's kind = bim step import kind:
+            set nativeCounts to the bim ifc natives (importJob's natives) made in (the address of (editor's documentValue))
+            set landedText to the bim ifc native text of nativeCounts
+        set landed to importJob's imported
+        if landed's valid:
+            set imported to landed
+            set importGeneration to importGeneration + 1
+            install bim gpu import upload (importJob's upload) into (the address of gpuScene) on window
+            set importUploadKey to the string form of importGeneration
+            # The native ordinals follow the imported ones.
+            set nativeUploadKey to the string form of "stale"
+            set landedText to ((landedText + (the string form of "Imported ")) + ((the string form of (the length of (imported's labels's values))) + (the string form of " elements, "))) + ((the string form of imported's triangleCount) + (the string form of " triangles, "))
+            set landedText to (landedText + (the string form of ((the length of (imported's curves's values)) / 2))) + (the string form of " curve segments in ")
+            set landedText to (landedText + (the string form of (importJob's microseconds / (1000 as a 64 bit integer)))) + (the string form of " ms on the import's thread (")
+            set landedText to (landedText + (the string form of (importJob's upload's microseconds / (1000 as a 64 bit integer)))) + (the string form of " ms for the GPU)")
+            set landedText to landedText + (the bim instancing text of imported)
+            set fitting to true
+        else:
+            set landedText to (the string form of "Import refused: ") + landed's message
+        set landedText to ((landedText + (the string form of "; taken in ")) + (the string form of (((the bim microseconds now) - landingStarted) / (1000 as a 64 bit integer)))) + (the string form of " ms")
+        set importMessage to landedText
+        if (the length of startupMessage) > 0:
+            set importMessage to (startupMessage + (the string form of "; ")) + landedText
+        set editor's message to landedText
+        print landedText as a line
+    if importRunning and (importLanding = false):
+        set importLanding to bim import job (the address of importJob) has finished
     set frameStarted to the bim microseconds now
     set layout to the bim screen layout of window browsing browserOpen folded ribbonFolded with properties propertiesShown
     set windowWidth to layout's width
@@ -412,6 +521,21 @@ loop while window remains open:
             replace item at index activeTab in tabDetails with editor's planViewId
     else:
         set sideTab to activeTab
+    # Another tab made active (or its plan another storey's): with nothing
+    # selected the properties show its view, as in Revit. An elevation
+    # chosen in the browser keeps showing in the 3D tab.
+    if activeTab >= 0:
+        set activeDetail to the item at activeTab in tabDetails
+        if (activeKind != propertiesTabKind) or (activeDetail != propertiesTabDetail):
+            set propertiesTabKind to activeKind
+            set propertiesTabDetail to activeDetail
+            set tabView to the bim view shown by tab activeKind showing activeDetail in editor's documentValue's current
+            set keepShown to false
+            set shownView to the bim view index of editor's propertiesViewId in editor's documentValue's current
+            if shownView's valid and (activeKind = bim model tab):
+                set keepShown to (the item at shownView's position in (editor's documentValue's current's views's values))'s kind = bim model view kind
+            if (keepShown = false) and (tabView != the bim refused id):
+                set editor's propertiesViewId to tabView
     set sideKind to bim model tab
     if (sideTab >= 0) and (sideTab < (the length of tabKinds)):
         set sideKind to the item at sideTab in tabKinds
@@ -732,6 +856,10 @@ loop while window remains open:
             set propertiesShown to propertiesShown = false
         else if chromeCommand = bim ui fold command:
             set ribbonFolded to ribbonFolded = false
+        else if chromeCommand = bim ui ribbon scroll command:
+            set ribbonFirstGroup to the maximum of 0 and (ribbonFirstGroup - 1)
+        else if chromeCommand = ((bim ui ribbon scroll command) + 1):
+            set ribbonFirstGroup to ribbonFirstGroup + 1
         else if chromeCommand = bim ui api command:
             set apiOn to apiOn = false
             if apiOn:
@@ -741,6 +869,7 @@ loop while window remains open:
                 set editor's message to the string form of "Automation API off"
         else if (chromeCommand >= bim ui subtab command) and (chromeCommand < ((bim ui subtab command) + 20)):
             replace item at index ribbonTab in ribbonSubs with (chromeCommand - (bim ui subtab command))
+            set ribbonFirstGroup to 0
         else if (chromeCommand >= bim ui rail command) and (chromeCommand < ((bim ui rail command) + 20)):
             # A rail section: the browser opens on it (its group alone open,
             # inside the views where it lies there), or closes when it showed.
@@ -769,6 +898,7 @@ loop while window remains open:
             set uiCommand to chromeCommand
         if uiHit's tab >= 0:
             set ribbonTab to uiHit's tab
+            set ribbonFirstGroup to 0
             # A tab chosen while the ribbon is folded unfolds it.
             set ribbonFolded to false
         # The project browser: groups open and close, views open, a door or
@@ -1379,7 +1509,7 @@ loop while window remains open:
         set overBrowser to (browserOpen and (pixel's x < layout's planLeft)) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))
         if (propertiesShown and (pixel's x >= layout's width)) and ((pixel's y > layout's top) and (pixel's y < layout's bottom)):
             # Over the properties: they scroll.
-            set visibleProperties to the bim property rows of editor
+            set visibleProperties to the bim property rows of editor with imported
             set propertiesHeight to ((the length of visibleProperties) as a 64 bit floating-point number) * 21.0
             free visibleProperties
             set maximumScroll to the maximum of 0.0 and ((propertiesHeight - (layout's bottom - ((the bim ui canvas top folded ribbonFolded) + 82.0))) + 21.0)
@@ -1532,16 +1662,20 @@ loop while window remains open:
         if (the item at ifcCursor in pressedCodes) = 2128:
             set pickedIfc to the bim ifc file picked
             if (the length of pickedIfc) > 0:
-                set ifcStarted to the bim microseconds now
-                set pickedCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
-                set freshImport to the bim ifc import of pickedIfc made native in (the address of (editor's documentValue)) counting (the address of pickedCounts)
-                if freshImport's valid:
-                    set imported to freshImport
-                    set importGeneration to importGeneration + 1
-                    set editor's message to (the bim ifc native text of pickedCounts) + (((((the string form of "Imported ") + (the string form of (the length of (imported's labels's values)))) + (the string form of " IFC elements, ")) + ((the string form of imported's triangleCount) + (the string form of " triangles in "))) + ((the string form of (((the bim microseconds now) - ifcStarted) / (1000 as a 64 bit integer))) + (the string form of " ms")))
-                    set fitting to true
+                # Read on the import's thread, as --import is.
+                if importRunning:
+                    set editor's message to the string form of "An import is still being read"
                 else:
-                    set editor's message to (the string form of "IFC import refused: ") + freshImport's message
+                    set pickedPaths to an empty list of a string
+                    append pickedIfc to pickedPaths
+                    set importJob to a bim import job of pickedPaths on gpuDevice
+                    free pickedPaths
+                    if start bim import job (the address of importJob):
+                        set importRunning to true
+                        set importLanding to false
+                        set importAfterSteps to 0
+                    else:
+                        set editor's message to the string form of "Import refused: no thread could be started for it"
     # 2132 gives each imported storey a storey in the model, and so a plan.
     loop storeysCursor from 0 to the length of pressedCodes:
         if (the item at storeysCursor in pressedCodes) = 2132:
@@ -1745,24 +1879,69 @@ loop while window remains open:
     loop while (lodTier < 24) and (lodTolerance > halfPixel):
         set lodTolerance to lodTolerance * 0.5
         set lodTier to lodTier + 1
-    if (editor's documentValue's revision != meshedRevision) or (editor's dragging or (lodTier != meshedTier)):
+    # An edit or a drag meshes the model again at once. Zooming past a tier
+    # queues the round shapes to be meshed again (`the bim zoom queue of …`):
+    # each frame takes from the queue for at most 6 ms, those covering the
+    # most of the 3D view first, and the view shows what is made so far.
+    # Only meshes that come out different count as a change.
+    set modelChanged to (editor's documentValue's revision != meshedRevision) or editor's dragging
+    if modelChanged:
         set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
-        if ((editor's documentValue's revision = meshedRevision) and (editor's dragging = false)) and (gizmoAxis = 0):
-            set sketchMeshes to the bim sketch meshes of editor's documentValue's current within lodTolerance reusing (sketchMeshes's values)
-        else:
-            set sketchMeshes to the bim sketch meshes of editor's documentValue's current within lodTolerance
+        set sketchMeshes to the bim sketch meshes of editor's documentValue's current within lodTolerance
         set meshedTier to lodTier
+        clear lodQueue
+        set lodQueueNext to 0
         loop cursor from 0 to the length of (sketchMeshes's values):
             append (the item at cursor in (sketchMeshes's values)) to (meshes's values)
         set meshedRevision to editor's documentValue's revision
         set meshGeneration to meshGeneration + (1 as a 64 bit integer)
+    else if lodTier != meshedTier:
+        free lodQueue
+        set lodQueue to the bim zoom queue of (sketchMeshes's values) in viewLayout with camera
+        set lodQueueNext to 0
+        set meshedTier to lodTier
+    if (modelChanged = false) and (lodQueueNext < (the length of lodQueue)):
+        set queueStarted to the bim microseconds now
+        set remade to an empty list of a boolean
+        loop cursor from 0 to the length of (sketchMeshes's values):
+            append false to remade
+        set changedAny to false
+        loop while (lodQueueNext < (the length of lodQueue)) and (((the bim microseconds now) - queueStarted) < (6000 as a 64 bit integer)):
+            set chunkStarted to the bim microseconds now
+            set chunkEnd to the minimum of (lodQueueNext + lodChunk) and (the length of lodQueue)
+            loop queueCursor from lodQueueNext to chunkEnd:
+                replace item at index (the item at queueCursor in lodQueue) in remade with true
+            set refreshed to the bim sketch meshes of editor's documentValue's current within lodTolerance reusing (sketchMeshes's values) refreshing remade
+            loop queueCursor from lodQueueNext to chunkEnd:
+                set queued to the item at queueCursor in lodQueue
+                if (bim scene mesh (the item at queued in (refreshed's values)) repeats (the item at queued in (sketchMeshes's values))) = false:
+                    set changedAny to true
+                replace item at index queued in remade with false
+            set sketchMeshes to refreshed
+            set lodQueueNext to chunkEnd
+            # A chunk as large as about a quarter of the budget takes.
+            set chunkTook to (the bim microseconds now) - chunkStarted
+            if (chunkTook < (1500 as a 64 bit integer)) and (lodChunk < 256):
+                set lodChunk to lodChunk * 2
+            else if (chunkTook > (3000 as a 64 bit integer)) and (lodChunk > 1):
+                set lodChunk to lodChunk / 2
+        free remade
+        if changedAny:
+            set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
+            loop cursor from 0 to the length of (sketchMeshes's values):
+                append (the item at cursor in (sketchMeshes's values)) to (meshes's values)
+            set meshGeneration to meshGeneration + (1 as a 64 bit integer)
     # The meshes of the categories the 3D view shows; picking sees only these.
     # They are filtered again only when the meshes or the 3D view's rules
-    # change.
+    # change, and not while the zoom queue or a section box drag is under
+    # way (the GPU shows those through flags and the shaders' cut).
     set shownKey to ((the string form of meshGeneration) + (the string form of " import ")) + ((the string form of importGeneration) + (the bim rule text of editor's modelRules))
     if storeyIsolated:
         set shownKey to (shownKey + (the string form of " storey ")) + (the bim exact text of isolatedStorey)
-    if sectionBoxOn:
+    set flagsWanted to shownKey
+    if (lodQueueNext < (the length of lodQueue)) or (boxDragFace >= 0):
+        set shownKey to shownMeshesKey
+    else if sectionBoxOn:
         set shownKey to ((shownKey + (the string form of " box ")) + ((the string form of sectionBoxLow's x) + (the string form of sectionBoxLow's y))) + (((the string form of sectionBoxLow's z) + (the string form of sectionBoxHigh's x)) + ((the string form of sectionBoxHigh's y) + (the string form of sectionBoxHigh's z)))
     if shownKey != shownMeshesKey:
         set shownMeshes to the bim meshes of (meshes's values) and (imported's meshes's values) shown by editor's modelRules
@@ -1891,14 +2070,48 @@ loop while window remains open:
     # the plan drew into it, and the bars over whatever either panel drew.
     draw a rectangle at x layout's planRight and y 0 with width (layout's width - layout's planRight) and height layout's height in color red 247, green 249 and blue 252 in frame
     if drawModel:
-        # The model lives on the GPU, with its ground, shadows and edges: it
-        # is written again only when the shown meshes, the view mode or the
-        # shadows change, and each frame sets the camera and draws it.
-        if ((shownMeshesKey != uploadedKey) or (viewMode != uploadedMode)) or (shadowsOn != uploadedShadows):
-            set gpuScene to upload bim gpu scene of (shownMeshes's values) for editor in mode viewMode shadowed shadowsOn to window
-            set uploadedKey to shownMeshesKey
-            set uploadedMode to viewMode
-            set uploadedShadows to shadowsOn
+        # The model lives on the GPU in slots (`bim gpu ground slot` and on),
+        # each written again only when what it holds changes: the imported
+        # elements with the import or their colours, the native ones with
+        # the meshes, the ground and shadows after either. Which elements
+        # show is a flag each, the section box a cut in the shaders; each
+        # frame sets them and the camera and draws.
+        # The colours of the hidden line view and the rules' halftone are the
+        # shaders' (parameter 37, the elements' flags); only the native
+        # elements' edges depend on the view mode.
+        set edgesWanted to viewMode != bim shaded view mode
+        set importKey to the string form of importGeneration
+        set nativeKey to (the string form of meshGeneration) + (the string form of edgesWanted)
+        set bim gpu light model (viewMode = bim hidden line view mode) on window
+        set uploadStarted to the bim microseconds now
+        set uploadedAny to false
+        if importKey != importUploadKey:
+            upload bim gpu import of imported into (the address of gpuScene) on window
+            set importUploadKey to importKey
+            # The native ordinals follow the imported ones.
+            set nativeUploadKey to the string form of "stale"
+            set uploadedAny to true
+        if nativeKey != nativeUploadKey:
+            if (the length of (imported's meshes's values)) = 0:
+                set gpuScene's origin to the bim gpu origin for imported and (meshes's values)
+            upload bim gpu native of (meshes's values) for editor in mode viewMode into (the address of gpuScene) on window
+            set nativeUploadKey to nativeKey
+            set uploadedAny to true
+        set groundKey to (importUploadKey + (the string form of " native ")) + nativeUploadKey
+        if shadowsOn:
+            set groundKey to groundKey + (the string form of " shadows")
+        if groundKey != groundUploadKey:
+            upload bim gpu ground of (imported's meshes's values) and (meshes's values) shadowed shadowsOn into (the address of gpuScene) on window
+            set groundUploadKey to groundKey
+            set uploadedAny to true
+        if uploadedAny:
+            set uploadMilliseconds to ((the bim microseconds now) - uploadStarted) / (1000 as a 64 bit integer)
+            set uploadCount to uploadCount + 1
+        set flagsWanted to (flagsWanted + (the string form of " native ")) + nativeUploadKey
+        if flagsWanted != flagsKey:
+            show bim gpu elements of (imported's meshes's values) and (meshes's values) in gpuScene for editor isolating storeyIsolated at isolatedStorey with imported on window
+            set flagsKey to flagsWanted
+        set bim gpu section box from sectionBoxLow to sectionBoxHigh boxed sectionBoxOn for gpuScene on window
         set viewKey to the bim view key of editor with camera in viewLayout at meshGeneration showing (the length of (shownMeshes's values))
         set selectedForGpu to an empty list of a 64 bit integer
         if editor's selectionKind != bim nothing picked:
@@ -1909,7 +2122,7 @@ loop while window remains open:
         free selectedForGpu
         draw bim model of gpuScene in viewLayout with camera mode viewMode on window
         if viewMode != bim shaded view mode:
-            draw bim edges in viewLayout hidden (viewMode != bim wireframe view mode) on window
+            draw bim edges of gpuScene in viewLayout hidden (viewMode != bim wireframe view mode) on window
         draw bim grid lines in view of editor around gpuScene in viewLayout with camera in frame
         draw bim label ((the string form of "3D  ") + ((the bim name of view mode viewMode) + (the string form of " (Ctrl+1-4)   drag: select (right: window, left: crossing)   right or Shift+middle: orbit, middle: pan, wheel: zoom"))) at (viewLayout's planRight + 16.0) and (viewLayout's top + 30.0) using typeface in frame
         if elevationLocked = false:
@@ -2084,7 +2297,9 @@ loop while window remains open:
     set status to ((status + (the string form of " elements in ")) + (the string form of editor's lastMicroseconds)) + (the string form of " us   revision ")
     set status to (status + (the string form of editor's documentValue's revision)) + (the string form of "   spaces ")
     set status to (status + (the string form of (the length of (editor's spaces's values)))) + (the string form of "   frame ")
-    set status to (status + (the string form of frameMicroseconds)) + (the string form of " us   ")
+    set status to (status + (the string form of "CPU ")) + (the bim milliseconds text of frameMicroseconds)
+    set status to ((status + (the string form of " ms, GPU ")) + (the bim milliseconds text of (((the gpu frame microseconds of (the gpu context of window)) + 0.5) as a 64 bit integer))) + (the string form of " ms   ")
+    set status to (((status + (the string form of "3D uploads ")) + (the string form of uploadCount)) + (the string form of ", last ")) + ((the string form of uploadMilliseconds) + (the string form of " ms   "))
     if apiOn:
         set status to (status + (the string form of "API ")) + (apiFolder + (the string form of "   "))
     set typeFound to the bim opening type index of editor's openingTypeId in editor's documentValue's current
@@ -2130,7 +2345,7 @@ loop while window remains open:
     set prompt to editor's message
     if (the length of editor's numeric) > 0:
         set prompt to (the string form of "Length: ") + editor's numeric
-    set uiHit to draw bim ribbon of tab ribbonTab under (the item at ribbonTab in ribbonSubs) folded ribbonFolded for editor pointing at pixel's x and pixel's y across windowWidth using typeface in frame
+    set uiHit to draw bim ribbon of tab ribbonTab under (the item at ribbonTab in ribbonSubs) folded ribbonFolded from group ribbonFirstGroup for editor pointing at pixel's x and pixel's y across windowWidth using typeface in frame
     draw bim document bar named filePath across windowWidth folded ribbonFolded using typeface in frame
     set chromeBottom to the bim ui canvas top folded ribbonFolded
     # The selection's actions float over the canvas, centred on the active
@@ -2149,7 +2364,9 @@ loop while window remains open:
         if explorerHit's inChrome:
             set uiHit to explorerHit
     if propertiesShown:
-        set propertiesHit to draw bim properties of editor scrolled propertiesScroll choosing typeSelectorOpen folding headingsClosed pointing at pixel's x and pixel's y from layout's width below chromeBottom down to layout's bottom using typeface in frame
+        set propertiesRows to the bim property rows of editor with imported
+        set propertiesHit to draw bim properties of editor listing propertiesRows scrolled propertiesScroll choosing typeSelectorOpen folding headingsClosed pointing at pixel's x and pixel's y from layout's width below chromeBottom down to layout's bottom using typeface in frame
+        free propertiesRows
         if propertiesHit's inChrome:
             set uiHit to propertiesHit
     draw bim command line saying prompt and status uiStatus in windowWidth by layout's height using typeface in frame
@@ -2162,8 +2379,34 @@ loop while window remains open:
         set contextCorner to the bim context menu corner of contextRows opened at contextAt's x and contextAt's y within windowWidth by layout's height
         set contextHover to draw bim context menu contextRows cornered at contextCorner for editor pointing at pixel's x and pixel's y using typeface in frame
         free contextRows
+    if importRunning:
+        draw bim loading card of (the address of importJob) after importAfterSteps steps centred on ((layout's planLeft + layout's width) * 0.5) from (layout's bottom - 96.0) landing importLanding using typeface in frame
     set frameMicroseconds to (the bim microseconds now) - frameStarted
     display frame
+    # Whether anything happened this frame: input, an edit, the camera
+    # still settling, a drag; twenty quiet frames in a row let the loop sleep.
+    set markNow to the bim input mark of window over watchedKeys
+    set changed to (markNow != inputMark) or (editor's documentValue's revision != markedRevision)
+    if ((changed or cameraUnsettled) or editor's dragging) or importLanding:
+        set quietFrames to 0
+    else:
+        set quietFrames to quietFrames + 1
+    set inputMark to markNow
+    set markedRevision to editor's documentValue's revision
+    # The time until the editor answered, from the start to the first frame
+    # shown, and its parts.
+    if firstFrame:
+        set firstFrame to false
+        set readyAt to the bim microseconds now
+        set startupMessage to ((the string form of "Ready in ") + (the string form of ((readyAt - startedAt) / (1000 as a 64 bit integer)))) + (the string form of " ms (window ")
+        set startupMessage to ((startupMessage + (the string form of ((windowAt - startedAt) / (1000 as a 64 bit integer)))) + (the string form of ", fonts ")) + (the string form of ((fontsAt - windowAt) / (1000 as a 64 bit integer)))
+        set startupMessage to ((startupMessage + (the string form of ", editor ")) + (the string form of ((editorAt - fontsAt) / (1000 as a 64 bit integer)))) + (the string form of ", first frame ")
+        set startupMessage to (startupMessage + (the string form of ((readyAt - editorAt) / (1000 as a 64 bit integer)))) + (the string form of " ms)")
+        print startupMessage as a line
+        if (the length of importMessage) = 0:
+            set importMessage to startupMessage
+        else:
+            set importMessage to (startupMessage + (the string form of "; ")) + importMessage
 free previousKeys
 release bim text atlas typeface
 close window

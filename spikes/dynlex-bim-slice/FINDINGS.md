@@ -509,3 +509,312 @@ show imports.
   part`, `size`, `length`, `a`, `from` all had to be renamed. Compiling
   `tests/ifc_read.dl` at `-O0` takes 13 to 18 minutes and the application at `-O2` 51
   minutes, before and after these changes alike.
+
+## The 3D view in slots: zoom, filters in the shaders, instances (2026-10-16)
+
+**Question.** Zooming the 3D view on Sixty5 lagged. Reading the code showed why: each
+time the zoom crossed a level of detail, the whole model was meshed again and written to
+the GPU as one mesh. That cost was not measured before the change, and only the "after"
+below is a measurement. The same single mesh meant that isolating a storey, toggling a
+category or moving the section box also wrote the model again.
+
+**What changed.**
+- **Slots.** The GPU keeps the model in four mesh slots: the ground and shadows, the
+  imported elements, the shapes imported elements share, and the native elements. Each
+  slot is written again only when what it holds changes.
+- **Flags.** Which elements show (the 3D view's categories, its phase, an isolated
+  storey) is a float per element ordinal in the shaders' storage buffer. The vertex
+  shaders read it and move a hidden element's corners out of view, its shadow included.
+- **The section box** is a cut in the fragment shaders. The shader compiler got a
+  `shader discard` intrinsic for it (`llvm.spv.discard`, SPIR-V `OpKill`, in
+  `patches/dynlex-shader-extensions.patch`).
+- **Instances.** An IFC element made of exactly one mapped item places its mapped
+  representation's mesh. The import keeps the shape once, in its own coordinates, and
+  each element's transform. The GPU welds and smooths each shape once and draws it
+  with one instanced draw. The meshes in the world stay for picking, the plan and the
+  section.
+- **A zoom queue.** Zooming past a level of detail queues the native round shapes to be
+  meshed again. The shapes covering most of the 3D view come first, in classes a factor
+  of two apart; shapes outside the view count a sixty-fourth. Each frame takes from the
+  queue for at most 6 ms, in chunks sized to about a quarter of that, and only meshes
+  that come out different count as a change.
+
+**Measured** on the hardware above, Sixty5 with the native conversion of the same day
+(903 native elements; 15,460 imported, 1,627,128 triangles), in a 1440 × 900 window:
+- **Uploads.** Writing all four slots once took 377, 389, 403 and 410 ms in four runs.
+- **Zoom.** 12 wheel steps in, from the whole building to a few balconies: the
+  status bar's upload count stayed at 1. The levels of detail are a factor of two
+  apart, so that zoom crossed several of them.
+- **Filters.** Isolating a storey, Page Up three storeys, turning the section box on,
+  dragging its top face and turning it off: the upload count stayed at 1, with frames
+  of 14 to 17 ms over the whole building.
+- **Instances.** 5,719 meshes, 1,096,799 of the 1,627,128 triangles (67%), are drawn
+  as instances of 362 shapes. A count of faces in the STEP text beforehand had
+  estimated 65%.
+- **The cost of a cut.** It showed in a fixed view: *Fit*, then 12 wheel steps, then
+  four frame-time samples. Fragment shaders without discard took 24.9 to 28.8 ms. The
+  same shaders with the box test, box off, took 31.0 to 31.7 ms, since a shader that
+  can drop fragments loses the GPU's early depth test. The cut now has its own six
+  pipelines (faces, edges, wires, each plain and instanced), drawn only while the box
+  is on. With them, the box off took 24.1 to 27.2 ms. The faces' and edges' shading is
+  one shader library (`lib/vulkan/shaders/mesh_shading.dl`) that both variants import.
+- **Tests.** `tests/zoom_queue.dl`: three columns, two of them round, meshed coarse, and
+  then the first two made again fine. The round one came out as the fine mesh made
+  whole (468 corners), the square one as it was, and the untouched round one stayed
+  coarse (132). `tests/ifc_read.dl`: of the small file's mapped items, only the green
+  column (one mapped item) places a shape, 11,000 mm along x; the columns of two mapped
+  items do not. Both pass in a bundle with `pick`, `editor`, `linear_tool`, `curtains`,
+  `ifc_native` and `views`.
+
+**Not measured.** The GPU's own frame time and the GPU memory saved by instances. The
+zoom queue in the running editor on a model with many native round shapes; Sixty5's
+native elements are walls and floors. The time picking takes to clip the model to the
+box after a drag ends, when its list is filtered again.
+
+**Left as it is.**
+- Shadows (models of up to 150,000 triangles) show whole elements even where the box
+  cuts them.
+- The cut has no cap.
+- A new view mode or halftone writes the imported elements again, since their colours
+  are in their vertices.
+- An instance's normal is turned by its axes, not by their inverse transpose, so a
+  non-uniform scale shades slightly wrong.
+- Kept meshes are found by their position in the list. Should an element come out in
+  another number of meshes, everything is made again.
+
+**DynLex.** A local named like a literal word of its own function's pattern turns into
+a parameter of that function: "'queue' is a parameter because it was used here". In
+`the bim zoom queue of …` a local `queue` cost a 15-minute build; `shade` and `outside`
+did the same in the shaders. The compile memory and the variation in build time follow
+from the clones of type-inference trials, which are not freed until the parse context
+goes (reported as dynlex#13).
+
+## Review of the running build (2026-10-19)
+
+The maintainer ran the `-O2` build of 2026-10-16 with `--import` of the Sixty5
+architecture file.
+
+- **Navigation.** *Observed* by the maintainer: zooming and orbiting are smooth.
+- **Start-up.** The editor is not usable until the import has finished. The window
+  opens first, but the IFC import runs before the first frame, then the meshing and
+  the GPU upload follow. *Measured* in that run, from the import message: 12,489 ms
+  for the import (15,460 elements, 1,627,128 triangles; 715 walls, 143 openings and
+  188 floors made native). The status bar gave 393 ms for the last upload. The time to
+  the first frame without an import was not measured. The maintainer's requirement:
+  the editor is interactive within 1 s of starting. Anything slower loads in the
+  background, behind a loading screen that names the step under way and counts the
+  steps.
+- **Isolate storey out of reach.** *Observed* by the maintainer: in a smaller window,
+  *Isolate storey* does not show. The cause, read from the code: the ribbon lays its
+  groups out from the left at full size, with no compact form and no overflow, so the
+  groups past the window's right edge are drawn off screen. Under View > All, *3D mode*
+  is the seventh of eight groups.
+- **Wanted next.** A realistic view: transparent glass and shadows that elements cast
+  on each other (a shadow map), as proposed on 2026-10-16.
+
+## Start-up in the background, the triangulation, and a realistic view (2026-10-19)
+
+**The import's time.** Sixty5's architecture import took 12.5 s (above). Sampling its
+stack under `gdb` every 100 ms, with the callee-saved registers recorded, showed two
+calls of `the cad triangulation of` that took about 5 s each (*measured*, under the
+debugger). Each was a face of about 1,800 corners: the registers holding the ring
+stayed the same while a count fell from 1,812. The ear clipping
+(`lib/cadkernel/triangulate2.dl`, ported from cadkernel) tests every corner against
+every other point for each ear it cuts, which is O(n³). The overlay's copy now keeps,
+for each corner, whether it turns left and how many points lie in its triangle. A cut
+changes the triangles of its two neighbours only; every other corner loses at most the
+cut point. That makes it O(n²), with the same ears in the same order.
+- *Measured* against the toolchain's version, on the same driver: identical output for
+  600 random rings, with holes, and rounded to whole numbers so that points repeat and
+  lie in line. A comb of 1,804 corners took 6.04 s before and 0.054 s after.
+- The toolchain's own triangulation tests (`cadkernel_triangulate2` and its ownership
+  test) pass with the overlay's copy. `tests/triangulate_comb.dl` keeps the comb.
+- Sixty5's import took 5,482 ms after the change, with the same 15,460 elements and
+  1,627,128 triangles.
+
+**Start-up.** A loading screen counts the steps of the start (the window, the fonts,
+the editor). A file given with `--import` is then read on a POSIX thread while the
+editor runs. A card over the canvas names the step under way, how far it is, and the
+time so far. *Measured* on Sixty5 with the `-O2` build:
+- From the first statement to the first frame shown: 221 ms. Of that, the window
+  (Vulkan, its pipelines) took 182 ms, the fonts 37 ms, the editor below 1 ms.
+- The window was on screen 0.35 s after `build.sh run` was started. That figure
+  includes copying the tree; the 221 ms does not include the process's own start.
+- The editor answered during the import: frames of 3 to 16 ms in the status bar.
+- The import's thread took 5.5 s. The frame that takes its result then meshes the 903
+  native elements (25 ms) and writes the GPU's slots (400 ms), so it stalls for about
+  0.4 s.
+
+**DynLex and threads.** `the function named "…$"` gives an exposed function's C
+address, and `pthread_create` runs it. A function reached only that way is compiled
+without its list code: any list append in it, however deep, stops the compiler with
+"runtime call argument produced no value". Calling the function directly first, in a
+branch that never runs, works around it. DynLex counts references to strings and
+lists without atomics, so the thread works on an editor and an import record of its
+own, and the window's thread touches them only after it has joined the thread.
+
+**The ribbon in a narrow window.** A tab's groups that do not fit become compact (their
+buttons small, three to a column), from the last group back. When even that is too
+wide, arrows scroll the ribbon by a group. Sub-tabs that would run into the tabs are
+left out. *Observed* at 1,000 pixels wide: View showed Create, Windows, Drawing types
+and Phasing with an arrow, and three clicks on it brought *Section box*, *Isolate
+storey* and *Realistic* into view.
+
+**The realistic view (removed the same day).** It was built and measured as below, then
+taken out at the maintainer's decision: the editor is to be as lean as it can be, and a
+realistic view may come later as an extension installed through the Open AEC
+installer. Its code is kept as `patches/overlay-realistic-view.patch`. It was reached
+through View > 3D mode > Realistic, the 3D view's Graphics menu, or Ctrl+5.
+- **Shadows.** The sun lights the faces through a shadow map: the model is drawn
+  from the sun into a depth image of 4096 × 4096. The faces' shader compares each
+  point against it, averaging four texels.
+- **When the map is drawn.** The sun is fixed in the world, so the map is drawn
+  again only when the model or what shows changes, not when the camera moves.
+- **Sky and glass.** The sky lights every face, more from above. Glass, an IFC
+  surface style's transparency, is blended over the other faces. It is more opaque
+  and reflects the sky at a glancing angle (Schlick's approximation), and it carries
+  the sun's highlight.
+- **Cost at start-up.** Its ten pipelines and the map are made the first time the
+  view is chosen, so the start does not pay for them. Choosing it writes nothing to
+  the GPU again: the upload count stayed at 1.
+
+*Observed* on Sixty5: the parapets cast their shadows on the terraces. With one
+storey isolated, the map was drawn again and the walls' shadows fell across the
+floors. The status bar's frame time was 16 to 22 ms. That is the CPU's time per
+frame, not the GPU's.
+
+**Tests.** A bundle of `ifc_read`, `zoom_queue`, `pick`, `editor`, `linear_tool`,
+`curtains`, `ifc_native`, `views`, `triangulate_comb`, `api` and `reinforcement_editor`
+passes. It was run by hand: `build.sh bundle` stops on two warnings in `api.dl`'s
+prints, which are older than these changes.
+
+**Not measured.**
+- The GPU's time for the shadow pass or for the realistic faces.
+- The start without an import, and the start on another machine.
+
+**Left as it was then** (the first two are resolved in the next section; the others
+went with the realistic view):
+- The frame that takes the import's result stalls for about 0.4 s.
+- Collaborate > Import > IFC still imports in the window's thread.
+- Glass is blended in the order it was written, not sorted by depth.
+- The ground is only drawn for models of up to 150,000 triangles, so on Sixty5 the
+  map shades no ground.
+- Native elements have no glass yet: a curtain wall's panels are opaque.
+
+## The GPU's uploads off the window's thread, and frames only when needed (2026-10-19)
+
+The maintainer's requirements after the review:
+- Uploads to the GPU happen in the background and no faster than the GPU takes them.
+- Frames are paced by vsync where the GPU is not the limit.
+- The time a frame takes is shown, so that it can still be optimised, but no
+  computing power is spent while nothing changes.
+
+**The import's upload.** The import's thread now writes the imported elements for
+the GPU into buffers of its own: vertices, indices, edges and instances, in
+host-visible memory that the GPU reads directly.
+- It makes those buffers through a device record of plain pointers, so that it
+  touches no list the window's thread counts. Creating Vulkan objects needs no lock.
+- The window's thread then installs them, once the GPU is idle, and adds the walls
+  and floors the thread found to the model, as one undoable step.
+- Collaborate > Import > IFC starts the same job. The model may be edited during
+  the import: the walls and floors are added to the model as it is then.
+- The window's thread draws at most one frame ahead of the GPU: each frame waits
+  for the one before. Presenting waits for the display (FIFO).
+
+*Measured* on Sixty5:
+- The thread took 4,501 ms in all, of which 549 ms were the GPU's buffers.
+- The frame that took the result spent 5 ms on it, against about 400 ms before.
+- The first 3D frame after it wrote the native elements and the ground in 12 ms.
+- Same model as before: 15,460 elements, 1,627,128 triangles.
+- From the first statement to the first frame: 95 to 107 ms.
+
+**The colours a view mode or the rules change.** The hidden line view's grey is a
+shader parameter, and the halftone of the 3D view's rules is a value of each
+element's flag (2: faint), both applied by the vertex shaders.
+- The imported elements are written with their feature edges whatever the view
+  mode, so a new import is the only thing that writes them again.
+- The native elements are written again when edges become needed.
+- *Measured:* switching to Hidden wrote only the native elements, in 14 ms.
+
+**Frames on demand.** When twenty frames in a row saw no input, no edit, no camera
+still settling and no drag, the loop waits for the window's next event instead of
+drawing (`glfwWaitEventsTimeout`). It wakes on its own only while there is
+something to update:
+- a running import, four times a second for its card;
+- a letter waiting for its second, ten times a second;
+- the automation API, ten times a second;
+- work in the zoom queue keeps it drawing.
+
+*Measured*, the editor's CPU time over 10 s without input, from `/proc`:
+- Before (`--example`): 6.1 to 7.5 % of one core.
+- After: 0 ticks, both with `--example` and with Sixty5 imported.
+- After 10 s of rest, a scroll was answered and drawn at once.
+
+**Frame times.** The status bar shows the last frame's time on the CPU (the work
+before presenting) and on the GPU (two timestamps around the frame's commands,
+`vkCmdWriteTimestamp`). *Measured*:
+
+| Situation | CPU | GPU |
+|---|---|---|
+| Plan view while the import ran | 0.3 ms | 1.5 to 2.2 ms |
+| Whole of Sixty5 in the 3D view, shaded | 15.8 ms | 13.5 ms |
+| Whole of Sixty5 in the 3D view, hidden line | 21.4 ms | 15.5 ms |
+
+**The row of tabs in a narrow window.** It leaves out the title, then closes up,
+then letters its tabs smaller. *Observed:* all ten tabs fit at 1,000 pixels without
+the title, and at 880 with smaller letters.
+
+**A start without arguments aborted.** `the argument at 0` was read in a condition
+`(length > 1) and (… = "--import")` even with no arguments. DynLex's `and`
+evaluates both sides, so the list's bounds check stopped the program. The committed
+`main.dl` has the same condition (read from the code; that build was not run without
+arguments). The first argument is now read only when there is one, and a start
+without arguments runs.
+
+**Tests.** `build.sh bundle` with `ifc_read`, `zoom_queue`, `pick`, `editor`,
+`linear_tool`, `curtains`, `ifc_native`, `views`, `triangulate_comb`, `api` and
+`reinforcement_editor` passes. The working tree had the bracketed prints of
+`tests/api.dl` by then, so it ran without stopping on warnings.
+
+## The properties panel (2026-10-19)
+
+The maintainer reported that the properties panel does not work well. Checked in
+the running build with Sixty5 imported:
+
+- **An imported element showed the wrong things.** *Observed:* with an imported
+  IfcBeam selected, the panel showed a wall type to choose, the active storey, a
+  view, the project and the element's phases. Nothing about the beam itself. The
+  cause, read from the code: the panel's rows come from the editor, which does not
+  hold the import, so an imported selection fell through to the rows shown with
+  nothing selected. The window now builds those rows from the import: IFC class,
+  GlobalId, name, storey and its elevation, read only. The type box names the IFC
+  class and opens no list, and there are no phase rows (setting a phase would have
+  written phasing for an id that is not in the model). *Observed* after the change:
+  an IfcWall from Sixty5 shows its class, GlobalId and storey (`00 begane grond`,
+  0 mm).
+- **The view shown was not the active one.** *Observed:* with the 3D tab active, the
+  panel showed *Section 2*, the view last chosen in the project browser. Now, when
+  another tab is made active (or its plan moves to another storey), the panel shows
+  that tab's view. An elevation chosen in the browser keeps showing in the 3D tab.
+  *Observed* after the change: switching from the plan to the 3D tab gives
+  `3D`, `3D view`.
+- **Names and values ran into each other.** *Observed:* "Drawing standar",
+  "Coordinate syste", "Phase demolishe": the label column is 88 pixels and the field
+  was drawn over the rest. Labels and values that do not fit are now cut short with
+  "...", and the whole row shows beside the pointer. A GlobalId (22 characters) does
+  not fit the value column.
+- **Rows under the wrong heading.** *Observed:* the view's *Drawing type* and *Phase*
+  came after *Georeferencing*. They were added after all the other rows. They now
+  sit under *View*.
+- **A selected level.** *Observed:* a level picked in the 3D view showed the view,
+  project, units and georeferencing, a wall type to choose, and phases. A level now
+  shows only its own rows, with *Level* in the type box.
+
+Typing a value (the 3D view's scale), folding a heading and scrolling worked as
+before. Once during the test the active tab changed to the plan with nobody
+clicking it on purpose. The same steps did not reproduce it.
+
+**Tests.** `properties`, `project_settings`, `plates`, `linear_tool`,
+`type_editor`, `solid_tool`, `editor`, `views` and `pick` pass, in three bundles of
+three. One bundle of all nine ran out of memory: the watchdog stopped it at 1.1 GB
+available, from 10.6 GB at the start.

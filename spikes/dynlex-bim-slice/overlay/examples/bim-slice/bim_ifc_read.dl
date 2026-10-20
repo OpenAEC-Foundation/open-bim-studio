@@ -24,7 +24,9 @@
 #                  first operand's triangles clipped; other second operands
 #                  are left out)
 #   instancing     IfcMappedItem (IfcCartesianTransformationOperator3D,
-#                  uniform and not), each mapped representation meshed once
+#                  uniform and not), each mapped representation meshed once;
+#                  an element made of one mapped item is marked as placing
+#                  that mesh (the import's instancing), for the 3D view
 #   storeys        IfcBuildingStorey at its placement's height; each
 #                  element in the storey that contains it, through
 #                  IfcRelContainedInSpatialStructure or the whole it is a
@@ -146,10 +148,19 @@ class:
         mappedIds as the type of (an empty list of an integer)
         mappedColours as the type of (an empty list of an integer)
         mappedMeshes as the type of (an empty list of a bim ifc painted mesh record)
+        # The mapped representation placed last (-1: none) and how.
+        lastMapped as an integer
+        lastMappedAxes as a bim ifc frame record
         # The surface colour styled onto an item, by item id: red, green and
         # blue in 0..255 packed, or -1.
         itemColours as the type of (an empty list of an integer)
         skipped as the type of (an empty list of a string)
+
+# A reader of `stepFile` that has evaluated nothing yet, in metres and
+# radians until its units are gathered.
+function a fresh bim ifc reading of {bim step file record:stepFile}:
+    execute:
+        return @intrinsic("construct", a bim ifc reader record, stepFile, 1.0, 1.0, an empty list of a boolean, an empty list of a bim ifc frame record, an empty list of an integer, an empty list of an integer, an empty list of a bim ifc painted mesh record, -1, the bim ifc identity axes, an empty list of an integer, an empty list of a string)
 
 local function note bim ifc skipped {a string:typeName} in {a pointer to a bim ifc reader record:reader}:
     execute:
@@ -1301,6 +1312,8 @@ local function add bim ifc mapped item {bim step instance record:itemValue} thro
             set cached to (the length of (reader's mappedIds)) - 1
         set mappedAxes to the bim ifc axes (the bim ifc axes originFrame within targetFrame) within frame
         add bim ifc painted (the item at cached in (reader's mappedMeshes)) through mappedAxes to painted
+        set reader's lastMapped to cached
+        set reader's lastMappedAxes to mappedAxes
 
 # The items of shape representation `representationId` through `frame`, each
 # in its colour (`inherited` for those without one).
@@ -1675,6 +1688,37 @@ local function bim ifc class {a string:className} is left out:
 # The body representation of product definition shape `shapeId`: the one
 # named Body (or Facetation, or Mesh), else the first that is not an axis,
 # outline or box; -1 if none.
+# Whether representation `representationId` is one mapped item and nothing
+# else, so that its element places the mapped representation's mesh.
+local function bim ifc representation {integer:representationId} is one mapped item in {bim step file record:stepFile}:
+    execute:
+        if (bim step file stepFile holds representationId) = false:
+            return false
+        set representationValue to the bim step instance representationId in stepFile
+        set items to the bim step argument 3 of representationValue
+        set single to false
+        if (the bim step count of items in representationValue) = 1:
+            set single to bim step instance (the bim step reference of (the bim step member 0 of items in representationValue) in representationValue) is a "IFCMAPPEDITEM" in stepFile
+        free bim step instance representationValue
+        return single
+
+# The twelve numbers placing a shape through `frame`, by rows: the x, y and
+# z axes' parts and the shift.
+local function append bim ifc rows of {bim ifc frame record:frame} to {a pointer to a list:rows}:
+    execute:
+        append frame's xAxis's x to rows
+        append frame's yAxis's x to rows
+        append frame's zAxis's x to rows
+        append frame's origin's x to rows
+        append frame's xAxis's y to rows
+        append frame's yAxis's y to rows
+        append frame's zAxis's y to rows
+        append frame's origin's y to rows
+        append frame's xAxis's z to rows
+        append frame's yAxis's z to rows
+        append frame's zAxis's z to rows
+        append frame's origin's z to rows
+
 function the bim ifc body of shape {integer:shapeId} in {bim step file record:stepFile}:
     execute:
         if (bim step instance shapeId is a "IFCPRODUCTDEFINITIONSHAPE" in stepFile) = false:
@@ -1765,10 +1809,16 @@ function the bim ifc elements of {bim step file record:stepFile}:
 # model instead, see `bim_ifc_native.dl`).
 function the bim ifc elements of {bim step file record:stepFile} skipping {a pointer to a list:skippedIds}:
     execute:
+        return the bim ifc elements of stepFile skipping skippedIds reporting to (no bim load progress)
+
+# The same, reporting how many of the file's instances have been looked at
+# to `tracker` (see `bim_step.dl`).
+function the bim ifc elements of {bim step file record:stepFile} skipping {a pointer to a list:skippedIds} reporting to {a pointer to a bim load progress record:tracker}:
+    execute:
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
         if stepFile's valid = false:
-            return @intrinsic("construct", a bim import record, false, stepFile's message, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys)
-        set reader to @intrinsic("construct", a bim ifc reader record, stepFile, 1.0, 1.0, an empty list of a boolean, an empty list of a bim ifc frame record, an empty list of an integer, an empty list of an integer, an empty list of a bim ifc painted mesh record, an empty list of an integer, an empty list of a string)
+            return @intrinsic("construct", a bim import record, false, stepFile's message, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys, no bim import instancing)
+        set reader to a fresh bim ifc reading of stepFile
         set r to the address of reader
         gather bim ifc units for r
         gather bim ifc colours for r
@@ -1835,6 +1885,13 @@ function the bim ifc elements of {bim step file record:stepFile} skipping {a poi
             set typeText to the item at typeCursor in (stepFile's typeNames)
             append (((bim ifc type typeText is no product) = false) and ((bim ifc class typeText is left out) = false)) to productTypes
         set voidedCount to 0
+        # The shapes elements of one mapped item place, and for each mapped
+        # representation meshed (`mappedMeshes`) its first shape, -1 until
+        # an element places it.
+        set placements to no bim import instancing
+        set firstPrototypes to an empty list of an integer
+        set identityRows to an empty list of a 64 bit floating-point number
+        append bim ifc rows of (the bim ifc identity axes) to identityRows
         set meshes to a cad topology list of a bim scene mesh record
         set labels to a cad topology list of a string
         set infinity to 1.0 / 0.0
@@ -1842,7 +1899,10 @@ function the bim ifc elements of {bim step file record:stepFile} skipping {a poi
         set high to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
         set triangles to 0
         set element to 0
-        loop identifier from 0 to the length of (stepFile's starts):
+        set instanceTotal to the length of (stepFile's starts)
+        loop identifier from 0 to instanceTotal:
+            if (the remainder of identifier divided by 4096) = 0:
+                report bim load count identifier of instanceTotal to tracker
             set typeNumber to the item at identifier in (stepFile's types)
             set candidate to false
             if typeNumber >= 0:
@@ -1874,8 +1934,23 @@ function the bim ifc elements of {bim step file record:stepFile} skipping {a poi
                             set cut to add bim ifc voided body bodyId through frame cutting openingIds to (the address of painted) in r
                             if cut:
                                 set voidedCount to voidedCount + 1
+                        set prototypeBase to -1
                         if cut = false:
+                            set singleMapped to bim ifc representation bodyId is one mapped item in stepFile
+                            set reader's lastMapped to -1
                             add bim ifc representation bodyId through frame coloured -1 to (the address of painted) in r
+                            set placedMesh to reader's lastMapped
+                            if singleMapped and (placedMesh >= 0):
+                                loop while (the length of firstPrototypes) <= placedMesh:
+                                    append -1 to firstPrototypes
+                                set mappedPainted to the item at placedMesh in (reader's mappedMeshes)
+                                if (the item at placedMesh in firstPrototypes) < 0:
+                                    replace item at index placedMesh in firstPrototypes with (the length of (placements's prototypes's values))
+                                    loop groupCursor from 0 to the length of (mappedPainted's groups):
+                                        append (the item at groupCursor in (mappedPainted's groups)) to (placements's prototypes's values)
+                                # The element's colour groups are the mapped mesh's, in order.
+                                if (the length of (painted's groups)) = (the length of (mappedPainted's groups)):
+                                    set prototypeBase to the item at placedMesh in firstPrototypes
                         free openingIds
                         # One scene mesh per colour, all with the element's id.
                         set elementId to (the bim imported id base) + (element as a 64 bit integer)
@@ -1890,6 +1965,13 @@ function the bim ifc elements of {bim step file record:stepFile} skipping {a poi
                                     set low to a cad vector3 with x (the minimum of low's x and point's x), y (the minimum of low's y and point's y) and z (the minimum of low's z and point's z)
                                     set high to a cad vector3 with x (the maximum of high's x and point's x), y (the maximum of high's y and point's y) and z (the maximum of high's z and point's z)
                                 append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, colourGroup, category, the bim ifc mesh colour of (the item at groupCursor in (painted's colours)))) to (meshes's values)
+                                if prototypeBase >= 0:
+                                    append (prototypeBase + groupCursor) to (placements's prototypeOf's values)
+                                    append bim ifc rows of (reader's lastMappedAxes) to (placements's transforms's values)
+                                else:
+                                    append -1 to (placements's prototypeOf's values)
+                                    loop rowCursor from 0 to 12:
+                                        append (the item at rowCursor in identityRows) to (placements's transforms's values)
                                 set cornerCount to cornerCount + groupCorners
                         free bim ifc painted (the address of painted)
                         if cornerCount > 0:
@@ -1911,7 +1993,9 @@ function the bim ifc elements of {bim step file record:stepFile} skipping {a poi
         free storeyAt
         free containerOf
         free skippedAt
-        return @intrinsic("construct", a bim import record, true, message, meshes, labels, triangles, low, high, a cad topology list of a cad vector3, storeys)
+        free firstPrototypes
+        free identityRows
+        return @intrinsic("construct", a bim import record, true, message, meshes, labels, triangles, low, high, a cad topology list of a cad vector3, storeys, placements)
 
 # IFCWALLSTANDARDCASE written as IfcWallStandardCase is not known without
 # the schema; the class is shown as IfcWallstandardcase (Ifc and the rest

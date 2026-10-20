@@ -203,8 +203,12 @@ without a number.
   16,506 imported elements, 1,668,688 triangles, each element selectable by an ordinal carried in
   its vertices. *Measured* there: the wireframe frame on the whole model takes 21.5 ms of CPU time
   (80 ms before its edges moved to the GPU), and while zooming a 130,944-triangle storey 74 of 83
-  stack samples wait on the GPU or the display. It does **not** test this criterion: there is no
-  instancing (repeated items are copied into one mesh), picking time and GPU frame time were not
+  stack samples wait on the GPU or the display. **Added (2026-10-16)**, §The 3D view in slots: an
+  imported element made of one IFC mapped item is drawn as an instance of its shape (*measured* on
+  Sixty5: 5,719 meshes, 1,096,799 of 1,627,128 triangles, as instances of 362 shapes); the section
+  box is a cut in the fragment shaders and storey isolation a flag per element, so neither writes
+  the mesh again. It still does **not** test this criterion: the instances are imported elements,
+  not 100k generated ones; the cut is not capped; picking time and GPU frame time were not
   measured, the fps figure the criterion names was not taken, and the effort was not recorded in a
   form that answers "under two weeks".
 

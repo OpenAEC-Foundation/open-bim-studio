@@ -42,6 +42,7 @@ and the measurements.
 | `bim_canvas.dl` | Recorded drawings: coloured triangles and labels in pixels, and depth-tested triangles, replayed into a frame. The plan is replayed shifted while it is panned, and the 3D view is replayed until its camera, meshes, selection or rules change. |
 | `bim_text.dl` | Text through a glyph atlas: the printable characters are rendered once into one texture, and a line of text is one batch of textured triangles. |
 | `bim_ui.dl` | The application chrome after the Open BIM Studio frontend of Open CAD Studio, in Fusion Black: a top bar with quick-access buttons and ribbon tabs; ribbon groups of tool buttons that send the editor the commands its keys send (tools not available yet shown dimmed); a project explorer with the storeys, views and the selection's properties; a command line and a status bar. |
+| `bim_loading.dl` | The start-up's loading screen, and an `--import` read on a thread of its own while the editor runs, with a card naming its step and how far it is. |
 | `main.dl` | The interactive application: explorer left, plan editor in the middle, the GPU-resident 3D view or the section right, inside the chrome. |
 
 ## Running the editor
@@ -49,14 +50,18 @@ and the measurements.
 From the repository root:
 
 ```sh
-for pair in screen_vertex:vertex canvas_vertex:vertex flat_fragment:fragment text_fragment:fragment mesh_vertex:vertex mesh_fragment:fragment edge_fragment:fragment; do
+for pair in screen_vertex:vertex canvas_vertex:vertex flat_fragment:fragment text_fragment:fragment mesh_vertex:vertex mesh_instance_vertex:vertex mesh_fragment:fragment mesh_cut_fragment:fragment edge_fragment:fragment edge_cut_fragment:fragment; do
   ./build/dynlex lib/vulkan/shaders/${pair%%:*}.dl --emit-spirv --shader-stage=${pair##*:} -o build/shaders/${pair%%:*}.spv
 done
 ./build/dynlex examples/bim-slice/main.dl -O2 -o build/bim-slice
 ./build/bim-slice
 ```
 
-The shaders need the shader-language extensions of `examples/gpu/README.md`.
+The shaders need the shader-language extensions of `examples/gpu/README.md`,
+with `shader discard` (`patches/dynlex-shader-extensions.patch`). The face and
+edge fragment shaders share `lib/vulkan/shaders/mesh_shading.dl`, imported by
+its path from the root, so they compile from a tree that holds both the
+compiler's `lib/shader.dl` and this `lib/vulkan/shaders/`.
 
 **Fonts and shaders.** The application loads
 `tests/games/fonts/LiberationMono-Regular.ttf` and the shaders in `build/shaders`.
@@ -65,17 +70,66 @@ When `$BIM_SLICE_HOME` is set, it loads `$BIM_SLICE_HOME/fonts` and
 
 **Drawing.** It draws through `lib/vulkan/graphics.dl`: DynLex calling libvulkan
 and GLFW directly, with no C graphics runtime.
-- The 3D view is a persistent GPU mesh. Each element's distinct corners are
-  stored once, and the camera, the lighting and the highlight of the selection
-  are shader parameters. Its feature edges (Hidden and Wire) are a second
-  index list of lines between the same vertices, drawn through the same
-  camera; the faces are pushed back by a depth bias so that the edges on them
-  stay in front.
+- The 3D view keeps the model on the GPU in four mesh slots: the ground and
+  shadows, the imported elements, the shapes imported elements share (an IFC
+  element made of one mapped item), drawn in instances, and the native
+  elements. Each slot is written again only when what it holds changes. Each
+  element's distinct corners are stored once, and the camera, the lighting and
+  the highlight of the selection are shader parameters. Which elements show
+  (the 3D view's categories, its phase, an isolated storey) is a flag per
+  element that the vertex shaders read, as is its halftone (the 3D view's
+  rules) and the hidden line view's grey, so that none of these writes the
+  model again; the section box is a cut in the
+  fragment shaders, drawn by their own pipelines only while the box is on.
+  Its feature edges (Hidden and Wire) are a second index list of lines
+  between the same vertices, drawn through the same camera; the faces are
+  pushed back by a depth bias so that the edges on them stay in front.
+- Zooming past a level of detail queues the native round shapes to be meshed
+  again: each frame takes from the queue for at most 6 ms, the shapes that
+  cover most of the 3D view first, and the view shows what is made so far.
 - The recorded plan is a persistent GPU buffer, drawn shifted while it is
   panned.
 - Everything else streams through one buffer that grows as needed. `./build/bim-slice --generate 500000` builds an imaginary tower of at least that many walls (99 storeys of 50 x 50 rooms, with facade windows and a slab per storey) for testing at scale; `./build/bim-slice --example` opens an
 example house with a ground slab and a first floor; `--example X Y` places it at plan coordinates X and Y metres,
 for instance 500000 500000.
+
+**Starting and importing.** A loading screen names each step of the start
+and counts them (the window, the fonts, the editor). The editor then runs
+while a file given with `--import`, or chosen with Collaborate > Import >
+IFC, is read on a thread of its own: a card over the canvas names the step
+under way, how far it is and the time so far. The thread reads the file,
+finds the walls and floors to make native, reads the other elements and
+writes them for the GPU into buffers of its own. When it is done, the
+window's thread adds the walls and floors to the model (one undoable step)
+and installs the buffers. The first frame prints the time it took and its
+parts, which also open the 3D view's import message. The thread is a POSIX
+thread started on an exposed function; DynLex counts references without
+atomics, so nothing else touches what the thread makes until it has
+finished.
+
+**Frames.** Presenting waits for the display (vsync), so the editor never
+draws more frames than it shows. When nothing changes (no input, no edit,
+the camera settled, no work queued), the loop sleeps until the window's
+next event instead of drawing the same frame again. A running import, a
+letter waiting for its second and the automation API wake it a few times a
+second. The status bar shows the last frame's time on the CPU (the work
+before presenting) and on the GPU (timestamps around its commands).
+
+**The ribbon in a narrow window.** When a tab's groups are wider than the
+window, they become compact from the last one back (their buttons small,
+three to a column); when even that does not fit, arrows at the ribbon's ends
+scroll it by a group. The row of tabs leaves out the title, then closes up,
+then letters its tabs smaller; sub-tabs that would run into the tabs are
+left out.
+
+**The properties panel.** With nothing selected it shows the active storey,
+the active tab's view (its drawing type and phase among the view's rows), the
+project, its units and its georeferencing. A view chosen in the browser shows
+until another tab is made active. A level that is selected shows only its
+own rows. An imported element shows its IFC class, GlobalId, name and storey,
+read only, taken from the import (the editor does not hold it); it has no
+type to choose and no phases. Names and values that do not fit are cut short
+with "...", and the whole row shows beside the pointer.
 
 ### Importing IFC
 
@@ -93,7 +147,8 @@ composes IfcX layers.
 
 The 3D view keeps the model, its feature edges and, for models of up to
 150,000 triangles, the ground with the shadows on it on the GPU; moving the
-camera only sets the shaders' parameters.
+camera, zooming, isolating a storey and the section box only set the
+shaders' parameters. The import message says how much is drawn in instances.
 
 ### Installer
 

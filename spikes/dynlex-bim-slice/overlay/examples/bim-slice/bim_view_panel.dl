@@ -14,23 +14,77 @@ function the bim direction toward the sun:
 
 # ---------------------------------------------------------------- GPU scene
 
+# The mesh slots the 3D view's model takes on the GPU: the ground and the
+# shadows on it; the imported elements drawn once; the shapes imported
+# elements share (each made of one mapped item), drawn in instances; and the
+# native elements. Each is written again only when what it holds changes:
+# the native elements as the model is edited or its round shapes are meshed
+# for the zoom, the imported ones only when the import or their colours
+# change. Which elements show (the 3D view's rules, its phase, an isolated
+# storey) is a flag per element, and the section box a cut in the shaders,
+# so neither writes a mesh again.
+function bim gpu ground slot:
+    replacement:
+        0
+function bim gpu import slot:
+    replacement:
+        1
+function bim gpu instance slot:
+    replacement:
+        2
+function bim gpu native slot:
+    replacement:
+        3
+
+# A shape shared by imported elements: its triangle corners and its edge
+# ends in the instance slot, and its instances there.
+class:
+    patterns:
+        [a|] bim gpu shape draw record
+    members:
+        first as an integer
+        count as an integer
+        firstEdge as an integer
+        edgeCount as an integer
+        firstInstance as an integer
+        instanceCount as an integer
+
 # The 3D view's meshes as they were written to the GPU: positions relative to
 # `origin`, the bounding radius of the model with its ground, and per element
-# ordinal its id, in ascending order, for highlighting the selection.
+# ordinal its id, for highlighting the selection and showing elements: the
+# imported elements' ordinals from 0, the native elements' after them.
 class:
     patterns:
         [a|] bim gpu scene record
     members:
         origin as a cad vector3
         radius as a 64 bit floating-point number
-        ids as the type of (a cad topology list of a 64 bit integer)
-        # The model's extent.
+        importIds as the type of (a cad topology list of a 64 bit integer)
+        nativeIds as the type of (a cad topology list of a 64 bit integer)
+        # The model's extent, imported and native.
         low as a cad vector3
         high as a cad vector3
-        # The ground and the shadows: the mesh's first indices, drawn only
-        # when the view looks down on them.
+        importLow as a cad vector3
+        importHigh as a cad vector3
+        importIndexCount as an integer
+        importEdgeCount as an integer
+        shapes as the type of (a cad topology list of a bim gpu shape draw record)
+        nativeLow as a cad vector3
+        nativeHigh as a cad vector3
+        nativeIndexCount as an integer
+        nativeEdgeCount as an integer
+        # The ground and the shadows, drawn only when the view looks down on
+        # them, and how far the ground reaches from the origin.
         groundIndexCount as an integer
-        indexCount as an integer
+        groundReach as a 64 bit floating-point number
+
+function an empty bim gpu scene:
+    execute:
+        set infinity to 1.0 / 0.0
+        set nowhereLow to a cad vector3 with x infinity, y infinity and z infinity
+        set nowhereHigh to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+        set zero to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return @intrinsic("construct", a bim gpu scene record, zero, 1.0, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, zero, zero, nowhereLow, nowhereHigh, 0, 0, a cad topology list of a bim gpu shape draw record, nowhereLow, nowhereHigh, 0, 0, 0, 0.0)
 
 # The bar at a view's bottom right: its Graphics button (opening the view's
 # graphics menu), its scale (- 1:100 +, not for the 3D view) and its display
@@ -268,176 +322,538 @@ function draw bim gesture in view of {bim editor record:editor} in {bim screen l
         if editor's editMode:
             draw bim edit points of editor in layout with camera in view true in frame
 
-# Writes `meshes` into the GPU's persistent mesh: each element's distinct
-# corners once (the shaders find each face's normal per pixel), coloured by
-# its own colour or its category's, faint where the 3D rules say halftone;
-# and, for the view modes that draw them, its feature edges as lines between
-# those corners. When `withShadows`, the ground and the shadows on it come
-# first, unlit (element ordinal -2), for models of up to 150,000 triangles.
-function upload bim gpu scene of {a pointer to a list:meshes} for {bim editor record:editor} in mode {integer:viewMode} shadowed {boolean:withShadows} to {pointer:window}:
+# The element ordinal of each of `meshes`, a new one at each change of
+# element id, from `first` on, into `meshOrdinals`, with each new ordinal's
+# id into `idList`; the ordinal after the last.
+function the bim gpu ordinals after numbering {a pointer to a list:meshes} from {integer:first} into {a pointer to a list:meshOrdinals} naming {a pointer to a list:idList}:
     execute:
-        set context to the gpu context of window
-        set vertexBound to 0
-        set indexCount to 0
-        set infinity to 1.0 / 0.0
-        set low to a cad vector3 with x infinity, y infinity and z infinity
-        set high to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
-        loop cursor from 0 to the length of meshes:
-            set shape to (the item at cursor in meshes)'s shape
-            # A corner may be stored once per smooth group, so at most once
-            # per triangle corner.
-            set vertexBound to vertexBound + (the length of (shape's triangles's values))
-            set indexCount to indexCount + (the length of (shape's triangles's values))
-            loop point from 0 to the length of (shape's positions's values):
-                set p to the item at point in (shape's positions's values)
-                set low to a cad vector3 with x (the minimum of low's x and p's x), y (the minimum of low's y and p's y) and z (the minimum of low's z and p's z)
-                set high to a cad vector3 with x (the maximum of high's x and p's x), y (the maximum of high's y and p's y) and z (the maximum of high's z and p's z)
-        set ids to a cad topology list of a 64 bit integer
-        if vertexBound = 0:
-            prepare gpu mesh of 0 vertices and 0 indices in context
-            return @intrinsic("construct", a bim gpu scene record, (a cad vector3 with x 0.0, y 0.0 and z 0.0), 1.0, ids, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0), 0, 0)
-        set groundCorners to an empty list of a cad vector3
-        set groundColours to an empty list of a cad vector3
-        if withShadows and (indexCount <= 450000):
-            append bim ground and shadows of meshes toward (the bim direction toward the sun) to groundCorners colouring groundColours
-        set groundCount to the length of groundCorners
-        # The depth range reaches over the ground too.
-        set origin to (the cad sum of low and high) scaled by 0.5
-        set reach to (the cad length of (the cad difference of high and low)) * 0.5
-        loop corner from 0 to groundCount:
-            set reach to the maximum of reach and (the cad length of (the cad difference of (the item at corner in groundCorners) and origin))
-        set radius to the maximum of 1.0 and reach
-        prepare gpu mesh of (vertexBound + groundCount) vertices and (indexCount + groundCount) indices in context
-        loop corner from 0 to groundCount:
-            set spot to the item at corner in groundCorners
-            set groundColour to the item at (corner / 3) in groundColours
-            put gpu mesh vertex corner at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element -2 coloured (groundColour's x as an integer), (groundColour's y as an integer) and (groundColour's z as an integer) in (@intrinsic("dereference", context))
-            put gpu mesh index corner as corner in (@intrinsic("dereference", context))
-        free groundCorners
-        free groundColours
-        set edgeVertices to an empty list of an integer
-        set base to groundCount
-        set slot to groundCount
-        set ordinal to -1
+        set ordinal to first - 1
         set previousId to (-1) as a 64 bit integer
         loop cursor from 0 to the length of meshes:
             set entry to the item at cursor in meshes
-            if entry's elementId != previousId:
+            if (cursor = 0) or (entry's elementId != previousId):
                 set ordinal to ordinal + 1
-                append entry's elementId to (ids's values)
+                append entry's elementId to idList
                 set previousId to entry's elementId
-            set colour to the bim colour of category entry's category
-            if entry's colour's x >= 0.0:
-                set colour to entry's colour
-            set isFaint to false
-            if entry's category >= 0:
-                set isFaint to bim category entry's category is halftone in editor's modelRules
-            if viewMode = bim hidden line view mode:
-                set colour to a cad vector3 with x 242.0, y 242.0 and z 238.0
-            set red to the bim halftone of channel (colour's x as an integer) when isFaint
-            set green to the bim halftone of channel (colour's y as an integer) when isFaint
-            set blue to the bim halftone of channel (colour's z as an integer) when isFaint
-            # The corners welded by position: each triangle corner as the
-            # spot it lies on.
-            set welds to the bim welding of entry's shape
-            set spots to welds's spots
-            set triangleCorners to welds's corners
-            set distinct to the length of spots
-            # Smooth shading, as round surfaces need: each triangle corner
-            # takes the normals of the triangles at its welded corner that
-            # meet its own within 30 degrees (a crease beyond), averaged by
-            # area; a welded corner is stored once per distinct normal.
-            set triangleCount to (the length of triangleCorners) / 3
-            set faceNormals to an empty list of a cad vector3
-            loop triangle from 0 to triangleCount:
-                set first to the item at (the item at (triangle * 3) in triangleCorners) in spots
-                set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in spots
-                set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in spots
-                append (the cad cross of (the cad difference of second and first) and (the cad difference of third and first)) to faceNormals
-            # The triangles at each welded corner (counted, then listed).
-            set incidentStart to an empty list of an integer
-            loop weld from 0 to (distinct + 1):
-                append 0 to incidentStart
-            loop corner from 0 to the length of triangleCorners:
-                set weld to the item at corner in triangleCorners
-                replace item at index (weld + 1) in incidentStart with ((the item at (weld + 1) in incidentStart) + 1)
-            loop weld from 1 to (distinct + 1):
-                replace item at index weld in incidentStart with ((the item at weld in incidentStart) + (the item at (weld - 1) in incidentStart))
-            set incidentFill to an empty list of an integer
-            set incident to an empty list of an integer
-            loop weld from 0 to distinct:
-                append (the item at weld in incidentStart) to incidentFill
-            loop corner from 0 to the length of triangleCorners:
-                append 0 to incident
-            loop corner from 0 to the length of triangleCorners:
-                set weld to the item at corner in triangleCorners
-                replace item at index (the item at weld in incidentFill) in incident with (corner / 3)
-                replace item at index weld in incidentFill with ((the item at weld in incidentFill) + 1)
-            # The GPU corners made so far for each welded corner, as chains,
-            # and the first of them, where the welded corner's edges end.
-            set chainHead to an empty list of an integer
-            set spotVertex to an empty list of an integer
-            loop weld from 0 to distinct:
-                append -1 to chainHead
-                append -1 to spotVertex
-            set chainNext to an empty list of an integer
-            set chainNormal to an empty list of a cad vector3
-            set made to 0
-            loop corner from 0 to the length of triangleCorners:
-                set weld to the item at corner in triangleCorners
-                set own to the item at (corner / 3) in faceNormals
-                set ownLength to the cad length of own
-                set summed to a cad vector3 with x 0.0, y 0.0 and z 0.0
-                if ownLength > 1e-18:
-                    loop link from (the item at weld in incidentStart) to (the item at (weld + 1) in incidentStart):
-                        set other to the item at (the item at link in incident) in faceNormals
-                        set otherLength to the cad length of other
-                        if otherLength > 1e-18:
-                            if (the cad dot of own and other) > ((0.866 * ownLength) * otherLength):
-                                set summed to the cad sum of summed and other
-                set summedLength to the cad length of summed
-                set smoothNormal to a cad vector3 with x 0.0, y 0.0 and z 0.0
-                if summedLength > 1e-18:
-                    set smoothNormal to summed scaled by (1.0 / summedLength)
-                set chosen to -1
-                set walker to the item at weld in chainHead
-                loop while (walker >= 0) and (chosen < 0):
-                    if (the cad dot of (the item at walker in chainNormal) and smoothNormal) > 0.9995:
-                        set chosen to walker
-                    set walker to the item at walker in chainNext
-                if chosen < 0:
-                    set chosen to made
-                    if (the item at weld in chainHead) < 0:
-                        replace item at index weld in spotVertex with (base + made)
-                    append smoothNormal to chainNormal
-                    append (the item at weld in chainHead) to chainNext
-                    replace item at index weld in chainHead with made
-                    set spot to the item at weld in spots
-                    put gpu mesh vertex (base + made) at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in (@intrinsic("dereference", context))
-                    set made to made + 1
-                put gpu mesh index slot as (base + chosen) in (@intrinsic("dereference", context))
-                set slot to slot + 1
-            free faceNormals
-            free incidentStart
-            free incidentFill
-            free incident
-            free chainHead
-            free chainNext
-            free chainNormal
-            # The feature edges, for the modes that draw them, as lines
-            # between the GPU corners of their welded corners.
-            if viewMode != bim shaded view mode:
-                set pairs to an empty list of an integer
-                append bim feature edge pairs of spots and triangleCorners to pairs
-                loop pairCursor from 0 to the length of pairs:
-                    append (the item at (the item at pairCursor in pairs) in spotVertex) to edgeVertices
-                free pairs
+            append ordinal to meshOrdinals
+        return ordinal + 1
+
+# The halftone of every category in the 3D view's rules, as text: the
+# colours the GPU holds depend on it, which elements show do not.
+function the bim halftone text of {bim view rules record:viewRules}:
+    execute:
+        set written to the string form of " "
+        loop code from 0 to the bim category count:
+            if (the item at code in (viewRules's rules's values))'s halftone:
+                set written to written + (the string form of "h")
+            else:
+                set written to written + (the string form of "-")
+        return written
+
+# Writes the triangles of `shape`, less `offset`, into `target` from vertex
+# `base` and index `position` on, for element `ordinal` in `tint`: each
+# distinct corner once (the shaders find each face's normal per pixel), and
+# for round surfaces once per smooth group; and, when `edged`, the shape's
+# feature edges as pairs of the vertices written, appended to `edgeEnds`.
+# The number of vertices written.
+function write bim gpu triangles of {fast mesh record:shape} less {cad vector3:offset} for element {integer:ordinal} in {cad vector3:tint} from vertex {integer:base} and index {integer:position} edged {boolean:withEdges} into {gpu mesh slot record:target} adding edges to {a pointer to a list:edgeEnds}:
+    execute:
+        set red to tint's x as an integer
+        set green to tint's y as an integer
+        set blue to tint's z as an integer
+        set slot to position
+        # The corners welded by position: each triangle corner as the
+        # spot it lies on.
+        set welds to the bim welding of shape
+        set spots to welds's spots
+        set triangleCorners to welds's corners
+        set distinct to the length of spots
+        # Smooth shading, as round surfaces need: each triangle corner
+        # takes the normals of the triangles at its welded corner that
+        # meet its own within 30 degrees (a crease beyond), averaged by
+        # area; a welded corner is stored once per distinct normal.
+        set triangleCount to (the length of triangleCorners) / 3
+        set faceNormals to an empty list of a cad vector3
+        loop triangle from 0 to triangleCount:
+            set first to the item at (the item at (triangle * 3) in triangleCorners) in spots
+            set second to the item at (the item at ((triangle * 3) + 1) in triangleCorners) in spots
+            set third to the item at (the item at ((triangle * 3) + 2) in triangleCorners) in spots
+            append (the cad cross of (the cad difference of second and first) and (the cad difference of third and first)) to faceNormals
+        # The triangles at each welded corner (counted, then listed).
+        set incidentStart to an empty list of an integer
+        loop weld from 0 to (distinct + 1):
+            append 0 to incidentStart
+        loop corner from 0 to the length of triangleCorners:
+            set weld to the item at corner in triangleCorners
+            replace item at index (weld + 1) in incidentStart with ((the item at (weld + 1) in incidentStart) + 1)
+        loop weld from 1 to (distinct + 1):
+            replace item at index weld in incidentStart with ((the item at weld in incidentStart) + (the item at (weld - 1) in incidentStart))
+        set incidentFill to an empty list of an integer
+        set incident to an empty list of an integer
+        loop weld from 0 to distinct:
+            append (the item at weld in incidentStart) to incidentFill
+        loop corner from 0 to the length of triangleCorners:
+            append 0 to incident
+        loop corner from 0 to the length of triangleCorners:
+            set weld to the item at corner in triangleCorners
+            replace item at index (the item at weld in incidentFill) in incident with (corner / 3)
+            replace item at index weld in incidentFill with ((the item at weld in incidentFill) + 1)
+        # The GPU corners made so far for each welded corner, as chains,
+        # and the first of them, where the welded corner's edges end.
+        set chainHead to an empty list of an integer
+        set spotVertex to an empty list of an integer
+        loop weld from 0 to distinct:
+            append -1 to chainHead
+            append -1 to spotVertex
+        set chainNext to an empty list of an integer
+        set chainNormal to an empty list of a cad vector3
+        set made to 0
+        loop corner from 0 to the length of triangleCorners:
+            set weld to the item at corner in triangleCorners
+            set own to the item at (corner / 3) in faceNormals
+            set ownLength to the cad length of own
+            set summed to a cad vector3 with x 0.0, y 0.0 and z 0.0
+            if ownLength > 1e-18:
+                loop link from (the item at weld in incidentStart) to (the item at (weld + 1) in incidentStart):
+                    set other to the item at (the item at link in incident) in faceNormals
+                    set otherLength to the cad length of other
+                    if otherLength > 1e-18:
+                        if (the cad dot of own and other) > ((0.866 * ownLength) * otherLength):
+                            set summed to the cad sum of summed and other
+            set summedLength to the cad length of summed
+            set smoothNormal to a cad vector3 with x 0.0, y 0.0 and z 0.0
+            if summedLength > 1e-18:
+                set smoothNormal to summed scaled by (1.0 / summedLength)
+            set chosen to -1
+            set walker to the item at weld in chainHead
+            loop while (walker >= 0) and (chosen < 0):
+                if (the cad dot of (the item at walker in chainNormal) and smoothNormal) > 0.9995:
+                    set chosen to walker
+                set walker to the item at walker in chainNext
+            if chosen < 0:
+                set chosen to made
+                if (the item at weld in chainHead) < 0:
+                    replace item at index weld in spotVertex with (base + made)
+                append smoothNormal to chainNormal
+                append (the item at weld in chainHead) to chainNext
+                replace item at index weld in chainHead with made
+                set spot to the item at weld in spots
+                put gpu mesh vertex (base + made) at (spot's x - offset's x), (spot's y - offset's y) and (spot's z - offset's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in target
+                set made to made + 1
+            put gpu mesh index slot as (base + chosen) in target
+            set slot to slot + 1
+        free faceNormals
+        free incidentStart
+        free incidentFill
+        free incident
+        free chainHead
+        free chainNext
+        free chainNormal
+        # The feature edges, as lines between the GPU corners of their
+        # welded corners.
+        if withEdges:
+            set pairs to an empty list of an integer
+            append bim feature edge pairs of spots and triangleCorners to pairs
+            loop pairCursor from 0 to the length of pairs:
+                append (the item at (the item at pairCursor in pairs) in spotVertex) to edgeEnds
+            free pairs
+        free spotVertex
+        free bim welding (the address of welds)
+        return made
+
+# Widens `low` and `high` (pointers to cad vector3) over the corners of `meshes`.
+local function widen bim gpu extent {a pointer to a cad vector3:low} and {a pointer to a cad vector3:high} over {a pointer to a list:meshes}:
+    execute:
+        set lower to @intrinsic("dereference", low)
+        set upper to @intrinsic("dereference", high)
+        loop cursor from 0 to the length of meshes:
+            set points to (the item at cursor in meshes)'s shape's positions's values
+            loop point from 0 to the length of points:
+                set p to the item at point in points
+                set lower to a cad vector3 with x (the minimum of lower's x and p's x), y (the minimum of lower's y and p's y) and z (the minimum of lower's z and p's z)
+                set upper to a cad vector3 with x (the maximum of upper's x and p's x), y (the maximum of upper's y and p's y) and z (the maximum of upper's z and p's z)
+        @intrinsic("store at", low, lower)
+        @intrinsic("store at", high, upper)
+
+# The scene's extent over what its slots hold, and the radius the depth
+# range reaches over around its origin: the model's corners and the ground.
+function settle bim gpu extent of {a pointer to a bim gpu scene record:scene}:
+    execute:
+        set lower to a cad vector3 with x (the minimum of scene's importLow's x and scene's nativeLow's x), y (the minimum of scene's importLow's y and scene's nativeLow's y) and z (the minimum of scene's importLow's z and scene's nativeLow's z)
+        set upper to a cad vector3 with x (the maximum of scene's importHigh's x and scene's nativeHigh's x), y (the maximum of scene's importHigh's y and scene's nativeHigh's y) and z (the maximum of scene's importHigh's z and scene's nativeHigh's z)
+        set reach to scene's groundReach
+        if lower's x <= upper's x:
+            set reach to the maximum of reach and (the maximum of (the cad length of (the cad difference of upper and scene's origin)) and (the cad length of (the cad difference of lower and scene's origin)))
+        else:
+            set lower to a cad vector3 with x 0.0, y 0.0 and z 0.0
+            set upper to lower
+        set scene's low to lower
+        set scene's high to upper
+        set scene's radius to the maximum of 1.0 and reach
+
+# The centre of the imported elements' extent, the GPU scene's origin while
+# there are any (so that the native elements change without writing them
+# again), else of `nativeMeshes`.
+function the bim gpu origin for {bim import record:imported} and {a pointer to a list:nativeMeshes}:
+    execute:
+        set infinity to 1.0 / 0.0
+        set lower to a cad vector3 with x infinity, y infinity and z infinity
+        set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+        widen bim gpu extent (the address of lower) and (the address of upper) over (imported's meshes's values)
+        if lower's x > upper's x:
+            widen bim gpu extent (the address of lower) and (the address of upper) over nativeMeshes
+        if lower's x > upper's x:
+            return a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return (the cad sum of lower and upper) scaled by 0.5
+
+# The colour (red, green and blue in 0..255) `entry` is written to the GPU
+# in: its own or its category's. The hidden line view's grey and the
+# halftone of the 3D view's rules are the vertex shaders' (parameter 37, the
+# elements' flags), so that neither writes the model again.
+function the bim gpu base colour of {bim scene mesh record:entry}:
+    execute:
+        if entry's colour's x >= 0.0:
+            return entry's colour
+        return the bim colour of category entry's category
+
+# The imported elements as written for the GPU, by the import's thread
+# (`bim_loading.dl`), into slots of their own that the window's thread then
+# installs (`install bim gpu import upload`): the elements drawn once, the
+# shapes they share with their instances, and what the scene needs of them.
+class:
+    patterns:
+        [a|] bim gpu import upload record
+    members:
+        origin as a cad vector3
+        importIds as the type of (a cad topology list of a 64 bit integer)
+        importLow as a cad vector3
+        importHigh as a cad vector3
+        importIndexCount as an integer
+        importEdgeCount as an integer
+        shapes as the type of (a cad topology list of a bim gpu shape draw record)
+        importSlot as a gpu mesh slot record
+        instanceSlot as a gpu mesh slot record
+        microseconds as a 64 bit integer
+
+# Writes the imported elements of `imported`, on `hardware` from any thread,
+# around the centre of their extent: each that places a shared shape (the
+# import's instancing) as an instance of it, the others once, in their own
+# colours, with their feature edges (so that no view mode writes them
+# again). Their ordinals count from 0; the native elements' follow.
+function the bim gpu import upload of {bim import record:imported} on {gpu device record:hardware}:
+    execute:
+        set started to the bim microseconds now
+        set noNative to a cad topology list of a bim scene mesh record
+        set origin to the bim gpu origin for imported and (noNative's values)
+        set importMeshes to imported's meshes's values
+        set noOffset to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set idList to a cad topology list of a 64 bit integer
+        set meshOrdinals to an empty list of an integer
+        ignore the bim gpu ordinals after numbering importMeshes from 0 into meshOrdinals naming (idList's values)
+        # What each slot takes: a corner may be stored once per smooth
+        # group, so at most once per triangle corner.
+        set shapeList to imported's instancing's prototypes's values
+        set placedCounts to an empty list of an integer
+        loop shapeCursor from 0 to the length of shapeList:
+            append 0 to placedCounts
+        set vertexBound to 0
+        loop cursor from 0 to the length of importMeshes:
+            set shapeOf to the bim prototype of imported mesh cursor in imported
+            if (shapeOf >= 0) and (shapeOf < (the length of shapeList)):
+                replace item at index shapeOf in placedCounts with ((the item at shapeOf in placedCounts) + 1)
+            else:
+                set vertexBound to vertexBound + (the length of ((the item at cursor in importMeshes)'s shape's triangles's values))
+        set infinity to 1.0 / 0.0
+        set lower to a cad vector3 with x infinity, y infinity and z infinity
+        set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+        widen bim gpu extent (the address of lower) and (the address of upper) over importMeshes
+        # The elements drawn once.
+        set onceSlot to a gpu mesh slot of vertexBound vertices and vertexBound indices on hardware
+        set edgeEnds to an empty list of an integer
+        set base to 0
+        set position to 0
+        loop cursor from 0 to the length of importMeshes:
+            set shapeOf to the bim prototype of imported mesh cursor in imported
+            if (shapeOf < 0) or (shapeOf >= (the length of shapeList)):
+                set entry to the item at cursor in importMeshes
+                set made to write bim gpu triangles of entry's shape less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged true into onceSlot adding edges to edgeEnds
+                set base to base + made
+                set position to position + (the length of (entry's shape's triangles's values))
+        set gpu edges of (the address of onceSlot) to edgeEnds on hardware
+        set onceCount to position
+        set onceEdges to the length of edgeEnds
+        clear edgeEnds
+        # The shared shapes placed at least once, each in its own
+        # coordinates, then their instances.
+        set shapeBound to 0
+        loop shapeCursor from 0 to the length of shapeList:
+            if (the item at shapeCursor in placedCounts) > 0:
+                set shapeBound to shapeBound + (the length of ((the item at shapeCursor in shapeList)'s triangles's values))
+        set sharedSlot to a gpu mesh slot of shapeBound vertices and shapeBound indices on hardware
+        set drawList to a cad topology list of a bim gpu shape draw record
+        set placeNext to an empty list of an integer
+        set instanceTotal to 0
+        set base to 0
+        set position to 0
+        loop shapeCursor from 0 to the length of shapeList:
+            set placedCount to the item at shapeCursor in placedCounts
+            append instanceTotal to placeNext
+            if placedCount > 0:
+                set shape to the item at shapeCursor in shapeList
+                set firstEdge to the length of edgeEnds
+                set made to write bim gpu triangles of shape less noOffset for element 0 in noOffset from vertex base and index position edged true into sharedSlot adding edges to edgeEnds
+                set cornerCount to the length of (shape's triangles's values)
+                append (@intrinsic("construct", a bim gpu shape draw record, position, cornerCount, firstEdge, (the length of edgeEnds) - firstEdge, instanceTotal, placedCount)) to (drawList's values)
+                set base to base + made
+                set position to position + cornerCount
+                set instanceTotal to instanceTotal + placedCount
+        set gpu edges of (the address of sharedSlot) to edgeEnds on hardware
+        make room for instanceTotal gpu instances in (the address of sharedSlot) on hardware
+        set rows to an empty list of a 64 bit floating-point number
+        set transforms to imported's instancing's transforms's values
+        loop cursor from 0 to the length of importMeshes:
+            set shapeOf to the bim prototype of imported mesh cursor in imported
+            if (shapeOf >= 0) and (shapeOf < (the length of shapeList)):
+                clear rows
+                loop part from 0 to 12:
+                    append (the item at ((cursor * 12) + part) in transforms) to rows
+                # The shift relative to the origin, as the vertices are.
+                replace item at index 3 in rows with ((the item at 3 in rows) - origin's x)
+                replace item at index 7 in rows with ((the item at 7 in rows) - origin's y)
+                replace item at index 11 in rows with ((the item at 11 in rows) - origin's z)
+                set tint to the bim gpu base colour of (the item at cursor in importMeshes)
+                put gpu instance (the item at shapeOf in placeNext) of element (the item at cursor in meshOrdinals) coloured (tint's x as an integer), (tint's y as an integer) and (tint's z as an integer) through rows in sharedSlot
+                replace item at index shapeOf in placeNext with ((the item at shapeOf in placeNext) + 1)
+        free rows
+        free placeNext
+        free placedCounts
+        free edgeEnds
+        free meshOrdinals
+        return @intrinsic("construct", a bim gpu import upload record, origin, idList, lower, upper, onceCount, onceEdges, drawList, onceSlot, sharedSlot, (the bim microseconds now) - started)
+
+# Makes `prepared` the import and instance slots of the window's GPU and the
+# scene's imported elements, around the upload's origin; the native
+# elements' ordinals follow the imported ones, so they must be written
+# again after.
+function install bim gpu import upload {bim gpu import upload record:prepared} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        install gpu mesh slot (bim gpu import slot) from prepared's importSlot in context
+        install gpu mesh slot (bim gpu instance slot) from prepared's instanceSlot in context
+        set scene's origin to prepared's origin
+        set scene's importIds to prepared's importIds
+        set scene's importLow to prepared's importLow
+        set scene's importHigh to prepared's importHigh
+        set scene's importIndexCount to prepared's importIndexCount
+        set scene's importEdgeCount to prepared's importEdgeCount
+        set scene's shapes to prepared's shapes
+        settle bim gpu extent of scene
+
+# The same done at once by the window's thread (for a small or empty
+# import).
+function upload bim gpu import of {bim import record:imported} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+    execute:
+        set written to the bim gpu import upload of imported on (the gpu device of (@intrinsic("dereference", the gpu context of window)))
+        install bim gpu import upload written into scene on window
+
+# Writes the native elements `nativeMeshes` into the native slot around the
+# scene's origin, their ordinals after the imported elements', coloured for
+# `editor`'s 3D view in `viewMode`, with feature edges for the modes that
+# draw them.
+function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim editor record:editor} in mode {integer:viewMode} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set origin to scene's origin
+        set withEdges to viewMode != bim shaded view mode
+        clear (scene's nativeIds's values)
+        set meshOrdinals to an empty list of an integer
+        ignore the bim gpu ordinals after numbering nativeMeshes from (the length of (scene's importIds's values)) into meshOrdinals naming (scene's nativeIds's values)
+        set vertexBound to 0
+        loop cursor from 0 to the length of nativeMeshes:
+            set vertexBound to vertexBound + (the length of ((the item at cursor in nativeMeshes)'s shape's triangles's values))
+        set infinity to 1.0 / 0.0
+        set lower to a cad vector3 with x infinity, y infinity and z infinity
+        set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+        widen bim gpu extent (the address of lower) and (the address of upper) over nativeMeshes
+        set scene's nativeLow to lower
+        set scene's nativeHigh to upper
+        prepare gpu mesh slot (bim gpu native slot) of vertexBound vertices and vertexBound indices in context
+        set target to the gpu mesh held in slot (bim gpu native slot) of context
+        set edgeEnds to an empty list of an integer
+        set base to 0
+        set position to 0
+        loop cursor from 0 to the length of nativeMeshes:
+            set entry to the item at cursor in nativeMeshes
+            set made to write bim gpu triangles of entry's shape less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged withEdges into target adding edges to edgeEnds
             set base to base + made
-            free spotVertex
-            free bim welding (the address of welds)
-        set gpu mesh edges to edgeVertices in context
-        free edgeVertices
-        return @intrinsic("construct", a bim gpu scene record, origin, radius, ids, low, high, groundCount, groundCount + indexCount)
+            set position to position + (the length of (entry's shape's triangles's values))
+        set gpu mesh slot (bim gpu native slot) edges to edgeEnds in context
+        set scene's nativeIndexCount to position
+        set scene's nativeEdgeCount to the length of edgeEnds
+        free edgeEnds
+        free meshOrdinals
+        settle bim gpu extent of scene
+
+# Writes into the ground slot, when `withShadows` and the model has at most
+# 150,000 triangles, the ground and the shadows of `importMeshes` and
+# `nativeMeshes`, unlit; each shadow knows its element's ordinal, so that it
+# goes with the element when that is hidden.
+function upload bim gpu ground of {a pointer to a list:importMeshes} and {a pointer to a list:nativeMeshes} shadowed {boolean:withShadows} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set origin to scene's origin
+        set cornerTotal to 0
+        set allMeshes to an empty list of a bim scene mesh record
+        loop cursor from 0 to the length of importMeshes:
+            append (the item at cursor in importMeshes) to allMeshes
+        loop cursor from 0 to the length of nativeMeshes:
+            append (the item at cursor in nativeMeshes) to allMeshes
+        loop cursor from 0 to the length of allMeshes:
+            set cornerTotal to cornerTotal + (the length of ((the item at cursor in allMeshes)'s shape's triangles's values))
+        set groundCorners to an empty list of a cad vector3
+        set groundColours to an empty list of a cad vector3
+        set groundOwners to an empty list of an integer
+        if withShadows and (cornerTotal <= 450000):
+            set meshOrdinals to an empty list of an integer
+            set noIds to an empty list of a 64 bit integer
+            set nativeFirst to the bim gpu ordinals after numbering importMeshes from 0 into meshOrdinals naming noIds
+            ignore the bim gpu ordinals after numbering nativeMeshes from nativeFirst into meshOrdinals naming noIds
+            append bim ground and shadows of allMeshes numbered meshOrdinals toward (the bim direction toward the sun) to groundCorners colouring groundColours owned by groundOwners
+            free meshOrdinals
+            free noIds
+        set groundCount to the length of groundCorners
+        prepare gpu mesh slot (bim gpu ground slot) of groundCount vertices and groundCount indices in context
+        set target to the gpu mesh held in slot (bim gpu ground slot) of context
+        set reach to 0.0
+        loop corner from 0 to groundCount:
+            set spot to the item at corner in groundCorners
+            set groundColour to the item at (corner / 3) in groundColours
+            put gpu mesh vertex corner at (spot's x - origin's x), (spot's y - origin's y) and (spot's z - origin's z) of element (the item at (corner / 3) in groundOwners) coloured (groundColour's x as an integer), (groundColour's y as an integer) and (groundColour's z as an integer) in target
+            put gpu mesh index corner as corner in target
+            set reach to the maximum of reach and (the cad length of (the cad difference of spot and origin))
+        set scene's groundIndexCount to groundCount
+        set scene's groundReach to reach
+        free groundCorners
+        free groundColours
+        free groundOwners
+        free allMeshes
+        settle bim gpu extent of scene
+
+# Whether scene mesh `entry` shows in `editor`'s 3D view: its category is
+# shown there, its phase does not hide it, and when `isolating`, it belongs
+# to the storey at `height` (within a millimetre).
+function bim gpu mesh {bim scene mesh record:entry} shows for {bim editor record:editor} isolating {boolean:storeyOnly} at {a 64 bit floating-point number:height} with {bim import record:imported}:
+    execute:
+        if entry's category >= 0:
+            if (bim category entry's category is visible in editor's modelRules) = false:
+                return false
+        if (the length of (editor's documentValue's current's phases's values)) > 0:
+            if (the bim phase look of element entry's elementId in model view of editor) = bim phase hidden look:
+                return false
+        if storeyOnly:
+            if ((the absolute value of ((the bim storey elevation of mesh entry in editor's documentValue's current with imported) - height)) < 0.001) = false:
+                return false
+        return true
+
+# How much of the 3D view `entry` covers: its extent's diagonal in pixels,
+# a sixty-fourth of that when its middle lies further outside the panel than
+# half of it.
+function the bim screen size of {bim scene mesh record:entry} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set points to entry's shape's positions's values
+        if (the length of points) = 0:
+            return 0.0
+        set lower to the item at 0 in points
+        set upper to lower
+        loop point from 1 to the length of points:
+            set p to the item at point in points
+            set lower to a cad vector3 with x (the minimum of lower's x and p's x), y (the minimum of lower's y and p's y) and z (the minimum of lower's z and p's z)
+            set upper to a cad vector3 with x (the maximum of upper's x and p's x), y (the maximum of upper's y and p's y) and z (the maximum of upper's z and p's z)
+        set reach to (the cad length of (the cad difference of upper and lower)) * camera's viewScale
+        set middle to the bim view pixel of ((the cad sum of lower and upper) scaled by 0.5) in layout with camera
+        set margin to reach * 0.5
+        if ((middle's x < (layout's planRight - margin)) or (middle's x > (layout's width + margin))) or ((middle's y < (layout's top - margin)) or (middle's y > (layout's bottom + margin))):
+            return reach / 64.0
+        return reach
+
+# The positions of `sketchList` in the order the 3D view meshes them again
+# for a new zoom: those covering the most of the view first, by classes a
+# factor of two apart (`the bim screen size of …`).
+function the bim zoom queue of {a pointer to a list:sketchList} in {bim screen layout record:layout} with {bim camera record:camera}:
+    execute:
+        set classes to an empty list of an integer
+        loop cursor from 0 to the length of sketchList:
+            set covered to the bim screen size of (the item at cursor in sketchList) in layout with camera
+            set sizeClass to 0
+            loop while (covered >= 2.0) and (sizeClass < 40):
+                set covered to covered * 0.5
+                set sizeClass to sizeClass + 1
+            append sizeClass to classes
+        set ordered to an empty list of an integer
+        loop step from 0 to 41:
+            loop cursor from 0 to the length of classes:
+                if (the item at cursor in classes) = (40 - step):
+                    append cursor to ordered
+        free classes
+        return ordered
+
+# Shows in the 3D view the elements of `importMeshes` and `nativeMeshes` (as
+# the scene numbers them) of which a mesh shows (`bim gpu mesh … shows …`),
+# and hides the others: a flag per element the shaders read, so that no
+# mesh is written again.
+function show bim gpu elements of {a pointer to a list:importMeshes} and {a pointer to a list:nativeMeshes} in {bim gpu scene record:scene} for {bim editor record:editor} isolating {boolean:storeyOnly} at {a 64 bit floating-point number:height} with {bim import record:imported} on {pointer:window}:
+    execute:
+        set context to @intrinsic("dereference", the gpu context of window)
+        set importCount to the length of (scene's importIds's values)
+        set total to importCount + (the length of (scene's nativeIds's values))
+        loop ordinal from 0 to total:
+            set gpu element ordinal shown false in context
+        set meshOrdinals to an empty list of an integer
+        set noIds to an empty list of a 64 bit integer
+        ignore the bim gpu ordinals after numbering importMeshes from 0 into meshOrdinals naming noIds
+        loop cursor from 0 to the length of importMeshes:
+            set entry to the item at cursor in importMeshes
+            if bim gpu mesh entry shows for editor isolating storeyOnly at height with imported:
+                set gpu element (the item at cursor in meshOrdinals) shown true faint (bim gpu mesh entry is faint for editor) in context
+        clear meshOrdinals
+        ignore the bim gpu ordinals after numbering nativeMeshes from importCount into meshOrdinals naming noIds
+        loop cursor from 0 to the length of nativeMeshes:
+            set entry to the item at cursor in nativeMeshes
+            if bim gpu mesh entry shows for editor isolating storeyOnly at height with imported:
+                set gpu element (the item at cursor in meshOrdinals) shown true faint (bim gpu mesh entry is faint for editor) in context
+        free meshOrdinals
+        free noIds
+        set gpu parameter 49 to 1.0 in context
+
+# Whether `entry` is drawn halftone: its category is in the 3D view's rules.
+function bim gpu mesh {bim scene mesh record:entry} is faint for {bim editor record:editor}:
+    execute:
+        if entry's category < 0:
+            return false
+        return bim category entry's category is halftone in editor's modelRules
+
+# The hidden line view's light model (parameter 37): every element light
+# grey, by the vertex shaders.
+function set bim gpu light model {boolean:isLight} on {pointer:window}:
+    execute:
+        set flag to 0.0
+        if isLight:
+            set flag to 1.0
+        set gpu parameter 37 to flag in (@intrinsic("dereference", the gpu context of window))
+
+# The section box as the mesh shaders cut the model: when `boxed`, what lies
+# outside the box from `low` to `high` (in the world) is not drawn; otherwise
+# the shaders that do not cut draw it.
+function set bim gpu section box from {cad vector3:low} to {cad vector3:high} boxed {boolean:boxed} for {bim gpu scene record:scene} on {pointer:window}:
+    execute:
+        set gpu section cut to boxed in (the gpu context of window)
+        set context to @intrinsic("dereference", the gpu context of window)
+        set gpu parameter 43 to (low's x - scene's origin's x) in context
+        set gpu parameter 44 to (low's y - scene's origin's y) in context
+        set gpu parameter 45 to (low's z - scene's origin's z) in context
+        set gpu parameter 46 to (high's x - scene's origin's x) in context
+        set gpu parameter 47 to (high's y - scene's origin's y) in context
+        set gpu parameter 48 to (high's z - scene's origin's z) in context
 
 # The camera's parallel view of the GPU scene in the 3D panel, as the mesh
 # shaders' parameters: the editor's view axes and scale, centred in the panel,
@@ -477,8 +893,13 @@ function set bim gpu camera {bim camera record:camera} in {bim screen layout rec
         set gpu parameter 20 to (0.0 - axes's depth's y) in context
         set gpu parameter 21 to (0.0 - axes's depth's z) in context
         set slot to 0
-        loop cursor from 0 to the length of (scene's ids's values):
-            set sceneId to the item at cursor in (scene's ids's values)
+        set importCount to the length of (scene's importIds's values)
+        loop cursor from 0 to (importCount + (the length of (scene's nativeIds's values))):
+            set sceneId to (0 as a 64 bit integer)
+            if cursor < importCount:
+                set sceneId to the item at cursor in (scene's importIds's values)
+            else:
+                set sceneId to the item at (cursor - importCount) in (scene's nativeIds's values)
             loop wantedCursor from 0 to the length of selectedIds:
                 if ((the item at wantedCursor in selectedIds) = sceneId) and (slot < 9):
                     set gpu parameter (22 + slot) to (cursor as a 64 bit floating-point number) in context
@@ -490,10 +911,12 @@ function set bim gpu camera {bim camera record:camera} in {bim screen layout rec
 # A ground plane through the lowest point of `meshes`, reaching beyond the
 # model and its shadow, and the shadow of every triangle facing the sun cast
 # on it along `towardSun`, as triangles in the world: three corners each in
-# `corners`, facing up, and the colour of each in `colours`. They depend on
-# the model and the sun only, so the GPU keeps them while the camera moves.
-# Shadows are opaque, so where they overlap they do not darken twice.
-function append bim ground and shadows of {a pointer to a list:meshes} toward {cad vector3:towardSun} to {a pointer to a list:corners} colouring {a pointer to a list:colours}:
+# `corners`, facing up, the colour of each in `colours` and in `owners` what
+# it belongs to: -2 the ground, -3 - the ordinal (`meshOrdinals`, one per
+# mesh) a shadow's element. They depend on the model and the sun only, so
+# the GPU keeps them while the camera moves. Shadows are opaque, so where
+# they overlap they do not darken twice.
+function append bim ground and shadows of {a pointer to a list:meshes} numbered {a pointer to a list:meshOrdinals} toward {cad vector3:towardSun} to {a pointer to a list:corners} colouring {a pointer to a list:colours} owned by {a pointer to a list:owners}:
     execute:
         set groundLevel to 1.0 / 0.0
         loop cursor from 0 to the length of meshes:
@@ -506,6 +929,7 @@ function append bim ground and shadows of {a pointer to a list:meshes} toward {c
         set highX to 0.0 - lowX
         set highY to highX
         set cast to an empty list of a cad vector3
+        set castOwners to an empty list of an integer
         loop cursor from 0 to the length of meshes:
             set entry to the item at cursor in meshes
             set points to entry's shape's positions's values
@@ -514,6 +938,7 @@ function append bim ground and shadows of {a pointer to a list:meshes} toward {c
             set corner to 0
             loop while corner < the length of triangleCorners:
                 if (the cad dot of (the item at (the item at corner in triangleCorners) in normals) and towardSun) > 0.0:
+                    append (-3 - (the item at cursor in meshOrdinals)) to castOwners
                     loop vertex from 0 to 3:
                         set point to the item at (the item at (corner + vertex) in triangleCorners) in points
                         set drop to (point's z - groundLevel) / towardSun's z
@@ -527,6 +952,7 @@ function append bim ground and shadows of {a pointer to a list:meshes} toward {c
                 set corner to corner + 3
         if (the length of cast) = 0:
             free cast
+            free castOwners
             return nothing
         set margin to 0.5 * (the maximum of (highX - lowX) and (highY - lowY))
         set southWest to a cad vector3 with x (lowX - margin), y (lowY - margin) and z groundLevel
@@ -539,10 +965,12 @@ function append bim ground and shadows of {a pointer to a list:meshes} toward {c
         append southEast to corners
         append northEast to corners
         append groundColour to colours
+        append -2 to owners
         append southWest to corners
         append northEast to corners
         append northWest to corners
         append groundColour to colours
+        append -2 to owners
         # Each shadow turned to face up, so that culling back faces keeps it.
         set cursor to 0
         loop while (cursor + 2) < the length of cast:
@@ -558,8 +986,10 @@ function append bim ground and shadows of {a pointer to a list:meshes} toward {c
                 append third to corners
                 append second to corners
             append shadowColour to colours
+            append (the item at (cursor / 3) in castOwners) to owners
             set cursor to cursor + 3
         free cast
+        free castOwners
 
 # The selected opening outlined, and the selected space's floor filled, in
 # the 3D view.
@@ -779,29 +1209,43 @@ function draw bim view cube in {bim screen layout record:layout} with {bim camer
         free cuts
 
 # The GPU scene in the 3D panel, through the camera set for it: its ground
-# and shadows when the camera looks down on them, then its faces, except in
-# a wireframe.
+# and shadows when the camera looks down on them, then its faces (the
+# imported elements, their shared shapes in instances, the native
+# elements), except in a wireframe.
 function draw bim model of {bim gpu scene record:scene} in {bim screen layout record:layout} with {bim camera record:camera} mode {integer:viewMode} on {pointer:window}:
     execute:
         set context to the gpu context of window
         set panelWidth to layout's width - layout's planRight
         set panelHeight to layout's bottom - layout's top
         if (camera's pitch > 0.05) and (scene's groundIndexCount > 0):
-            draw gpu mesh indices from 0 counting scene's groundIndexCount within layout's planRight, layout's top, panelWidth and panelHeight in context
+            draw gpu mesh slot (bim gpu ground slot) indices from 0 counting scene's groundIndexCount within layout's planRight, layout's top, panelWidth and panelHeight in context
         if viewMode != bim wireframe view mode:
-            draw gpu mesh indices from scene's groundIndexCount counting (scene's indexCount - scene's groundIndexCount) within layout's planRight, layout's top, panelWidth and panelHeight in context
+            draw gpu mesh slot (bim gpu import slot) indices from 0 counting scene's importIndexCount within layout's planRight, layout's top, panelWidth and panelHeight in context
+            loop shapeCursor from 0 to the length of (scene's shapes's values):
+                set shapeDraw to the item at shapeCursor in (scene's shapes's values)
+                draw gpu mesh slot (bim gpu instance slot) indices from shapeDraw's first counting shapeDraw's count as instances from shapeDraw's firstInstance counting shapeDraw's instanceCount within layout's planRight, layout's top, panelWidth and panelHeight in context
+            draw gpu mesh slot (bim gpu native slot) indices from 0 counting scene's nativeIndexCount within layout's planRight, layout's top, panelWidth and panelHeight in context
 
 # The GPU scene's feature edges in the 3D panel, as thin lines drawn from
 # the GPU's copy, through the camera the mesh is drawn with; when `hidden`,
 # only where the faces drawn before them leave them in view.
-function draw bim edges in {bim screen layout record:layout} hidden {boolean:hidden} on {pointer:window}:
+function draw bim edges of {bim gpu scene record:scene} in {bim screen layout record:layout} hidden {boolean:behindFaces} on {pointer:window}:
     execute:
+        set context to the gpu context of window
         set panelWidth to layout's width - layout's planRight
         set panelHeight to layout's bottom - layout's top
-        if hidden:
-            draw gpu mesh edges within layout's planRight, layout's top, panelWidth and panelHeight coloured 28, 32 and 40 hidden true in (the gpu context of window)
-        else:
-            draw gpu mesh edges within layout's planRight, layout's top, panelWidth and panelHeight coloured 40, 70 and 120 hidden false in (the gpu context of window)
+        set red to 40
+        set green to 70
+        set blue to 120
+        if behindFaces:
+            set red to 28
+            set green to 32
+            set blue to 40
+        draw gpu mesh slot (bim gpu import slot) edges from 0 counting scene's importEdgeCount within layout's planRight, layout's top, panelWidth and panelHeight coloured red, green and blue hidden behindFaces in context
+        loop shapeCursor from 0 to the length of (scene's shapes's values):
+            set shapeDraw to the item at shapeCursor in (scene's shapes's values)
+            draw gpu mesh slot (bim gpu instance slot) edges from shapeDraw's firstEdge counting shapeDraw's edgeCount as instances from shapeDraw's firstInstance counting shapeDraw's instanceCount within layout's planRight, layout's top, panelWidth and panelHeight coloured red, green and blue hidden behindFaces in context
+        draw gpu mesh slot (bim gpu native slot) edges from 0 counting scene's nativeEdgeCount within layout's planRight, layout's top, panelWidth and panelHeight coloured red, green and blue hidden behindFaces in context
 
 # The grid lines in the 3D panel: dash-dot, depth tested against the model
 # as the edges are, so that a grid line passes behind the elements in front
