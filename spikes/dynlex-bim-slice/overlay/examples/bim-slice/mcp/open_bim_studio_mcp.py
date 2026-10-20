@@ -275,7 +275,7 @@ def elements_tool(arguments: dict) -> dict:
     return text_result(MODELLER.request("elements"))
 
 
-@tool("buttons", "Every ribbon button (tab, group, label, command code); press one with `press_button`.")
+@tool("buttons", "Every ribbon button (tab, group, label, command-line key, command code); press one with `press_button`.")
 def buttons_tool(arguments: dict) -> dict:
     return text_result(MODELLER.request("buttons"))
 

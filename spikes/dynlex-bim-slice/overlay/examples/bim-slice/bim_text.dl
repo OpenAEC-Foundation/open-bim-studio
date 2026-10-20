@@ -5,8 +5,11 @@
 # of textured triangles. Glyphs are rendered with FreeType's light hinting,
 # which keeps proportional text crisp at small sizes without distorting its
 # shapes. Widths come from the glyphs' advances, so layouts can measure text.
+# The window has one texture, so the interface's icons (`icons/ui-icons.txt`)
+# sit in the same atlas, below the faces.
 import lib/vulkan/graphics.dl
 import lib/string.dl
+import lib/text.dl
 
 # FreeType's face and glyph slot records, as far as the atlas reads them.
 # FT_FaceRec — font face metadata
@@ -108,6 +111,29 @@ class:
         lineHeight as an integer
         ascent as an integer
 
+# One interface icon as `icons/ui-icons.txt` holds it: its glyph (as `bim
+# icon ...` in bim_ui.dl), its size in pixels, its part (0 drawn in the
+# primary colour, 1 in the accent) and its coverage, a byte per pixel.
+class:
+    patterns:
+        [a|] bim icon image record
+    members:
+        glyph as an integer
+        size as an integer
+        part as an integer
+        coverage as a string
+
+# Where an icon image sits in the atlas: its top left pixel.
+class:
+    patterns:
+        [a|] bim icon cell record
+    members:
+        glyph as an integer
+        size as an integer
+        part as an integer
+        x as an integer
+        y as an integer
+
 class:
     patterns:
         [a|] bim text atlas record
@@ -116,6 +142,7 @@ class:
         faces as the type of (an empty list of a bim text face record)
         atlasWidth as an integer
         atlasHeight as an integer
+        icons as the type of (an empty list of a bim icon cell record)
 
 # The faces every atlas holds, by index.
 function bim text body:
@@ -137,6 +164,21 @@ function bim text heading:
 function bim text drawing:
     replacement:
         5
+# The OpenAEC style's faces (Style Repo 0.4): mono labels (JetBrains Mono,
+# 11 pixels, drawn in capitals), mono figures (12), semibold (Inter, 12)
+# and medium (12).
+function bim text mono label:
+    replacement:
+        6
+function bim text mono:
+    replacement:
+        7
+function bim text semibold:
+    replacement:
+        8
+function bim text medium:
+    replacement:
+        9
 
 function the bim first printable code:
     replacement:
@@ -183,14 +225,31 @@ function the bim text atlas from regular font at {a string:regularPath} and bold
     execute:
         return the bim text atlas from regular font at regularPath and bold font at boldPath and drawing font at (the string form of "") for window
 
-# The atlas of the faces body (13 pixels), small (12), caption (11), bold (13),
-# heading (15 bold) and drawing (13, the font at `drawingPath`) from the fonts
-# at `regularPath` and `boldPath`; the regular font stands in for a missing
-# bold or drawing one. Invalid when the regular font cannot be loaded.
+# `wanted` when a file is there, else `fallback`.
+function the bim font file {a string:wanted} falling back to {a string:fallback}:
+    execute:
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of wanted, "rb")
+        if handle = (0 as a pointer to a byte):
+            return fallback
+        ignore @intrinsic("call", "libc", "fclose", integer, handle)
+        return wanted
+
 function the bim text atlas from regular font at {a string:regularPath} and bold font at {a string:boldPath} and drawing font at {a string:drawingPath} for {pointer:window}:
     execute:
+        set none to the string form of ""
+        return the bim text atlas from regular font at regularPath and bold font at boldPath and drawing font at drawingPath and mono font at none and medium font at none with icons from none for window
+
+# The atlas of the faces body (13 pixels), small (12), caption (11), bold (13),
+# heading (15 bold), drawing (13, the font at `drawingPath`), mono label (11,
+# the font at `monoPath`), mono (12), semibold (12, the bold font) and medium
+# (12, the font at `mediumPath`) from the fonts at `regularPath` and
+# `boldPath`, the regular font standing in for a missing one; and below them
+# the icons in the file at `iconPath`, none when it cannot be read. Invalid
+# when the regular font cannot be loaded.
+function the bim text atlas from regular font at {a string:regularPath} and bold font at {a string:boldPath} and drawing font at {a string:drawingPath} and mono font at {a string:monoPath} and medium font at {a string:mediumPath} with icons from {a string:iconPath} for {pointer:window}:
+    execute:
         set library to 0 as a pointer
-        set nothingLoaded to @intrinsic("construct", a bim text atlas record, @intrinsic("construct", a graphics texture, 0 as a pointer to a byte, 0, 0), an empty list of a bim text face record, 0, 0)
+        set nothingLoaded to @intrinsic("construct", a bim text atlas record, @intrinsic("construct", a graphics texture, 0 as a pointer to a byte, 0, 0), an empty list of a bim text face record, 0, 0, an empty list of a bim icon cell record)
         if (@intrinsic("call", "freetype", "FT_Init_FreeType", an integer, the address of library)) != 0:
             return @intrinsic("construct", a bim text atlas result record, false, nothingLoaded)
         set sources to an empty list of a pointer
@@ -200,22 +259,110 @@ function the bim text atlas from regular font at {a string:regularPath} and bold
         append (the bim font face at boldPath sized 13 through library) to sources
         append (the bim font face at boldPath sized 15 through library) to sources
         append (the bim font face at drawingPath sized 13 through library) to sources
+        append (the bim font face at monoPath sized 11 through library) to sources
+        append (the bim font face at monoPath sized 12 through library) to sources
+        append (the bim font face at boldPath sized 12 through library) to sources
+        append (the bim font face at mediumPath sized 12 through library) to sources
         if (the item at 0 in sources) = (0 as a pointer):
             free sources
             return @intrinsic("construct", a bim text atlas result record, false, nothingLoaded)
-        if (the item at 3 in sources) = (0 as a pointer):
-            replace item at index 3 in sources with (the bim font face at regularPath sized 13 through library)
-        if (the item at 4 in sources) = (0 as a pointer):
-            replace item at index 4 in sources with (the bim font face at regularPath sized 15 through library)
-        if (the item at 5 in sources) = (0 as a pointer):
-            replace item at index 5 in sources with (the bim font face at regularPath sized 13 through library)
-        set made to the bim text atlas of sources for window
+        set sizes to an empty list of an integer
+        append 13 to sizes
+        append 12 to sizes
+        append 11 to sizes
+        append 13 to sizes
+        append 15 to sizes
+        append 13 to sizes
+        append 11 to sizes
+        append 12 to sizes
+        append 12 to sizes
+        append 12 to sizes
+        loop faceCursor from 3 to the length of sources:
+            if (the item at faceCursor in sources) = (0 as a pointer):
+                replace item at index faceCursor in sources with (the bim font face at regularPath sized (the item at faceCursor in sizes) through library)
+        free sizes
+        set iconImages to the bim icon images at iconPath
+        set made to the bim text atlas of sources with icons iconImages for window
+        free iconImages
         free sources
         return @intrinsic("construct", a bim text atlas result record, true, made)
 
-# The atlas of the FreeType faces `sources`, each at its pixel size, stacked in
-# one texture of `window`.
-function the bim text atlas of {a pointer to a list:sources} for {pointer:window}:
+# The byte at `spot` of `content`, or a line end past its end.
+local function the bim icon byte {integer:spot} of {a string:content}:
+    execute:
+        if (spot < 0) or (spot >= (the length of content)):
+            return 10
+        return (the character at spot in content) as an integer
+
+# The value of hexadecimal digit `letter` (a character code).
+local function the bim hex digit {integer:letter}:
+    execute:
+        if (letter >= 48) and (letter <= 57):
+            return letter - 48
+        if (letter >= 97) and (letter <= 102):
+            return letter - 87
+        if (letter >= 65) and (letter <= 70):
+            return letter - 55
+        return 0
+
+# The icon images in the file at `path`, as tools/make_ui_icons.py writes
+# them: a line per image, "glyph size part" and the coverage in hex; lines
+# starting with # are comments. None when the file cannot be read.
+function the bim icon images at {a string:path}:
+    execute:
+        set found to an empty list of a bim icon image record
+        if (the length of path) = 0:
+            return found
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of path, "rb")
+        if handle = (0 as a pointer to a byte):
+            return found
+        set stored to (-1) as a 64 bit integer
+        if (@intrinsic("call", "libc", "fseek", integer, handle, 0 as a 64 bit integer, 2)) = 0:
+            set stored to @intrinsic("call", "libc", "ftell", a 64 bit integer, handle)
+        if (stored <= (0 as a 64 bit integer)) or ((@intrinsic("call", "libc", "fseek", integer, handle, 0 as a 64 bit integer, 0)) != 0):
+            ignore @intrinsic("call", "libc", "fclose", integer, handle)
+            return found
+        set content to a new string buffer containing (stored as an integer) bytes
+        set got to @intrinsic("call", "libc", "fread", a word sized integer, the data of content, 1 as a word sized integer, stored as a word sized integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", integer, handle)
+        set total to got as an integer
+        set cursor to 0
+        loop while cursor < total:
+            set first to the bim icon byte cursor of content
+            if (first < 48) or (first > 57):
+                # A comment or an empty line: on to the next line.
+                loop while (the bim icon byte cursor of content) != 10:
+                    set cursor to cursor + 1
+                set cursor to cursor + 1
+            else:
+                set fields to an empty list of an integer
+                loop while (the length of fields) < 3:
+                    set number to 0
+                    set letter to the bim icon byte cursor of content
+                    loop while (letter >= 48) and (letter <= 57):
+                        set number to (number * 10) + (letter - 48)
+                        set cursor to cursor + 1
+                        set letter to the bim icon byte cursor of content
+                    append number to fields
+                    if letter = 32:
+                        set cursor to cursor + 1
+                set side to the item at 1 in fields
+                set pixels to a new string buffer containing (side * side) bytes
+                loop dot from 0 to side * side:
+                    set high to the bim hex digit (the bim icon byte (cursor + (dot * 2)) of content)
+                    set low to the bim hex digit (the bim icon byte ((cursor + (dot * 2)) + 1) of content)
+                    store (((high * 16) + low) as a byte) into the data of pixels at dot
+                append (@intrinsic("construct", a bim icon image record, the item at 0 in fields, side, the item at 2 in fields, pixels)) to found
+                free fields
+                set cursor to cursor + ((side * side) * 2)
+                loop while (the bim icon byte cursor of content) != 10:
+                    set cursor to cursor + 1
+                set cursor to cursor + 1
+        return found
+
+# The atlas of the FreeType faces `sources`, each at its pixel size, and the
+# icon images `images` stacked in one texture of `window`.
+function the bim text atlas of {a pointer to a list:sources} with icons {a pointer to a list:images} for {pointer:window}:
     execute:
         set faces to an empty list of a bim text face record
         set atlasWidth to 1
@@ -243,6 +390,22 @@ function the bim text atlas of {a pointer to a list:sources} for {pointer:window
             append (@intrinsic("construct", a bim text face record, glyphs, cellWidth, cellHeight, atlasHeight, lineHeight, ascent)) to faces
             set atlasWidth to the maximum of atlasWidth and (cellWidth * (the bim atlas columns))
             set atlasHeight to atlasHeight + (cellHeight * rows)
+        # The icons on shelves below the faces, a blank pixel around each.
+        set cells to an empty list of a bim icon cell record
+        set shelfX to 0
+        set shelfY to atlasHeight
+        set shelfHeight to 0
+        loop imageCursor from 0 to the length of images:
+            set image to the item at imageCursor in images
+            set span to image's size + 2
+            if (shelfX + span) > atlasWidth:
+                set shelfX to 0
+                set shelfY to shelfY + shelfHeight
+                set shelfHeight to 0
+            append (@intrinsic("construct", a bim icon cell record, image's glyph, image's size, image's part, shelfX + 1, shelfY + 1)) to cells
+            set shelfX to shelfX + span
+            set shelfHeight to the maximum of shelfHeight and span
+        set atlasHeight to shelfY + shelfHeight
         set pixels to a new string buffer containing (atlasWidth * atlasHeight) bytes
         loop cursor from 0 to atlasWidth * atlasHeight:
             store (0 as a byte) into the data of pixels at cursor
@@ -261,8 +424,14 @@ function the bim text atlas of {a pointer to a list:sources} for {pointer:window
                     loop dot from 0 to glyph's width:
                         set value to @intrinsic("dereference", source + ((line * pitch) + dot))
                         store value into the data of pixels at (((originY + line) * atlasWidth) + (originX + dot))
+        loop imageCursor from 0 to the length of images:
+            set image to the item at imageCursor in images
+            set cell to the item at imageCursor in cells
+            loop line from 0 to image's size:
+                loop dot from 0 to image's size:
+                    store (the character at ((line * image's size) + dot) in image's coverage) into the data of pixels at (((cell's y + line) * atlasWidth) + (cell's x + dot))
         set texture to a new red texture sized atlasWidth by atlasHeight from ((the data of pixels) as a pointer) for window
-        return @intrinsic("construct", a bim text atlas record, texture, faces, atlasWidth, atlasHeight)
+        return @intrinsic("construct", a bim text atlas record, texture, faces, atlasWidth, atlasHeight, cells)
 
 local function add bim atlas corner {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} at texture {a 64 bit floating-point number:u} and {a 64 bit floating-point number:v} to {graphics frame:frame}:
     execute:
@@ -301,6 +470,11 @@ function draw bim text {a string:message} at {a 64 bit floating-point number:x} 
 # The same, leaving out the glyphs that would reach past `rightEdge`.
 function draw bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} in face {integer:faceIndex} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} cut at {a 64 bit floating-point number:rightEdge} in {graphics frame:frame}:
     execute:
+        draw bim text message at x and y in face faceIndex with atlas coloured red, green and blue cut at rightEdge spaced 0.0 in frame
+
+# The same, `tracking` pixels added after every character.
+function draw bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} in face {integer:faceIndex} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} cut at {a 64 bit floating-point number:rightEdge} spaced {a 64 bit floating-point number:tracking} in {graphics frame:frame}:
+    execute:
         if ((the length of message) = 0) or ((the length of atlas's faces) = 0):
             return nothing
         set entry to the item at faceIndex in (atlas's faces)
@@ -327,13 +501,65 @@ function draw bim text {a string:message} at {a 64 bit floating-point number:x} 
                 add bim atlas corner west and north at texture u0 and v0 to frame
                 add bim atlas corner east and south at texture u1 and v1 to frame
                 add bim atlas corner west and south at texture u0 and v1 to frame
-            set pen to pen + (glyph's advance as a 64 bit floating-point number)
+            set pen to (pen + (glyph's advance as a 64 bit floating-point number)) + tracking
         finish triangles in frame
 
 # Draws `message` in the body face.
 function draw bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} in {graphics frame:frame}:
     execute:
         draw bim text message at x and y in face (bim text body) with atlas coloured red, green and blue in frame
+
+# The OpenAEC style's mono label (group titles, panel headings): `message`
+# in capitals in the mono label face, letters 0.08 em (one pixel) apart.
+function the bim caps width of {a string:message} with {bim text atlas record:atlas}:
+    execute:
+        set capitals to the uppercase form of message
+        return (the bim text width of capitals in face (bim text mono label) of atlas) + ((the length of capitals) as a 64 bit floating-point number)
+
+function draw bim caps {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} in {graphics frame:frame}:
+    execute:
+        set capitals to the uppercase form of message
+        draw bim text capitals at x and y in face (bim text mono label) with atlas coloured red, green and blue cut at 1000000.0 spaced 1.0 in frame
+
+# Whether the atlas holds icon `glyph` at `size` pixels.
+function the bim pictogram {integer:glyph} sized {integer:size} is in {bim text atlas record:atlas}:
+    execute:
+        loop cellCursor from 0 to the length of (atlas's icons):
+            set cell to the item at cellCursor in (atlas's icons)
+            if (cell's glyph = glyph) and (cell's size = size):
+                return true
+        return false
+
+# Draws icon `glyph` at `size` pixels (16 or 22) with its top left at `x`,
+# `y`: its primary part in `red`, `green`, `blue`, its accent part in
+# `accentRed`, `accentGreen`, `accentBlue`. Nothing when the atlas lacks it.
+function draw bim pictogram {integer:glyph} sized {integer:size} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} accented {integer:accentRed}, {integer:accentGreen} and {integer:accentBlue} in {graphics frame:frame}:
+    execute:
+        set west to ((x + 0.5) as an integer) as a 64 bit floating-point number
+        set north to ((y + 0.5) as an integer) as a 64 bit floating-point number
+        set east to west + (size as a 64 bit floating-point number)
+        set south to north + (size as a 64 bit floating-point number)
+        set atlasWidth to atlas's atlasWidth as a 64 bit floating-point number
+        set atlasHeight to atlas's atlasHeight as a 64 bit floating-point number
+        loop cellCursor from 0 to the length of (atlas's icons):
+            set cell to the item at cellCursor in (atlas's icons)
+            if (cell's glyph = glyph) and (cell's size = size):
+                set u0 to (cell's x as a 64 bit floating-point number) / atlasWidth
+                set v0 to (cell's y as a 64 bit floating-point number) / atlasHeight
+                set u1 to u0 + ((size as a 64 bit floating-point number) / atlasWidth)
+                set v1 to v0 + ((size as a 64 bit floating-point number) / atlasHeight)
+                start triangles using atlas's texture in frame
+                if cell's part = 1:
+                    use vertex color red accentRed, green accentGreen and blue accentBlue in frame
+                else:
+                    use vertex color red red, green green and blue blue in frame
+                add bim atlas corner west and north at texture u0 and v0 to frame
+                add bim atlas corner east and north at texture u1 and v0 to frame
+                add bim atlas corner east and south at texture u1 and v1 to frame
+                add bim atlas corner west and north at texture u0 and v0 to frame
+                add bim atlas corner east and south at texture u1 and v1 to frame
+                add bim atlas corner west and south at texture u0 and v1 to frame
+                finish triangles in frame
 
 function release bim text atlas {bim text atlas record:atlas}:
     execute:
