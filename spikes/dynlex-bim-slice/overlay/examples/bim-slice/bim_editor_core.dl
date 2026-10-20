@@ -5466,10 +5466,16 @@ function push bim editor side by {a 64 bit floating-point number:distance} in {a
 
 # ---------------------------------------------------------------- control points
 
+# The pick kind of a reinforcement definition (its bars share its id).
+function bim reinforcement picked:
+    replacement:
+        30
+
 # The points an element is edited by in edit mode, in model coordinates
 # (plan position and height above its storey): a grid's, wall's or linear
 # element's two ends, a floor's corners, a level's one point at its
-# elevation. One way to edit every element, as Blender edits every object.
+# elevation, reinforcement without a host its axis's two ends. One way to
+# edit every element, as Blender edits every object.
 function the bim handles of {integer:pickKind} numbered {a 64 bit integer:elementId} in {bim model record:modelValue}:
     execute:
         set found to a cad topology list of a cad vector3
@@ -5491,6 +5497,15 @@ function the bim handles of {integer:pickKind} numbered {a 64 bit integer:elemen
                 set linearValue to the item at linearFound's position in (modelValue's linears's values)
                 append linearValue's start to (found's values)
                 append linearValue's finish to (found's values)
+        if pickKind = bim reinforcement picked:
+            # Reinforcement on a host follows the host and has no points of
+            # its own; its generated bars are never points either.
+            set rebarFound to the bim reinforcement index of elementId in modelValue
+            if rebarFound's valid:
+                set rebarValue to the item at rebarFound's position in (modelValue's reinforcements's values)
+                if rebarValue's hostId = the bim refused id:
+                    append rebarValue's start to (found's values)
+                    append rebarValue's finish to (found's values)
         if pickKind = bim slab picked:
             set slabFound to the bim slab index of elementId in modelValue
             if slabFound's valid:
@@ -5527,7 +5542,7 @@ function bim kind {integer:pickKind} has handles:
             return true
         if (pickKind = bim linear picked) or ((pickKind = bim slab picked) or (pickKind = bim level picked)):
             return true
-        return pickKind = bim curtain picked
+        return (pickKind = bim curtain picked) or (pickKind = bim reinforcement picked)
 
 # Element `elementId` takes `pointList` as its control points (see `the bim
 # handles of`); refused as the element's own edit refuses them.
@@ -5556,6 +5571,18 @@ function set bim handles of {integer:pickKind} numbered {a 64 bit integer:elemen
             if linearFound's valid = false:
                 return false
             return move bim linear elementId to first and last turned (the item at linearFound's position in (target's linears's values))'s angle in target
+        if (pickKind = bim reinforcement picked) and (count = 2):
+            # Only the definition's axis moves, its bars regenerate from it;
+            # refused on a host and for an axis the definition refuses.
+            set rebarFound to the bim reinforcement index of elementId in (@intrinsic("dereference", target))
+            if rebarFound's valid = false:
+                return false
+            set rebarValue to the item at rebarFound's position in (target's reinforcements's values)
+            if rebarValue's hostId != the bim refused id:
+                return false
+            set rebarValue's start to first
+            set rebarValue's finish to last
+            return (store bim reinforcement rebarValue in target) != the bim refused id
         if pickKind = bim slab picked:
             set corners to an empty list of a cad vector2
             loop cursor from 0 to count:
@@ -5644,10 +5671,56 @@ function the bim edited sketch of {bim editor record:editor}:
         set found to the bim sketch index of editor's editSketchId in editor's documentValue's current
         return found
 
+# The pick kind of the host of reinforcement `rebarValue` (a linear
+# element, a plate or a wall); nothing picked when it has none or it is gone.
+function the bim host kind of reinforcement {reinforcement definition:rebarValue} in {bim model record:modelValue}:
+    execute:
+        if rebarValue's hostId = the bim refused id:
+            return bim nothing picked
+        if (the bim linear index of rebarValue's hostId in modelValue)'s valid:
+            return bim linear picked
+        if (the bim slab index of rebarValue's hostId in modelValue)'s valid:
+            return bim slab picked
+        if (the bim wall index of rebarValue's hostId in modelValue)'s valid:
+            return bim wall picked
+        return bim nothing picked
+
+# Tab on the selection: edit mode. Reinforcement without a host is edited by
+# its axis's two ends, as any element by its points. Reinforcement on a host
+# keeps following it: Tab selects the host and edits the host's geometry,
+# and says so; the reinforcement is never cut loose from it.
+function enter bim editor edit mode in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind != bim reinforcement picked:
+            enter bim editor element edit mode in editor
+            return nothing
+        set modelValue to editor's documentValue's current
+        set rebarFound to the bim reinforcement index of editor's selectionId in modelValue
+        if rebarFound's valid = false:
+            set editor's message to the string form of "Tab: select an element to edit its points"
+            return nothing
+        set rebarValue to the item at rebarFound's position in (modelValue's reinforcements's values)
+        if rebarValue's hostId = the bim refused id:
+            enter bim editor element edit mode in editor
+            if editor's editMode:
+                set editor's message to (the string form of "Edit mode (reinforcement ") + (rebarValue's mark + (the string form of "): its two ends; G grabs, X Y Z constrain; Tab leaves"))
+            return nothing
+        set hostKind to the bim host kind of reinforcement rebarValue in modelValue
+        if hostKind = bim nothing picked:
+            set editor's message to (the string form of "Tab: the host of reinforcement ") + (rebarValue's mark + (the string form of " is gone; place it again or delete it"))
+            return nothing
+        select bim editor hostKind numbered (rebarValue's hostId) in editor
+        enter bim editor element edit mode in editor
+        set hostEditing to editor's editMode or (bim editor sketches a boundary (@intrinsic("dereference", editor)))
+        if hostEditing:
+            set editor's message to (the string form of "Reinforcement ") + (rebarValue's mark + ((the string form of " follows its host: editing the host's geometry. ") + editor's message))
+        else:
+            set editor's message to (the string form of "Reinforcement ") + (rebarValue's mark + (the string form of " follows its host, whose geometry is not edited by points; host selected"))
+
 # Tab on a selected sketch element: edit mode, its points to pick and grab.
 # A mass becomes a free mesh first, as in Blender, so that each of its points
 # moves in 3D; a mesh is edited as it is.
-function enter bim editor edit mode in {a pointer to a bim editor record:editor}:
+local function enter bim editor element edit mode in {a pointer to a bim editor record:editor}:
     execute:
         set editor's editMesh to false
         # A plate, a wall or a building system: its outline as a sketch; a
