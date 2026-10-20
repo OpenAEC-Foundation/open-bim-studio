@@ -1,0 +1,127 @@
+# Windows build of the DynLex compiler the BIM slice needs, from the v0.1
+# source snapshot (draft release v0.1, `Open-BIM-Studio-0.1-source.tar.gz`:
+# the compiler source 02fbe6a, the CAD library and the BIM app 2942813).
+# Compiler only: it builds `dynlex.exe` with the slice's compiler patches,
+# runs three light headless checks of the slice, and uploads the staged
+# compiler with its toolchain as an artifact. Nothing is published.
+#
+# Activated for the user's Windows/Linux v0.1 installer request.
+name: Windows compiler (v0.1)
+
+on:
+  push:
+    branches: [codex/windows-v0.1]
+  workflow_dispatch:
+
+permissions:
+  # A draft release's assets may need `contents: write` to be listed; the
+  # download step says so when it cannot find the asset.
+  contents: read
+
+jobs:
+  compiler:
+    runs-on: windows-latest
+    # The pinned LLVM fork is built from source on the first run.
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: dynlex
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: open-bim-studio
+
+      - name: Download the v0.1 source snapshot
+        working-directory: .
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1 --repo "${{ github.repository }}" `
+            --pattern "Open-BIM-Studio-0.1-source.tar.gz" --dir snapshot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the v0.1 source asset; a draft release may need contents: write."
+          }
+          $digest = (Get-FileHash snapshot/Open-BIM-Studio-0.1-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne "086aa0704607372473f0604a6f9bdd7143589cea9b18f3d3a65e1705b3efbf5a") {
+            throw "Unexpected source snapshot checksum."
+          }
+          New-Item -ItemType Directory -Force dynlex | Out-Null
+          tar -xzf snapshot/Open-BIM-Studio-0.1-source.tar.gz -C dynlex
+          if ($LASTEXITCODE -ne 0) { throw "Could not unpack the source snapshot." }
+          if (-not (Test-Path dynlex/scripts/install.ps1)) {
+            throw "The snapshot has no scripts/install.ps1 at its root."
+          }
+
+      - name: Apply the slice's compiler patches
+        shell: pwsh
+        run: |
+          $patches = "../open-bim-studio/spikes/dynlex-bim-slice/patches"
+          foreach ($name in "dynlex-compiler-local", "dynlex-shader-extensions", "dynlex-windows-library-names") {
+            git apply --reverse --check "$patches/$name.patch" 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "Already applied: $name"; continue }
+            git apply -p1 --whitespace=nowarn "$patches/$name.patch"
+            if ($LASTEXITCODE -ne 0) { throw "Patch $name does not apply to the snapshot." }
+          }
+
+      - name: Restore the pinned toolchains
+        uses: actions/cache@v6
+        with:
+          path: |
+            dynlex/.cache/llvm-toolchain
+            dynlex/.cache/llvm-mingw
+            dynlex/.cache/vcpkg
+            dynlex/.cache/vcpkg-installed
+          key: obs-windows-toolchains-${{ runner.arch }}-${{ hashFiles('dynlex/metadata/LLVM_TOOLCHAIN', 'dynlex/metadata/LLVM_MINGW_TOOLCHAIN', 'dynlex/metadata/VCPKG_TOOLCHAIN', 'dynlex/vcpkg.json', 'dynlex/cmake/vcpkg-triplets/*.cmake', 'dynlex/scripts/llvm_toolchain.sh', 'dynlex/scripts/llvm-mingw-toolchain.ps1') }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: ./scripts/install.ps1
+
+      - name: Build the compiler (Release)
+        shell: bash
+        run: ./scripts/build.sh --release
+
+      - name: Light headless checks of the slice
+        shell: pwsh
+        # ui_layout uses no library; plan_pan links GLFW and the Vulkan loader
+        # (the library-name patch); text_glyphs links FreeType too. None
+        # opens a window.
+        run: |
+          $failed = @()
+          foreach ($name in "ui_layout", "plan_pan", "text_glyphs") {
+            $source = "examples/bim-slice/tests/$name.dl"
+            $program = "build/check-$name.exe"
+            & build/dynlex.exe $source -o $program
+            if ($LASTEXITCODE -ne 0) { $failed += "$name (compile)"; continue }
+            $output = (& $program | Out-String) -replace "`r`n", "`n"
+            if ($LASTEXITCODE -ne 0) { $failed += "$name (runtime)"; continue }
+            $expected = (Get-Content -Raw "examples/bim-slice/tests/$name.expected.txt") -replace "`r`n", "`n"
+            if ($output.TrimEnd() -ne $expected.TrimEnd()) {
+              Write-Host "--- $name output"; Write-Host $output
+              $failed += $name
+            } else {
+              Write-Host "PASS $name"
+            }
+          }
+          if ($failed.Count -gt 0) { throw "Failed: $($failed -join ', ')" }
+
+      - name: Stage the compiler with its toolchain
+        shell: pwsh
+        run: |
+          if (Test-Path "build/windows-stage") { Remove-Item -Recurse -Force "build/windows-stage" }
+          cmake --install build --prefix build/windows-stage
+          if ($LASTEXITCODE -ne 0) { throw "CMake failed to stage the compiler." }
+          ./scripts/stage-windows-toolchain.ps1 `
+            -InstallationRoot (Resolve-Path "build/windows-stage") `
+            -ToolchainRoot $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT `
+            -TargetArchitecture $env:DYNLEX_WINDOWS_TOOLCHAIN_ARCHITECTURE `
+            -LlvmVersion $env:DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION `
+            -DependencyRoot $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT
+
+      - name: Upload the staged compiler
+        uses: actions/upload-artifact@v7
+        with:
+          name: dynlex-windows-x64-v0.1
+          path: dynlex/build/windows-stage
+          if-no-files-found: error
