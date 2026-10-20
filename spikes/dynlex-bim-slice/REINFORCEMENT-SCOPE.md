@@ -154,3 +154,20 @@ They do not design anchorage into supports, laps, structural capacity or stirrup
 hooks. The two slab U-bars illustrate individual objects, not a complete perimeter
 distribution. Wall edge bars are explicit free bars and do not follow later opening
 edits automatically. Run these five new tests through the coordinator before merging.
+
+## Plan drawing callouts
+
+Explicit reinforcement tags now expand into one label per quantity-schedule row
+in the plan canvas, including plans placed on sheets. Each label uses the project
+drawing standard and points to the first generated bar of that row (including the
+host's position and roll). Labels stack at 16-pixel intervals from the existing
+tag position. Editing the object updates both quantities and leader anchors.
+Invalid reinforcement suppresses the row labels and shows an explicit diagnostic
+at the tag instead. No automatic tags are created for untagged objects.
+
+`bim_reinforcement_drawing.dl` contains the editor-independent label data;
+`reinforcement_drawing` tests this data without importing the editor or graphics.
+The canvas integration in `bim_plan_panel.dl` additionally needs an app compile
+and visual review by the coordinator. Section labels, collision avoidance and
+per-row manual placement remain subsequent steps. These callouts do not change
+the existing unverified fabrication shape codes or add EC2 design allowances.
