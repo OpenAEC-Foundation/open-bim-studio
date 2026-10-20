@@ -466,29 +466,85 @@ function load bim editor from text {a string:source} named {a string:path} in {a
 
 # ---------------------------------------------------------------- drawing import
 
-# The drawing the person picks in a file dialog (zenity): DXF, DWG or PDF;
-# empty when cancelled or when there is no dialog.
+# Whether this is Windows (`platform/obs_platform.c`).
+function bim app runs on windows:
+    execute:
+        return (@intrinsic("call", "obs_platform", "obs_platform_is_windows", a 64 bit integer)) = (1 as a 64 bit integer)
+
+# The folder for the files the editor passes to and from the commands it
+# runs: %TEMP% on Windows, $TMPDIR or /tmp elsewhere.
+function the bim scratch folder:
+    execute:
+        set variableName to the string form of "TMPDIR"
+        set fallback to the string form of "/tmp"
+        if bim app runs on windows:
+            set variableName to the string form of "TEMP"
+            set fallback to the string form of "."
+        set folderPointer to @intrinsic("call", "libc", "getenv", a pointer to a byte, the data of variableName)
+        if folderPointer = (0 as a pointer to a byte):
+            return fallback
+        set folderLength to @intrinsic("call", "libc", "strlen", a word sized unsigned integer, folderPointer)
+        return a new string from folderPointer containing (folderLength as an integer) bytes
+
+# The drawing the person picks in a file dialog: DXF, DWG or PDF; empty
+# when cancelled or when there is no dialog.
 function the bim drawing picked:
     execute:
-        return the bim file picked with (the string form of "--title='Import a drawing (DXF, DWG, PDF)' --file-filter='Drawings | *.dxf *.DXF *.dwg *.DWG *.pdf *.PDF'")
+        return the bim file picked titled (the string form of "Import a drawing (DXF, DWG, PDF)") among (the string form of "Drawings|*.dxf *.DXF *.dwg *.DWG *.pdf *.PDF") saving false from (the string form of "")
 
 # The IFC file the person picks in a file dialog; empty when cancelled.
 function the bim ifc file picked:
     execute:
-        return the bim file picked with (the string form of "--title='Import IFC (IFC2X3, IFC4, IFC4X3)' --file-filter='IFC | *.ifc *.IFC'")
+        return the bim file picked titled (the string form of "Import IFC (IFC2X3, IFC4, IFC4X3)") among (the string form of "IFC|*.ifc *.IFC") saving false from (the string form of "")
 
-# The file the person picks in a zenity dialog with `dialogOptions`.
-function the bim file picked with {a string:dialogOptions}:
+# The file the person picks in the system's file dialog titled `title`,
+# offering `filters` (entries "Label|*.a *.b" joined with ";"): one to save
+# to, starting from `suggested`, when `isSaving`, else one to open. Linux
+# asks zenity, Windows the Windows Forms dialog through PowerShell; the
+# answer comes back in a file of the scratch folder. "" when cancelled or
+# when there is no dialog.
+function the bim file picked titled {a string:title} among {a string:filters} saving {boolean:isSaving} from {a string:suggested}:
     execute:
-        set answerPath to the string form of "/tmp/open-bim-studio-pick.txt"
+        set answerPath to (the bim scratch folder) + (the string form of "/open-bim-studio-pick.txt")
         ignore (write bim text (the string form of "") to file answerPath)
-        set command to (((the string form of "zenity --file-selection ") + dialogOptions) + (the string form of " > ")) + answerPath
+        set filterEntries to filters split at ";"
+        set command to the string form of ""
+        if bim app runs on windows:
+            # Single quotes inside PowerShell's single-quoted text double.
+            set windowsFilter to the string form of ""
+            loop entryCursor from 0 to the length of filterEntries:
+                set entryParts to (the item at entryCursor in filterEntries) split at "|"
+                if (the length of entryParts) = 2:
+                    if (the length of windowsFilter) > 0:
+                        set windowsFilter to windowsFilter + (the string form of "|")
+                    set windowsFilter to (windowsFilter + ((the item at 0 in entryParts) + (the string form of "|"))) + ((the item at 1 in entryParts) with " " replaced by ";")
+            set dialogKind to the string form of "OpenFileDialog"
+            if isSaving:
+                set dialogKind to the string form of "SaveFileDialog"
+            set script to ((the string form of "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.") + dialogKind) + (the string form of "; $d.Title = '")
+            set script to ((script + (title with "'" replaced by "''")) + (the string form of "'; $d.Filter = '")) + ((windowsFilter with "'" replaced by "''") + (the string form of "'"))
+            if isSaving and ((the length of suggested) > 0):
+                set script to ((script + (the string form of "; $d.FileName = '")) + (suggested with "'" replaced by "''")) + (the string form of "'")
+            set script to ((script + (the string form of "; if ($d.ShowDialog() -eq 'OK') { [IO.File]::WriteAllText('")) + (answerPath with "'" replaced by "''")) + (the string form of "', $d.FileName) }")
+            set command to ((the string form of "powershell -NoProfile -STA -Command \"") + (script with "\"" replaced by "")) + (the string form of "\"")
+        else:
+            set command to the string form of "zenity --file-selection"
+            if isSaving:
+                set command to command + (the string form of " --save --confirm-overwrite")
+            set command to ((command + (the string form of " --title='")) + (title with "'" replaced by "")) + (the string form of "'")
+            if isSaving and ((the length of suggested) > 0):
+                set command to ((command + (the string form of " --filename='")) + (suggested with "'" replaced by "")) + (the string form of "'")
+            loop entryCursor from 0 to the length of filterEntries:
+                set entryParts to (the item at entryCursor in filterEntries) split at "|"
+                if (the length of entryParts) = 2:
+                    set command to ((command + (the string form of " --file-filter='")) + (((the item at 0 in entryParts) with "'" replaced by "") + (the string form of " | "))) + (((the item at 1 in entryParts) with "'" replaced by "") + (the string form of "'"))
+            set command to (command + (the string form of " > ")) + answerPath
         ignore @intrinsic("call", "libc", "system", integer, the data of command)
         set answer to the bim file content at answerPath
         if (answer's valid = false) or ((the length of answer's text) = 0):
             return the string form of ""
         set pickedPath to answer's text
-        if (the character at ((the length of pickedPath) - 1) in pickedPath) = 10:
+        loop while ((the length of pickedPath) > 0) and (((the character at ((the length of pickedPath) - 1) in pickedPath) = 10) or ((the character at ((the length of pickedPath) - 1) in pickedPath) = 13)):
             set pickedPath to the substring of pickedPath from 0 spanning ((the length of pickedPath) - 1) bytes
         return pickedPath
 
@@ -498,8 +554,12 @@ function the bim file picked with {a string:dialogOptions}:
 # message.
 function import bim drawing at {a string:path} through {a string:script} in {a pointer to a bim editor record:editor}:
     execute:
-        set linesPath to the string form of "/tmp/open-bim-studio-lines.txt"
+        # Python 3 runs the script: `python3` on Linux, `python` on Windows,
+        # its answer in a file of the scratch folder.
+        set linesPath to (the bim scratch folder) + (the string form of "/open-bim-studio-lines.txt")
         set command to (((the string form of "python3 '") + script) + ((the string form of "' '") + path)) + ((the string form of "' > ") + (linesPath + (the string form of " 2>&1")))
+        if bim app runs on windows:
+            set command to (((the string form of "python \"") + script) + ((the string form of "\" \"") + path)) + ((the string form of "\" > \"") + (linesPath + (the string form of "\" 2>&1")))
         ignore @intrinsic("call", "libc", "system", integer, the data of command)
         set reading to the bim file content at linesPath
         if reading's valid = false:
@@ -1315,7 +1375,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         # 2136 exports the project's types as a library (IfcX), 2137 imports
         # one: every type the project lacks is added.
         if code = 2136:
-            set libraryPath to the bim file picked with (the string form of "--save --confirm-overwrite --filename=library.ifcx --title='Export the library (IfcX)' --file-filter='IfcX | *.ifcx *.ifcxb'")
+            set libraryPath to the bim file picked titled (the string form of "Export the library (IfcX)") among (the string form of "IfcX|*.ifcx *.ifcxb") saving true from (the string form of "library.ifcx")
             if (the length of libraryPath) = 0:
                 return nothing
             if write bim library of editor's documentValue's current to libraryPath:
@@ -1324,7 +1384,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's message to (the string form of "Could not write ") + libraryPath
             return nothing
         if code = 2137:
-            set libraryPath to the bim file picked with (the string form of "--title='Import a library (IfcX)' --file-filter='IfcX | *.ifcx *.ifcxb'")
+            set libraryPath to the bim file picked titled (the string form of "Import a library (IfcX)") among (the string form of "IfcX|*.ifcx *.ifcxb") saving false from (the string form of "")
             if (the length of libraryPath) = 0:
                 return nothing
             set libraryReading to the bim library read from libraryPath
