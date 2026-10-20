@@ -196,7 +196,7 @@ installer again replaces it; `~/.local/share/bim-slice/uninstall` removes it.
 | Delete | Delete the selected wall, opening or slab, or else the wall under the pointer; a wall goes with its openings |
 | Z / Y | Undo / redo |
 | X | Export `bim-slice.ifc` to the working directory |
-| Ctrl+S / Ctrl+O | Save the model / open it again: the file named on the command line (opened at start when it exists; `.ifcx` is saved as IfcX JSON, `.ifcxb` as binary IfcX, and an older `.bim` file is saved next to itself as `.ifcxb`), or `open-bim-studio.ifcxb`. Opening reads JSON and binary IfcX alike and clears the undo history |
+| Ctrl+S / Ctrl+O | Save the model (Save as… asks for a name while it has none; `.ifcxb` binary IfcX by default, `.ifcx` IfcX JSON or native `.bim`) / open a model picked in a dialog. File > New starts from a template (Dutch: mm, NL storeys and types; international: metres). The ten most recent files and the application's settings are kept in `~/.config/open-bim-studio`. A new or opened model in place of one with unsaved changes asks first. Opening clears the undo history |
 | Escape | Cancel what is under way (a wall chain, typed input, a grid or section being placed, the visibility panel) and clear the selection; it never closes the editor |
 | Ctrl+Q | Quit (as does the window's close button) |
 | C | Section tool: click two points; the right panel shows the section |
