@@ -94,3 +94,38 @@ units, provenance, editable material assignments and generic cage/mesh presets.
 The new source extends persistence to 45 tokens and includes a source-only regression
 suite. Library changes have not been compiled or runtime-tested; the earlier 50 passing
 assertions predate these changes and do not validate the library.
+
+## Reinforcement schedule and notation API (step 1)
+
+`bim_reinforcement_schedule.dl` derives grouped quantity rows from generated bars.
+Rows stay separate by owner and semantic family; exact diameter and analytic length
+must match before quantities are combined. The TSV report includes owner, mark,
+count, diameter, individual/total centreline lengths, main or secondary steel, and
+shape descriptions. Invalid geometry refuses the complete report instead of returning
+partial quantities. Variable stirrup end zones deliberately omit a single spacing.
+All displayed spacing values from generators are marked as maxima.
+
+Callouts read the existing project drawing-standard setting. NEN mode uses the
+project convention `pos 3: 5 ø12-150 K` (K lower, B upper); other modes use explicit
+English positions and `@` spacing. Wall faces remain front/back. UTF-8 output and an
+explicit ASCII diameter option are available. The current ASCII UI atlas is unchanged.
+These are backend APIs and a review-report format; they are not yet connected to a new
+UI command or substituted for existing assembly tags.
+
+This is a quantity schedule, not an approved bending schedule: shape codes are
+`UNVERIFIED`, hoop descriptions identify omitted hooks, and lengths do not include
+new lap or anchorage allowances. Fabrication dimensions, verified shape-code mapping,
+EC2 edition/National Annex selection and anchorage checks belong to subsequent steps.
+No EN 1992 design calculation has been introduced by this change.
+
+Norm reference: [ISO 3766:2003](https://www.iso.org/standard/34171.html) covers
+reinforcement representation and shape/bending schedules and replaces ISO 4066:1994.
+The [NEN adoption/correction](https://www.nen.nl/nen-en-iso-3766-2004-c11-2004-en-116973)
+and [NEN 47 catalog entry](https://www.nen.nl/nen-47-1970-nl-7779) identify the
+requested drawing references. Public catalog information does not verify detailed
+shape-code tables or the project's K/B convention, so this implementation makes no
+claim of complete ISO/NEN compliance.
+
+Source-only tests `reinforcement_schedule` and `reinforcement_notation` cover grouping,
+quantity conservation, material separation, refusal, Dutch/English callouts and
+project-standard persistence. Compilation and execution await the coordinator.
