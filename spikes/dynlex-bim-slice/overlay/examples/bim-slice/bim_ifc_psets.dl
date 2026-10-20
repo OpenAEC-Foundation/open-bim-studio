@@ -1,0 +1,209 @@
+# SPDX-License-Identifier: MPL-2.0
+# Property sets read from an IFC file (the STEP text of `bim_step.dl`): what
+# IfcRelDefinesByProperties gives an element (an IfcPropertySet or an
+# IfcElementQuantity), and what its type has (IfcRelDefinesByType to an
+# IfcTypeObject's HasPropertySets), as `bim pset entry record`s keyed by the
+# STEP instance they belong to; the import gives them to the elements it
+# makes (`bim_ifc_native.dl`).
+#
+# Properties read:
+#   IfcPropertySingleValue      its nominal value, with the value's IFC type
+#   IfcPropertyEnumeratedValue  its values, joined by ", "
+#   IfcPropertyListValue        the same
+#   IfcPropertyBoundedValue     "lower .. upper"
+#   IfcQuantityLength, -Area, -Volume, -Count, -Weight, -Time
+#                               its value, typed as the matching measure
+# Other kinds (tables, references, complex properties) are left out.
+import examples/bim-slice/bim_step.dl
+import examples/bim-slice/bim_file.dl
+
+# `value` in the fewest digits (up to 17) that read back as the same
+# number: 2.45, not 2.4500000000000002.
+function the bim short text of {a 64 bit floating-point number:value}:
+    execute:
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.15g", value)
+        set shortText to the substring of buffer from 0 spanning written bytes
+        if (the bim real reading of shortText)'s value = value:
+            return shortText
+        return the bim exact text of value
+
+# The text of value node `nodeIndex` of `instanceValue`, as IFC writes it:
+# a string decoded, an enumeration between dots (.T.), a number in full.
+function the bim ifc value text of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        # A typed value (IFCLABEL('x')) is seen through to its one value.
+        set valueNode to nodeIndex
+        if valueNode >= 0:
+            set outerNode to the item at valueNode in (instanceValue's nodes)
+            if outerNode's kind = bim step typed:
+                set valueNode to the item at outerNode's first in (instanceValue's members)
+        set nodeKind to the bim step kind of valueNode in instanceValue
+        if nodeKind = bim step text:
+            return the bim step string of valueNode in instanceValue
+        if nodeKind = bim step enumeration:
+            return ((the string form of ".") + (the bim step raw text of valueNode in instanceValue)) + (the string form of ".")
+        if (nodeKind = bim step number) or (nodeKind = bim step whole number):
+            return the bim short text of (the bim step number of valueNode in instanceValue)
+        return the string form of ""
+
+# The IFC type of value node `nodeIndex` (IFCLABEL), or IFCLABEL when it
+# carries none.
+function the bim ifc value type of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set typeName to the bim step type name of nodeIndex in instanceValue
+        if (the length of typeName) = 0:
+            return the string form of "IFCLABEL"
+        return typeName
+
+# The values of list node `listNode` joined by ", ".
+local function the bim ifc joined values of {integer:listNode} in {bim step instance record:instanceValue}:
+    execute:
+        set joinedText to the string form of ""
+        loop memberCursor from 0 to the bim step count of listNode in instanceValue:
+            if memberCursor > 0:
+                set joinedText to joinedText + (the string form of ", ")
+            set joinedText to joinedText + (the bim ifc value text of (the bim step member memberCursor of listNode in instanceValue) in instanceValue)
+        return joinedText
+
+# The measure a quantity of IFC class `className` is typed as.
+local function the bim ifc quantity type of {a string:className}:
+    execute:
+        if className = (the string form of "IFCQUANTITYLENGTH"):
+            return the string form of "IFCLENGTHMEASURE"
+        if className = (the string form of "IFCQUANTITYAREA"):
+            return the string form of "IFCAREAMEASURE"
+        if className = (the string form of "IFCQUANTITYVOLUME"):
+            return the string form of "IFCVOLUMEMEASURE"
+        if className = (the string form of "IFCQUANTITYCOUNT"):
+            return the string form of "IFCCOUNTMEASURE"
+        if className = (the string form of "IFCQUANTITYWEIGHT"):
+            return the string form of "IFCMASSMEASURE"
+        if className = (the string form of "IFCQUANTITYTIME"):
+            return the string form of "IFCTIMEMEASURE"
+        return the string form of ""
+
+# Whether values of IFC type `typeName` are lengths (kept in metres).
+function bim ifc type {a string:typeName} measures length:
+    execute:
+        if (typeName = (the string form of "IFCLENGTHMEASURE")) or (typeName = (the string form of "IFCPOSITIVELENGTHMEASURE")):
+            return true
+        return typeName = (the string form of "IFCNONNEGATIVELENGTHMEASURE")
+
+# `valueText` of IFC type `typeName` in metres when it is a length in the
+# file's unit (`lengthScale` metres to the unit); otherwise as it is.
+local function the bim ifc metric text of {a string:valueText} typed {a string:typeName} scaled {a 64 bit floating-point number:lengthScale}:
+    execute:
+        if ((bim ifc type typeName measures length) = false) or ((the length of valueText) = 0):
+            return valueText
+        if lengthScale = 1.0:
+            return valueText
+        set reading to (the bim real reading of valueText)'s value
+        # A unit that is a whole fraction of a metre (a millimetre) divides,
+        # which keeps 2450 mm exactly 2.45 m.
+        set inverse to 1.0 / lengthScale
+        set wholeInverse to the floor of (inverse + 0.5)
+        if (wholeInverse >= 1.0) and ((the absolute value of (inverse - wholeInverse)) < 0.000000001):
+            return the bim short text of (reading / wholeInverse)
+        return the bim short text of (reading * lengthScale)
+
+# The properties of property definition `definitionId` (an IfcPropertySet or
+# IfcElementQuantity) appended to `entries` for STEP instance `ownerId`.
+function append bim ifc properties of definition {integer:definitionId} for {integer:ownerId} in {bim step file record:stepFile} scaled {a 64 bit floating-point number:lengthScale} to {a pointer to a list:entries}:
+    execute:
+        if (bim step file stepFile holds definitionId) = false:
+            return nothing
+        set isQuantities to bim step instance definitionId is a "IFCELEMENTQUANTITY" in stepFile
+        if ((bim step instance definitionId is a "IFCPROPERTYSET" in stepFile) = false) and (isQuantities = false):
+            return nothing
+        set definitionValue to the bim step instance definitionId in stepFile
+        set setName to the bim step string of (the bim step argument 2 of definitionValue) in definitionValue
+        set listNode to the bim step argument 4 of definitionValue
+        if isQuantities:
+            set listNode to the bim step argument 5 of definitionValue
+        loop memberCursor from 0 to the bim step count of listNode in definitionValue:
+            set propertyId to the bim step reference of (the bim step member memberCursor of listNode in definitionValue) in definitionValue
+            if bim step file stepFile holds propertyId:
+                set property to the bim step instance propertyId in stepFile
+                set className to the bim step type of propertyId in stepFile
+                set propertyName to the bim step string of (the bim step argument 0 of property) in property
+                set valueType to the string form of ""
+                set valueText to the string form of ""
+                set kept to true
+                if className = (the string form of "IFCPROPERTYSINGLEVALUE"):
+                    set valueNode to the bim step argument 2 of property
+                    set valueType to the bim ifc value type of valueNode in property
+                    set valueText to the bim ifc value text of valueNode in property
+                else if (className = (the string form of "IFCPROPERTYENUMERATEDVALUE")) or (className = (the string form of "IFCPROPERTYLISTVALUE")):
+                    set valueType to the string form of "IFCLABEL"
+                    set valueText to the bim ifc joined values of (the bim step argument 2 of property) in property
+                else if className = (the string form of "IFCPROPERTYBOUNDEDVALUE"):
+                    set valueType to the bim ifc value type of (the bim step argument 2 of property) in property
+                    set valueText to ((the bim ifc value text of (the bim step argument 3 of property) in property) + (the string form of " .. ")) + (the bim ifc value text of (the bim step argument 2 of property) in property)
+                else:
+                    set valueType to the bim ifc quantity type of className
+                    if (the length of valueType) > 0:
+                        set valueText to the bim ifc value text of (the bim step argument 3 of property) in property
+                    else:
+                        set kept to false
+                if kept:
+                    append (@intrinsic("construct", a bim pset entry record, ownerId as a 64 bit integer, setName, propertyName, valueType, (the bim ifc metric text of valueText typed valueType scaled lengthScale))) to entries
+                free bim step instance property
+        free bim step instance definitionValue
+
+# The property sets of the STEP instances `wanted` marks (one flag per
+# instance number): their own (IfcRelDefinesByProperties) and their type's
+# (IfcRelDefinesByType), keyed by instance number.
+function the bim ifc psets of {bim step file record:stepFile} wanted {a pointer to a list:wantedFlags} scaled {a 64 bit floating-point number:lengthScale}:
+    execute:
+        set entries to an empty list of a bim pset entry record
+        set relations to the bim step instances of type (the string form of "IFCRELDEFINESBYPROPERTIES") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set definitionId to the bim step reference of (the bim step argument 5 of relation) in relation
+            set objectsNode to the bim step argument 4 of relation
+            loop objectCursor from 0 to the bim step count of objectsNode in relation:
+                set objectId to the bim step reference of (the bim step member objectCursor of objectsNode in relation) in relation
+                if (objectId >= 0) and (objectId < (the length of wantedFlags)):
+                    if the item at objectId in wantedFlags:
+                        append bim ifc properties of definition definitionId for objectId in stepFile scaled lengthScale to entries
+            free bim step instance relation
+        free relations
+        set typings to the bim step instances of type (the string form of "IFCRELDEFINESBYTYPE") in stepFile
+        loop typingCursor from 0 to the length of typings:
+            set typing to the bim step instance (the item at typingCursor in typings) in stepFile
+            set typeId to the bim step reference of (the bim step argument 5 of typing) in typing
+            set objectsNode to the bim step argument 4 of typing
+            if bim step file stepFile holds typeId:
+                set typeObject to the bim step instance typeId in stepFile
+                set setsNode to the bim step argument 5 of typeObject
+                loop objectCursor from 0 to the bim step count of objectsNode in typing:
+                    set objectId to the bim step reference of (the bim step member objectCursor of objectsNode in typing) in typing
+                    if (objectId >= 0) and (objectId < (the length of wantedFlags)):
+                        if the item at objectId in wantedFlags:
+                            loop setCursor from 0 to the bim step count of setsNode in typeObject:
+                                append bim ifc properties of definition (the bim step reference of (the bim step member setCursor of setsNode in typeObject) in typeObject) for objectId in stepFile scaled lengthScale to entries
+                free bim step instance typeObject
+            free bim step instance typing
+        free typings
+        return entries
+
+# The properties of STEP instance `sourceId` in `entries` given to element
+# `elementId` of `target`.
+function give bim ifc psets of {integer:sourceId} in {a pointer to a list:entries} to {a 64 bit integer:elementId} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of entries:
+            set entry to the item at cursor in entries
+            if entry's elementId = (sourceId as a 64 bit integer):
+                append (@intrinsic("construct", a bim pset entry record, elementId, entry's setName, entry's name, entry's valueType, entry's value)) to (target's properties's values)
+        note bim change of elementId in target
+
+# The same, each property set on element `elementId` with `set bim property`
+# (replacing what it had there): for the few elements, such as levels, that
+# an import may meet again.
+function set bim ifc psets of {integer:sourceId} in {a pointer to a list:entries} on {a 64 bit integer:elementId} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of entries:
+            set entry to the item at cursor in entries
+            if entry's elementId = (sourceId as a 64 bit integer):
+                set bim property (entry's name) of set (entry's setName) of elementId to (entry's value) typed (entry's valueType) in target
