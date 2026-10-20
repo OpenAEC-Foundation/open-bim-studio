@@ -48,6 +48,7 @@ import examples/bim-slice/bim_ifc_native.dl
 import examples/bim-slice/bim_loading.dl
 import examples/bim-slice/bim_ifc_promote.dl
 import examples/bim-slice/bim_section_box.dl
+import examples/bim-slice/bim_app_files.dl
 
 # When the start began, for the time until the editor answers.
 set startedAt to the bim microseconds now
@@ -129,9 +130,21 @@ set propertiesTabDetail to the bim refused id
 set typeSelectorOpen to false
 # Millimetres, as Dutch building drawings use; a file keeps its own units.
 set editor's lengthUnit to bim millimetre unit
-# Ctrl+S saves to and Ctrl+O opens `filePath`: the file named on the command
-# line, opened at start when it exists, or open-bim-studio.ifcxb.
-set filePath to the string form of "open-bim-studio.ifcxb"
+# The model's file (`filePath`, "" while it has none): the file named on
+# the command line, opened at start when it exists, or one opened or saved
+# through File (`bim_app_files.dl`). The model has unsaved changes while its
+# revision differs from `savedRevision`; File asks before a new or opened
+# model replaces it (`pendingFileAction`, the command waiting for the
+# answer). The application's settings and recent files are read once.
+set filePath to the string form of ""
+set savedRevision to 0 as a 64 bit integer
+set pendingFileAction to 0
+set modelUnsaved to false
+set appSettings to the bim stored app settings
+set recentFiles to the bim recent files
+# The start screen shows when the window opens without a file to open
+# (`bim_ui.dl` draws it); any File command closes it.
+set startScreen to false
 # --import FILE opens an IFC file (IFC2X3, IFC4, IFC4X3, read directly by
 # bim_ifc_read.dl) or a BIM-MESH file (written from IFC by
 # import/ifc_to_mesh.py) as read-only imported elements; --import with IfcX
@@ -200,6 +213,7 @@ else if arguments' length > 0:
         set filePath to the argument at 0 in arguments
         if (the bim file content at filePath)'s valid:
             open bim editor from filePath in (the address of editor)
+            note bim recent file filePath
         # Everything is saved as IFC5: a native file is saved next to itself
         # as .ifcxb.
         if (bim path filePath is ifcx) = false:
@@ -220,6 +234,18 @@ else if arguments' length > 0:
         # Its piles, and a structural plan and a pile plan in the browser.
         add bim example structure to (the address of editor) at base
         set fitting to true
+# Opened without arguments: the start screen, or the last file used when the
+# settings say so.
+if arguments' length = 0:
+    set startScreen to true
+    if appSettings's openLast:
+        set lastPath to the bim recent path at 0
+        if (the length of lastPath) > 0:
+            if open bim model file lastPath in (the address of editor):
+                set filePath to lastPath
+                set startScreen to false
+                set fitting to true
+set savedRevision to editor's documentValue's revision
 set camera to @intrinsic("construct", a bim camera record, a cad vector2 with x 3.0 and y 2.0, 60.0, bim view home yaw, bim view home pitch, (a cad vector3 with x 3.0, y 2.0 and z 1.5), 42.0)
 # ZP's views: the camera of each view stood at in turn (the last 50), the
 # view last stood at, the camera last frame and how many frames it has
@@ -1679,6 +1705,94 @@ loop while window remains open:
                 set promotedMade to promote every bim import element of importedFull into (the address of (editor's documentValue's current))
                 commit bim transaction in (the address of (editor's documentValue))
                 set editor's message to ((the string form of "Made editable: ") + (the string form of promotedMade)) + (the string form of " imported elements")
+    # File commands (`bim_app_files.dl`): 2173 a new model, 2190 to 2193 a
+    # new model from template 0 to 3, 2174 (Ctrl+O) opens a model picked in
+    # a dialog, 2180 to 2189 recent file 0 to 9, 2175 (Ctrl+S) saves, 2176
+    # saves as. A new or opened model in place of one with unsaved changes
+    # asks first: 2177 (Enter) saves and goes on, 2178 goes on without
+    # saving, 2179 (Escape) keeps the model. The commands are taken out of
+    # `pressedCodes` (-1), so that no key handling below sees them.
+    set fileSave to 0
+    set fileNext to 0
+    set fileAnswered to false
+    loop fileCursor from 0 to the length of pressedCodes:
+        set fileCode to the item at fileCursor in pressedCodes
+        set fileTaken to true
+        if fileCode = ((bim ui control command) + 83):
+            set fileSave to 2175
+        else if fileCode = ((bim ui control command) + 79):
+            set fileNext to 2174
+        else if (fileCode = 2175) or (fileCode = 2176):
+            set fileSave to fileCode
+        else if ((fileCode = 2173) or (fileCode = 2174)) or ((fileCode >= 2180) and (fileCode <= 2193)):
+            set fileNext to fileCode
+        else if ((fileCode = 2177) or (fileCode = 257)) and (pendingFileAction != 0):
+            set fileSave to 2175
+            set fileNext to pendingFileAction
+            set fileAnswered to true
+            set pendingFileAction to 0
+        else if (fileCode = 2178) and (pendingFileAction != 0):
+            set fileNext to pendingFileAction
+            set fileAnswered to true
+            set pendingFileAction to 0
+        else if ((fileCode = 2179) or (fileCode = bim escape key code)) and (pendingFileAction != 0):
+            set pendingFileAction to 0
+            set editor's message to the string form of "Kept the model"
+        else:
+            set fileTaken to false
+        if fileTaken:
+            replace item at index fileCursor in pressedCodes with -1
+    set modelUnsaved to (editor's documentValue's revision != savedRevision)
+    if ((fileNext != 0) and (fileAnswered = false)) and (modelUnsaved and (fileSave = 0)):
+        set pendingFileAction to fileNext
+        set fileNext to 0
+        set editor's message to (the string form of "Unsaved changes in ") + (the bim document title of filePath)
+    set fileSaved to true
+    if fileSave != 0:
+        set saveTarget to filePath
+        if (fileSave = 2176) or ((the length of filePath) = 0):
+            set saveTarget to the bim save path picked from filePath
+        set fileSaved to false
+        if (the length of saveTarget) > 0:
+            if save bim model file saveTarget in (the address of editor):
+                set filePath to saveTarget
+                set savedRevision to editor's documentValue's revision
+                set fileSaved to true
+                set recentFiles to the bim recent files
+    if fileSaved = false:
+        set fileNext to 0
+    if fileNext != 0:
+        set nextPath to the string form of ""
+        set nextOpened to false
+        if fileNext = 2174:
+            set nextPath to the bim model file picked
+        else if (fileNext >= 2180) and (fileNext <= 2189):
+            set nextPath to the bim recent path at (fileNext - 2180)
+        if (fileNext = 2173) or (fileNext >= 2190):
+            set templateWanted to 0
+            if fileNext >= 2190:
+                set templateWanted to fileNext - 2190
+            make new bim model from template templateWanted in (the address of editor)
+            set filePath to the string form of ""
+            set nextOpened to true
+        else if (the length of nextPath) > 0:
+            if open bim model file nextPath in (the address of editor):
+                set filePath to nextPath
+                set nextOpened to true
+        if nextOpened:
+            set savedRevision to editor's documentValue's revision
+            set modelUnsaved to false
+            set startScreen to false
+            set fitting to true
+            set recentFiles to the bim recent files
+            # A model linked to no IFC file shows no import.
+            if (the length of (the bim linked ifc of editor's documentValue's current)) = 0:
+                if ((the length of linkedLoaded) > 0) or ((the length of (imported's labels's values)) > 0):
+                    set imported to the bim import of (the string form of "")
+                    set importedFull to imported
+                    set linkedLoaded to the string form of ""
+                    set promotedSeen to 0
+                    set importGeneration to importGeneration + 1
     # A model linked to an IFC file other than the one shown (just opened)
     # has it read, on the import's thread.
     set linkWanted to the bim linked ifc of editor's documentValue's current
@@ -1935,17 +2049,11 @@ loop while window remains open:
         # Commands of their own (two-letter commands) go to the editor.
         else if entry >= 2000:
             type bim editor key entry in (the address of editor)
-        else if control and (code = 83):
-            save bim editor to filePath in (the address of editor)
         else if code = 256:
             # Escape cancels what is under way and clears the selection;
             # it never closes the window.
             set showVisibility to false
             type bim editor key code in (the address of editor)
-        else if control and (code = 79):
-            open bim editor from filePath in (the address of editor)
-            add bim type library to (the address of editor)
-            set fitting to true
         else if (code = 45) and ((editor's grabbing = false) and (editor's propertyCode < 0)):
             set camera's scale to camera's scale / 1.2
         else if code = 61:
@@ -2500,7 +2608,7 @@ loop while window remains open:
     if uiHit's command != tipCommand:
         set tipCommand to uiHit's command
         set tipSince to the bim microseconds now
-    draw bim document bar named filePath across windowWidth folded ribbonFolded using typeface in frame
+    draw bim document bar named (the bim document title of filePath) across windowWidth folded ribbonFolded using typeface in frame
     set chromeBottom to the bim ui canvas top folded ribbonFolded
     # The selection's actions float over the canvas, centred on the active
     # view.
