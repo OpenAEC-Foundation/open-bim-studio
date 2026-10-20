@@ -27,8 +27,28 @@ references and undo, and is a change re-evaluated fast enough to follow a gestur
 | IFC export | IFC4: spatial structure, wall/opening types and occurrences, voids, extruded bodies |
 | Snapping | end point, mid point, horizontal/vertical alignment and grid inference in the plan editor |
 
-**Not in scope**: other element kinds, multiple storeys, IFC import, sheets,
-scale (R-12, R-20), GPU instancing.
+The table above describes the original experiment. The editor has since grown
+multiple levels, IFC import, GPU instancing, component libraries, reinforcement,
+connections and drawing sheets. Large-model acceptance criteria (R-12, R-20)
+remain separate work; their presence in the editor does not establish scale.
+
+### Reinforcement display
+
+The 3D view defaults to reinforcement centre lines. Bars, stirrups, cages and
+meshes keep their model parameters, but their display does not generate round
+solids. The native GPU buffer retains the line geometry during camera movement.
+Open the 3D view's **Graphics** menu and enable **Rebar with diameter** to inspect
+round bars. Changing this option regenerates the display geometry; it does not
+change model parameters or the solid reinforcement used for IFCX export.
+
+The lines are depth-tested: concrete in front of reinforcement hides it. Hide
+the host or use a suitable section box to inspect the cage. A click near a
+visible line selects its reinforcement object. The display uses one-pixel
+lines; it does not represent bar diameter in line mode.
+
+Plan grid heads can be selected even where a beam lies on the grid line.
+Selecting a curtain-wall mullion or transom highlights the member's profile
+edges instead of highlighting the entire curtain wall.
 
 **Layout.** The DynLex code is kept here as an overlay on a DynLex checkout (the
 `cadkernel` fork with a built compiler):
