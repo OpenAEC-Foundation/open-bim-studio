@@ -40,6 +40,7 @@ noto=/usr/share/fonts/truetype/noto
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/payload/bin" "$stage/payload/lib" "$stage/payload/fonts" "$stage/payload/shaders"
+cp -R "$root/examples/bim-slice/installer/licenses" "$stage/payload/licenses"
 cp "$shaders"/*.spv "$stage/payload/shaders/"
 cp "$binary" "$stage/payload/bin/open-bim-studio"
 cp "$font" "$licence" "$stage/payload/fonts/"
