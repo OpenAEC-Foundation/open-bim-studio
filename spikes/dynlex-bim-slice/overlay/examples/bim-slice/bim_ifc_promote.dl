@@ -1,0 +1,248 @@
+# SPDX-License-Identifier: MPL-2.0
+# Imported elements made editable: an element read from IFC (or IfcX) that
+# the import could not make a wall, plate or linear element of (a curved
+# wall, a B-rep, a boolean, a revolved shape, anything) becomes a mesh of
+# the model's own (`bim mesh record`: points and polygon faces, which the
+# editor moves, turns, copies, mirrors, pushes and pulls), keeping what it
+# was as properties: its IFC class, GlobalId and name (set "IFC attributes")
+# and its property sets.
+#
+# The import itself is not changed (it is not part of the model, nor undone
+# with it): the model lists the GlobalIds it took over (properties of the
+# project, element 0, in set "OBS promoted"), and the views show the import
+# without them (`the bim import of ... without promoted ... in`). Undo
+# brings the imported element back.
+import examples/bim-slice/bim_import.dl
+import examples/bim-slice/bim_ifc_psets.dl
+
+# The parts of an imported element's label ("class GlobalId name" from
+# IFC, "class name" from IfcX): its class, its GlobalId ("" when it has
+# none) and its name.
+class:
+    patterns:
+        [a|] bim imported label record
+    members:
+        className as a string
+        globalId as a string
+        name as a string
+
+function the bim imported label of {a string:labelText}:
+    execute:
+        set className to labelText
+        set rest to the string form of ""
+        set gap to the index of (the string form of " ") in labelText
+        if gap >= 0:
+            set className to the substring of labelText from 0 spanning gap bytes
+            set rest to the substring of labelText from (gap + 1) spanning ((the length of labelText) - (gap + 1)) bytes
+        set globalId to the string form of ""
+        set elementName to rest
+        set firstWord to rest
+        set gap to the index of (the string form of " ") in rest
+        if gap >= 0:
+            set firstWord to the substring of rest from 0 spanning gap bytes
+        # A GlobalId is 22 characters long.
+        if (the length of firstWord) = 22:
+            set globalId to firstWord
+            set elementName to the string form of ""
+            if gap >= 0:
+                set elementName to the substring of rest from (gap + 1) spanning ((the length of rest) - (gap + 1)) bytes
+        return @intrinsic("construct", a bim imported label record, className, globalId, elementName)
+
+# A spatial hash of points within `tolerance` of each other: `heads` holds
+# per bucket the first point (or -1), `nexts` per point the next in its
+# bucket. Points that round to the same cell are one point.
+local function the bim weld bucket of {cad vector3:point} within {a 64 bit floating-point number:tolerance} among {integer:bucketCount}:
+    execute:
+        set cellX to ((the floor of (point's x / tolerance)) as a 64 bit integer) as a 64 bit unsigned integer
+        set cellY to ((the floor of (point's y / tolerance)) as a 64 bit integer) as a 64 bit unsigned integer
+        set cellZ to ((the floor of (point's z / tolerance)) as a 64 bit integer) as a 64 bit unsigned integer
+        set mixed to ((cellX * (73856093 as a 64 bit unsigned integer)) bitwise xor (cellY * (19349663 as a 64 bit unsigned integer))) bitwise xor (cellZ * (83492791 as a 64 bit unsigned integer))
+        return (the remainder of mixed divided by (bucketCount as a 64 bit unsigned integer)) as an integer
+
+# The meshes of imported element `index` of `imported` as one welded mesh
+# of points (z made relative to `elevation`) and faces (`bim mesh record`'s
+# form: each face its point count, then its points); `points` empty when the
+# element has no triangles.
+class:
+    patterns:
+        [a|] bim welded mesh record
+    members:
+        points as the type of (a cad topology list of a cad vector3)
+        faces as the type of (a cad topology list of an integer)
+
+function the bim welded mesh of import element {integer:index} of {bim import record:importValue} above {a 64 bit floating-point number:elevation}:
+    execute:
+        set weldedMesh to @intrinsic("construct", a bim welded mesh record, a cad topology list of a cad vector3, a cad topology list of an integer)
+        set wantedId to (the bim imported id base) + (index as a 64 bit integer)
+        set cornerTotal to 0
+        loop meshCursor from 0 to the length of (importValue's meshes's values):
+            set entry to the item at meshCursor in (importValue's meshes's values)
+            if entry's elementId = wantedId:
+                set cornerTotal to cornerTotal + (the length of (entry's shape's triangles's values))
+        if cornerTotal = 0:
+            return weldedMesh
+        set bucketCount to (cornerTotal * 2) + 1
+        set heads to an empty list of an integer
+        loop bucketCursor from 0 to bucketCount:
+            append -1 to heads
+        set nexts to an empty list of an integer
+        set tolerance to 0.0001
+        loop meshCursor from 0 to the length of (importValue's meshes's values):
+            set entry to the item at meshCursor in (importValue's meshes's values)
+            if entry's elementId = wantedId:
+                set positions to entry's shape's positions's values
+                set corners to entry's shape's triangles's values
+                set triangleCorner to 0
+                loop while (triangleCorner + 2) < (the length of corners):
+                    append 3 to (weldedMesh's faces's values)
+                    loop offset from 0 to 3:
+                        set source to the item at (the item at (triangleCorner + offset) in corners) in positions
+                        set point to a cad vector3 with x source's x, y source's y and z (source's z - elevation)
+                        set bucketIndex to the bim weld bucket of point within tolerance among bucketCount
+                        set found to -1
+                        set probe to the item at bucketIndex in heads
+                        loop while (probe >= 0) and (found < 0):
+                            set other to the item at probe in (weldedMesh's points's values)
+                            if ((the absolute value of (other's x - point's x)) < tolerance) and (((the absolute value of (other's y - point's y)) < tolerance) and ((the absolute value of (other's z - point's z)) < tolerance)):
+                                set found to probe
+                            else:
+                                set probe to the item at probe in nexts
+                        if found < 0:
+                            set found to the length of (weldedMesh's points's values)
+                            append point to (weldedMesh's points's values)
+                            append (the item at bucketIndex in heads) to nexts
+                            replace item at index bucketIndex in heads with found
+                        append found to (weldedMesh's faces's values)
+                    set triangleCorner to triangleCorner + 3
+        free heads
+        free nexts
+        return weldedMesh
+
+# The level of `modelValue` at `elevation` (within half a centimetre), or the
+# first level; the refused id when there is none.
+local function the bim level at {a 64 bit floating-point number:elevation} in {bim model record:modelValue}:
+    execute:
+        if (the length of (modelValue's levels's values)) = 0:
+            return the bim refused id
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            if (the absolute value of (levelValue's elevation - elevation)) < 0.005:
+                return levelValue's id
+        return (the item at 0 in (modelValue's levels's values))'s id
+
+# Imported element `index` of `imported` made a mesh of `target`: on the
+# level at its storey's height, its class, GlobalId, name and property sets
+# as its properties, its GlobalId listed as taken over. The new mesh's id,
+# or the refused id (no triangles, or already taken over).
+function promote bim import element {integer:index} of {bim import record:importValue} into {a pointer to a bim model record:target}:
+    execute:
+        if (index < 0) or (index >= (the length of (importValue's labels's values))):
+            return the bim refused id
+        set parts to the bim imported label of (the item at index in (importValue's labels's values))
+        if bim guid (parts's globalId) is promoted in (@intrinsic("dereference", target)):
+            return the bim refused id
+        set elevation to 0.0
+        set storeyOf to importValue's storeys's ofElements's values
+        if index < (the length of storeyOf):
+            set storeyIndex to the item at index in storeyOf
+            if (storeyIndex >= 0) and (storeyIndex < (the length of (importValue's storeys's elevations's values))):
+                set elevation to the item at storeyIndex in (importValue's storeys's elevations's values)
+        set levelId to the bim level at elevation in (@intrinsic("dereference", target))
+        if levelId = the bim refused id:
+            set levelId to add bim level named (the string form of "Ground floor") at 0.0 with height 3.0 to target
+        set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+        set weldedMesh to the bim welded mesh of import element index of importValue above levelElevation
+        if (the length of (weldedMesh's points's values)) = 0:
+            return the bim refused id
+        set fresh to add bim mesh on levelId with (weldedMesh's points's values) and (weldedMesh's faces's values) to target
+        if fresh = the bim refused id:
+            return fresh
+        set attributes to the string form of "IFC attributes"
+        set bim property (the string form of "Class") of set attributes of fresh to (parts's className) typed (the string form of "IFCLABEL") in target
+        if (the length of parts's globalId) > 0:
+            set bim property (the string form of "GlobalId") of set attributes of fresh to (parts's globalId) typed (the string form of "IFCLABEL") in target
+        if (the length of parts's name) > 0:
+            set bim property (the string form of "Name") of set attributes of fresh to (parts's name) typed (the string form of "IFCLABEL") in target
+        loop psetCursor from 0 to the length of (importValue's psets's values):
+            set entry to the item at psetCursor in (importValue's psets's values)
+            if entry's elementId = (index as a 64 bit integer):
+                append (@intrinsic("construct", a bim pset entry record, fresh, entry's setName, entry's name, entry's valueType, entry's value)) to (target's properties's values)
+        note bim guid (parts's globalId) promoted as fresh in target
+        return fresh
+
+# Every imported element of `imported` that has not been taken over made a
+# mesh of `target`; how many were.
+function promote every bim import element of {bim import record:importValue} into {a pointer to a bim model record:target}:
+    execute:
+        set made to 0
+        loop index from 0 to the length of (importValue's labels's values):
+            if (promote bim import element index of importValue into target) != the bim refused id:
+                set made to made + 1
+        return made
+
+# `imported` without the elements `modelValue` took over: their meshes,
+# labels, storeys and property sets left out and the rest numbered on (the
+# views show this). `imported` itself when none were taken over.
+function the bim import of {bim import record:importValue} without promoted in {bim model record:modelValue}:
+    execute:
+        set promotedSet to the bim promoted set name
+        set anyPromoted to false
+        loop cursor from 0 to the length of (modelValue's properties's values):
+            if (the item at cursor in (modelValue's properties's values))'s setName = promotedSet:
+                set anyPromoted to true
+        if (anyPromoted = false) or (importValue's valid = false):
+            return importValue
+        # The new number of each element, or -1 when it is left out.
+        set promotedIds to the bim promoted ids of modelValue
+        set renumbered to an empty list of an integer
+        set kept to 0
+        loop index from 0 to the length of (importValue's labels's values):
+            set parts to the bim imported label of (the item at index in (importValue's labels's values))
+            if bim guid (parts's globalId) is among promotedIds:
+                append -1 to renumbered
+            else:
+                append kept to renumbered
+                set kept to kept + 1
+        set base to the bim imported id base
+        set meshes to a cad topology list of a bim scene mesh record
+        set placing to a cad topology list of an integer
+        set placements to a cad topology list of a 64 bit floating-point number
+        set placingOf to importValue's instancing's prototypeOf's values
+        set transforms to importValue's instancing's transforms's values
+        loop meshCursor from 0 to the length of (importValue's meshes's values):
+            set entry to the item at meshCursor in (importValue's meshes's values)
+            set elementIndex to (entry's elementId - base) as an integer
+            set newIndex to -1
+            if (elementIndex >= 0) and (elementIndex < (the length of renumbered)):
+                set newIndex to the item at elementIndex in renumbered
+            if newIndex >= 0:
+                append (@intrinsic("construct", a bim scene mesh record, base + (newIndex as a 64 bit integer), entry's serial, entry's shape, entry's category, entry's colour)) to (meshes's values)
+                if meshCursor < (the length of placingOf):
+                    append (the item at meshCursor in placingOf) to (placing's values)
+                    loop row from 0 to 12:
+                        set slot to (meshCursor * 12) + row
+                        if slot < (the length of transforms):
+                            append (the item at slot in transforms) to (placements's values)
+                        else:
+                            append 0.0 to (placements's values)
+        set labels to a cad topology list of a string
+        set storeyOf to a cad topology list of an integer
+        loop index from 0 to the length of (importValue's labels's values):
+            if (the item at index in renumbered) >= 0:
+                append (the item at index in (importValue's labels's values)) to (labels's values)
+                if index < (the length of (importValue's storeys's ofElements's values)):
+                    append (the item at index in (importValue's storeys's ofElements's values)) to (storeyOf's values)
+                else:
+                    append -1 to (storeyOf's values)
+        set psets to a cad topology list of a bim pset entry record
+        loop psetCursor from 0 to the length of (importValue's psets's values):
+            set entry to the item at psetCursor in (importValue's psets's values)
+            set owner to entry's elementId as an integer
+            if (owner >= 0) and (owner < (the length of renumbered)):
+                if (the item at owner in renumbered) >= 0:
+                    append (@intrinsic("construct", a bim pset entry record, (the item at owner in renumbered) as a 64 bit integer, entry's setName, entry's name, entry's valueType, entry's value)) to (psets's values)
+        free renumbered
+        free promotedIds
+        set storeys to @intrinsic("construct", a bim import storeys record, importValue's storeys's names, importValue's storeys's elevations, storeyOf)
+        set instancing to @intrinsic("construct", a bim import instancing record, importValue's instancing's prototypes, placing, placements)
+        return @intrinsic("construct", a bim import record, true, importValue's message, meshes, labels, importValue's triangleCount, importValue's low, importValue's high, importValue's curves, storeys, instancing, psets)
