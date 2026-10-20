@@ -128,4 +128,29 @@ claim of complete ISO/NEN compliance.
 
 Source-only tests `reinforcement_schedule` and `reinforcement_notation` cover grouping,
 quantity conservation, material separation, refusal, Dutch/English callouts and
-project-standard persistence. Compilation and execution await the coordinator.
+project-standard persistence. Both passed the coordinator's bundle for 03bf304.
+
+## Native reinforcement examples
+
+Five review models in `examples/` have matching `reinforcement_example_*` tests:
+
+| Model | Test suffix | Contents |
+|---|---|---|
+| `reinforcement-beam.bim` | `beam` | 3 top bars of 12 mm, 3 bottom bars of 16 mm, extra top bars and dense end stirrups |
+| `reinforcement-column-footing.bim` | `column` | Vertical eight-bar cage and two-face footing area reinforcement |
+| `reinforcement-floor-field.bim` | `floor` | Two-face mesh with different diameters and two sample edge U-bars |
+| `reinforcement-wall-opening.bim` | `wall` | Eight explicit straight edge bars, four per face, clear of a 1 m square opening |
+| `reinforcement-pile-foundation.bim` | `piles` | Four vertical pile cages and two-face pile-cap area reinforcement |
+
+The build staging copies these actual files to `examples/bim-slice/models/`.
+Tests load them through `bim_file.dl`, generate every reinforcement object,
+compare schedule counts and total lengths, and check canonical save/load stability.
+They import the file and reinforcement modules without the editor. Each test also
+checks its model-specific parameters; the wall test verifies aperture clearance
+and refusal of automatic area reinforcement on the perforated host.
+
+These are geometric review fixtures, not engineered or fabrication-ready designs.
+They do not design anchorage into supports, laps, structural capacity or stirrup
+hooks. The two slab U-bars illustrate individual objects, not a complete perimeter
+distribution. Wall edge bars are explicit free bars and do not follow later opening
+edits automatically. Run these five new tests through the coordinator before merging.

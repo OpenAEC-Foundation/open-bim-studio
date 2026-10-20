@@ -30,6 +30,9 @@ tree=$out/tree
 mkdir -p "$tree/build/shaders"
 rsync -a --delete "$root/lib/" "$tree/lib/"
 rsync -a "$here/overlay/" "$tree/"
+# Headless fixture tests read the same review models shipped with the spike.
+mkdir -p "$tree/examples/bim-slice/models"
+rsync -a --delete "$here/examples/" "$tree/examples/bim-slice/models/"
 if ! grep -q "the JSON document parsed from" "$tree/lib/json.dl"; then
     (cd "$tree" && patch -p1 -s < "$here/patches/lib-json-public-parse.patch")
 fi
