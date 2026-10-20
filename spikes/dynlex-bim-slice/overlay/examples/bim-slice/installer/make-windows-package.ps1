@@ -11,12 +11,19 @@
 # program was compiled in (examples/bim-slice, build/shaders, tests/games/fonts).
 # The staged folder holds bin\ (the program and its DLLs), shaders\, fonts\
 # with their licences, icons\ and import\; the program finds them from its
-# own folder. Nothing is signed.
+# own folder. licenses\ holds the notices of installer\licenses (the
+# application, the DynLex runtime, GLFW, the Vulkan loader) and, from the
+# build's toolchain, the copyright file of every vcpkg package the DLLs come
+# from (-DependencyRoot, by default $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT) and
+# llvm-mingw's licence for its runtime DLLs (-ToolchainRoot, by default
+# $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT). Nothing is signed.
 param(
     [Parameter(Mandatory = $true)] [string] $Program,
     [Parameter(Mandatory = $true)] [string] $Tree,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = "0.1.0"
+    [string] $Version = "0.1.0",
+    [string] $DependencyRoot = $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT,
+    [string] $ToolchainRoot = $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT
 )
 $ErrorActionPreference = "Stop"
 
@@ -29,7 +36,7 @@ $slice = Join-Path $treePath "examples\bim-slice"
 $stageRoot = Join-Path $outputPath "stage"
 if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
 $stage = Join-Path $stageRoot "Open BIM Studio"
-foreach ($folder in "bin", "shaders", "fonts", "icons", "import") {
+foreach ($folder in "bin", "shaders", "fonts", "icons", "import", "licenses") {
     New-Item -ItemType Directory -Force (Join-Path $stage $folder) | Out-Null
 }
 
@@ -58,6 +65,26 @@ foreach ($name in "LiberationMono-Regular.ttf", "LICENSE-LiberationFonts") {
     Copy-Item (Join-Path $treePath "tests\games\fonts\$name") (Join-Path $stage "fonts")
 }
 
+# The notices: the application's and the bundled libraries' from
+# installer\licenses, every vcpkg package's copyright, llvm-mingw's licence.
+$notices = Join-Path $slice "installer\licenses"
+if (-not (Test-Path (Join-Path $notices "README.txt"))) { throw "No notices in $notices." }
+Copy-Item -Path (Join-Path $notices "*") -Destination (Join-Path $stage "licenses")
+if (-not $DependencyRoot -or -not (Test-Path (Join-Path $DependencyRoot "share"))) {
+    throw "No vcpkg packages at '$DependencyRoot' for the DLLs' notices; pass -DependencyRoot."
+}
+$packageNotices = Join-Path $stage "licenses\vcpkg"
+New-Item -ItemType Directory -Force $packageNotices | Out-Null
+foreach ($package in Get-ChildItem -Path (Join-Path $DependencyRoot "share") -Directory) {
+    $copyright = Join-Path $package.FullName "copyright"
+    if (Test-Path $copyright) { Copy-Item $copyright (Join-Path $packageNotices "$($package.Name).txt") }
+}
+if (-not $ToolchainRoot -or -not (Test-Path (Join-Path $ToolchainRoot "LICENSE.TXT"))) {
+    throw "No llvm-mingw LICENSE.TXT at '$ToolchainRoot' for its runtime DLLs; pass -ToolchainRoot."
+}
+$toolchainLicence = Join-Path $ToolchainRoot "LICENSE.TXT"
+Copy-Item $toolchainLicence (Join-Path $stage "licenses\llvm-mingw.txt")
+
 # The interface's icons and the drawing import's script (it needs Python 3).
 Copy-Item (Join-Path $slice "icons\ui-icons.txt") (Join-Path $stage "icons")
 Copy-Item (Join-Path $slice "icons\README.md") (Join-Path $stage "icons")
@@ -69,7 +96,9 @@ Open BIM Studio $Version for Windows (x64)
 Start bin\open-bim-studio.exe. It needs a graphics driver with Vulkan 1.2 or
 later. Importing a drawing (DXF, DWG, PDF) needs Python 3 as `python`.
 Settings and recent files are kept in %APPDATA%\Open BIM Studio.
-The fonts' licences are in fonts\, the icons' in icons\README.md.
+The licences of the program and of the libraries it ships are in
+licenses\ (vcpkg\ for the DLLs' packages), the fonts' in fonts\, the
+icons' in icons\README.md.
 "@ | Set-Content -Encoding UTF8 (Join-Path $stage "README.txt")
 
 # The portable ZIP.
