@@ -77,6 +77,11 @@ class:
         # them, and how far the ground reaches from the origin.
         groundIndexCount as an integer
         groundReach as a 64 bit floating-point number
+        # The native slot's lines (reinforcement as its centre lines): its
+        # edges from `nativeLineFirst`, `nativeLineCount` of them, after the
+        # feature edges; drawn in every view mode.
+        nativeLineFirst as an integer
+        nativeLineCount as an integer
 
 function an empty bim gpu scene:
     execute:
@@ -84,7 +89,7 @@ function an empty bim gpu scene:
         set nowhereLow to a cad vector3 with x infinity, y infinity and z infinity
         set nowhereHigh to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
         set zero to a cad vector3 with x 0.0, y 0.0 and z 0.0
-        return @intrinsic("construct", a bim gpu scene record, zero, 1.0, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, zero, zero, nowhereLow, nowhereHigh, 0, 0, a cad topology list of a bim gpu shape draw record, nowhereLow, nowhereHigh, 0, 0, 0, 0.0)
+        return @intrinsic("construct", a bim gpu scene record, zero, 1.0, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, zero, zero, nowhereLow, nowhereHigh, 0, 0, a cad topology list of a bim gpu shape draw record, nowhereLow, nowhereHigh, 0, 0, 0, 0.0, 0, 0)
 
 # The bar at a view's bottom right: its Graphics button (opening the view's
 # graphics menu), its scale (- 1:100 +, not for the 3D view) and its display
@@ -684,6 +689,8 @@ function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim ed
         set vertexBound to 0
         loop cursor from 0 to the length of nativeMeshes:
             set vertexBound to vertexBound + (the length of ((the item at cursor in nativeMeshes)'s shape's triangles's values))
+            if bim scene mesh (the item at cursor in nativeMeshes) draws lines:
+                set vertexBound to vertexBound + (the length of ((the item at cursor in nativeMeshes)'s shape's positions's values))
         set infinity to 1.0 / 0.0
         set lower to a cad vector3 with x infinity, y infinity and z infinity
         set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
@@ -693,17 +700,34 @@ function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim ed
         prepare gpu mesh slot (bim gpu native slot) of vertexBound vertices and vertexBound indices in context
         set target to the gpu mesh held in slot (bim gpu native slot) of context
         set edgeEnds to an empty list of an integer
+        # Meshes of lines (reinforcement as its centre lines) give vertices
+        # and edges, no triangles: their edges follow the feature edges.
+        set lineEnds to an empty list of an integer
         set base to 0
         set position to 0
         loop cursor from 0 to the length of nativeMeshes:
             set entry to the item at cursor in nativeMeshes
-            set made to write bim gpu triangles of entry's shape less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged withEdges into target adding edges to edgeEnds
-            set base to base + made
-            set position to position + (the length of (entry's shape's triangles's values))
+            if bim scene mesh entry draws lines:
+                set linePoints to entry's shape's positions's values
+                set lineTint to the bim gpu base colour of entry
+                loop lineCorner from 0 to the length of linePoints:
+                    set linePoint to the item at lineCorner in linePoints
+                    put gpu mesh vertex (base + lineCorner) at (linePoint's x - origin's x), (linePoint's y - origin's y) and (linePoint's z - origin's z) of element (the item at cursor in meshOrdinals) coloured (lineTint's x as an integer), (lineTint's y as an integer) and (lineTint's z as an integer) in target
+                    append (base + lineCorner) to lineEnds
+                set base to base + (the length of linePoints)
+            else:
+                set made to write bim gpu triangles of entry's shape less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged withEdges into target adding edges to edgeEnds
+                set base to base + made
+                set position to position + (the length of (entry's shape's triangles's values))
+        set scene's nativeLineFirst to the length of edgeEnds
+        set scene's nativeLineCount to the length of lineEnds
+        loop lineCursor from 0 to the length of lineEnds:
+            append (the item at lineCursor in lineEnds) to edgeEnds
         set gpu mesh slot (bim gpu native slot) edges to edgeEnds in context
         set scene's nativeIndexCount to position
         set scene's nativeEdgeCount to the length of edgeEnds
         free edgeEnds
+        free lineEnds
         free meshOrdinals
         settle bim gpu extent of scene
 
@@ -1447,7 +1471,42 @@ function draw bim edges of {bim gpu scene record:scene} in {bim screen layout re
         loop shapeCursor from 0 to the length of (scene's shapes's values):
             set shapeDraw to the item at shapeCursor in (scene's shapes's values)
             draw gpu mesh slot (bim gpu instance slot) edges from shapeDraw's firstEdge counting shapeDraw's edgeCount as instances from shapeDraw's firstInstance counting shapeDraw's instanceCount within layout's planRight, layout's top, panelWidth and panelHeight coloured red, green and blue hidden behindFaces in context
+        # The native slot's edges end with its lines (reinforcement).
         draw gpu mesh slot (bim gpu native slot) edges from 0 counting scene's nativeEdgeCount within layout's planRight, layout's top, panelWidth and panelHeight coloured red, green and blue hidden behindFaces in context
+
+# The native slot's lines alone (reinforcement as its centre lines), for the
+# shaded view, which draws no edges: depth tested, in the hidden line view's
+# edge colour. Every pipeline reads one parameter buffer, so the lines take
+# the colour the edges take in the same frame (parameters 39 to 41).
+function draw bim lines of {bim gpu scene record:scene} in {bim screen layout record:layout} on {pointer:window}:
+    execute:
+        if scene's nativeLineCount <= 0:
+            return nothing
+        set context to the gpu context of window
+        draw gpu mesh slot (bim gpu native slot) edges from scene's nativeLineFirst counting scene's nativeLineCount within layout's planRight, layout's top, (layout's width - layout's planRight) and (layout's bottom - layout's top) coloured 28, 32 and 40 hidden true in context
+
+# The selected element's lines (reinforcement drawn as its centre lines)
+# over the 3D view in the selection colour, since the GPU's lines are all
+# one colour: taken from `sceneMeshes` as they were made, nothing made
+# again.
+function draw bim chosen lines of {bim editor record:editor} among {a pointer to a list:sceneMeshes} in {bim screen layout record:layout} with {bim camera record:camera} in {graphics frame:frame}:
+    execute:
+        if editor's selectionKind = bim nothing picked:
+            return nothing
+        start triangles in frame
+        use vertex color red 70, green 130 and blue 220 in frame
+        loop meshCursor from 0 to the length of sceneMeshes:
+            set entry to the item at meshCursor in sceneMeshes
+            if entry's elementId = editor's selectionId:
+                if bim scene mesh entry draws lines:
+                    set linePoints to entry's shape's positions's values
+                    set lineCursor to 0
+                    loop while (lineCursor + 1) < the length of linePoints:
+                        set lineFrom to the item at lineCursor in linePoints
+                        set lineTo to the item at (lineCursor + 1) in linePoints
+                        add bim stroke from (the bim view point (lineFrom's x) (lineFrom's y) (lineFrom's z) in layout with camera) to (the bim view point (lineTo's x) (lineTo's y) (lineTo's z) in layout with camera) wide 2.0 in frame
+                        set lineCursor to lineCursor + 2
+        finish triangles in frame
 
 # The grid lines in the 3D panel: dash-dot, depth tested against the model
 # as the edges are, so that a grid line passes behind the elements in front
@@ -2191,24 +2250,30 @@ function the bim box face at {cad vector2:pixel} from {cad vector3:low} to {cad 
 
 # The graphics menu of a view, standing on the bar's Graphics button at
 # `left`, its foot at `foot`: for a plan or section (`flat`) sketchy lines
-# and hatches along the elements, for the 3D view its shadows and its edges
-# (shaded with edges), each ticked when on. The choice under `pixel` (12
-# sketchy, 13 shadows, 14 hatches along, 15 edges), or -1.
+# and hatches along the elements, for the 3D view its shadows, its edges
+# (shaded with edges) and reinforcement with its diameter (else drawn as
+# its bars' centre lines), each ticked when on. The choice under `pixel` (12
+# sketchy, 13 shadows, 14 hatches along, 15 edges, 16 reinforcement with
+# its diameter), or -1.
 function the bim graphics choice at {cad vector2:pixel} from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat}:
     execute:
         set menuTop to foot - 48.0
+        if isFlat = false:
+            set menuTop to foot - 72.0
         if (((pixel's x < left) or (pixel's x > (left + 190.0))) or (pixel's y < menuTop)) or (pixel's y >= foot):
             return -1
         set row to ((pixel's y - menuTop) / 24.0) as an integer
         if isFlat = false:
             if row = 0:
                 return 13
-            return 15
+            if row = 1:
+                return 15
+            return 16
         if row = 0:
             return 12
         return 14
 
-function draw bim graphics menu from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat} sketchy {boolean:handDrawn} along {boolean:alongObjects} shadows {boolean:shadowed} edges {boolean:withEdges} using {bim text atlas record:typeface} in {graphics frame:frame}:
+function draw bim graphics menu from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat} sketchy {boolean:handDrawn} along {boolean:alongObjects} shadows {boolean:shadowed} edges {boolean:withEdges} rebar {boolean:rebarDetail} using {bim text atlas record:typeface} in {graphics frame:frame}:
     execute:
         set labels to an empty list of a string
         set ticks to an empty list of a boolean
@@ -2222,6 +2287,8 @@ function draw bim graphics menu from {a 64 bit floating-point number:left} above
             append shadowed to ticks
             append (the string form of "Edges") to labels
             append withEdges to ticks
+            append (the string form of "Rebar with diameter") to labels
+            append rebarDetail to ticks
         set menuTop to foot - (24.0 * ((the length of labels) as a 64 bit floating-point number))
         draw a rectangle at x left and y menuTop with width 190 and height (foot - menuTop) in color red 250, green 251 and blue 253 in frame
         draw a rectangle at x left and y menuTop with width 190 and height 1 in color red 180, green 186 and blue 196 in frame

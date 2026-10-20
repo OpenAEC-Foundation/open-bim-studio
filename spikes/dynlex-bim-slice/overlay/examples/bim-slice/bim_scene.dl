@@ -1014,6 +1014,68 @@ function the bim reinforcement shape of {reinforcement definition:spec} in {bim 
         set derived to the bim parts of reinforcement (the bim hostbound reinforcement spec in modelValue) in modelValue
         return the bim independent shapes of (derived's values) in modelValue
 
+# A reinforcement object as the centre lines of its bars, without their
+# diameter: the same bars as `the bim reinforcement shape of` (bars,
+# stirrups, cages, area and mesh reinforcement, following their host), as
+# pairs of model points with the storey's elevation added, and no
+# triangles. The 3D view draws reinforcement so unless asked for the
+# diameter; nothing is meshed round. Export keeps the round shape.
+function the bim reinforcement line shape of {reinforcement definition:spec} in {bim model record:modelValue}:
+    execute:
+        set lineShape to an empty fast mesh
+        set bound to the bim hostbound reinforcement spec in modelValue
+        set lift to 0.0
+        set levelFound to the bim level index of bound's levelId in modelValue
+        if levelFound's valid:
+            set lift to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set generated to the bim reinforcement paths of bound in modelValue
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        loop barCursor from 0 to the length of (generated's bars's values):
+            set barPoints to (the item at barCursor in (generated's bars's values))'s points's values
+            loop edge from 0 to ((the length of barPoints) - 1):
+                set firstPoint to the item at edge in barPoints
+                set lastPoint to the item at (edge + 1) in barPoints
+                append (a cad vector3 with x firstPoint's x, y firstPoint's y and z (firstPoint's z + lift)) to (lineShape's positions's values)
+                append (a cad vector3 with x lastPoint's x, y lastPoint's y and z (lastPoint's z + lift)) to (lineShape's positions's values)
+                append upward to (lineShape's normals's values)
+                append upward to (lineShape's normals's values)
+        return lineShape
+
+# Whether scene mesh `entry` holds lines (pairs of points, as `the bim
+# reinforcement line shape of` makes) instead of triangles.
+function bim scene mesh {bim scene mesh record:entry} draws lines:
+    execute:
+        return ((the length of (entry's shape's triangles's values)) = 0) and ((the length of (entry's shape's positions's values)) >= 2)
+
+# How far along `ray` it passes within `reach` of the segment from `first`
+# to `second`, at its nearest; infinity when it passes farther off, runs
+# parallel to it or meets it behind its origin. Lines are picked so, not
+# through a mesh made round them.
+function the bim ray distance to segment from {cad vector3:first} to {cad vector3:second} along {bim ray record:ray} within {a 64 bit floating-point number:reach}:
+    execute:
+        set missed to 1.0 / 0.0
+        set run to the cad difference of second and first
+        set fromStart to the cad difference of ray's origin and first
+        set aa to the cad dot of ray's direction and ray's direction
+        set bb to the cad dot of ray's direction and run
+        set cc to the cad dot of run and run
+        set dd to the cad dot of ray's direction and fromStart
+        set ee to the cad dot of run and fromStart
+        set denominator to (aa * cc) - (bb * bb)
+        if (aa < 1e-18) or (cc < 1e-18):
+            return missed
+        if denominator <= (1e-12 * (aa * cc)):
+            return missed
+        set share to (((aa * ee) - (bb * dd)) / denominator) clamped between 0.0 and 1.0
+        set travel to ((bb * share) - dd) / aa
+        if travel <= 0.0:
+            return missed
+        set onRay to the cad sum of ray's origin and (ray's direction scaled by travel)
+        set onSegment to the cad sum of first and (run scaled by share)
+        if (the cad length of (the cad difference of onRay and onSegment)) > reach:
+            return missed
+        return travel
+
 function the bim independent shapes of {a pointer to a list:parts} in {bim model record:modelValue}:
     execute:
         set combined to an empty fast mesh
@@ -1137,8 +1199,25 @@ local function bim meshes from {integer:position} counting {integer:count} are w
 # makes round shapes finer or coarser for the zoom a few at a time, those
 # covering the most of the screen first. Work shared by elements (a
 # component's mesh, the joins' end cuts, the fittings) is done only for
-# what is made again.
+# what is made again. Reinforcement is meshed round (its diameter).
 function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} reusing {a pointer to a list:previous} refreshing {a pointer to a list:remade}:
+    execute:
+        return the bim sketch meshes of modelValue within tolerance reusing previous refreshing remade with reinforcement detail true
+
+# The same, from nothing made before.
+function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} with reinforcement detail {boolean:rebarDetail}:
+    execute:
+        set noPrevious to an empty list of a bim scene mesh record
+        set everything to an empty list of a boolean
+        set built to the bim sketch meshes of modelValue within tolerance reusing noPrevious refreshing everything with reinforcement detail rebarDetail
+        free noPrevious
+        free everything
+        return built
+
+# The same, reinforcement as its bars' centre lines (`the bim reinforcement
+# line shape of`) unless `rebarDetail`: then meshed round, with its
+# diameter. `previous` must hold reinforcement made the same way.
+function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} reusing {a pointer to a list:previous} refreshing {a pointer to a list:remade} with reinforcement detail {boolean:rebarDetail}:
     execute:
         set result to a cad topology list of a bim scene mesh record
         loop cursor from 0 to the length of (modelValue's connections's values):
@@ -1159,7 +1238,12 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
             else if retainedSlot >= 0:
                 append (the item at retainedSlot in previous) to (result's values)
             else:
-                append (@intrinsic("construct", a bim scene mesh record, spec's id, 0 as a 64 bit integer, the bim reinforcement shape of spec in modelValue, bim other category, the bim material colour of (the string form of "steel"))) to (result's values)
+                set rebarShape to an empty fast mesh
+                if rebarDetail:
+                    set rebarShape to the bim reinforcement shape of spec in modelValue
+                else:
+                    set rebarShape to the bim reinforcement line shape of spec in modelValue
+                append (@intrinsic("construct", a bim scene mesh record, spec's id, 0 as a 64 bit integer, rebarShape, bim other category, the bim material colour of (the string form of "steel"))) to (result's values)
         # Components with solid parts: mesh their B-rep once per component
         # and place it per instance.
         set foldedIds to an empty list of a 64 bit integer
@@ -1314,7 +1398,7 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
         # out in another number of meshes, every mesh is made again.
         if ((the length of remade) > 0) and ((the length of (result's values)) != (the length of previous)):
             set everything to an empty list of a boolean
-            set result to the bim sketch meshes of modelValue within tolerance reusing previous refreshing everything
+            set result to the bim sketch meshes of modelValue within tolerance reusing previous refreshing everything with reinforcement detail rebarDetail
             free everything
         return result
 
@@ -1645,10 +1729,24 @@ function the bim face along {bim ray record:ray} among {a pointer to a list:mesh
 # meshes of `modelValue`'s evaluation and `spaces` its spaces.
 function the bim pick along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue} with {a pointer to a list:spaces}:
     execute:
+        return the bim pick along ray among meshes in modelValue with spaces reaching lines within 0.0
+
+# The same, a mesh of lines (reinforcement drawn as its centre lines) hit
+# where the ray passes within `lineReach` of one of them.
+function the bim pick along {bim ray record:ray} among {a pointer to a list:meshes} in {bim model record:modelValue} with {a pointer to a list:spaces} reaching lines within {a 64 bit floating-point number:lineReach}:
+    execute:
         set best to no bim pick
         loop meshCursor from 0 to the length of meshes:
             set entry to the item at meshCursor in meshes
             set entryKind to the bim pick kind of entry in modelValue
+            if (lineReach > 0.0) and (bim scene mesh entry draws lines):
+                set linePoints to entry's shape's positions's values
+                set lineCursor to 0
+                loop while (lineCursor + 1) < the length of linePoints:
+                    set lineDistance to the bim ray distance to segment from (the item at lineCursor in linePoints) to (the item at (lineCursor + 1) in linePoints) along ray within lineReach
+                    if lineDistance < best's distance:
+                        set best to @intrinsic("construct", a bim pick record, entryKind, entry's elementId, lineDistance)
+                    set lineCursor to lineCursor + 2
             set points to entry's shape's positions's values
             set corners to entry's shape's triangles's values
             set cursor to 0
@@ -1784,15 +1882,60 @@ function the bim mesh {fast mesh record:triangles} clipped to box from {cad vect
             set cursor to cursor + 3
         return cutMesh
 
+# The part `span` (from x to y, as shares of the run) of a segment that
+# stays within `lowEdge` to `highEdge` along one axis, starting at `start`
+# and moving `step` over its run; empty (x above y) when it stays outside.
+function the bim clip of {a 64 bit floating-point number:start} moving {a 64 bit floating-point number:step} between {a 64 bit floating-point number:lowEdge} and {a 64 bit floating-point number:highEdge} narrowing {cad vector2:span}:
+    execute:
+        if (the absolute value of step) < 1e-15:
+            if (start < lowEdge) or (start > highEdge):
+                return a cad vector2 with x 1.0 and y 0.0
+            return span
+        set atLow to (lowEdge - start) / step
+        set atHigh to (highEdge - start) / step
+        set enter to the minimum of atLow and atHigh
+        set leave to the maximum of atLow and atHigh
+        return a cad vector2 with x (the maximum of span's x and enter) and y (the minimum of span's y and leave)
+
+# A mesh of lines (pairs of points) clipped to the box from `low` to `high`:
+# each line cut to its part inside, those wholly outside left out.
+function the bim line shape {fast mesh record:lineShape} clipped to box from {cad vector3:low} to {cad vector3:high}:
+    execute:
+        set kept to an empty fast mesh
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        set linePoints to lineShape's positions's values
+        set cursor to 0
+        loop while (cursor + 1) < the length of linePoints:
+            set first to the item at cursor in linePoints
+            set run to the cad difference of (the item at (cursor + 1) in linePoints) and first
+            set span to a cad vector2 with x 0.0 and y 1.0
+            set span to the bim clip of (first's x) moving (run's x) between (low's x) and (high's x) narrowing span
+            set span to the bim clip of (first's y) moving (run's y) between (low's y) and (high's y) narrowing span
+            set span to the bim clip of (first's z) moving (run's z) between (low's z) and (high's z) narrowing span
+            if span's x <= span's y:
+                append (the cad sum of first and (run scaled by (span's x))) to (kept's positions's values)
+                append (the cad sum of first and (run scaled by (span's y))) to (kept's positions's values)
+                append upward to (kept's normals's values)
+                append upward to (kept's normals's values)
+            set cursor to cursor + 2
+        return kept
+
 # The scene meshes `sceneList` clipped to the box from `low` to `high`; those
-# left empty are left out.
+# left empty are left out. Meshes of lines keep the parts of their lines
+# inside.
 function the bim scene meshes of {a pointer to a list:sceneList} clipped to box from {cad vector3:low} to {cad vector3:high}:
     execute:
         set result to a cad topology list of a bim scene mesh record
         loop cursor from 0 to the length of sceneList:
             set sceneMesh to the item at cursor in sceneList
-            set cutShape to the bim mesh sceneMesh's shape clipped to box from low to high
-            if (the length of (cutShape's triangles's values)) > 0:
-                set sceneMesh's shape to cutShape
-                append sceneMesh to (result's values)
+            if bim scene mesh sceneMesh draws lines:
+                set cutLines to the bim line shape sceneMesh's shape clipped to box from low to high
+                if (the length of (cutLines's positions's values)) > 0:
+                    set sceneMesh's shape to cutLines
+                    append sceneMesh to (result's values)
+            else:
+                set cutShape to the bim mesh sceneMesh's shape clipped to box from low to high
+                if (the length of (cutShape's triangles's values)) > 0:
+                    set sceneMesh's shape to cutShape
+                    append sceneMesh to (result's values)
         return result
