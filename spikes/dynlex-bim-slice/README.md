@@ -38,7 +38,9 @@ scale (R-12, R-20), GPU instancing.
   `bim_drawing.dl` (plan, section, dimensions), `bim_ifc.dl` (IFC4 export),
   `bim_ifcx.dl` and `bim_ifcx_read.dl` (IFC5 export and import), `bim_editor.dl`
   (editor core), `bim_ui.dl` (ribbon and panels), `bim_ui_files.dl` (start screen, File
-  menu, Settings and the unsaved-changes dialog), `main.dl` (the editor). Headless tests,
+  menu, Settings and the unsaved-changes dialog), `bim_pavilion_drawings.dl` (the
+  demonstration pavilion's plan, sections, elevation and A2 sheets; `main.dl --pavilion
+  --export-sheets` writes every sheet as SVG and PDF), `main.dl` (the editor). Headless tests,
   timing programs and the GUI driver are in `tests/`. IFC4 output is checked with
   IfcOpenShell; IFC5 output with an independent composition in Python.
 - `overlay/lib/fastkernel/` — direct polyhedral walls and prisms.
