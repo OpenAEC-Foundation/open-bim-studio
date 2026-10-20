@@ -18,7 +18,13 @@
 # in the checkout is changed.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-root=${DYNLEX_ROOT:?set DYNLEX_ROOT to a DynLex checkout with a built compiler}
+source "$here/toolchain.sh"
+resolve_bim_toolchain "$here"
+# Inspect the selected fork without staging files or invoking the compiler.
+if [[ ${1:-app} == toolchain-info ]]; then
+    show_bim_toolchain
+    exit 0
+fi
 out=${BIM_BUILD_DIR:-$here/build}
 tree=$out/tree
 mkdir -p "$tree/build/shaders"

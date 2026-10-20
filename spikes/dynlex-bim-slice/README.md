@@ -69,8 +69,15 @@ git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-compiler-local.patch
 
 `patches/dynlex-shader-extensions.patch` is needed only to rebuild the shaders.
 
-**How to run.** Set `DYNLEX_ROOT` to a DynLex checkout at commit `bc653ad`, with its
-compiler built at `build/dynlex`, then:
+**Local fork selection.** Put the absolute path to the local DynLex fork in
+`.dynlex-root.local` (one line, no quotes). This machine-local file is ignored by
+Git. An explicit `DYNLEX_ROOT` overrides it. Both the compiler and `lib/` come from
+the selected checkout. `bash ./build.sh toolchain-info` prints the resolved paths,
+binary hash and source revision without staging files or starting a compilation.
+Editing compiler source does not update its binary; a compiler rebuild must be
+scheduled separately. The source revision alone is not binary provenance.
+
+**How to run.** Select a checkout with its compiler built at `build/dynlex`, then:
 
 ```
 ./build.sh app             # the editor, optimised, in build/bim-slice
