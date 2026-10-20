@@ -1,0 +1,1112 @@
+# SPDX-License-Identifier: MPL-2.0
+# The application's parts beside its loop: how the section fits, the
+# camera, sheets and view tabs (split from `main.dl`).
+import examples/bim-slice/bim_view_panel.dl
+
+# ---------------------------------------------------------------- application
+
+# How the section fits the right panel: `low` and `high` bound its cut
+# polygons; invalid when the section line meets nothing.
+class:
+    patterns:
+        [a|] bim section fit record
+    members:
+        valid as a boolean
+        low as a cad vector2
+        high as a cad vector2
+        transform as a bim drawing transform record
+
+function the bim section fit of {bim editor record:editor} in {bim screen layout record:layout}:
+    execute:
+        set infinity to 1.0 / 0.0
+        set low to a cad vector2 with x infinity and y infinity
+        set high to a cad vector2 with x (0.0 - infinity) and y (0.0 - infinity)
+        loop sourceCursor from 0 to the length of (editor's section's sources's values):
+            set polygons to (the item at sourceCursor in (editor's section's sources's values))'s polygons's values
+            loop cursor from 0 to the length of polygons:
+                set corners to (the item at cursor in polygons)'s points's values
+                loop corner from 0 to the length of corners:
+                    set point to the item at corner in corners
+                    set low to a cad vector2 with x (the minimum of low's x and point's x) and y (the minimum of low's y and point's y)
+                    set high to a cad vector2 with x (the maximum of high's x and point's x) and y (the maximum of high's y and point's y)
+        # Room is kept on the right for the level heads and their names.
+        set panelWidth to (layout's width - layout's planRight) - 150.0
+        set panelHeight to layout's bottom - layout's top
+        set spanX to the maximum of ((high's x - low's x) + 3.0) and 0.5
+        set spanY to the maximum of (high's y - low's y) and 0.5
+        set fitted to (the minimum of ((panelWidth * 0.85) / spanX) and ((panelHeight * 0.8) / spanY)) * editor's sectionZoom
+        set centre to a cad vector2 with x ((layout's planRight + (panelWidth * 0.5)) + editor's sectionPanX) and y (((layout's top + layout's bottom) * 0.5) + editor's sectionPanY)
+        set origin to a cad vector2 with x ((low's x + high's x) * 0.5) and y ((low's y + high's y) * 0.5)
+        return @intrinsic("construct", a bim section fit record, low's x <= high's x, low, high, @intrinsic("construct", a bim drawing transform record, centre, origin, fitted))
+
+# The void of opening `openingValue` in the section, in section coordinates
+# (metres along the section line, height): where the line crosses its host
+# wall within the opening's width, as deep as the wall is thick across the
+# line; invalid when it does not cross there.
+class:
+    patterns:
+        [a|] bim section box record
+    members:
+        valid as a boolean
+        low as a cad vector2
+        high as a cad vector2
+
+function the bim section box of opening {bim opening record:openingValue} for {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set zero to a cad vector2 with x 0.0 and y 0.0
+        set missing to @intrinsic("construct", a bim section box record, false, zero, zero)
+        set hostFound to the bim wall index of openingValue's hostId in modelValue
+        set typeFound to the bim opening type index of openingValue's typeId in modelValue
+        if (hostFound's valid = false) or (typeFound's valid = false):
+            return missing
+        set host to the item at hostFound's position in (modelValue's walls's values)
+        set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+        set first to editor's sectionFirst
+        set run to the cad distance from editor's sectionFirst to editor's sectionSecond
+        if run < 1e-9:
+            return missing
+        set dx to (editor's sectionSecond's x - first's x) / run
+        set dy to (editor's sectionSecond's y - first's y) / run
+        set wallLength to the cad distance from host's start to host's finish
+        if wallLength < 1e-9:
+            return missing
+        set gx to host's finish's x - host's start's x
+        set gy to host's finish's y - host's start's y
+        set denominator to (dx * gy) - (dy * gx)
+        if (the absolute value of denominator) < 1e-9:
+            return missing
+        set ox to host's start's x - first's x
+        set oy to host's start's y - first's y
+        set along to ((ox * gy) - (oy * gx)) / denominator
+        set onWall to ((ox * dy) - (oy * dx)) / denominator
+        set halfWidth to (the bim rough width of openingType) * 0.5
+        set fromStart to onWall * wallLength
+        if ((fromStart < (openingValue's offset - halfWidth)) or (fromStart > (openingValue's offset + halfWidth))) or ((along < 0.0) or (along > run)):
+            return missing
+        set crossing to (the absolute value of denominator) / wallLength
+        set halfDepth to ((the bim wall thickness of host in modelValue) * 0.5) / (the maximum of crossing and 0.05)
+        set levelFound to the bim level index of host's levelId in modelValue
+        set elevation to 0.0
+        if levelFound's valid:
+            set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set low to a cad vector2 with x (along - halfDepth) and y (elevation + openingType's sill)
+        set high to a cad vector2 with x (along + halfDepth) and y (elevation + (the bim head height of openingType))
+        return @intrinsic("construct", a bim section box record, true, low, high)
+
+# The box the cut of element `elementId` fills in the section; invalid when
+# the section does not cut it.
+function the bim section extent of element {a 64 bit integer:elementId} for {bim editor record:editor}:
+    execute:
+        set infinity to 1.0 / 0.0
+        set low to a cad vector2 with x infinity and y infinity
+        set high to a cad vector2 with x (0.0 - infinity) and y (0.0 - infinity)
+        loop sourceCursor from 0 to the length of (editor's section's sources's values):
+            set source to the item at sourceCursor in (editor's section's sources's values)
+            if source's id = elementId:
+                loop polygonCursor from 0 to the length of (source's polygons's values):
+                    set corners to (the item at polygonCursor in (source's polygons's values))'s points's values
+                    loop corner from 0 to the length of corners:
+                        set point to the item at corner in corners
+                        set low to a cad vector2 with x (the minimum of low's x and point's x) and y (the minimum of low's y and point's y)
+                        set high to a cad vector2 with x (the maximum of high's x and point's x) and y (the maximum of high's y and point's y)
+        return @intrinsic("construct", a bim section box record, low's x <= high's x, low, high)
+
+# A shape handle in the section: what it moves (`bim section … handle`), of
+# which element, where (section coordinates) and the height it stands for.
+class:
+    patterns:
+        [a|] bim section handle record
+    members:
+        kind as an integer
+        elementId as a 64 bit integer
+        spot as a cad vector2
+
+function bim wall top handle:
+    replacement:
+        1
+
+function bim slab top handle:
+    replacement:
+        2
+
+function bim slab bottom handle:
+    replacement:
+        3
+
+function bim opening head handle:
+    replacement:
+        4
+
+function bim opening sill handle:
+    replacement:
+        5
+
+function bim wall bottom handle:
+    replacement:
+        6
+
+# A floor's sides where the section crosses them, dragged along the section.
+function bim slab start side handle:
+    replacement:
+        7
+
+function bim slab finish side handle:
+    replacement:
+        8
+
+# A level picked in the section, dragged up or down at its head.
+function bim level handle:
+    replacement:
+        9
+
+# True for a handle dragged along the section rather than up and down.
+function bim section handle {integer:kind} slides:
+    execute:
+        return (kind = bim slab start side handle) or (kind = bim slab finish side handle)
+
+# Where grid `gridValue` crosses the section line (metres along it), or not
+# valid when it does not cross.
+class:
+    patterns:
+        [a|] bim grid crossing record
+    members:
+        valid as a boolean
+        along as a 64 bit floating-point number
+
+function the bim crossing of grid {bim grid record:gridValue} for {bim editor record:editor}:
+    execute:
+        set run to the cad distance from editor's sectionFirst to editor's sectionSecond
+        if run <= 1e-9:
+            return @intrinsic("construct", a bim grid crossing record, false, 0.0)
+        set dx to (editor's sectionSecond's x - editor's sectionFirst's x) / run
+        set dy to (editor's sectionSecond's y - editor's sectionFirst's y) / run
+        set gx to gridValue's finish's x - gridValue's start's x
+        set gy to gridValue's finish's y - gridValue's start's y
+        set denominator to (dx * gy) - (dy * gx)
+        if (the absolute value of denominator) <= 1e-12:
+            return @intrinsic("construct", a bim grid crossing record, false, 0.0)
+        set ox to gridValue's start's x - editor's sectionFirst's x
+        set oy to gridValue's start's y - editor's sectionFirst's y
+        set onGrid to ((ox * dy) - (oy * dx)) / denominator
+        return @intrinsic("construct", a bim grid crossing record, (onGrid >= 0.0) and (onGrid <= 1.0), ((ox * gy) - (oy * gx)) / denominator)
+
+# The extent of everything cut by the section, in section coordinates; not
+# valid when nothing is.
+function the bim section bounds of {bim editor record:editor}:
+    execute:
+        set infinity to 1.0 / 0.0
+        set low to a cad vector2 with x infinity and y infinity
+        set high to a cad vector2 with x (0.0 - infinity) and y (0.0 - infinity)
+        loop sourceCursor from 0 to the length of (editor's section's sources's values):
+            set polygons to (the item at sourceCursor in (editor's section's sources's values))'s polygons's values
+            loop cursor from 0 to the length of polygons:
+                set corners to (the item at cursor in polygons)'s points's values
+                loop corner from 0 to the length of corners:
+                    set point to the item at corner in corners
+                    set low to a cad vector2 with x (the minimum of low's x and point's x) and y (the minimum of low's y and point's y)
+                    set high to a cad vector2 with x (the maximum of high's x and point's x) and y (the maximum of high's y and point's y)
+        return @intrinsic("construct", a bim section box record, low's x <= high's x, low, high)
+
+# The handles of the selection in the section: a wall's top and foot, a floor's top
+# and underside, an opening's head and sill.
+function the bim section handles of {bim editor record:editor}:
+    execute:
+        set gripList to an empty list of a bim section handle record
+        set chosenId to editor's selectionId
+        if (editor's selectionKind = bim wall picked) or (editor's selectionKind = bim slab picked):
+            set cutExtent to the bim section extent of element chosenId for editor
+            if cutExtent's valid:
+                set middle to (cutExtent's low's x + cutExtent's high's x) * 0.5
+                if editor's selectionKind = bim wall picked:
+                    append (@intrinsic("construct", a bim section handle record, bim wall top handle, chosenId, a cad vector2 with x middle and y cutExtent's high's y)) to gripList
+                    append (@intrinsic("construct", a bim section handle record, bim wall bottom handle, chosenId, a cad vector2 with x middle and y cutExtent's low's y)) to gripList
+                else:
+                    append (@intrinsic("construct", a bim section handle record, bim slab top handle, chosenId, a cad vector2 with x middle and y cutExtent's high's y)) to gripList
+                    append (@intrinsic("construct", a bim section handle record, bim slab bottom handle, chosenId, a cad vector2 with x middle and y cutExtent's low's y)) to gripList
+                    set halfway to (cutExtent's low's y + cutExtent's high's y) * 0.5
+                    append (@intrinsic("construct", a bim section handle record, bim slab start side handle, chosenId, a cad vector2 with x cutExtent's low's x and y halfway)) to gripList
+                    append (@intrinsic("construct", a bim section handle record, bim slab finish side handle, chosenId, a cad vector2 with x cutExtent's high's x and y halfway)) to gripList
+        if editor's selectionKind = bim level picked:
+            set levelFound to the bim level index of chosenId in editor's documentValue's current
+            set bounds to the bim section bounds of editor
+            if levelFound's valid and bounds's valid:
+                set levelValue to the item at levelFound's position in (editor's documentValue's current's levels's values)
+                append (@intrinsic("construct", a bim section handle record, bim level handle, chosenId, a cad vector2 with x (bounds's high's x + 1.5) and y levelValue's elevation)) to gripList
+        if editor's selectionKind = bim opening picked:
+            set found to the bim opening index of chosenId in editor's documentValue's current
+            if found's valid:
+                set voidBox to the bim section box of opening (the item at found's position in (editor's documentValue's current's openings's values)) for editor
+                if voidBox's valid:
+                    set middle to (voidBox's low's x + voidBox's high's x) * 0.5
+                    append (@intrinsic("construct", a bim section handle record, bim opening head handle, chosenId, a cad vector2 with x middle and y voidBox's high's y)) to gripList
+                    append (@intrinsic("construct", a bim section handle record, bim opening sill handle, chosenId, a cad vector2 with x middle and y voidBox's low's y)) to gripList
+        return gripList
+
+# The distance along the section line (metres) a pixel column of the section
+# stands for, to 10 mm.
+function the bim section distance at {a 64 bit floating-point number:pixelX} through {bim drawing transform record:transform}:
+    execute:
+        set exact to transform's origin's x + ((pixelX - transform's centre's x) / transform's scale)
+        return (the floor of ((exact * 100.0) + 0.5)) / 100.0
+
+# Where a handle dragged to pixel row `pixelY` lands: on a level, or on the
+# top or underside of another element cut by the section, when one lies
+# within 8 pixels (named in `label`), else at the height under the pointer
+# to 10 mm.
+class:
+    patterns:
+        [a|] bim section snap record
+    members:
+        height as a 64 bit floating-point number
+        label as a string
+        # The level snapped to, else the refused id.
+        levelId as a 64 bit integer
+
+function the bim section snap at {a 64 bit floating-point number:pixelY} through {bim drawing transform record:transform} for {bim editor record:editor} leaving out {a 64 bit integer:draggedId}:
+    execute:
+        set exact to transform's origin's y - ((pixelY - transform's centre's y) / transform's scale)
+        set best to (the floor of ((exact * 100.0) + 0.5)) / 100.0
+        set bestLabel to the string form of ""
+        set bestLevel to the bim refused id
+        set reach to 8.0 / transform's scale
+        loop levelCursor from 0 to the length of (editor's documentValue's current's levels's values):
+            set levelValue to the item at levelCursor in (editor's documentValue's current's levels's values)
+            if (the absolute value of (levelValue's elevation - exact)) < reach:
+                set reach to the absolute value of (levelValue's elevation - exact)
+                set best to levelValue's elevation
+                set bestLabel to (the string form of "Level ") + levelValue's name
+                set bestLevel to levelValue's id
+        loop sourceCursor from 0 to the length of (editor's section's sources's values):
+            set cutSource to the item at sourceCursor in (editor's section's sources's values)
+            if cutSource's id != draggedId:
+                set sourceBox to the bim section extent of element cutSource's id for editor
+                if sourceBox's valid:
+                    if (the absolute value of (sourceBox's high's y - exact)) < reach:
+                        set reach to the absolute value of (sourceBox's high's y - exact)
+                        set best to sourceBox's high's y
+                        set bestLabel to the string form of "Top of an element"
+                        set bestLevel to the bim refused id
+                    if (the absolute value of (sourceBox's low's y - exact)) < reach:
+                        set reach to the absolute value of (sourceBox's low's y - exact)
+                        set best to sourceBox's low's y
+                        set bestLabel to the string form of "Underside of an element"
+                        set bestLevel to the bim refused id
+        return @intrinsic("construct", a bim section snap record, best, bestLabel, bestLevel)
+
+# Moves what handle `kind` of `elementId` stands for so that it lies at
+# `height`, as one edit: a wall's top (its height; held at level
+# `levelId` when it was dropped on one, else free), its foot (its base
+# offset, keeping the top; dropped on a level, the wall stands on it), a floor's side (the edge the section crosses
+# there, pushed across itself so that it lies `targetHeight` along the
+# section line), a floor's top (its top
+# above the storey) or underside (its thickness), an opening's head (its
+# type's height) or sill (its type's sill, keeping the head).
+function apply bim section handle {integer:kind} of {a 64 bit integer:elementId} at {a 64 bit floating-point number:targetHeight} on {a 64 bit integer:snapLevel} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set changed to false
+        begin bim transaction in (the address of (editor's documentValue))
+        if kind = bim wall top handle:
+            set cutExtent to the bim section extent of element elementId for (@intrinsic("dereference", editor))
+            set wallFound to the bim wall index of elementId in (@intrinsic("dereference", target))
+            if cutExtent's valid and wallFound's valid:
+                set wallValue to the item at wallFound's position in (target's walls's values)
+                set changed to set bim wall elementId height to (the maximum of 0.1 and (wallValue's height + (targetHeight - cutExtent's high's y))) in target
+                if changed and (snapLevel != the bim refused id):
+                    set changed to hold bim wall elementId top at level snapLevel in target
+        if kind = bim wall bottom handle:
+            set cutExtent to the bim section extent of element elementId for (@intrinsic("dereference", editor))
+            set wallFound to the bim wall index of elementId in (@intrinsic("dereference", target))
+            if cutExtent's valid and wallFound's valid:
+                set wallValue to the item at wallFound's position in (target's walls's values)
+                set lift to targetHeight - cutExtent's low's y
+                if snapLevel != the bim refused id:
+                    set changed to set bim wall elementId on level snapLevel at 0.0 in target
+                else if (wallValue's height - lift) >= 0.1:
+                    set changed to set bim wall elementId base to (wallValue's baseOffset + lift) and height to (wallValue's height - lift) in target
+        if kind = bim level handle:
+            set levelFound to the bim level index of elementId in (@intrinsic("dereference", target))
+            if levelFound's valid:
+                set levelValue to the item at levelFound's position in (target's levels's values)
+                set changed to set bim level elementId at targetHeight with height levelValue's height in target
+        if bim section handle kind slides:
+            set cutExtent to the bim section extent of element elementId for (@intrinsic("dereference", editor))
+            set slabFound to the bim slab index of elementId in (@intrinsic("dereference", target))
+            set run to the cad distance from editor's sectionFirst to editor's sectionSecond
+            if (cutExtent's valid and slabFound's valid) and (run > 1e-9):
+                set slabValue to the item at slabFound's position in (target's slabs's values)
+                set ux to (editor's sectionSecond's x - editor's sectionFirst's x) / run
+                set uy to (editor's sectionSecond's y - editor's sectionFirst's y) / run
+                set sideAlong to cutExtent's low's x
+                if kind = bim slab finish side handle:
+                    set sideAlong to cutExtent's high's x
+                set sidePoint to a cad vector2 with x (editor's sectionFirst's x + (ux * sideAlong)) and y (editor's sectionFirst's y + (uy * sideAlong))
+                set count to the length of (slabValue's outline's values)
+                set edgeIndex to -1
+                set nearest to 1.0 / 0.0
+                loop corner from 0 to count:
+                    set here to the item at corner in (slabValue's outline's values)
+                    set following to the item at (the remainder of (corner + 1) divided by count) in (slabValue's outline's values)
+                    set gap to the cad distance from sidePoint to the segment from here to following
+                    if gap < nearest:
+                        set nearest to gap
+                        set edgeIndex to corner
+                if edgeIndex >= 0:
+                    set slide to targetHeight - sideAlong
+                    set pushedCorners to an empty list of a cad vector2
+                    if fill bim outline of slabValue with edge edgeIndex pushed by (a cad vector2 with x (ux * slide) and y (uy * slide)) into pushedCorners:
+                        set changed to set bim slab elementId outline to pushedCorners in target
+                    free pushedCorners
+        if (kind = bim slab top handle) or (kind = bim slab bottom handle):
+            set cutExtent to the bim section extent of element elementId for (@intrinsic("dereference", editor))
+            set slabFound to the bim slab index of elementId in (@intrinsic("dereference", target))
+            if cutExtent's valid and slabFound's valid:
+                set slabValue to the item at slabFound's position in (target's slabs's values)
+                if kind = bim slab top handle:
+                    set changed to set bim plate elementId top to (slabValue's top + (targetHeight - cutExtent's high's y)) pitch slabValue's pitch heading slabValue's heading in target
+                else:
+                    set thicker to the maximum of 0.01 and (cutExtent's high's y - targetHeight)
+                    set changed to set bim slab elementId thickness to thicker in target
+                    if changed = false:
+                        set editor's message to the string form of "The floor's thickness follows its type's layers"
+        if (kind = bim opening head handle) or (kind = bim opening sill handle):
+            set openingFound to the bim opening index of elementId in (@intrinsic("dereference", target))
+            if openingFound's valid:
+                set openingValue to the item at openingFound's position in (target's openings's values)
+                set voidBox to the bim section box of opening openingValue for (@intrinsic("dereference", editor))
+                set typeFound to the bim opening type index of openingValue's typeId in (@intrinsic("dereference", target))
+                if voidBox's valid and typeFound's valid:
+                    set openingType to the item at typeFound's position in (target's openingTypes's values)
+                    set newHeight to openingType's height
+                    set newSill to openingType's sill
+                    if kind = bim opening head handle:
+                        set newHeight to openingType's height + (targetHeight - voidBox's high's y)
+                    else:
+                        set newSill to openingType's sill + (targetHeight - voidBox's low's y)
+                        set newHeight to openingType's height - (targetHeight - voidBox's low's y)
+                    if (newHeight > 0.1) and (newSill >= 0.0):
+                        set changed to set bim opening type openingValue's typeId sized openingType's width by newHeight with sill newSill in target
+        if changed:
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to (the string form of "Section: moved to ") + (the bim length targetHeight in units editor's lengthUnit)
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+
+# The storeys in the section: a dashed line at each storey's level across
+# the cut, with a level head and its name and elevation at the right, as
+# the drawing standard marks them (`bim_drawing_standard.dl`).
+function draw bim levels in section of {bim editor record:editor} from {cad vector2:low} to {cad vector2:high} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set levelList to editor's documentValue's current's levels's values
+        set pairs to an empty list of a cad vector2
+        set marks to an empty list of a cad vector2
+        set markLines to an empty list of a cad vector2
+        set drawingStandard to the bim drawing standard of editor's documentValue's current
+        loop cursor from 0 to the length of levelList:
+            set levelValue to the item at cursor in levelList
+            set leftEnd to the bim pixel of (a cad vector2 with x (low's x - 1.5) and y levelValue's elevation) through transform
+            set rightEnd to the bim pixel of (a cad vector2 with x (high's x + 1.5) and y levelValue's elevation) through transform
+            set position to leftEnd's x
+            loop while position < rightEnd's x:
+                set ending to the minimum of (position + 10.0) and rightEnd's x
+                append (a cad vector2 with x position and y leftEnd's y) to pairs
+                append (a cad vector2 with x ending and y leftEnd's y) to pairs
+                set position to ending + 5.0
+            # The level head on the line, and its elevation, as the
+            # project's drawing standard marks and writes them.
+            append bim level mark at (a cad vector2 with x (rightEnd's x + 8.0) and y rightEnd's y) under drawingStandard into marks and markLines
+            set elevationText to the bim level text of levelValue's elevation under drawingStandard
+            record bim text levelValue's name at (rightEnd's x + 18.0) and (rightEnd's y - 10.0) coloured 40, 60 and 120 on canvas
+            record bim text elevationText at (rightEnd's x + 18.0) and (rightEnd's y + 6.0) coloured 40, 60 and 120 on canvas
+        record bim strokes pairs coloured 40, 60 and 120 wide 1.0 on canvas
+        record bim triangles marks coloured 40, 60 and 120 on canvas
+        record bim strokes markLines coloured 40, 60 and 120 wide 1.0 on canvas
+        free pairs
+        free marks
+        free markLines
+
+# Selects the wall or slab whose cut lies under `pixel` in the section panel;
+# clears the selection when there is none.
+function pick bim section element of {bim editor record:editor} at {cad vector2:pixel} in {bim screen layout record:layout}:
+    execute:
+        set fit to the bim section fit of editor in layout
+        set kindCode to bim nothing picked
+        set chosenId to the bim refused id
+        if fit's valid:
+            set transform to fit's transform
+            set location to a cad vector2 with x (transform's origin's x + ((pixel's x - transform's centre's x) / transform's scale)) and y (transform's origin's y - ((pixel's y - transform's centre's y) / transform's scale))
+            loop sourceCursor from 0 to the length of (editor's section's sources's values):
+                set polygons to (the item at sourceCursor in (editor's section's sources's values))'s polygons's values
+                loop cursor from 0 to the length of polygons:
+                    set polygon to the item at cursor in polygons
+                    if bim flat point location lies in (polygon's points's values):
+                        set chosenId to polygon's elementId
+        set modelValue to editor's documentValue's current
+        # An opening's void, which no cut polygon fills, before what is cut.
+        if fit's valid:
+            set spot to a cad vector2 with x (fit's transform's origin's x + ((pixel's x - fit's transform's centre's x) / fit's transform's scale)) and y (fit's transform's origin's y - ((pixel's y - fit's transform's centre's y) / fit's transform's scale))
+            loop openingCursor from 0 to the length of (modelValue's openings's values):
+                set openingValue to the item at openingCursor in (modelValue's openings's values)
+                set voidBox to the bim section box of opening openingValue for editor
+                if voidBox's valid:
+                    if ((spot's x >= voidBox's low's x) and (spot's x <= voidBox's high's x)) and ((spot's y >= voidBox's low's y) and (spot's y <= voidBox's high's y)):
+                        select bim editor bim opening picked numbered openingValue's id in (the address of editor)
+                        return nothing
+        # A building system: its footprint under the click along the section
+        # line, over its height (lying level: at its height); the part there
+        # chosen, as in the plan.
+        if fit's valid and ((the bim wall index of chosenId in modelValue)'s valid = false):
+            set sectionRun to the cad distance from editor's sectionFirst to editor's sectionSecond
+            if sectionRun > 1e-9:
+                set alongX to (editor's sectionSecond's x - editor's sectionFirst's x) / sectionRun
+                set alongY to (editor's sectionSecond's y - editor's sectionFirst's y) / sectionRun
+                set sectionSpot to a cad vector2 with x (fit's transform's origin's x + ((pixel's x - fit's transform's centre's x) / fit's transform's scale)) and y (fit's transform's origin's y - ((pixel's y - fit's transform's centre's y) / fit's transform's scale))
+                set planSpot to a cad vector2 with x (editor's sectionFirst's x + (alongX * sectionSpot's x)) and y (editor's sectionFirst's y + (alongY * sectionSpot's x))
+                set reach to 6.0 / fit's transform's scale
+                loop curtainCursor from 0 to the length of (modelValue's curtains's values):
+                    set curtainValue to the item at curtainCursor in (modelValue's curtains's values)
+                    if (the bim footprint gap of planSpot to curtainValue in modelValue) <= reach:
+                        set placement to the bim placed system curtainValue in modelValue
+                        set floorLevel to the bim elevation of level placement's curtain's levelId in modelValue
+                        set heightAbove to sectionSpot's y - floorLevel
+                        set hit to (heightAbove >= (placement's lift - reach)) and (heightAbove <= ((placement's lift + placement's curtain's height) + reach))
+                        if bim system curtainValue's id lies level in modelValue:
+                            set flatHeight to ((the bim setting (bim system level setting) of curtainValue's id in modelValue)'s value as a 64 bit floating-point number) / 1000.0
+                            set hit to (the absolute value of (heightAbove - (flatHeight + placement's lift))) <= ((the maximum of 0.1 and (the bim joint depth of system curtainValue's id in modelValue)) + reach)
+                        if hit:
+                            choose bim editor part of system curtainValue's id seen at (a cad vector3 with x planSpot's x, y planSpot's y and z heightAbove) in (the address of editor)
+                            return nothing
+        # A level: its line (where nothing cut lies), its head or its label.
+        # A click on the label selects it and starts typing its elevation.
+        if (fit's valid and ((the bim wall index of chosenId in modelValue)'s valid = false)) and ((the bim slab index of chosenId in modelValue)'s valid = false):
+            set lineLeft to (the bim pixel of (a cad vector2 with x (fit's low's x - 1.5) and y 0.0) through fit's transform)'s x
+            set lineRight to (the bim pixel of (a cad vector2 with x (fit's high's x + 1.5) and y 0.0) through fit's transform)'s x
+            loop levelCursor from 0 to the length of (modelValue's levels's values):
+                set levelValue to the item at levelCursor in (modelValue's levels's values)
+                set levelY to (the bim pixel of (a cad vector2 with x 0.0 and y levelValue's elevation) through fit's transform)'s y
+                set onLine to ((the absolute value of (pixel's y - levelY)) <= 5.0) and ((pixel's x >= lineLeft) and (pixel's x <= (lineRight + 16.0)))
+                set onLabel to ((pixel's x > (lineRight + 16.0)) and (pixel's x < (lineRight + 140.0))) and ((pixel's y >= (levelY - 24.0)) and (pixel's y <= (levelY + 12.0)))
+                if onLine or onLabel:
+                    select bim editor bim level picked numbered levelValue's id in (the address of editor)
+                    if onLabel:
+                        start bim editor property bim level elevation property in (the address of editor)
+                        set editor's message to ((the string form of "Level ") + levelValue's name) + (the string form of ": type its elevation and press Enter (Esc cancels)")
+                    return nothing
+        # A grid (stramien): its upright dash-dot line or its head.
+        if (fit's valid and ((the bim wall index of chosenId in modelValue)'s valid = false)) and ((the bim slab index of chosenId in modelValue)'s valid = false):
+            if bim category bim grid category is visible in editor's sectionRules:
+                loop gridCursor from 0 to the length of (modelValue's grids's values):
+                    set gridValue to the item at gridCursor in (modelValue's grids's values)
+                    set crossing to the bim crossing of grid gridValue for editor
+                    if crossing's valid:
+                        set gridTop to the bim pixel of (a cad vector2 with x crossing's along and y gridValue's high) through fit's transform
+                        set gridBottom to the bim pixel of (a cad vector2 with x crossing's along and y gridValue's low) through fit's transform
+                        set onGridLine to ((the absolute value of (pixel's x - gridTop's x)) <= 5.0) and ((pixel's y >= gridTop's y) and (pixel's y <= gridBottom's y))
+                        if onGridLine or ((the cad distance from pixel to gridTop) <= 12.0):
+                            select bim editor bim grid picked numbered gridValue's id in (the address of editor)
+                            return nothing
+        if (the bim wall index of chosenId in modelValue)'s valid:
+            set kindCode to bim wall picked
+        else if (the bim slab index of chosenId in modelValue)'s valid:
+            set kindCode to bim slab picked
+        else:
+            set chosenId to the bim refused id
+        select bim editor kindCode numbered chosenId in (the address of editor)
+
+# The section, fitted into the right panel, with the level's floor line; the
+# cut of the selected wall or slab is drawn in the selection colour.
+function draw bim section of {bim editor record:editor} in {bim screen layout record:layout} dragging {integer:dragKind} of {a 64 bit integer:dragId} at {a 64 bit floating-point number:dragX} and {a 64 bit floating-point number:dragY} using {bim text atlas record:typeface} in {graphics frame:frame}:
+    execute:
+        draw bim label (the string form of "Section  (V: 3D, click: select)") at (layout's planRight + 16.0) and (layout's top + 20.0) using typeface in frame
+        set fit to the bim section fit of editor in layout
+        if fit's valid = false:
+            draw bim label (the string form of "The section line meets no wall") at (layout's planRight + 16.0) and (layout's top + 44.0) using typeface in frame
+            return nothing
+        set transform to fit's transform
+        set floorLeft to the bim pixel of (a cad vector2 with x (fit's low's x - 1.0) and y fit's low's y) through transform
+        set floorRight to the bim pixel of (a cad vector2 with x (fit's high's x + 1.0) and y fit's low's y) through transform
+        start triangles in frame
+        use vertex color red 150, green 160 and blue 175 in frame
+        add bim stroke from floorLeft to floorRight wide 1.0 in frame
+        finish triangles in frame
+        set sectionCanvas to a new bim canvas
+        set sectionCanvas's sketchy to bim view editor's sectionViewId is sketchy in editor's documentValue's current
+        draw bim hatched cut faces of editor's section for editor through transform as section true following editor's sectionRules on (the address of sectionCanvas)
+        draw bim grids in section of editor through transform on (the address of sectionCanvas)
+        draw bim levels in section of editor from fit's low to fit's high through transform on (the address of sectionCanvas)
+        replay bim canvas sectionCanvas shifted by 0.0 and 0.0 with typeface in frame
+        # The selected opening's void, and the handles of the selection.
+        if editor's selectionKind = bim opening picked:
+            set openingFound to the bim opening index of editor's selectionId in editor's documentValue's current
+            if openingFound's valid:
+                set voidBox to the bim section box of opening (the item at openingFound's position in (editor's documentValue's current's openings's values)) for editor
+                if voidBox's valid:
+                    set boxLow to the bim pixel of voidBox's low through transform
+                    set boxHigh to the bim pixel of voidBox's high through transform
+                    draw a rectangle at x boxLow's x and y boxHigh's y with width (boxHigh's x - boxLow's x) and height (boxLow's y - boxHigh's y) in color red 70, green 130 and blue 220 in frame
+        if (editor's selectionKind = bim wall picked) or (editor's selectionKind = bim slab picked):
+            set pixels to an empty list of a cad vector2
+            loop sourceCursor from 0 to the length of (editor's section's sources's values):
+                set source to the item at sourceCursor in (editor's section's sources's values)
+                if source's id = editor's selectionId:
+                    set rings to an empty list of the type of (an empty list of a cad vector2)
+                    loop cursor from 0 to the length of (source's polygons's values):
+                        append ((the item at cursor in (source's polygons's values))'s points's values) to rings
+                    append bim fill of rings through transform to pixels
+                    free rings
+            draw bim triangles pixels coloured 70, 130 and 220 in frame
+            free pixels
+        # The level or grid picked, in the selection colour.
+        start triangles in frame
+        use vertex color red 0, green 120 and blue 215 in frame
+        if editor's selectionKind = bim level picked:
+            set pickedLevel to the bim level index of editor's selectionId in editor's documentValue's current
+            if pickedLevel's valid:
+                set pickedElevation to (the item at pickedLevel's position in (editor's documentValue's current's levels's values))'s elevation
+                add bim stroke from (the bim pixel of (a cad vector2 with x (fit's low's x - 1.5) and y pickedElevation) through transform) to (the bim pixel of (a cad vector2 with x (fit's high's x + 1.5) and y pickedElevation) through transform) wide 2.5 in frame
+        if editor's selectionKind = bim grid picked:
+            set pickedGrid to the bim grid index of editor's selectionId in editor's documentValue's current
+            if pickedGrid's valid:
+                set gridShown to the item at pickedGrid's position in (editor's documentValue's current's grids's values)
+                set gridCrossing to the bim crossing of grid gridShown for editor
+                if gridCrossing's valid:
+                    add bim stroke from (the bim pixel of (a cad vector2 with x gridCrossing's along and y gridShown's high) through transform) to (the bim pixel of (a cad vector2 with x gridCrossing's along and y gridShown's low) through transform) wide 2.5 in frame
+        finish triangles in frame
+        set sectionGrips to the bim section handles of editor
+        start triangles in frame
+        loop handleCursor from 0 to the length of sectionGrips:
+            set handlePixel to the bim pixel of (the item at handleCursor in sectionGrips)'s spot through transform
+            use vertex color red 255, green 255 and blue 255 in frame
+            add bim square at handlePixel sized 10.0 in frame
+            use vertex color red 0, green 120 and blue 215 in frame
+            add bim square at handlePixel sized 7.0 in frame
+        # A handle being dragged: a dashed line at the pointer's height, or
+        # upright at its place along the section for a floor's side.
+        if (dragKind > 0) and (bim section handle dragKind slides):
+            use vertex color red 0, green 120 and blue 215 in frame
+            set dashAt to layout's top + 4.0
+            loop while dashAt < (layout's bottom - 4.0):
+                add bim stroke from (a cad vector2 with x dragX and y dashAt) to (a cad vector2 with x dragX and y (dashAt + 8.0)) wide 1.0 in frame
+                set dashAt to dashAt + 13.0
+        else if dragKind > 0:
+            use vertex color red 0, green 120 and blue 215 in frame
+            set lineY to (the bim pixel of (a cad vector2 with x 0.0 and y (the bim section snap at dragY through transform for editor leaving out dragId)'s height) through transform)'s y
+            set dashAt to layout's planRight + 4.0
+            loop while dashAt < (layout's width - 4.0):
+                add bim stroke from (a cad vector2 with x dashAt and y lineY) to (a cad vector2 with x (dashAt + 8.0) and y lineY) wide 1.0 in frame
+                set dashAt to dashAt + 13.0
+        finish triangles in frame
+        free sectionGrips
+        if (dragKind > 0) and ((bim section handle dragKind slides) = false):
+            # The height it would land on, with the level or element it
+            # snaps to.
+            set dragSnap to the bim section snap at dragY through transform for editor leaving out dragId
+            set snappedY to (the bim pixel of (a cad vector2 with x 0.0 and y dragSnap's height) through transform)'s y
+            draw bim label (the bim length dragSnap's height in units editor's lengthUnit) at (layout's width - 110.0) and (snappedY - 6.0) using typeface in frame
+            if (the length of dragSnap's label) > 0:
+                draw bim label dragSnap's label at (layout's width - 260.0) and (snappedY - 6.0) using typeface in frame
+
+# A camera that shows every wall of the model in the plan panel and in the 3D
+# view, keeping the 3D orientation of `current`; the 3D view orbits the
+# middle of the walls' box. An empty model keeps `current`.
+function the bim camera fitting {bim editor record:editor} in {bim screen layout record:layout} keeping {bim camera record:current}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set walls to modelValue's walls's values
+        set infinity to 1.0 / 0.0
+        set low to a cad vector2 with x infinity and y infinity
+        set high to a cad vector2 with x (0.0 - infinity) and y (0.0 - infinity)
+        set bottomZ to infinity
+        set topZ to 0.0 - infinity
+        loop cursor from 0 to the length of walls:
+            set wallValue to the item at cursor in walls
+            set low to a cad vector2 with x (the minimum of low's x and (the minimum of wallValue's start's x and wallValue's finish's x)) and y (the minimum of low's y and (the minimum of wallValue's start's y and wallValue's finish's y))
+            set high to a cad vector2 with x (the maximum of high's x and (the maximum of wallValue's start's x and wallValue's finish's x)) and y (the maximum of high's y and (the maximum of wallValue's start's y and wallValue's finish's y))
+            set elevation to 0.0
+            set levelFound to the bim level index of wallValue's levelId in modelValue
+            if levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+            set bottomZ to the minimum of bottomZ and elevation
+            set topZ to the maximum of topZ and (elevation + wallValue's height)
+        set detailPoints to an empty list of a cad vector3
+        set structuralParts to the bim linear parts of modelValue
+        loop nodeCursor from 0 to the length of (modelValue's connections's values):
+            set extraParts to the bim parts of connection (the item at nodeCursor in (modelValue's connections's values)) in modelValue
+            loop partCursor from 0 to the length of (extraParts's values):
+                append (the item at partCursor in (extraParts's values)) to (structuralParts's values)
+        loop partCursor from 0 to the length of (structuralParts's values):
+            set partValue to the item at partCursor in (structuralParts's values)
+            set sectionPoints to the bim profile rings of partValue's element as partValue's kind in modelValue
+            loop corner from 0 to the length of sectionPoints:
+                append (the item at corner in sectionPoints) to detailPoints
+            free sectionPoints
+        loop rebarCursor from 0 to the length of (modelValue's reinforcements's values):
+            set spec to the bim hostbound reinforcement (the item at rebarCursor in (modelValue's reinforcements's values)) in modelValue
+            set generated to the bim reinforcement paths of spec in modelValue
+            set lift to 0.0
+            set levelFound to the bim level index of spec's levelId in modelValue
+            if levelFound's valid:
+                set lift to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+            loop barCursor from 0 to the length of (generated's bars's values):
+                set barValue to the item at barCursor in (generated's bars's values)
+                set reach to barValue's diameter * 0.5
+                loop corner from 0 to the length of (barValue's points's values):
+                    set pointValue to the item at corner in (barValue's points's values)
+                    append (a cad vector3 with x (pointValue's x - reach), y (pointValue's y - reach) and z ((pointValue's z + lift) - reach)) to detailPoints
+                    append (a cad vector3 with x (pointValue's x + reach), y (pointValue's y + reach) and z ((pointValue's z + lift) + reach)) to detailPoints
+        loop corner from 0 to the length of detailPoints:
+            set pointValue to the item at corner in detailPoints
+            set low to a cad vector2 with x (the minimum of low's x and pointValue's x) and y (the minimum of low's y and pointValue's y)
+            set high to a cad vector2 with x (the maximum of high's x and pointValue's x) and y (the maximum of high's y and pointValue's y)
+            set bottomZ to the minimum of bottomZ and pointValue's z
+            set topZ to the maximum of topZ and pointValue's z
+        free detailPoints
+        if low's x = infinity:
+            return current
+        set spanX to (high's x - low's x) + 2.0
+        set spanY to (high's y - low's y) + 2.0
+        # A panel hidden behind another tab fits as it will show: across the
+        # whole drawing area.
+        set planSpan to layout's planRight - layout's planLeft
+        if planSpan < 50.0:
+            set planSpan to layout's width - layout's planLeft
+        set scale to the minimum of ((planSpan * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
+        set centre to a cad vector2 with x ((low's x + high's x) * 0.5) and y ((low's y + high's y) * 0.5)
+        set target to a cad vector3 with x centre's x, y centre's y and z ((bottomZ + topZ) * 0.5)
+        set spanZ to topZ - bottomZ
+        set diagonal to the square root of (((spanX * spanX) + (spanY * spanY)) + (spanZ * spanZ))
+        set viewSpan to layout's width - layout's planRight
+        if viewSpan < 50.0:
+            set viewSpan to layout's width - layout's planLeft
+        set panelSize to the minimum of viewSpan and (layout's bottom - layout's top)
+        return @intrinsic("construct", a bim camera record, centre, scale, current's yaw, current's pitch, target, (panelSize * 0.9) / diagonal)
+
+# A camera whose plan and 3D view show the box from `low` to `high`, keeping
+# the orientation of `current`.
+function the bim camera fitting box from {cad vector3:low} to {cad vector3:high} in {bim screen layout record:layout} keeping {bim camera record:current}:
+    execute:
+        set spanX to (high's x - low's x) + 2.0
+        set spanY to (high's y - low's y) + 2.0
+        set spanZ to high's z - low's z
+        # A panel hidden behind another tab fits as it will show: across the
+        # whole drawing area.
+        set planSpan to layout's planRight - layout's planLeft
+        if planSpan < 50.0:
+            set planSpan to layout's width - layout's planLeft
+        set scale to the minimum of ((planSpan * 0.85) / spanX) and (((layout's bottom - layout's top) * 0.85) / spanY)
+        set centre to a cad vector2 with x ((low's x + high's x) * 0.5) and y ((low's y + high's y) * 0.5)
+        set target to a cad vector3 with x centre's x, y centre's y and z ((low's z + high's z) * 0.5)
+        set diagonal to the square root of (((spanX * spanX) + (spanY * spanY)) + (spanZ * spanZ))
+        set viewSpan to layout's width - layout's planRight
+        if viewSpan < 50.0:
+            set viewSpan to layout's width - layout's planLeft
+        set panelSize to the minimum of viewSpan and (layout's bottom - layout's top)
+        return @intrinsic("construct", a bim camera record, centre, scale, current's yaw, current's pitch, target, (panelSize * 0.9) / diagonal)
+
+# The camera with its 3D view turned by `dx` and `dy` pixels of pointer
+# movement: dragging sideways turns about the vertical through the target,
+# dragging up and down tilts, from below the horizon to straight down.
+function the bim camera {bim camera record:current} orbited by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy}:
+    execute:
+        set turned to current
+        set turned's yaw to current's yaw + (dx * 0.006)
+        set turned's pitch to (current's pitch + (dy * 0.006)) clamped between -1.5 and 1.5
+        return turned
+
+# The camera with its 3D target moved so that the model follows the pointer
+# by `dx` and `dy` pixels.
+function the bim camera {bim camera record:current} panned by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy}:
+    execute:
+        set axes to the bim view axes of current
+        set moved to current
+        set shift to the cad sum of (axes's across scaled by (0.0 - (dx / current's viewScale))) and (axes's up scaled by (dy / current's viewScale))
+        set moved's target to the cad sum of current's target and shift
+        return moved
+
+# The camera zoomed by `factor` in the 3D view, keeping the model point under
+# `pixel` where it is.
+function the bim camera {bim camera record:current} zoomed by {a 64 bit floating-point number:factor} in view at {cad vector2:pixel} in {bim screen layout record:layout}:
+    execute:
+        set axes to the bim view axes of current
+        set middle to the bim view middle of layout
+        set acrossDistance to (pixel's x - middle's x) / current's viewScale
+        set upDistance to (middle's y - pixel's y) / current's viewScale
+        set keep to 1.0 - (1.0 / factor)
+        set closer to current
+        set closer's viewScale to current's viewScale * factor
+        set shift to the cad sum of (axes's across scaled by (acrossDistance * keep)) and (axes's up scaled by (upDistance * keep))
+        set closer's target to the cad sum of current's target and shift
+        return closer
+
+# The camera zoomed by `factor` in the plan, keeping the model point under
+# `pixel` where it is.
+function the bim camera {bim camera record:current} zoomed by {a 64 bit floating-point number:factor} in plan at {cad vector2:pixel} in {bim screen layout record:layout}:
+    execute:
+        set anchor to the bim model point of pixel in layout with current
+        set closer to current
+        set closer's scale to current's scale * factor
+        set closer's centre to a cad vector2 with x (anchor's x + ((current's centre's x - anchor's x) / factor)) and y (anchor's y + ((current's centre's y - anchor's y) / factor))
+        return closer
+
+# ---------------------------------------------------------------- properties
+
+# The rows the properties panel shows for `editor`'s selection: for an
+# imported element, read from `importValue` (which the editor does not
+# hold), its IFC class, GlobalId, name and storey, none of which can be
+# typed; otherwise `the bim property rows of`. A STEP import labels each
+# element "class GlobalId name", an IfcX import "class name".
+function the bim property rows of {bim editor record:editor} with {bim import record:importValue}:
+    execute:
+        if (editor's selectionKind != bim imported picked) or (importValue's valid = false):
+            return the bim property rows of editor
+        set propertyRows to an empty list of a bim property row record
+        set importIndex to (editor's selectionId - (the bim imported id base)) as an integer
+        if (importIndex < 0) or (importIndex >= (the length of (importValue's labels's values))):
+            return propertyRows
+        set label to the item at importIndex in (importValue's labels's values)
+        set className to label
+        set rest to the string form of ""
+        set gap to the index of (the string form of " ") in label
+        if gap >= 0:
+            set className to the substring of label from 0 spanning gap bytes
+            set rest to the substring of label from (gap + 1) spanning ((the length of label) - (gap + 1)) bytes
+        # A GlobalId is 22 characters long.
+        set globalId to the string form of "-"
+        set elementName to rest
+        set gap to the index of (the string form of " ") in rest
+        set firstWord to rest
+        if gap >= 0:
+            set firstWord to the substring of rest from 0 spanning gap bytes
+        if (the length of firstWord) = 22:
+            set globalId to firstWord
+            set elementName to the string form of ""
+            if gap >= 0:
+                set elementName to the substring of rest from (gap + 1) spanning ((the length of rest) - (gap + 1)) bytes
+        if (the length of elementName) = 0:
+            set elementName to the string form of "-"
+        append bim property (the string form of "IFC class") showing className as 0 to propertyRows
+        append bim property (the string form of "GlobalId") showing globalId as 0 to propertyRows
+        append bim property (the string form of "Name") showing elementName as 0 to propertyRows
+        set storeyText to the string form of "(none)"
+        set levelText to the string form of ""
+        set storeyOf to importValue's storeys's ofElements's values
+        if importIndex < (the length of storeyOf):
+            set storeyIndex to the item at importIndex in storeyOf
+            if (storeyIndex >= 0) and (storeyIndex < (the length of (importValue's storeys's names's values))):
+                set storeyText to the item at storeyIndex in (importValue's storeys's names's values)
+                set levelText to the bim length (the item at storeyIndex in (importValue's storeys's elevations's values)) in units editor's lengthUnit
+        append bim property (the string form of "Storey") showing storeyText as 0 to propertyRows
+        if (the length of levelText) > 0:
+            append bim property (the string form of "Storey elevation") showing levelText as 0 to propertyRows
+        append bim property (the string form of "Editing") showing (the string form of "read only (imported)") as 0 to propertyRows
+        return propertyRows
+
+# The view whose properties show while the tab of `tabKind` with `detail` is
+# active and nothing is selected: a plan's or a section's own, the 3D view's
+# for the 3D tab; the refused id for a sheet or a schedule.
+function the bim view shown by tab {integer:tabKind} showing {a 64 bit integer:detail} in {bim model record:modelValue}:
+    execute:
+        if (tabKind = bim plan tab) or (tabKind = bim section tab):
+            return detail
+        if tabKind = bim model tab:
+            loop cursor from 0 to the length of (modelValue's views's values):
+                set viewValue to the item at cursor in (modelValue's views's values)
+                if (viewValue's kind = bim model view kind) and (viewValue's detail = (0 as a 64 bit integer)):
+                    return viewValue's id
+        return the bim refused id
+
+# ---------------------------------------------------------------- sheets
+
+# Where sheet point `spot` (millimetres from the lower left corner) lands in
+# a pane whose sheet's lower left corner is at `corner`, `perMillimetre`
+# pixels to the millimetre.
+function the bim sheet pixel of {cad vector2:spot} from {cad vector2:corner} at {a 64 bit floating-point number:perMillimetre}:
+    execute:
+        return a cad vector2 with x (corner's x + (spot's x * perMillimetre)) and y (corner's y - (spot's y * perMillimetre))
+
+function append bim sheet rectangle from {cad vector2:low} to {cad vector2:high} from {cad vector2:corner} at {a 64 bit floating-point number:perMillimetre} into {a pointer to a list:pairs}:
+    execute:
+        set a to the bim sheet pixel of low from corner at perMillimetre
+        set b to the bim sheet pixel of (a cad vector2 with x high's x and y low's y) from corner at perMillimetre
+        set c to the bim sheet pixel of high from corner at perMillimetre
+        set d to the bim sheet pixel of (a cad vector2 with x low's x and y high's y) from corner at perMillimetre
+        append a to pairs
+        append b to pairs
+        append b to pairs
+        append c to pairs
+        append c to pairs
+        append d to pairs
+        append d to pairs
+        append a to pairs
+
+# A schedule on a sheet: its rows as a table hanging from `topLeft` (sheet
+# millimetres), 180 mm wide; a title row, a header and 6 mm per row.
+function record bim schedule table {bim view definition record:viewValue} at {cad vector2:topLeft} of {bim editor record:editor} from {cad vector2:corner} at {a 64 bit floating-point number:perMillimetre} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set allRows to the bim schedule of editor's documentValue's current with editor's evaluation and (editor's spaces's values)
+        set shownRows to the bim rows of (allRows's values) in schedule (viewValue's detail as an integer)
+        set tableWidth to 180.0
+        set rowHeight to 6.0
+        set columns to an empty list of a 64 bit floating-point number
+        append 0.0 to columns
+        append 32.0 to columns
+        append 110.0 to columns
+        append 128.0 to columns
+        append 146.0 to columns
+        append 164.0 to columns
+        set lines to an empty list of a cad vector2
+        set top to topLeft's y
+        set titleAt to the bim sheet pixel of (a cad vector2 with x topLeft's x and y (top - 6.0)) from corner at perMillimetre
+        record bim text viewValue's name at titleAt's x and titleAt's y coloured 0, 0 and 0 on canvas
+        set headerTop to top - 9.0
+        set rowCount to (the length of (shownRows's values)) + 1
+        set tableBottom to headerTop - ((rowCount as a 64 bit floating-point number) * rowHeight)
+        append bim sheet rectangle from (a cad vector2 with x topLeft's x and y tableBottom) to (a cad vector2 with x (topLeft's x + tableWidth) and y headerTop) from corner at perMillimetre into lines
+        loop rowCursor from 0 to rowCount:
+            set rowTop to headerTop - ((rowCursor as a 64 bit floating-point number) * rowHeight)
+            append (the bim sheet pixel of (a cad vector2 with x topLeft's x and y rowTop) from corner at perMillimetre) to lines
+            append (the bim sheet pixel of (a cad vector2 with x (topLeft's x + tableWidth) and y rowTop) from corner at perMillimetre) to lines
+        loop columnCursor from 1 to the length of columns:
+            append (the bim sheet pixel of (a cad vector2 with x (topLeft's x + (the item at columnCursor in columns)) and y headerTop) from corner at perMillimetre) to lines
+            append (the bim sheet pixel of (a cad vector2 with x (topLeft's x + (the item at columnCursor in columns)) and y tableBottom) from corner at perMillimetre) to lines
+        record bim strokes lines coloured 0, 0 and 0 wide 0.8 on canvas
+        free lines
+        set headers to an empty list of a string
+        append (the string form of "Element") to headers
+        append (the string form of "Type") to headers
+        append (the string form of "Count") to headers
+        append (the string form of "m") to headers
+        append (the string form of "m2") to headers
+        append (the string form of "m3") to headers
+        loop columnCursor from 0 to the length of headers:
+            set cellAt to the bim sheet pixel of (a cad vector2 with x ((topLeft's x + (the item at columnCursor in columns)) + 1.5) and y (headerTop - 4.5)) from corner at perMillimetre
+            record bim text (the item at columnCursor in headers) at cellAt's x and cellAt's y coloured 0, 0 and 0 on canvas
+        free headers
+        loop rowCursor from 0 to the length of (shownRows's values):
+            set row to the item at rowCursor in (shownRows's values)
+            set baseline to (headerTop - (((rowCursor + 1) as a 64 bit floating-point number) * rowHeight)) - 4.5
+            set cells to an empty list of a string
+            append row's group to cells
+            append row's name to cells
+            append (the string form of row's count) to cells
+            append (the bim schedule text of row's length) to cells
+            append (the bim schedule text of row's area) to cells
+            append (the bim schedule text of row's volume) to cells
+            loop columnCursor from 0 to the length of cells:
+                set cellAt to the bim sheet pixel of (a cad vector2 with x ((topLeft's x + (the item at columnCursor in columns)) + 1.5) and y baseline) from corner at perMillimetre
+                record bim text (the item at columnCursor in cells) at cellAt's x and cellAt's y coloured 0, 0 and 0 on canvas
+            free cells
+        free columns
+
+# Sheet `sheetValue` recorded on `canvas`: its paper, border, title block and
+# each plan view placed on it, drawn as the plan draws it (its storey, rules
+# and cut) at its scale.
+function record bim sheet {bim sheet record:sheetValue} of {bim editor record:editor} among {a pointer to a list:sceneMeshes} from {cad vector2:corner} at {a 64 bit floating-point number:perMillimetre} using {bim text atlas record:typeface} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set sheetSize to the bim size of sheet sheetValue
+        # The paper.
+        set paper to an empty list of a cad vector2
+        set topLeft to the bim sheet pixel of (a cad vector2 with x 0.0 and y sheetSize's y) from corner at perMillimetre
+        set bottomRight to the bim sheet pixel of (a cad vector2 with x sheetSize's x and y 0.0) from corner at perMillimetre
+        append topLeft to paper
+        append (a cad vector2 with x bottomRight's x and y topLeft's y) to paper
+        append bottomRight to paper
+        append topLeft to paper
+        append bottomRight to paper
+        append (a cad vector2 with x topLeft's x and y bottomRight's y) to paper
+        record bim triangles paper coloured 255, 255 and 255 on canvas
+        free paper
+        # The views.
+        loop placedCursor from 0 to the length of (sheetValue's viewports's values):
+            set placed to the item at placedCursor in (sheetValue's viewports's values)
+            set viewFound to the bim view index of placed's viewId in modelValue
+            if viewFound's valid:
+                set viewValue to the item at viewFound's position in (modelValue's views's values)
+                if viewValue's kind = bim schedule view:
+                    record bim schedule table viewValue at placed's centre of editor from corner at perMillimetre on canvas
+                if viewValue's kind = bim plan view:
+                    set levelFound to the bim level index of viewValue's levelId in modelValue
+                    if levelFound's valid:
+                        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                        set shown to editor
+                        set shown's levelId to viewValue's levelId
+                        set shown's planViewId to viewValue's id
+                        set shown's planRules to the bim rules of view viewValue in modelValue
+                        set centrePixel to the bim sheet pixel of placed's centre from corner at perMillimetre
+                        set transform to @intrinsic("construct", a bim drawing transform record, centrePixel, placed's modelCentre, perMillimetre * (1000.0 / (the bim scale of view viewValue's id in modelValue)))
+                        set cutView to the bim view of editor's evaluation cut by (the bim plan plane at elevation cut at viewValue's cutHeight)
+                        draw bim hatched cut faces of cutView for shown through transform as section false following shown's planRules on canvas
+                        draw bim openings in plan of shown through transform on canvas
+                        draw bim grids in plan of shown through transform on canvas
+                        draw bim sketches of shown through transform on canvas using typeface
+                        draw bim linears in plan of shown through transform on canvas
+                        draw bim stairs in plan of shown through transform on canvas
+                        draw bim folded components in plan of shown among sceneMeshes through transform on canvas
+                        draw bim dimensions in plan of shown through transform on canvas
+                        draw bim tags in plan of shown through transform on canvas
+                        # The view's title under its frame.
+                        set placedFrame to the bim frame of viewport placed in modelValue
+                        if placedFrame's valid:
+                            set titlePixel to the bim sheet pixel of (a cad vector2 with x placedFrame's low's x and y (placedFrame's low's y - 8.0)) from corner at perMillimetre
+                            record bim text ((viewValue's name + (the string form of "  1:")) + (the string form of viewValue's scale)) at titlePixel's x and titlePixel's y coloured 0, 0 and 0 on canvas
+        # The border and the title block over the views.
+        set lines to an empty list of a cad vector2
+        append bim sheet rectangle from (a cad vector2 with x 10.0 and y 10.0) to (a cad vector2 with x (sheetSize's x - 10.0) and y (sheetSize's y - 10.0)) from corner at perMillimetre into lines
+        set titleBlock to the bim title block of sheet sheetValue
+        append bim sheet rectangle from titleBlock's low to titleBlock's high from corner at perMillimetre into lines
+        set rowSplit to titleBlock's low's y + 20.0
+        append (the bim sheet pixel of (a cad vector2 with x titleBlock's low's x and y rowSplit) from corner at perMillimetre) to lines
+        append (the bim sheet pixel of (a cad vector2 with x titleBlock's high's x and y rowSplit) from corner at perMillimetre) to lines
+        record bim strokes lines coloured 0, 0 and 0 wide 1.2 on canvas
+        free lines
+        set nameAt to the bim sheet pixel of (a cad vector2 with x (titleBlock's low's x + 4.0) and y (titleBlock's high's y - 7.0)) from corner at perMillimetre
+        record bim text sheetValue's name at nameAt's x and nameAt's y coloured 0, 0 and 0 on canvas
+        set numberAt to the bim sheet pixel of (a cad vector2 with x (titleBlock's low's x + 4.0) and y (rowSplit - 7.0)) from corner at perMillimetre
+        record bim text ((the string form of "Sheet ") + sheetValue's number) at numberAt's x and numberAt's y coloured 0, 0 and 0 on canvas
+        set projectAt to the bim sheet pixel of (a cad vector2 with x (titleBlock's low's x + 100.0) and y (rowSplit - 7.0)) from corner at perMillimetre
+        record bim text (the string form of "Open BIM Studio") at projectAt's x and projectAt's y coloured 90, 90 and 90 on canvas
+
+# ---------------------------------------------------------------- view tabs
+
+# The kinds of view a tab shows.
+function bim plan tab:
+    replacement:
+        0
+
+function bim model tab:
+    replacement:
+        1
+
+function bim section tab:
+    replacement:
+        2
+
+function bim schedule tab:
+    replacement:
+        3
+
+function bim sheet tab:
+    replacement:
+        4
+
+# Tiled, the height of the caption above each view, naming it.
+function the bim pane caption height:
+    replacement:
+        22.0
+
+# The caption of a tiled view across `left` to `right` at `top`: its name,
+# marked when it is the active view.
+function draw bim pane caption {a string:caption} from {a 64 bit floating-point number:left} to {a 64 bit floating-point number:right} at {a 64 bit floating-point number:top} active {boolean:isActive} using {bim text atlas record:typeface} in {graphics frame:frame}:
+    execute:
+        draw a rectangle at x left and y top with width (right - left) and height (the bim pane caption height) in color red 236, green 239 and blue 244 in frame
+        if isActive:
+            draw a rectangle at x left and y ((top + (the bim pane caption height)) - 2.0) with width (right - left) and height 2 in color red 0, green 120 and blue 215 in frame
+            draw bim text caption at (left + 10.0) and (top + 16.0) in face (bim text bold) with typeface coloured 25, 30 and 40 in frame
+        else:
+            draw bim text caption at (left + 10.0) and (top + 16.0) in face (bim text small) with typeface coloured 70, 76 and 88 in frame
+        draw a rectangle at x left and y ((top + (the bim pane caption height)) - 1.0) with width (right - left) and height 1 in color red 200, green 206 and blue 216 in frame
+
+# The height of the tab bar above the drawing.
+function the bim tab bar height:
+    replacement:
+        26.0
+
+function the bim tab label of kind {integer:tabKind} detail {a 64 bit integer:detail} for {bim editor record:editor}:
+    execute:
+        if tabKind = bim plan tab:
+            set found to the bim view index of detail in editor's documentValue's current
+            if found's valid:
+                return (the string form of "Plan: ") + (the item at found's position in (editor's documentValue's current's views's values))'s name
+            return the string form of "Plan"
+        if tabKind = bim model tab:
+            return the string form of "3D"
+        if tabKind = bim section tab:
+            set sectionFound to the bim view index of detail in editor's documentValue's current
+            if sectionFound's valid:
+                return (the item at sectionFound's position in (editor's documentValue's current's views's values))'s name
+            return the string form of "Section"
+        if tabKind = bim sheet tab:
+            set sheetFound to the bim sheet index of detail in editor's documentValue's current
+            if sheetFound's valid:
+                set sheetValue to the item at sheetFound's position in (editor's documentValue's current's sheets's values)
+                return (sheetValue's number + (the string form of " ")) + sheetValue's name
+            return the string form of "Sheet"
+        return (the string form of "Schedule: ") + (the bim schedule name of (detail as an integer))
+
+# The tab of `tabKind` with `detail` among the open tabs, or -1.
+function the bim tab of kind {integer:tabKind} detail {a 64 bit integer:detail} among {a pointer to a list:kinds} and {a pointer to a list:details}:
+    execute:
+        loop cursor from 0 to the length of kinds:
+            if ((the item at cursor in kinds) = tabKind) and ((tabKind = bim model tab) or ((the item at cursor in details) = detail)):
+                return cursor
+        return -1
+
+# The left edges of the tabs, and after the last its right edge, in pixels.
+function the bim tab edges of {a pointer to a list:kinds} and {a pointer to a list:details} for {bim editor record:editor} from {a 64 bit floating-point number:left} using {bim text atlas record:typeface}:
+    execute:
+        set boundaries to an empty list of a 64 bit floating-point number
+        set x to left
+        loop cursor from 0 to the length of kinds:
+            append x to boundaries
+            set tabText to the bim tab label of kind (the item at cursor in kinds) detail (the item at cursor in details) for editor
+            set x to x + ((the bim text width of tabText in face (bim text small) of typeface) + 44.0)
+        append x to boundaries
+        return boundaries
+
+function the bim tool name of {integer:tool}:
+    execute:
+        if tool = bim zoom region tool:
+            return the string form of "Zoom region (ZR)"
+        if tool = bim linear tool:
+            return the string form of "Linear element (column, beam, mullion, skirting, pipe)"
+        if tool = bim dimension tool:
+            return the string form of "Dimension (DI)"
+        if tool = bim curtain tool:
+            return the string form of "Building system (CW)"
+        if tool = bim railing tool:
+            return the string form of "Railing (RL; RS on a selected stair)"
+        if tool = bim stair tool:
+            return the string form of "Stair (ST)"
+        if tool = bim crop tool:
+            return the string form of "Crop view (CV; UC uncrops)"
+        if tool = bim tag tool:
+            return the string form of "Tag (TG, TA all windows and doors)"
+        if tool = bim solid tool:
+            return the string form of "Solid part (BX box, CY cylinder, SH sphere)"
+        if tool = bim wall tool:
+            return the string form of "Wall (W)"
+        if tool = bim opening tool:
+            return the string form of "Opening (O window, D door)"
+        if tool = bim section tool:
+            return the string form of "Section (C)"
+        if tool = bim grid tool:
+            return the string form of "Grid (I)"
+        if tool = bim line tool:
+            return the string form of "Line (N)"
+        if tool = bim rectangle tool:
+            return the string form of "Rectangle (R)"
+        if tool = bim push tool:
+            return the string form of "Push/pull (P)"
+        if tool = bim text tool:
+            return the string form of "Text (Ctrl+T)"
+        if tool = bim move tool:
+            return the string form of "Move (M, G)"
+        if tool = bim copy tool:
+            return the string form of "Copy (CO)"
+        if tool = bim rotate tool:
+            return the string form of "Rotate (RO)"
+        if tool = bim mirror tool:
+            return the string form of "Mirror (MM)"
+        if tool = bim offset tool:
+            return the string form of "Offset (OF)"
+        if tool = bim trim tool:
+            return the string form of "Trim (TR)"
+        if tool = bim align tool:
+            return the string form of "Align (AL)"
+        if tool = bim extend tool:
+            return the string form of "Extend (EX)"
+        if tool = bim place tool:
+            return the string form of "Place component (Ctrl+I)"
+        return the string form of "Select (S)"

@@ -197,7 +197,20 @@ without a number.
   capped section clipping.
 - **Pass:** 60 fps with picking, reached in under two weeks of effort.
 - **Fail:** below 30 fps, or the effort estimate exceeds a month.
-- **Status:** open
+- **Status:** open — `spikes/renderer-scale/` has not been run. **Partial evidence (2026-10-15)**
+  from a different spike, [`spikes/dynlex-bim-slice/FINDINGS.md`](../spikes/dynlex-bim-slice/FINDINGS.md)
+  §A real building, which draws a real building through its own Vulkan renderer written in DynLex:
+  16,506 imported elements, 1,668,688 triangles, each element selectable by an ordinal carried in
+  its vertices. *Measured* there: the wireframe frame on the whole model takes 21.5 ms of CPU time
+  (80 ms before its edges moved to the GPU), and while zooming a 130,944-triangle storey 74 of 83
+  stack samples wait on the GPU or the display. **Added (2026-10-16)**, §The 3D view in slots: an
+  imported element made of one IFC mapped item is drawn as an instance of its shape (*measured* on
+  Sixty5: 5,719 meshes, 1,096,799 of 1,627,128 triangles, as instances of 362 shapes); the section
+  box is a cut in the fragment shaders and storey isolation a flag per element, so neither writes
+  the mesh again. It still does **not** test this criterion: the instances are imported elements,
+  not 100k generated ones; the cut is not capped; picking time and GPU frame time were not
+  measured, the fps figure the criterion names was not taken, and the effort was not recorded in a
+  form that answers "under two weeks".
 
 ### R-16 · Boolean robustness — ours and theirs
 No boolean algorithm is trusted until it survives the torture set. The same set measures the
@@ -377,6 +390,16 @@ per-frame transient arena holds at most 25,890 boxes, against a 10⁵-box target
 - **Fail:** below 30 fps, or coordinate error above 1e-2 m.
 - **Status:** open — named in `renderers/gpu-paths.md` §Risks as the measured counterpart that note's
   own arithmetic does not substitute for.
+
+  **The precondition is met, the experiment is not run (2026-10-15).** The DynLex compiler is built
+  and runs a Vulkan renderer in [`spikes/dynlex-bim-slice/`](../spikes/dynlex-bim-slice/FINDINGS.md):
+  its own context (`overlay/lib/vulkan/context.dl`) replaces the fixed per-frame arena with a growing
+  stream buffer, and keeps a persistent indexed mesh whose vertices are stored relative to the
+  scene's centre, with the centre-minus-camera shift computed in binary64 on the CPU and passed as
+  shader parameters. After this session's changes a camera change uploads no mesh data; that is by
+  construction, read from the code, not a measured byte count. The figures measured there (see R-04)
+  are for one scene origin and no instance buffer, so they say nothing yet about the per-tile
+  instance layout, the 500 km coordinate error, or 10⁵ instances — which is still this spike.
 
 ---
 

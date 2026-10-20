@@ -1,0 +1,726 @@
+# SPDX-License-Identifier: MPL-2.0
+# IfcX in a compact binary encoding, the editor's own file (.ifcxb): the
+# JSON document of `bim_ifcx.dl` as CBOR (RFC 8949), compressed with gzip
+# (zlib, which every system has). Only registered CBOR features are used, so
+# `gunzip` and any CBOR reader turn the file back into that JSON:
+#
+# - the CBOR starts with the self-described CBOR tag (55799, the bytes
+#   D9 D9 F7), which tells it apart from JSON text;
+# - one string reference namespace (tag 256) covers the document: a text met
+#   again (a key, a path, a material) is written as a reference (tag 25) to
+#   its first appearance, by the rules of the CBOR string reference
+#   extension;
+# - a whole number is a CBOR integer;
+# - any other number takes the shortest of a single float (when it is
+#   exact), a decimal fraction (tag 4, [exponent, mantissa], from the
+#   shortest decimal text that reads back to the same binary64) and a double.
+#
+# Reading gives the same JSON values back, each number with the shortest text
+# that reads back to its value, so the IfcX reading of `bim_ifcx_read.dl`
+# goes on unchanged. Reading takes a file compressed or not, and accepts half
+# floats, indefinite lengths and unknown tags (passed over) besides; byte
+# strings, which JSON has no form for, are refused.
+import examples/bim-slice/bim_file.dl
+import lib/json.dl
+
+# ---------------------------------------------------------------- writing
+
+# Bytes being written, and the texts a later reference can name.
+class:
+    patterns:
+        [a|] bim cbor writer record
+    members:
+        bytes as a string
+        length as an integer
+        texts as the type of (a cad topology list of a string)
+        slots as the type of (a cad topology list of an integer)
+
+# The FNV-1a hash of `label`, for the text index.
+local function the bim cbor hash of {a string:label}:
+    execute:
+        set digest to 14695981039346656037 as a 64 bit unsigned integer
+        loop cursor from 0 to the length of label:
+            set code to (((the character at cursor in label) as a 32 bit integer) bitwise and 255) as a 64 bit unsigned integer
+            set digest to (digest bitwise xor code) * (1099511628211 as a 64 bit unsigned integer)
+        return (digest shifted right by (1 as a 64 bit unsigned integer)) as a 64 bit integer
+
+local function make room for {integer:wanted} more bytes in {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set capacity to the length of (writer's bytes)
+        if (writer's length + wanted) <= capacity:
+            return nothing
+        loop while (writer's length + wanted) > capacity:
+            set capacity to capacity * 2
+        set grown to a new string buffer containing capacity bytes
+        ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the data of grown, the data of (writer's bytes), (writer's length) as a word sized integer)
+        set writer's bytes to grown
+
+local function put bim cbor byte {integer:code} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        make room for 1 more bytes in writer
+        store (code as a byte) into the data of (writer's bytes) at (writer's length)
+        set writer's length to writer's length + 1
+
+# `amount` as `count` bytes, most significant first.
+local function put bim cbor {a 64 bit unsigned integer:amount} in {integer:count} bytes into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        loop place from 0 to count:
+            set shift to ((count - 1) - place) * 8
+            put bim cbor byte (((amount shifted right by (shift as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+
+# The bytes a head with argument `amount` takes.
+function the bim cbor head size of {a 64 bit unsigned integer:amount}:
+    execute:
+        if amount < (24 as a 64 bit unsigned integer):
+            return 1
+        if amount < (256 as a 64 bit unsigned integer):
+            return 2
+        if amount < (65536 as a 64 bit unsigned integer):
+            return 3
+        if amount < (4294967296 as a 64 bit unsigned integer):
+            return 5
+        return 9
+
+# A head: the major type and its argument in the fewest bytes.
+local function put bim cbor head {integer:major} with {a 64 bit unsigned integer:amount} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set top to major * 32
+        set size to the bim cbor head size of amount
+        if size = 1:
+            put bim cbor byte (top + (amount as an integer)) into writer
+        else if size = 2:
+            put bim cbor byte (top + 24) into writer
+            put bim cbor amount in 1 bytes into writer
+        else if size = 3:
+            put bim cbor byte (top + 25) into writer
+            put bim cbor amount in 2 bytes into writer
+        else if size = 5:
+            put bim cbor byte (top + 26) into writer
+            put bim cbor amount in 4 bytes into writer
+        else:
+            put bim cbor byte (top + 27) into writer
+            put bim cbor amount in 8 bytes into writer
+
+# The CBOR argument of the whole number `whole` (for a negative one, minus
+# one minus it).
+local function the bim cbor argument of whole {a 64 bit integer:signedValue}:
+    execute:
+        if signedValue >= (0 as a 64 bit integer):
+            return signedValue as a 64 bit unsigned integer
+        return (((0 - 1) as a 64 bit integer) - signedValue) as a 64 bit unsigned integer
+
+local function put bim cbor whole {a 64 bit integer:signedValue} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        if signedValue >= (0 as a 64 bit integer):
+            put bim cbor head 0 with (signedValue as a 64 bit unsigned integer) into writer
+        else:
+            put bim cbor head 1 with (the bim cbor argument of whole signedValue) into writer
+
+# Whether a text of `size` bytes enters the reference table when it already
+# holds `count` texts: when a reference to it would be no longer than the
+# text (the CBOR string reference rule).
+function bim cbor text of {integer:size} bytes is referable after {integer:count}:
+    execute:
+        if count < 24:
+            return size >= 3
+        if count < 256:
+            return size >= 4
+        if count < 65536:
+            return size >= 5
+        return size >= 7
+
+# The table position of `label`, or -1.
+local function the bim cbor reference of {a string:label} in {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set capacity to the length of (writer's slots's values)
+        set slot to (the remainder of (the bim cbor hash of label) divided by (capacity as a 64 bit integer)) as an integer
+        loop while true:
+            set held to the item at slot in (writer's slots's values)
+            if held < 0:
+                return -1
+            if (the item at held in (writer's texts's values)) = label:
+                return held
+            set slot to the remainder of (slot + 1) divided by capacity
+        return -1
+
+local function index bim cbor text {integer:position} in {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set capacity to the length of (writer's slots's values)
+        set slot to (the remainder of (the bim cbor hash of (the item at position in (writer's texts's values))) divided by (capacity as a 64 bit integer)) as an integer
+        loop while (the item at slot in (writer's slots's values)) >= 0:
+            set slot to the remainder of (slot + 1) divided by capacity
+        replace item at index slot in (writer's slots's values) with position
+
+local function remember bim cbor text {a string:label} in {a pointer to a bim cbor writer record:writer}:
+    execute:
+        append label to (writer's texts's values)
+        set count to the length of (writer's texts's values)
+        if (count * 2) <= (the length of (writer's slots's values)):
+            index bim cbor text (count - 1) in writer
+            return nothing
+        set wanted to (the length of (writer's slots's values)) * 2
+        set writer's slots to a cad topology list of an integer
+        loop cursor from 0 to wanted:
+            append -1 to (writer's slots's values)
+        loop cursor from 0 to count:
+            index bim cbor text cursor in writer
+
+# A text: a reference when it was written before, else its bytes.
+local function put bim cbor text {a string:label} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set known to the bim cbor reference of label in writer
+        if known >= 0:
+            put bim cbor byte 216 into writer
+            put bim cbor byte 25 into writer
+            put bim cbor head 0 with (known as a 64 bit unsigned integer) into writer
+            return nothing
+        if bim cbor text of (the length of label) bytes is referable after (the length of (writer's texts's values)):
+            remember bim cbor text label in writer
+        put bim cbor head 3 with ((the length of label) as a 64 bit unsigned integer) into writer
+        make room for (the length of label) more bytes in writer
+        ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, (the data of (writer's bytes)) + (writer's length), the data of label, (the length of label) as a word sized integer)
+        set writer's length to writer's length + (the length of label)
+
+# `token` as a NUL-terminated copy, for the C number parsers.
+local function the bim cbor terminated copy of {a string:token}:
+    execute:
+        set buffer to a new string buffer containing (the length of token) bytes
+        copy token into (the data of buffer) at offset 0
+        store (0 as a byte) into the data of buffer at (the length of token)
+        return buffer
+
+local function the bim cbor real of text {a string:token}:
+    execute:
+        set nulEnded to the bim cbor terminated copy of token
+        return @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of nulEnded, 0 as a pointer)
+
+local function the bim cbor printed {a 64 bit floating-point number:amount} in {integer:precision} digits:
+    execute:
+        set buffer to a new string buffer containing 40 bytes
+        set written to 0
+        if precision <= 15:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.15g", amount)
+        else if precision = 16:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.16g", amount)
+        else:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.17g", amount)
+        return the substring of buffer from 0 spanning written bytes
+
+# The shortest decimal text (of 15, 16 or 17 significant digits) that reads
+# back to `amount`.
+function the bim shortest text of {a 64 bit floating-point number:amount}:
+    execute:
+        loop precision from 15 to 18:
+            set candidate to the bim cbor printed amount in precision digits
+            if (the bim cbor real of text candidate) = amount:
+                return candidate
+        return the bim cbor printed amount in 17 digits
+
+# A number as mantissa times ten to the exponent; invalid when the mantissa
+# has more than 18 digits.
+class:
+    patterns:
+        [a|] bim cbor decimal record
+    members:
+        valid as a boolean
+        mantissa as a 64 bit integer
+        exponent as a 64 bit integer
+
+# The decimal fraction a number text (as C prints it) spells.
+function the bim cbor decimal of {a string:numberText}:
+    execute:
+        set failure to @intrinsic("construct", a bim cbor decimal record, false, 0 as a 64 bit integer, 0 as a 64 bit integer)
+        set cursor to 0
+        set negative to false
+        if (the length of numberText) > 0:
+            if (the character at 0 in numberText) = 45:
+                set negative to true
+                set cursor to 1
+        set mantissa to 0 as a 64 bit integer
+        set significant to 0
+        set fraction to 0
+        set afterPoint to false
+        set scanning to true
+        loop while scanning and (cursor < (the length of numberText)):
+            set code to the character at cursor in numberText
+            if code = 46:
+                set afterPoint to true
+                set cursor to cursor + 1
+            else if (code >= 48) and (code <= 57):
+                if (significant > 0) or (code != 48):
+                    set significant to significant + 1
+                    if significant > 18:
+                        return failure
+                    set mantissa to (mantissa * (10 as a 64 bit integer)) + ((code - 48) as a 64 bit integer)
+                if afterPoint:
+                    set fraction to fraction + 1
+                set cursor to cursor + 1
+            else:
+                set scanning to false
+        set power to 0 as a 64 bit integer
+        if cursor < (the length of numberText):
+            set code to the character at cursor in numberText
+            if (code != 101) and (code != 69):
+                return failure
+            set cursor to cursor + 1
+            set powerNegative to false
+            if cursor < (the length of numberText):
+                if (the character at cursor in numberText) = 45:
+                    set powerNegative to true
+                    set cursor to cursor + 1
+                else if (the character at cursor in numberText) = 43:
+                    set cursor to cursor + 1
+            loop while cursor < (the length of numberText):
+                set code to the character at cursor in numberText
+                if (code < 48) or (code > 57):
+                    return failure
+                set power to (power * (10 as a 64 bit integer)) + ((code - 48) as a 64 bit integer)
+                set cursor to cursor + 1
+            if powerNegative:
+                set power to (0 as a 64 bit integer) - power
+        set power to power - (fraction as a 64 bit integer)
+        if mantissa = (0 as a 64 bit integer):
+            set power to 0 as a 64 bit integer
+        loop while (mantissa != (0 as a 64 bit integer)) and ((the remainder of mantissa divided by (10 as a 64 bit integer)) = (0 as a 64 bit integer)):
+            set mantissa to mantissa / (10 as a 64 bit integer)
+            set power to power + (1 as a 64 bit integer)
+        if negative:
+            set mantissa to (0 as a 64 bit integer) - mantissa
+        return @intrinsic("construct", a bim cbor decimal record, true, mantissa, power)
+
+# A number that is not whole: the shortest of a single float (when exact), a
+# decimal fraction and a double.
+local function put bim cbor real {a 64 bit floating-point number:amount} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set finite to (amount = amount) and ((the absolute value of amount) < 1e308)
+        if finite and ((the absolute value of amount) < 9007199254740992.0):
+            if (the floor of amount) = amount:
+                put bim cbor whole (amount as a 64 bit integer) into writer
+                return nothing
+        set bestSize to 9
+        set choice to 0
+        set narrow to amount as a 32 bit floating-point number
+        if finite and ((narrow as a 64 bit floating-point number) = amount):
+            set bestSize to 5
+            set choice to 1
+        set fractionForm to the bim cbor decimal of (the bim shortest text of amount)
+        if finite and fractionForm's valid:
+            set decimalSize to (2 + (the bim cbor head size of (the bim cbor argument of whole fractionForm's exponent))) + (the bim cbor head size of (the bim cbor argument of whole fractionForm's mantissa))
+            if decimalSize < bestSize:
+                set bestSize to decimalSize
+                set choice to 2
+        if choice = 2:
+            put bim cbor byte 196 into writer
+            put bim cbor byte 130 into writer
+            put bim cbor whole fractionForm's exponent into writer
+            put bim cbor whole fractionForm's mantissa into writer
+        else if choice = 1:
+            set narrowBits to 0 as a 32 bit unsigned integer
+            ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the address of narrowBits, the address of narrow, 4 as a word sized integer)
+            put bim cbor byte 250 into writer
+            put bim cbor (narrowBits as a 64 bit unsigned integer) in 4 bytes into writer
+        else:
+            set wideBits to 0 as a 64 bit unsigned integer
+            ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the address of wideBits, the address of amount, 8 as a word sized integer)
+            put bim cbor byte 251 into writer
+            put bim cbor wideBits in 8 bytes into writer
+
+# A JSON number, from its text: a whole number as an integer, any other by
+# `put bim cbor real`.
+local function put bim cbor number {a pointer to a JSON value:node} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set lexeme to the text of node
+        if (JSON number node has an integer lexeme) and ((the length of lexeme) <= 18):
+            set nulEnded to the bim cbor terminated copy of lexeme
+            put bim cbor whole (@intrinsic("call", "libc", "strtoll", a 64 bit integer, the data of nulEnded, 0 as a pointer, 10)) into writer
+            return nothing
+        put bim cbor real (the bim cbor real of text lexeme) into writer
+
+local function put bim cbor value {a pointer to a JSON value:node} into {a pointer to a bim cbor writer record:writer}:
+    execute:
+        set kind to the kind of node
+        if kind = the JSON null kind:
+            put bim cbor byte 246 into writer
+        else if kind = the JSON boolean kind:
+            if the boolean of node:
+                put bim cbor byte 245 into writer
+            else:
+                put bim cbor byte 244 into writer
+        else if kind = the JSON number kind:
+            put bim cbor number node into writer
+        else if kind = the JSON text kind:
+            put bim cbor text (the text of node) into writer
+        else if kind = the JSON array kind:
+            put bim cbor head 4 with ((the length of node) as a 64 bit unsigned integer) into writer
+            loop cursor from 0 to the length of node:
+                put bim cbor value (the JSON value at index cursor in node) into writer
+        else:
+            put bim cbor head 5 with ((the length of node) as a 64 bit unsigned integer) into writer
+            loop cursor from 0 to the length of node:
+                set entry to the item at cursor in (node's members)
+                put bim cbor text entry's name into writer
+                put bim cbor value entry's value into writer
+
+# The binary encoding of the JSON text `jsonText` (an IfcX document);
+# invalid when the text is not JSON.
+function the bim cbor ifcx of {a string:jsonText}:
+    execute:
+        set parsed to the JSON document parsed from jsonText
+        if parsed failed:
+            return @intrinsic("construct", a bim text reading record, false, the string form of "")
+        set writerValue to @intrinsic("construct", a bim cbor writer record, a new string buffer containing 4096 bytes, 0, a cad topology list of a string, a cad topology list of an integer)
+        set writer to the address of writerValue
+        loop cursor from 0 to 1024:
+            append -1 to (writer's slots's values)
+        # The self-described CBOR tag, then the string reference namespace.
+        put bim cbor byte 217 into writer
+        put bim cbor byte 217 into writer
+        put bim cbor byte 247 into writer
+        put bim cbor byte 217 into writer
+        put bim cbor byte 1 into writer
+        put bim cbor byte 0 into writer
+        put bim cbor value (the value of parsed) into writer
+        free parsed
+        return @intrinsic("construct", a bim text reading record, true, the substring of (writer's bytes) from 0 spanning (writer's length) bytes)
+
+# Whether `content` is binary IfcX (it starts with the self-described CBOR
+# tag).
+function bim content {a string:fileText} is binary ifcx:
+    execute:
+        if (the length of fileText) < 3:
+            return false
+        set first to ((the character at 0 in fileText) as a 32 bit integer) bitwise and 255
+        set second to ((the character at 1 in fileText) as a 32 bit integer) bitwise and 255
+        set third to ((the character at 2 in fileText) as a 32 bit integer) bitwise and 255
+        return ((first = 217) and (second = 217)) and (third = 247)
+
+# Writes `content` to the file at `path` compressed with gzip; false when
+# it cannot be written.
+function write bim compressed text {a string:content} to file {a string:path}:
+    execute:
+        set cPath to the bim cbor terminated copy of path
+        set handle to @intrinsic("call", ":libz.so.1", "gzopen", a pointer to a byte, the data of cPath, "wb9")
+        if handle = (0 as a pointer to a byte):
+            return false
+        set written to 0
+        if (the length of content) > 0:
+            set written to @intrinsic("call", ":libz.so.1", "gzwrite", integer, handle, the data of content, the length of content)
+        set closed to @intrinsic("call", ":libz.so.1", "gzclose", integer, handle)
+        return (written = (the length of content)) and (closed = 0)
+
+# The whole content of the file at `path`, uncompressed when it is gzip
+# (else as it is); invalid when it cannot be read, or is cut short.
+function the bim uncompressed content at {a string:path}:
+    execute:
+        set failure to @intrinsic("construct", a bim text reading record, false, the string form of "")
+        set cPath to the bim cbor terminated copy of path
+        set handle to @intrinsic("call", ":libz.so.1", "gzopen", a pointer to a byte, the data of cPath, "rb")
+        if handle = (0 as a pointer to a byte):
+            return failure
+        set pieces to an empty list of a string
+        set chunk to a new string buffer containing 1048576 bytes
+        set total to 0
+        set reading to true
+        set broken to false
+        loop while reading:
+            set got to @intrinsic("call", ":libz.so.1", "gzread", integer, handle, the data of chunk, 1048576)
+            if got < 0:
+                set broken to true
+                set reading to false
+            else if got = 0:
+                set reading to false
+            else if (total + got) > (the maximum string buffer length):
+                set broken to true
+                set reading to false
+            else:
+                append (the substring of chunk from 0 spanning got bytes) to pieces
+                set total to total + got
+        set closed to @intrinsic("call", ":libz.so.1", "gzclose", integer, handle)
+        if broken or (closed != 0):
+            free pieces
+            return failure
+        set joined to pieces joined with ""
+        free pieces
+        return @intrinsic("construct", a bim text reading record, true, joined)
+
+# ---------------------------------------------------------------- reading
+
+# Bytes being read: the position, the first fault's position (-1 while
+# there is none), the reference table and where its namespace starts.
+class:
+    patterns:
+        [a|] bim cbor reader record
+    members:
+        bytes as a string
+        position as an integer
+        fault as an integer
+        texts as the type of (a cad topology list of a string)
+        base as an integer
+
+local function mark bim cbor fault in {a pointer to a bim cbor reader record:reader}:
+    execute:
+        if reader's fault < 0:
+            set reader's fault to reader's position
+
+local function the next bim cbor byte of {a pointer to a bim cbor reader record:reader}:
+    execute:
+        if reader's position >= (the length of (reader's bytes)):
+            mark bim cbor fault in reader
+            return 0
+        set code to ((the character at (reader's position) in (reader's bytes)) as a 32 bit integer) bitwise and 255
+        set reader's position to reader's position + 1
+        return code as an integer
+
+local function the next {integer:count} bim cbor bytes of {a pointer to a bim cbor reader record:reader}:
+    execute:
+        set amount to 0 as a 64 bit unsigned integer
+        loop place from 0 to count:
+            set amount to (amount shifted left by (8 as a 64 bit unsigned integer)) bitwise or ((the next bim cbor byte of reader) as a 64 bit unsigned integer)
+        return amount
+
+# The argument of a head whose low five bits are `info`.
+local function the bim cbor argument after {integer:info} in {a pointer to a bim cbor reader record:reader}:
+    execute:
+        if info < 24:
+            return info as a 64 bit unsigned integer
+        if info = 24:
+            return the next 1 bim cbor bytes of reader
+        if info = 25:
+            return the next 2 bim cbor bytes of reader
+        if info = 26:
+            return the next 4 bim cbor bytes of reader
+        if info = 27:
+            return the next 8 bim cbor bytes of reader
+        mark bim cbor fault in reader
+        return 0 as a 64 bit unsigned integer
+
+local function a new bim cbor number {a 64 bit floating-point number:amount} spelled {a string:lexeme}:
+    execute:
+        set node to a new JSON value of kind the JSON number kind
+        set the text of node to lexeme
+        set the number of node to amount
+        return node
+
+local function a new bim cbor real {a 64 bit floating-point number:amount}:
+    execute:
+        return a new bim cbor number amount spelled (the bim shortest text of amount)
+
+local function a new bim cbor text {a string:label}:
+    execute:
+        set node to a new JSON value of kind the JSON text kind
+        set the text of node to label
+        return node
+
+# A half float's value.
+local function the bim cbor half {a 64 bit unsigned integer:bits}:
+    execute:
+        set magnitude to (bits bitwise and (32767 as a 64 bit unsigned integer)) as an integer
+        set power to magnitude / 1024
+        set fraction to (the remainder of magnitude divided by 1024) as a 64 bit floating-point number
+        set amount to 0.0
+        if power = 0:
+            set amount to fraction * (2.0 raised to the power of (0.0 - 24.0))
+        else if power = 31:
+            set amount to 1.0 / 0.0
+            if fraction != 0.0:
+                set amount to 0.0 / 0.0
+        else:
+            set amount to (1024.0 + fraction) * (2.0 raised to the power of ((power - 25) as a 64 bit floating-point number))
+        if (bits bitwise and (32768 as a 64 bit unsigned integer)) != (0 as a 64 bit unsigned integer):
+            set amount to 0.0 - amount
+        return amount
+
+# The text of a definite text string of `size` bytes at the reading place.
+local function the bim cbor text of {a 64 bit unsigned integer:size} bytes in {a pointer to a bim cbor reader record:reader}:
+    execute:
+        if size > (((the length of (reader's bytes)) - (reader's position)) as a 64 bit unsigned integer):
+            mark bim cbor fault in reader
+            return the string form of ""
+        set label to the substring of (reader's bytes) from (reader's position) spanning (size as an integer) bytes
+        set reader's position to reader's position + (size as an integer)
+        return label
+
+local function the bim cbor value read by {a pointer to a bim cbor reader record:reader} at depth {integer:nesting}:
+    execute:
+        set nothingRead to 0 as a pointer to a JSON value
+        if nesting > 400:
+            mark bim cbor fault in reader
+            return nothingRead
+        set initial to the next bim cbor byte of reader
+        if reader's fault >= 0:
+            return nothingRead
+        set major to initial / 32
+        set info to initial bitwise and 31
+        if major = 7:
+            if info = 20:
+                set node to a new JSON value of kind the JSON boolean kind
+                set the boolean of node to false
+                return node
+            if info = 21:
+                set node to a new JSON value of kind the JSON boolean kind
+                set the boolean of node to true
+                return node
+            if (info = 22) or (info = 23):
+                return a new JSON value of kind the JSON null kind
+            if info = 25:
+                return a new bim cbor real (the bim cbor half (the next 2 bim cbor bytes of reader))
+            if info = 26:
+                set narrowBits to (the next 4 bim cbor bytes of reader) as a 32 bit unsigned integer
+                set narrow to 0.0 as a 32 bit floating-point number
+                ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the address of narrow, the address of narrowBits, 4 as a word sized integer)
+                return a new bim cbor real (narrow as a 64 bit floating-point number)
+            if info = 27:
+                set wideBits to the next 8 bim cbor bytes of reader
+                set wide to 0.0
+                ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the address of wide, the address of wideBits, 8 as a word sized integer)
+                return a new bim cbor real wide
+            mark bim cbor fault in reader
+            return nothingRead
+        if info = 31:
+            # Indefinite lengths: text chunks, array items or map pairs up to
+            # the break byte.
+            if major = 3:
+                set pieces to an empty list of a string
+                loop while (reader's fault < 0) and ((the next bim cbor byte of reader) != 255):
+                    set reader's position to reader's position - 1
+                    set chunkHead to the next bim cbor byte of reader
+                    if (chunkHead / 32) != 3:
+                        mark bim cbor fault in reader
+                    else:
+                        append (the bim cbor text of (the bim cbor argument after (chunkHead bitwise and 31) in reader) bytes in reader) to pieces
+                set joined to pieces joined with ""
+                free pieces
+                return a new bim cbor text joined
+            if (major = 4) or (major = 5):
+                set node to a new JSON value of kind the JSON array kind
+                if major = 5:
+                    set node to a new JSON value of kind the JSON object kind
+                loop while (reader's fault < 0) and ((the next bim cbor byte of reader) != 255):
+                    set reader's position to reader's position - 1
+                    if major = 4:
+                        set entryValue to the bim cbor value read by reader at depth (nesting + 1)
+                        if reader's fault < 0:
+                            add entryValue to the JSON array node
+                    else:
+                        add bim cbor member read by reader at depth nesting to node
+                if reader's fault >= 0:
+                    free node
+                    return nothingRead
+                return node
+            mark bim cbor fault in reader
+            return nothingRead
+        set amount to the bim cbor argument after info in reader
+        if reader's fault >= 0:
+            return nothingRead
+        if major = 0:
+            return a new bim cbor number (amount as a 64 bit floating-point number) spelled (the string form of amount)
+        if major = 1:
+            if amount >= (9223372036854775808 as a 64 bit unsigned integer):
+                mark bim cbor fault in reader
+                return nothingRead
+            set negativeValue to ((0 - 1) as a 64 bit integer) - (amount as a 64 bit integer)
+            return a new bim cbor number (negativeValue as a 64 bit floating-point number) spelled (the string form of negativeValue)
+        if major = 2:
+            # JSON has no byte strings.
+            mark bim cbor fault in reader
+            return nothingRead
+        if major = 3:
+            set label to the bim cbor text of amount bytes in reader
+            if reader's fault >= 0:
+                return nothingRead
+            if bim cbor text of (the length of label) bytes is referable after ((the length of (reader's texts's values)) - reader's base):
+                append label to (reader's texts's values)
+            return a new bim cbor text label
+        if major = 4:
+            set node to a new JSON value of kind the JSON array kind
+            set counted to 0 as a 64 bit unsigned integer
+            loop while (reader's fault < 0) and (counted < amount):
+                set entryValue to the bim cbor value read by reader at depth (nesting + 1)
+                if reader's fault < 0:
+                    add entryValue to the JSON array node
+                set counted to counted + (1 as a 64 bit unsigned integer)
+            if reader's fault >= 0:
+                free node
+                return nothingRead
+            return node
+        if major = 5:
+            set node to a new JSON value of kind the JSON object kind
+            set counted to 0 as a 64 bit unsigned integer
+            loop while (reader's fault < 0) and (counted < amount):
+                add bim cbor member read by reader at depth nesting to node
+                set counted to counted + (1 as a 64 bit unsigned integer)
+            if reader's fault >= 0:
+                free node
+                return nothingRead
+            return node
+        # A tag.
+        if amount = (25 as a 64 bit unsigned integer):
+            set referenceIndex to the bim cbor argument after ((the next bim cbor byte of reader) bitwise and 31) in reader
+            set position to (reader's base) + (referenceIndex as an integer)
+            if (reader's fault >= 0) or (referenceIndex >= (((the length of (reader's texts's values)) - reader's base) as a 64 bit unsigned integer)):
+                mark bim cbor fault in reader
+                return nothingRead
+            return a new bim cbor text (the item at position in (reader's texts's values))
+        if amount = (256 as a 64 bit unsigned integer):
+            set outerBase to reader's base
+            set reader's base to the length of (reader's texts's values)
+            set inner to the bim cbor value read by reader at depth (nesting + 1)
+            loop while (the length of (reader's texts's values)) > reader's base:
+                remove the last item from (reader's texts's values)
+            set reader's base to outerBase
+            return inner
+        if amount = (4 as a 64 bit unsigned integer):
+            # A decimal fraction: [exponent, mantissa].
+            set pair to the bim cbor value read by reader at depth (nesting + 1)
+            if reader's fault >= 0:
+                return nothingRead
+            set fitting to false
+            if the kind of pair = the JSON array kind:
+                if the length of pair = 2:
+                    set fitting to (JSON number (the JSON value at index 0 in pair) has an integer lexeme) and (JSON number (the JSON value at index 1 in pair) has an integer lexeme)
+            if fitting = false:
+                free pair
+                mark bim cbor fault in reader
+                return nothingRead
+            set decimalText to ((the text of (the JSON value at index 1 in pair)) + (the string form of "e")) + (the text of (the JSON value at index 0 in pair))
+            free pair
+            return a new bim cbor real (the bim cbor real of text decimalText)
+        # Other tags (the self-described CBOR tag among them) are passed over.
+        return the bim cbor value read by reader at depth (nesting + 1)
+
+# A key (a text) and its value, added to the object `node`.
+local function add bim cbor member read by {a pointer to a bim cbor reader record:reader} at depth {integer:nesting} to {a pointer to a JSON value:node}:
+    execute:
+        set key to the bim cbor value read by reader at depth (nesting + 1)
+        if reader's fault >= 0:
+            return nothing
+        if the kind of key != the JSON text kind:
+            free key
+            mark bim cbor fault in reader
+            return nothing
+        set entryValue to the bim cbor value read by reader at depth (nesting + 1)
+        if reader's fault < 0:
+            add a JSON member named (the text of key) with value entryValue to node
+        free key
+
+# The JSON document the binary IfcX `content` encodes, as a JSON result: on
+# failure, the error position is the byte where reading stopped.
+function the bim json of binary ifcx {a string:content}:
+    execute:
+        set readerValue to @intrinsic("construct", a bim cbor reader record, content, 0, -1, a cad topology list of a string, 0)
+        set reader to the address of readerValue
+        set document to the bim cbor value read by reader at depth 0
+        if (reader's fault < 0) and (reader's position != (the length of content)):
+            mark bim cbor fault in reader
+        if reader's fault >= 0:
+            if document != (0 as a pointer to a JSON value):
+                free document
+            return @intrinsic("construct", a JSON result, 0 as a pointer to a JSON value, reader's fault)
+        return @intrinsic("construct", a JSON result, document, -1)
+
+# The JSON document of an IfcX file's content, binary or text.
+function the bim ifcx document of {a string:content}:
+    execute:
+        if bim content content is binary ifcx:
+            return the bim json of binary ifcx content
+        return the JSON document parsed from content

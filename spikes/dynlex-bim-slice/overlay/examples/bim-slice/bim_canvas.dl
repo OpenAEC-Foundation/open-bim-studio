@@ -35,10 +35,13 @@ class:
     members:
         batches as the type of (a cad topology list of a bim canvas batch record)
         texts as the type of (a cad topology list of a bim canvas text record)
+        # Lines drawn by hand, as a view's sketchy graphics: each overshoots
+        # its ends and bows a little.
+        sketchy as a boolean
 
 function a new bim canvas:
     execute:
-        return @intrinsic("construct", a bim canvas record, a cad topology list of a bim canvas batch record, a cad topology list of a bim canvas text record)
+        return @intrinsic("construct", a bim canvas record, a cad topology list of a bim canvas batch record, a cad topology list of a bim canvas text record, false)
 
 # Appends the two triangles of a stroke `breadth` pixels wide from `first` to
 # `second`.
@@ -58,6 +61,27 @@ function append bim stroke quad from {cad vector2:first} to {cad vector2:second}
         append (a cad vector2 with x (first's x - ox) and y (first's y - oy)) to pixels
         append (a cad vector2 with x (second's x - ox) and y (second's y - oy)) to pixels
 
+# A stroke as drawn by hand: past its ends by 4 pixels (less on a short
+# line) and bowed up to a pixel and a half at its middle, by an amount
+# that depends only on where it lies, so that it stays put as the view moves.
+function append bim sketchy stroke from {cad vector2:first} to {cad vector2:second} wide {a 64 bit floating-point number:breadth} into {a pointer to a list:pixels}:
+    execute:
+        set dx to second's x - first's x
+        set dy to second's y - first's y
+        set magnitude to the square root of ((dx * dx) + (dy * dy))
+        if magnitude <= 0.000001:
+            return nothing
+        set ux to dx / magnitude
+        set uy to dy / magnitude
+        set overshoot to the minimum of 4.0 and (magnitude * 0.15)
+        set mix to (((first's x * 12.9898) + (first's y * 78.233)) + ((second's x * 37.719) + (second's y * 4.581))) * 0.0137
+        set bow to ((mix - (the floor of mix)) - 0.5) * (the minimum of 3.0 and (magnitude * 0.02))
+        set fromPoint to a cad vector2 with x (first's x - (ux * overshoot)) and y (first's y - (uy * overshoot))
+        set toPoint to a cad vector2 with x (second's x + (ux * overshoot)) and y (second's y + (uy * overshoot))
+        set middlePoint to a cad vector2 with x (((first's x + second's x) * 0.5) - (uy * bow)) and y (((first's y + second's y) * 0.5) + (ux * bow))
+        append bim stroke quad from fromPoint to middlePoint wide breadth into pixels
+        append bim stroke quad from middlePoint to toPoint wide breadth into pixels
+
 # Records the triangles `pixels` (three per triangle) in one colour.
 function record bim triangles {a pointer to a list:pixels} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
     execute:
@@ -76,7 +100,12 @@ function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, 
         set quads to a cad topology list of a cad vector2
         set cursor to 0
         loop while cursor < the length of pairs:
-            append bim stroke quad from (the item at cursor in pairs) to (the item at (cursor + 1) in pairs) wide breadth into (quads's values)
+            set first to the item at cursor in pairs
+            set second to the item at (cursor + 1) in pairs
+            if canvas's sketchy:
+                append bim sketchy stroke from first to second wide breadth into (quads's values)
+            else:
+                append bim stroke quad from first to second wide breadth into (quads's values)
             set cursor to cursor + 2
         append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads)) to (canvas's batches's values)
 
@@ -89,17 +118,6 @@ function record bim text {a string:message} at {a 64 bit floating-point number:x
 function record bim centred text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
     execute:
         append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue, true)) to (canvas's texts's values)
-
-# The vertices replaying `canvas` streams: its triangle corners and six per
-# glyph of its labels.
-function the bim vertex count of {bim canvas record:canvas}:
-    execute:
-        set total to 0
-        loop cursor from 0 to the length of (canvas's batches's values):
-            set total to total + (the length of ((the item at cursor in (canvas's batches's values))'s pixels's values))
-        loop cursor from 0 to the length of (canvas's texts's values):
-            set total to total + (6 * (the length of ((the item at cursor in (canvas's texts's values))'s message)))
-        return total
 
 # Draws `canvas` into `frame` moved by `dx`, `dy` pixels: every batch in the
 # order recorded, then every label.

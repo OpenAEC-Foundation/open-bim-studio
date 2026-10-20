@@ -6,6 +6,7 @@
 #   DYNLEX_ROOT=... ./build.sh run-dev [ARGS...]                  run the independent development build
 #   DYNLEX_ROOT=... ./build.sh run [ARGS...]                     run the editor (--example, FILE, --import ...)
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
+#   DYNLEX_ROOT=... ./build.sh bundle [NAME...]                  the same tests compiled once as one program
 #   DYNLEX_ROOT=... ./build.sh installer OUT.sh                  self-contained installer
 #
 # BIM_BUILD_DIR (default build/) is where the tree and the outputs go, so two
@@ -17,7 +18,13 @@
 # in the checkout is changed.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-root=${DYNLEX_ROOT:?set DYNLEX_ROOT to a DynLex checkout with a built compiler}
+source "$here/toolchain.sh"
+resolve_bim_toolchain "$here"
+# Inspect the selected fork without staging files or invoking the compiler.
+if [[ ${1:-app} == toolchain-info ]]; then
+    show_bim_toolchain
+    exit 0
+fi
 out=${BIM_BUILD_DIR:-$here/build}
 tree=$out/tree
 mkdir -p "$tree/build/shaders"
@@ -82,6 +89,22 @@ case "$command" in
             fi
         done
         exit $status ;;
+    bundle)
+        # The tests (all when no name) bundled into one program: one compile
+        # instead of one per test (tools/bundle_tests.py).
+        names=("$@")
+        if [ ${#names[@]} -eq 0 ]; then
+            for expected in examples/bim-slice/tests/*.expected.txt; do
+                names+=("$(basename "$expected" .expected.txt)")
+            done
+        fi
+        mkdir -p "$out/tests"
+        python3 "$here/tools/bundle_tests.py" make examples/bim-slice/tests bundle "${names[@]}"
+        if ! build/dynlex examples/bim-slice/tests/bundle.dl -O0 -o "$out/tests/bundle" > "$out/tests/bundle.diag" 2>&1 || [ -s "$out/tests/bundle.diag" ]; then
+            echo "bundle DIAG"; head -20 "$out/tests/bundle.diag"; exit 1
+        fi
+        "$out/tests/bundle" > "$out/tests/bundle.out" 2>&1 || true
+        python3 "$here/tools/bundle_tests.py" split "$out/tests/bundle.out" examples/bim-slice/tests/bundle.expected.txt "$out/tests/bundled" ;;
     installer)
         bash examples/bim-slice/installer/make-installer.sh "$out/open-bim-studio" "${1:?installer output path}" ;;
     *)

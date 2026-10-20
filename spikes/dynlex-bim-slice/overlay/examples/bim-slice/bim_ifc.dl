@@ -10,6 +10,8 @@
 import examples/bim-slice/bim_evaluate.dl
 import lib/text.dl
 import examples/bim-slice/bim_spaces.dl
+import examples/bim-slice/bim_scene.dl
+import examples/bim-slice/bim_project_settings.dl
 
 class:
     patterns:
@@ -49,7 +51,7 @@ local function the bim real text of {a 64 bit floating-point number:value}:
         return ((the substring of digits from 0 spanning exponent bytes) + (the string form of ".")) + (the substring of digits from exponent spanning ((the length of digits) - exponent) bytes)
 
 # An area for a name, to two decimals.
-local function the bim area text of {a 64 bit floating-point number:value}:
+function the bim area text of {a 64 bit floating-point number:value}:
     execute:
         set buffer to a new string buffer containing 32 bytes
         set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
@@ -138,6 +140,44 @@ local function the bim ifc extrusion through {a pointer to a list:corners} depth
         set representation to write bim entity representationBody to writer
         return write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of representation)) + (the string form of "))")) to writer
 
+# A body representation of the triangles `triangles` as they are: an IFC4
+# triangulated face set (one-based indices), in context `context`.
+local function the bim ifc tessellation of {fast mesh record:triangles} in context {integer:context} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set pointText to the string form of "IFCCARTESIANPOINTLIST3D(("
+        loop cursor from 0 to the length of (triangles's positions's values):
+            set spot to the item at cursor in (triangles's positions's values)
+            if cursor > 0:
+                set pointText to pointText + (the string form of ",")
+            set pointText to pointText + ((((the string form of "(") + (the bim real text of spot's x)) + (((the string form of ",") + (the bim real text of spot's y)) + (the string form of ","))) + ((the bim real text of spot's z) + (the string form of ")")))
+        set pointList to write bim entity (pointText + (the string form of "))")) to writer
+        set indexText to the string form of "("
+        set cursor to 0
+        loop while (cursor + 2) < the length of (triangles's triangles's values):
+            if cursor > 0:
+                set indexText to indexText + (the string form of ",")
+            set indexText to indexText + ((((the string form of "(") + (the string form of ((the item at cursor in (triangles's triangles's values)) + 1))) + (((the string form of ",") + (the string form of ((the item at (cursor + 1) in (triangles's triangles's values)) + 1))) + (the string form of ","))) + ((the string form of ((the item at (cursor + 2) in (triangles's triangles's values)) + 1)) + (the string form of ")")))
+            set cursor to cursor + 3
+        set faceSet to write bim entity ((((the string form of "IFCTRIANGULATEDFACESET(") + (the bim reference text of pointList)) + (the string form of ",$,.T.,")) + (indexText + (the string form of "),$)"))) to writer
+        set representation to write bim entity ((((the string form of "IFCSHAPEREPRESENTATION(") + (the bim reference text of context)) + (the string form of ",'Body','Tessellation',(")) + ((the bim reference text of faceSet) + (the string form of "))"))) to writer
+        return write bim entity (((the string form of "IFCPRODUCTDEFINITIONSHAPE($,$,(") + (the bim reference text of representation)) + (the string form of "))")) to writer
+
+# An element of IFC class `className` (IfcColumn, IfcMember...) named
+# `label`, placed at `placement` with body `shape` (0 for none), its global
+# id from `kindCode` and `elementId`: its entity's number. Piles carry one
+# attribute more.
+local function the bim ifc element {string:className} named {string:label} for {a 64 bit integer:elementId} as kind {integer:kindCode} at {integer:placement} shaped {integer:shape} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set shapeText to the string form of "$"
+        if shape > 0:
+            set shapeText to the bim reference text of shape
+        set body to ((the uppercase form of className) + (the string form of "(")) + (the bim global id for kind kindCode of elementId)
+        set body to ((body + (the string form of ",$,")) + (the bim label text of label)) + (the string form of ",$,$,")
+        set body to (((body + (the bim reference text of placement)) + (the string form of ",")) + shapeText) + (the string form of ",$,$")
+        if className = (the string form of "IfcPile"):
+            set body to body + (the string form of ",$")
+        return write bim entity (body + (the string form of ")")) to writer
+
 local function the bim ifc list of {a pointer to a list:numbers}:
     execute:
         set text to the string form of "("
@@ -179,11 +219,26 @@ function the bim ifc text of {bim model record:modelValue}:
         append areaUnit to unitNumbers
         append volumeUnit to unitNumbers
         append angleUnit to unitNumbers
+        # The project's currency (`bim_project_settings.dl`).
+        set currencyName to the bim name of currency ((the bim project setting (bim project currency setting) in modelValue or (0 as a 64 bit integer)) as an integer)
+        append (write bim entity (((the string form of "IFCMONETARYUNIT('") + currencyName) + (the string form of "')")) to w) to unitNumbers
         set units to write bim entity ((the string form of "IFCUNITASSIGNMENT(") + (the bim ifc list of unitNumbers) + (the string form of ")")) to w
         free unitNumbers
         set worldOrigin to the bim ifc point 0.0, 0.0 and 0.0 in w
         set world to write bim entity (((the string form of "IFCAXIS2PLACEMENT3D(") + (the bim reference text of worldOrigin)) + (the string form of ",$,$)")) to w
-        set context to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-06,") + (the bim reference text of world)) + (the string form of ",$)")) to w
+        # True north: the direction of north in the model's plan.
+        set northAngle to the bim project north of modelValue
+        set northDirection to write bim entity (((the string form of "IFCDIRECTION((") + (the bim real text of (0.0 - (the sine of northAngle)))) + ((the string form of ",") + ((the bim real text of (the cosine of northAngle)) + (the string form of "))")))) to w
+        set context to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-06,") + (the bim reference text of world)) + (((the string form of ",") + (the bim reference text of northDirection)) + (the string form of ")"))) to w
+        # Georeferenced: the coordinate system and where the model's origin
+        # lies on the map, its x axis turned as north is.
+        if bim project modelValue is georeferenced:
+            set crs to write bim entity (((the string form of "IFCPROJECTEDCRS('EPSG:") + (the string form of (the bim project crs of modelValue))) + (the string form of "',$,$,$,$,$,$)")) to w
+            set mapOrigin to the bim project origin of modelValue
+            set mapBody to (((the string form of "IFCMAPCONVERSION(") + (the bim reference text of context)) + (the string form of ",")) + ((the bim reference text of crs) + (the string form of ","))
+            set mapBody to ((mapBody + (the bim real text of mapOrigin's x)) + (the string form of ",")) + ((the bim real text of mapOrigin's y) + (the string form of ","))
+            set mapBody to ((mapBody + (the bim real text of mapOrigin's z)) + (the string form of ",")) + ((the bim real text of (the cosine of northAngle)) + (the string form of ","))
+            ignore write bim entity ((mapBody + (the bim real text of (0.0 - (the sine of northAngle)))) + (the string form of ",$)")) to w
         set bodyContext to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,") + (the bim reference text of context)) + (the string form of ",$,.MODEL_VIEW.,$)")) to w
         set projectBody to ((the string form of "IFCPROJECT(") + (the bim global id for kind 1 of (1 as a 64 bit integer))) + (the string form of ",$,'Open BIM Studio',$,$,$,$,(")
         set project to write bim entity (((projectBody + (the bim reference text of context)) + (the string form of "),")) + ((the bim reference text of units) + (the string form of ")"))) to w
@@ -194,6 +249,17 @@ function the bim ifc text of {bim model record:modelValue}:
         set siteList to an empty list of an integer
         append site to siteList
         relate bim (the string form of "IFCRELAGGREGATES") named 20 from project to siteList first true in w
+        # The settings IFC has no entity for, as a property set of the
+        # project: the length unit shown, its decimals, the area and angle
+        # units shown.
+        set settingValues to an empty list of an integer
+        append (write bim entity (((the string form of "IFCPROPERTYSINGLEVALUE('LengthUnit',$,IFCLABEL('") + (the bim name of length unit (the bim project length unit of modelValue))) + (the string form of "'),$)")) to w) to settingValues
+        append (write bim entity (((the string form of "IFCPROPERTYSINGLEVALUE('LengthDecimals',$,IFCINTEGER(") + (the string form of (the bim project decimals of modelValue))) + (the string form of "),$)")) to w) to settingValues
+        append (write bim entity (((the string form of "IFCPROPERTYSINGLEVALUE('AreaUnit',$,IFCLABEL('") + (the bim name of area unit ((the bim project setting (bim project area unit setting) in modelValue or (0 as a 64 bit integer)) as an integer))) + (the string form of "'),$)")) to w) to settingValues
+        append (write bim entity (((the string form of "IFCPROPERTYSINGLEVALUE('AngleUnit',$,IFCLABEL('") + (the bim name of angle unit ((the bim project setting (bim project angle unit setting) in modelValue or (0 as a 64 bit integer)) as an integer))) + (the string form of "'),$)")) to w) to settingValues
+        set settingsSet to write bim entity (((the string form of "IFCPROPERTYSET(") + (the bim global id for kind 12 of (1 as a 64 bit integer))) + (((the string form of ",$,'OBS_ProjectSettings',$,") + (the bim ifc list of settingValues)) + (the string form of ")"))) to w
+        free settingValues
+        ignore write bim entity (((the string form of "IFCRELDEFINESBYPROPERTIES(") + (the bim global id for kind 13 of (1 as a 64 bit integer))) + ((((the string form of ",$,$,$,(") + (the bim reference text of project)) + (the string form of "),")) + ((the bim reference text of settingsSet) + (the string form of ")")))) to w
         set buildingList to an empty list of an integer
         append building to buildingList
         relate bim (the string form of "IFCRELAGGREGATES") named 21 from site to buildingList first true in w
@@ -212,9 +278,13 @@ function the bim ifc text of {bim model record:modelValue}:
             append placement to storeyPlacements
         relate bim (the string form of "IFCRELAGGREGATES") named 22 from building to storeyNumbers first true in w
 
-        # Wall types with their material layer sets.
+        # Wall types with their material layer sets, and their assembly
+        # codes as classification references (each classification written
+        # once, when a type first uses it).
         set typeNumbers to an empty list of an integer
         set layerSetNumbers to an empty list of an integer
+        set sfbSource to 0
+        set omniSource to 0
         loop cursor from 0 to the length of (modelValue's wallTypes's values):
             set wallType to the item at cursor in (modelValue's wallTypes's values)
             set layerNumbers to an empty list of an integer
@@ -230,6 +300,18 @@ function the bim ifc text of {bim model record:modelValue}:
             set typeList to an empty list of an integer
             append typeNumber to typeList
             relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 23 from layerSet to typeList first false in w
+            set sfbCode to the bim setting (bim nlsfb setting) of wallType's id in modelValue
+            if sfbCode's found:
+                if sfbSource = 0:
+                    set sfbSource to write bim entity (the string form of "IFCCLASSIFICATION('BIM Loket',$,$,'NL-SfB',$,$,$)") to w
+                set sfbReference to write bim entity ((((the string form of "IFCCLASSIFICATIONREFERENCE($,") + (the bim label text of (the bim assembly code text of sfbCode's value in (bim nlsfb setting)))) + (the string form of ",$,")) + ((the bim reference text of sfbSource) + (the string form of ",$,$)"))) to w
+                relate bim (the string form of "IFCRELASSOCIATESCLASSIFICATION") named 40 from sfbReference to typeList first false in w
+            set omniCode to the bim setting (bim omniclass setting) of wallType's id in modelValue
+            if omniCode's found:
+                if omniSource = 0:
+                    set omniSource to write bim entity (the string form of "IFCCLASSIFICATION('CSI',$,$,'OmniClass',$,$,$)") to w
+                set omniReference to write bim entity ((((the string form of "IFCCLASSIFICATIONREFERENCE($,") + (the bim label text of (the bim assembly code text of omniCode's value in (bim omniclass setting)))) + (the string form of ",$,")) + ((the bim reference text of omniSource) + (the string form of ",$,$)"))) to w
+                relate bim (the string form of "IFCRELASSOCIATESCLASSIFICATION") named 41 from omniReference to typeList first false in w
             free typeList
             append typeNumber to typeNumbers
             append layerSet to layerSetNumbers
@@ -372,6 +454,73 @@ function the bim ifc text of {bim model record:modelValue}:
             free uAxes
             free vAxes
             free curves
+        # Linear elements, each with its own body; stairs, railings and
+        # building systems as assemblies of their linear parts.
+        set linearParts to the bim linear parts of modelValue
+        set linearCuts to the bim end cuts of parts (linearParts's values) in modelValue
+        loop cursor from 0 to the length of (linearParts's values):
+            set part to the item at cursor in (linearParts's values)
+            set levelFound to the bim level index of part's element's levelId in modelValue
+            if levelFound's valid:
+                set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                set partMesh to the bim linear shape of part's element typed part's kind in modelValue within 0.002 cut by (the item at cursor in (linearCuts's values))
+                set partShape to the bim ifc tessellation of partMesh in context bodyContext with w
+                set partLocal to the bim ifc placement at height (0.0 - elevation) relative to (the item at levelFound's position in storeyPlacements) in w
+                append (the bim ifc element (the bim ifc class of linear role part's kind's role) named part's kind's name for part's element's id as kind 30 at partLocal shaped partShape with w) to containedNumbers
+                append levelFound's position to containedStoreys
+        loop assemblyKind from 0 to 3:
+            set count to the length of (modelValue's stairs's values)
+            if assemblyKind = 1:
+                set count to the length of (modelValue's railings's values)
+            if assemblyKind = 2:
+                set count to the length of (modelValue's curtains's values)
+            loop cursor from 0 to count:
+                set assemblyParts to a cad topology list of a bim stair part record
+                set assemblyId to 0 as a 64 bit integer
+                set assemblyLevel to 0 as a 64 bit integer
+                set assemblyClass to the string form of "IfcStair"
+                set assemblyName to the string form of "Stair"
+                if assemblyKind = 0:
+                    set stairValue to the item at cursor in (modelValue's stairs's values)
+                    set assemblyParts to the bim parts of stair stairValue in modelValue
+                    set assemblyId to stairValue's id
+                    set assemblyLevel to stairValue's levelId
+                if assemblyKind = 1:
+                    set railingValue to the item at cursor in (modelValue's railings's values)
+                    set assemblyParts to the bim parts of railing railingValue in modelValue
+                    set assemblyId to railingValue's id
+                    set assemblyLevel to railingValue's levelId
+                    set assemblyClass to the string form of "IfcRailing"
+                    set assemblyName to the string form of "Railing"
+                if assemblyKind = 2:
+                    set curtainValue to the item at cursor in (modelValue's curtains's values)
+                    set assemblyParts to the bim parts of curtain wall curtainValue in modelValue
+                    set assemblyId to curtainValue's id
+                    set assemblyLevel to curtainValue's levelId
+                    set assemblyClass to the string form of "IfcCurtainWall"
+                    set assemblyName to the bim system name of curtainValue
+                set levelFound to the bim level index of assemblyLevel in modelValue
+                if levelFound's valid and ((the length of (assemblyParts's values)) > 0):
+                    set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                    set assemblyLocal to the bim ifc placement at height 0.0 relative to (the item at levelFound's position in storeyPlacements) in w
+                    set assembly to the bim ifc element assemblyClass named assemblyName for assemblyId as kind 31 at assemblyLocal shaped 0 with w
+                    append assembly to containedNumbers
+                    append levelFound's position to containedStoreys
+                    set partCuts to the bim end cuts of parts (assemblyParts's values) in modelValue
+                    set partNumbers to an empty list of an integer
+                    loop partCursor from 0 to the length of (assemblyParts's values):
+                        set part to the item at partCursor in (assemblyParts's values)
+                        set partMesh to the bim linear shape of part's element typed part's kind in modelValue within 0.002 cut by (the item at partCursor in (partCuts's values))
+                        set partShape to the bim ifc tessellation of partMesh in context bodyContext with w
+                        set partLocal to the bim ifc placement at height (0.0 - elevation) relative to assemblyLocal in w
+                        set partClass to the string form of "IfcMember"
+                        if part's kind's role = bim generic linear role:
+                            set partClass to the string form of "IfcPlate"
+                        if assemblyKind < 2:
+                            set partClass to the string form of "IfcMember"
+                        append (the bim ifc element partClass named part's kind's name for ((assemblyId * (100000 as a 64 bit integer)) + (partCursor as a 64 bit integer)) as kind 32 at partLocal shaped partShape with w) to partNumbers
+                    relate bim (the string form of "IFCRELAGGREGATES") named 42 from assembly to partNumbers first true in w
+                    free partNumbers
         loop storeyCursor from 0 to the length of storeyNumbers:
             set storeyContents to an empty list of an integer
             loop cursor from 0 to the length of containedNumbers:

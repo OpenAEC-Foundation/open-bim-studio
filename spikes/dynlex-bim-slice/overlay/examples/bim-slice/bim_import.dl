@@ -7,6 +7,59 @@
 import examples/bim-slice/bim_scene.dl
 import examples/bim-slice/bim_file.dl
 
+# The storeys of an import: their names and elevations (metres, in the
+# world), and for each element the storey it is contained in (-1: none).
+class:
+    patterns:
+        [a|] bim import storeys record
+    members:
+        names as the type of (a cad topology list of a string)
+        elevations as the type of (a cad topology list of a 64 bit floating-point number)
+        ofElements as the type of (a cad topology list of an integer)
+
+function no bim import storeys:
+    execute:
+        return @intrinsic("construct", a bim import storeys record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of an integer)
+
+# Imported meshes that place a shape shared with others (an IFC element made
+# of one mapped item), so that the 3D view draws the shape once and places it
+# per mesh: the shapes in their own coordinates, and for each imported mesh
+# the shape it places (-1: none, or past the list's end) and twelve numbers
+# placing it, by rows: the x, y and z axes' parts and the shift.
+class:
+    patterns:
+        [a|] bim import instancing record
+    members:
+        prototypes as the type of (a cad topology list of a fast mesh record)
+        prototypeOf as the type of (a cad topology list of an integer)
+        transforms as the type of (a cad topology list of a 64 bit floating-point number)
+
+function no bim import instancing:
+    execute:
+        return @intrinsic("construct", a bim import instancing record, a cad topology list of a fast mesh record, a cad topology list of an integer, a cad topology list of a 64 bit floating-point number)
+
+# How much of `imported` the 3D view draws as instances, for a message:
+# "; 3600 meshes (1000000 triangles) as instances of 200 shapes".
+function the bim instancing text of {bim import record:imported}:
+    execute:
+        set placedMeshes to 0
+        set placedTriangles to 0
+        loop cursor from 0 to the length of (imported's meshes's values):
+            if (the bim prototype of imported mesh cursor in imported) >= 0:
+                set placedMeshes to placedMeshes + 1
+                set placedTriangles to placedTriangles + ((the length of ((the item at cursor in (imported's meshes's values))'s shape's triangles's values)) / 3)
+        set written to ((the string form of "; ") + (the string form of placedMeshes)) + (the string form of " meshes (")
+        set written to (written + (the string form of placedTriangles)) + (the string form of " triangles) as instances of ")
+        return (written + (the string form of (the length of (imported's instancing's prototypes's values)))) + (the string form of " shapes")
+
+# The shape imported mesh `index` places, or -1.
+function the bim prototype of imported mesh {integer:index} in {bim import record:imported}:
+    execute:
+        set placing to imported's instancing's prototypeOf's values
+        if (index >= 0) and (index < (the length of placing)):
+            return the item at index in placing
+        return -1
+
 class:
     patterns:
         [a|] bim import record
@@ -21,11 +74,83 @@ class:
         # Polylines (IfcX basiscurves) as pairs of points: space boundaries,
         # axes, alignments.
         curves as the type of (a cad topology list of a cad vector3)
+        storeys as a bim import storeys record
+        instancing as a bim import instancing record
+
+# The elevation of the storey scene mesh `entry` belongs to: its element's
+# level in `modelValue`, or for an imported element the storey it is
+# contained in; not a number when it has none.
+function the bim storey elevation of mesh {bim scene mesh record:entry} in {bim model record:modelValue} with {bim import record:imported}:
+    execute:
+        if entry's elementId >= (the bim imported id base):
+            return the bim storey elevation of imported element ((entry's elementId - (the bim imported id base)) as an integer) in imported
+        set levelFound to the bim level index of (the bim level of element entry's elementId in modelValue) in modelValue
+        if levelFound's valid:
+            return (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        return 0.0 / 0.0
+
+# The storeys of `modelValue`'s levels and `imported`'s storeys by
+# elevation, ascending: a storey within a millimetre of one before it is
+# the same storey, named by the first.
+class:
+    patterns:
+        [a|] bim storey list record
+    members:
+        elevations as the type of (an empty list of a 64 bit floating-point number)
+        names as the type of (an empty list of a string)
+
+function the bim storeys of {bim model record:modelValue} with {bim import record:imported}:
+    execute:
+        set heights to an empty list of a 64 bit floating-point number
+        set titles to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            add bim storey levelValue's name at levelValue's elevation to heights and titles
+        loop cursor from 0 to the length of (imported's storeys's names's values):
+            add bim storey (the item at cursor in (imported's storeys's names's values)) at (the item at cursor in (imported's storeys's elevations's values)) to heights and titles
+        return @intrinsic("construct", a bim storey list record, heights, titles)
+
+local function add bim storey {a string:title} at {a 64 bit floating-point number:height} to {a pointer to a list:heights} and {a pointer to a list:titles}:
+    execute:
+        set place to 0
+        loop while place < (the length of heights):
+            set there to the item at place in heights
+            if (the absolute value of (there - height)) < 0.001:
+                return nothing
+            if there > height:
+                insert height into heights at index place
+                insert title into titles at index place
+                return nothing
+            set place to place + 1
+        append height to heights
+        append title to titles
+
+# Of `meshes`, those whose storey (`the bim storey elevation of mesh …`) is
+# the one at `height`, within a millimetre; meshes in no storey are left out.
+function the bim meshes of {a pointer to a list:meshes} on storey at {a 64 bit floating-point number:height} of {bim model record:modelValue} with {bim import record:imported}:
+    execute:
+        set result to a cad topology list of a bim scene mesh record
+        loop cursor from 0 to the length of meshes:
+            set entry to the item at cursor in meshes
+            if (the absolute value of ((the bim storey elevation of mesh entry in modelValue with imported) - height)) < 0.001:
+                append entry to (result's values)
+        return result
+
+# The elevation of the storey imported element `index` (counted from the
+# first) is contained in; not a number when it is in none.
+function the bim storey elevation of imported element {integer:index} in {bim import record:imported}:
+    execute:
+        set storeyOf to imported's storeys's ofElements's values
+        if (index >= 0) and (index < (the length of storeyOf)):
+            set storeyIndex to the item at index in storeyOf
+            if storeyIndex >= 0:
+                return the item at storeyIndex in (imported's storeys's elevations's values)
+        return 0.0 / 0.0
 
 local function a bim import refusal saying {a string:reason}:
     execute:
         set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
-        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3)
+        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys, no bim import instancing)
 
 local function the bim unsigned at {integer:offset} in {a string:content}:
     execute:
@@ -116,4 +241,4 @@ function the bim import of {a string:path}:
             set elementId to (the bim imported id base) + (element as a 64 bit integer)
             append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, shape, category, the bim category colouring)) to (meshes's values)
             append label to (labels's values)
-        return @intrinsic("construct", a bim import record, true, the string form of "", meshes, labels, triangles, (a cad vector3 with x lowX, y lowY and z lowZ), (a cad vector3 with x highX, y highY and z highZ), a cad topology list of a cad vector3)
+        return @intrinsic("construct", a bim import record, true, the string form of "", meshes, labels, triangles, (a cad vector3 with x lowX, y lowY and z lowZ), (a cad vector3 with x highX, y highY and z highZ), a cad topology list of a cad vector3, no bim import storeys, no bim import instancing)
