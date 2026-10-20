@@ -51,6 +51,13 @@ if [ -d "$libs" ]; then
     export LIBRARY_PATH="$libs${LIBRARY_PATH:+:$LIBRARY_PATH}"
     export LD_LIBRARY_PATH="$libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
+# The platform shim (`examples/bim-slice/platform/obs_platform.c`): the few
+# C calls whose names differ between Linux and Windows, as the static
+# library the slice links ("obs_platform").
+mkdir -p "$out/platform"
+cc -std=c11 -O2 -fPIC -c "$tree/examples/bim-slice/platform/obs_platform.c" -o "$out/platform/obs_platform.o"
+ar rcs "$out/platform/libobs_platform.a" "$out/platform/obs_platform.o"
+export LIBRARY_PATH="$out/platform${LIBRARY_PATH:+:$LIBRARY_PATH}"
 cd "$tree"
 command=${1:-app}
 shift || true
