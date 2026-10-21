@@ -36,7 +36,7 @@ try {
     if (-not (Test-Path $platformSource)) { throw 'Source ref does not contain the Windows platform port.' }
     $toolBin = Join-Path $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT 'bin'
     $object = Join-Path $outPath 'obs_platform.o'
-    & "$toolBin\clang.exe" --target=$env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -std=c11 -O2 -c $platformSource -o $object
+    & "$toolBin\clang-$env:DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION.exe" --target=$env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -std=c11 -O2 -c $platformSource -o $object
     if ($LASTEXITCODE -ne 0) { throw 'Platform bridge compilation failed.' }
     & "$toolBin\llvm-ar.exe" rcs "$outPath\libobs_platform.a" $object
     if ($LASTEXITCODE -ne 0) { throw 'Platform bridge archive failed.' }

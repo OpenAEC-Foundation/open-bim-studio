@@ -74,3 +74,11 @@ sources. `.gitattributes` now keeps the compiler patches at LF. Reproduced
 locally without compiling: the exact verified snapshot passes the LF local
 patch reverse-check, and the shader/library patches pass forward-checks; a
 CRLF copy of the local patch fails its reverse-check.
+
+The second native run completed dependency installation, then exposed that the
+slim llvm-mingw tree contains `clang-22.exe` (version from the persisted LLVM
+metadata), not `clang.exe`. Preflight and bridge compilation now use that
+versioned executable. Dependency and LLVM caches are restored separately and
+saved immediately after successful installation/compiler build respectively;
+a later application or MSI failure does not discard completed toolchains.
+The staged compiler artifact is also uploaded before the application build.
