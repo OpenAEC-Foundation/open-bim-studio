@@ -20,6 +20,11 @@ if ($env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -ne 'x86_64-w64-mingw32') { throw 'A na
 # Use this checkout's app and library overlay, never the app in the snapshot.
 # Keep the snapshot's CAD library, runtime and fallback font.
 Copy-Item (Join-Path $slicePath 'overlay\*') $treePath -Recurse -Force
+# The canonical overlay uses Linux window decoration APIs. Replace it with
+# the native DWM implementation before parsing/linking anything on Windows.
+$windowStyle = Join-Path $slicePath 'platform\windows\bim_window_style.dl'
+if (-not (Test-Path -PathType Leaf $windowStyle)) { throw 'Missing Windows window-style implementation; refusing Linux X11 fallback.' }
+Copy-Item $windowStyle "$treePath\examples\bim-slice\bim_window_style.dl" -Force
 New-Item -ItemType Directory -Force "$treePath\build\shaders" | Out-Null
 Copy-Item "$slicePath\shaders\*.spv" "$treePath\build\shaders" -Force
 New-Item -ItemType Directory -Force "$treePath\examples\bim-slice\models" | Out-Null
