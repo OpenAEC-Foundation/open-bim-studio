@@ -5,6 +5,83 @@
 # library and the keys and two-letter commands.
 import examples/bim-slice/bim_editor_properties.dl
 import examples/bim-slice/bim_library.dl
+import examples/bim-slice/bim_dxf_reference.dl
+
+# Explicit level creation is separate from navigating between storeys.
+function add bim editor level above the highest in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if (the length of (modelValue's levels's values)) = 0:
+            set editor's message to the string form of "Level: create a project with a base storey first"
+            return nothing
+        set highest to the item at 0 in (modelValue's levels's values)
+        loop cursor from 1 to the length of (modelValue's levels's values):
+            set candidate to the item at cursor in (modelValue's levels's values)
+            if candidate's elevation > highest's elevation:
+                set highest to candidate
+        if highest's height <= 0.0:
+            set editor's message to the string form of "Level: set a positive height on the highest storey first"
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set nameValue to (the string form of "Level ") + (the string form of ((the length of (modelValue's levels's values)) + 1))
+        set fresh to add bim level named nameValue at (highest's elevation + highest's height) with height highest's height to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Level could not be added"
+            return nothing
+        set editor's levelId to fresh
+        set editor's chainActive to false
+        ignore (add bim view of kind bim plan view named nameValue on fresh to (the address of (editor's documentValue's current)))
+        follow bim editor storey in editor
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim level picked numbered fresh in editor
+        set editor's viewsDirty to true
+        set editor's message to the string form of "Level added: edit Name, Elevation and Storey height in Properties"
+
+# Turn an explicitly selected detected room into a persistent Space. The
+# room supplies its real contour and level; the level supplies its height.
+function create bim editor space from the selection in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind = bim space object picked:
+            set editor's message to the string form of "This Space is already a saved object"
+            return nothing
+        set chosen to the bim selected space of (@intrinsic("dereference", editor))
+        if chosen's valid = false:
+            set editor's message to the string form of "Space: select inside a closed room in plan, then click Space"
+            return nothing
+        set modelValue to editor's documentValue's current
+        set levelFound to the bim level index of chosen's space's levelId in modelValue
+        if levelFound's valid = false:
+            set editor's message to the string form of "Space: the room has no valid storey"
+            return nothing
+        set heightValue to (the item at levelFound's position in (modelValue's levels's values))'s height
+        if heightValue <= 0.0:
+            set editor's message to the string form of "Space: set a positive storey height first"
+            return nothing
+        # Repeating the command on the same detected contour selects its
+        # saved object instead of silently stacking duplicate volumes.
+        loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+            set existing to the item at cursor in (modelValue's spaceObjects's values)
+            set sameOutline to (existing's levelId = chosen's space's levelId) and ((the length of (existing's outline's values)) = (the length of (chosen's space's outline's values)))
+            if sameOutline:
+                loop corner from 0 to the length of (existing's outline's values):
+                    set first to the item at corner in (existing's outline's values)
+                    set second to the item at corner in (chosen's space's outline's values)
+                    if (first's x != second's x) or (first's y != second's y):
+                        set sameOutline to false
+            if sameOutline:
+                select bim editor bim space object picked numbered existing's id in editor
+                set editor's message to the string form of "Space: selected the saved room object"
+                return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim space object named (the string form of "Space") numbered (the string form of modelValue's nextId) on chosen's space's levelId around (chosen's space's outline's values) high heightValue to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Space: the selected room has no valid closed contour"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim space object picked numbered fresh in editor
+        set editor's message to the string form of "Space created from the selected room and storey height"
 
 # ---------------------------------------------------------------- checks
 
@@ -552,10 +629,37 @@ function the bim file picked titled {a string:title} among {a string:filters} sa
 # `import/drawing_to_lines.py`) added to the active storey as sketch lines,
 # as one undoable step. The number of lines, or -1 with the reason in the
 # message.
+function import bim native dxf at {a string:path} in {a pointer to a bim editor record:editor}:
+    execute:
+        set source to the bim dxf file content at path
+        if source's valid = false:
+            set editor's message to the string form of "DXF could not be read or exceeds the 64 MB limit"
+            return -1
+        set reading to the bim dxf reference read from source's text
+        if reading's valid = false:
+            set editor's message to reading's message
+            return -1
+        set pathParts to path split at "/"
+        set title to (the string form of "DXF: ") + (the item at ((the length of pathParts) - 1) in pathParts)
+        free pathParts
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim dxf reference reading named title from path on editor's levelId to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "DXF reference could not be placed; import rolled back"
+            return -1
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim instance picked numbered fresh in editor
+        set editor's viewsDirty to true
+        set editor's message to reading's message
+        return the length of (reading's segments's values)
+
 function import bim drawing at {a string:path} through {a string:script} in {a pointer to a bim editor record:editor}:
     execute:
-        # Python 3 runs the script: `python3` on Linux, `python` on Windows,
-        # its answer in a file of the scratch folder.
+        if (the length of path) >= 4:
+            if (the uppercase form of (the substring of path from ((the length of path) - 4) spanning 4 bytes)) = (the string form of ".DXF"):
+                return import bim native dxf at path in editor
+        # Legacy PDF/DWG fallback uses the platform scratch directory.
         set linesPath to (the bim scratch folder) + (the string form of "/open-bim-studio-lines.txt")
         set command to (((the string form of "python3 '") + script) + ((the string form of "' '") + path)) + ((the string form of "' > ") + (linesPath + (the string form of " 2>&1")))
         if bim app runs on windows:
@@ -1190,6 +1294,8 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's numeric to the string form of ""
             return nothing
         if code = bim escape key code:
+            if editor's propertiesViewId = bim project properties context:
+                set editor's propertiesViewId to the bim refused id
             set editor's pendingLetter to 0
             # With a part of a building system chosen, Escape chooses the
             # whole system again.
@@ -1396,6 +1502,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             commit bim transaction in (the address of (editor's documentValue))
             set editor's message to ((the string form of "Library imported: ") + (the string form of addedTypes)) + (the string form of " types added")
             return nothing
+        if code = 2197:
+            ignore duplicate bim editor linear type in editor
+            return nothing
         # 2135 loads the European steel profiles as linear types.
         if code = 2135:
             begin bim transaction in (the address of (editor's documentValue))
@@ -1422,6 +1531,22 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set editor's tool to bim opening tool
             set editor's chainActive to false
             set editor's message to ((the string form of "NL door library: ") + (the string form of (the length of (libraryDoors's values)))) + (the string form of " door types (type selector); click a wall to place a door")
+            return nothing
+        if code = 2139:
+            create bim editor space from the selection in editor
+            return nothing
+        if code = 2198:
+            set editor's tool to bim select tool
+            select bim editor bim nothing picked numbered (the bim refused id) in editor
+            set editor's propertiesViewId to bim project properties context
+            set editor's message to the string form of "Project settings (Esc returns to the active view or sheet)"
+            return nothing
+        if code = 2194:
+            add bim editor level above the highest in editor
+            return nothing
+        # 2195 gives the selected wall a copy of its type as its own.
+        if code = 2195:
+            duplicate bim editor selected wall type in editor
             return nothing
         # 2133 places the building system examples beside the building (2128
         # is the window's IFC import).
@@ -1490,6 +1615,13 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             return nothing
         if code = 2094:
             uncrop bim editor plan view in editor
+            return nothing
+        # Implemented plate commands must precede the unimplemented-command fallback.
+        if code = 2080:
+            add bim editor plate of role bim roof planar role under the selection in editor
+            return nothing
+        if code = 2081:
+            add bim editor plate of role bim ceiling planar role under the selection in editor
             return nothing
         if (code >= 2015) and (code < 2100):
             set editor's message to (the bim name of command code) + (the string form of ": not in the modeller yet")
@@ -1583,12 +1715,6 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set editor's openingTypeId to editor's doorTypeId
             set editor's chainActive to false
             return nothing
-        if code = 2080:
-            add bim editor plate of role bim roof planar role under the selection in editor
-            return nothing
-        if code = 2081:
-            add bim editor plate of role bim ceiling planar role under the selection in editor
-            return nothing
         if code = 66:
             add bim editor slab under the selection in editor
             return nothing
@@ -1632,6 +1758,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             if ((((editor's selectionKind = bim wall picked) or (editor's selectionKind = bim opening picked)) or (editor's selectionKind = bim slab picked)) or (editor's selectionKind = bim grid picked)) or (((((editor's selectionKind = bim sketch picked) or (editor's selectionKind = bim instance picked)) or (editor's selectionKind = bim mesh picked)) or (editor's selectionKind = bim linear picked)) or (((editor's selectionKind = bim stair picked) or (editor's selectionKind = bim railing picked)) or (editor's selectionKind = bim curtain picked))):
                 set doomedKind to editor's selectionKind
                 set doomedId to editor's selectionId
+            else if editor's selectionKind = bim space object picked:
+                set doomedKind to bim space object picked
+                set doomedId to editor's selectionId
             else if editor's hoverWall != the bim refused id:
                 set doomedKind to bim wall picked
                 set doomedId to editor's hoverWall
@@ -1641,6 +1770,8 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             set removed to false
             if doomedKind = bim wall picked:
                 set removed to delete bim wall doomedId from (the address of (editor's documentValue's current))
+            else if doomedKind = bim space object picked:
+                set removed to delete bim space object doomedId from (the address of (editor's documentValue's current))
             else if doomedKind = bim slab picked:
                 set removed to delete bim slab doomedId from (the address of (editor's documentValue's current))
             else if doomedKind = bim grid picked:

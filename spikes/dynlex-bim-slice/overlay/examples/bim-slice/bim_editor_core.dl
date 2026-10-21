@@ -502,6 +502,26 @@ function the bim snap segments near {cad vector2:location} within {a 64 bit floa
                     if (the cad distance from location to the segment from here to following) <= tolerance:
                         append here to result
                         append following to result
+        # Component reference lines participate in the same object snaps.
+        # Query in local coordinates first; only nearby segments are
+        # transformed, without expanding every component on every motion.
+        if bim category bim line category is visible in editor's planRules:
+            loop instanceCursor from 0 to the length of (modelValue's instances's values):
+                set placement to the item at instanceCursor in (modelValue's instances's values)
+                set inView to (placement's viewId = the bim refused id) or (placement's viewId = editor's planViewId)
+                if (placement's levelId = editor's levelId) and inView:
+                    set found to the bim component index of placement's componentId in modelValue
+                    if found's valid:
+                        set definition to the item at found's position in (modelValue's components's values)
+                        set query to the bim component coordinates of location at placement's origin turned placement's angle
+                        loop partCursor from 0 to the length of (definition's sketches's values):
+                            set part to the item at partCursor in (definition's sketches's values)
+                            if (part's kind = bim line sketch) and ((the length of (part's points's values)) >= 2):
+                                set first to the item at 0 in (part's points's values)
+                                set last to the item at 1 in (part's points's values)
+                                if (the cad distance from query to the segment from first to last) <= tolerance:
+                                    append (the bim plan point of first at placement's origin turned placement's angle) to result
+                                    append (the bim plan point of last at placement's origin turned placement's angle) to result
         loop cursor from 0 to the length of (modelValue's grids's values):
             set gridValue to the item at cursor in (modelValue's grids's values)
             if (the cad distance from location to the segment from gridValue's start to gridValue's finish) <= tolerance:
@@ -1635,6 +1655,22 @@ function the bim reference at {cad vector2:location} in {bim editor record:edito
                 if anchor's valid and ((the cad distance from location to anchor's origin) < nearest):
                     set nearest to the cad distance from location to anchor's origin
                     set chosen to a bim reference to wallId feature featureKind
+            # The masonry module's lines and its face's far end, on a wall
+            # that has one (`bim_masonry.dl`).
+            set masonryWall to the bim wall index of wallId in modelValue
+            if masonryWall's valid:
+                set masonryValue to the bim masonry of wall (the item at masonryWall's position in (modelValue's walls's values)) in modelValue using index
+                if masonryValue's status = (bim masonry measured):
+                    loop lineNumber from 0 to (masonryValue's whole + 1):
+                        set masonrySpot to the bim masonry point lineNumber of masonryValue
+                        if (the cad distance from location to masonrySpot) < nearest:
+                            set nearest to the cad distance from location to masonrySpot
+                            set chosen to a bim reference to wallId feature ((bim masonry line feature) + lineNumber)
+                    set farSpot to the bim masonry point 0 of masonryValue
+                    set farSpot to a cad vector2 with x (farSpot's x + (masonryValue's onward's x * masonryValue's span)) and y (farSpot's y + (masonryValue's onward's y * masonryValue's span))
+                    if (the cad distance from location to farSpot) < nearest:
+                        set nearest to the cad distance from location to farSpot
+                        set chosen to a bim reference to wallId feature (bim masonry far end feature)
             loop openingCursor from 0 to the length of (modelValue's openings's values):
                 set openingValue to the item at openingCursor in (modelValue's openings's values)
                 if openingValue's hostId = wallId:
@@ -1669,13 +1705,17 @@ function the bim feature name of {integer:featureKind}:
             return the string form of "exterior face"
         if featureKind = bim wall interior feature:
             return the string form of "interior face"
+        if (featureKind = (bim masonry near end feature)) or (featureKind = (bim masonry far end feature)):
+            return the string form of "masonry face end"
+        if featureKind >= (bim masonry line feature):
+            return the string form of "masonry module line"
         return the string form of "opening edge"
 
 function start bim editor dimension tool in {a pointer to a bim editor record:editor}:
     execute:
         set editor's tool to bim dimension tool
         set editor's moveStage to 0
-        set editor's message to the string form of "Dimension: click a wall face, a wall end or an opening edge"
+        set editor's message to the string form of "Dimension: click a wall face, a wall end, a masonry line or an opening edge"
 
 # A click of the dimension tool at `point`: the first feature, the second,
 # then where its line goes.
@@ -1862,29 +1902,6 @@ function the bim railing at {cad vector2:location} in {bim editor record:editor}
 
 # The curtain wall of the active storey whose line passes within `tolerance`
 # of `location`, or the refused id.
-# How far plan point `location` lies from building system `curtainValue`'s
-# footprint, as it is placed (a layer beside its host, a nested system in
-# its host's panel); 0 on it. An upright system's footprint is its line
-# widened by half its depth, a level one's its face, across its line to the
-# left.
-function the bim footprint gap of {cad vector2:location} to {bim curtain record:curtainValue} in {bim model record:modelValue}:
-    execute:
-        set placed to (the bim placed system curtainValue in modelValue)'s curtain
-        set station to the bim system station of location on placed
-        if bim system curtainValue's id lies level in modelValue:
-            set run to the bim system length of placed
-            set beyond to the maximum of 0.0 and (the maximum of (0.0 - station's x) and (station's x - run))
-            set across to station's y
-            set course to the bim system path of placed
-            if course's curved = false:
-                set ux to (placed's finish's x - placed's start's x) / (the maximum of 1e-9 and run)
-                set uy to (placed's finish's y - placed's start's y) / (the maximum of 1e-9 and run)
-                set across to (ux * (location's y - placed's start's y)) - (uy * (location's x - placed's start's x))
-            set outside to the maximum of 0.0 and (the maximum of (0.0 - across) and (across - placed's height))
-            return the maximum of beyond and outside
-        set halfDepth to (the maximum of 0.05 and (the bim joint depth of system curtainValue's id in modelValue)) * 0.5
-        return the maximum of 0.0 and (station's y - halfDepth)
-
 # The building system of the active storey nearest to `location` in the
 # plan, its footprint within `tolerance`; else the refused id.
 function the bim curtain at {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
@@ -2019,6 +2036,13 @@ function the bim system part name of {bim curtain record:curtainValue} coded {in
         set text to ((text + (the string form of " (bay ")) + (the string form of ((panelIndex / rows) + 1))) + (((the string form of ", row ") + (the string form of ((the remainder of panelIndex divided by rows) + 1))) + (the string form of ")"))
         return (text + (the string form of ": ")) + (the bim panel type name of (the bim panel type of panel panelIndex of system curtainValue's id in modelValue) in modelValue)
 
+# UI terminology is separate from the part names used by geometry/tests.
+function the bim displayed system part of {bim curtain record:curtainValue} coded {integer:code} in {bim model record:modelValue}:
+    execute:
+        if (code >= 0) and (code < 1000):
+            return (the string form of "Frame ") + (the string form of (code + 1))
+        return the bim system part name of curtainValue coded code in modelValue
+
 # Chooses the part of selected building system `curtainId` at `along` and
 # `height` (see `the bim system part code of`); a click off its parts
 # chooses the whole system again.
@@ -2029,7 +2053,7 @@ function choose bim editor part of system {a 64 bit integer:curtainId} at {a 64 
             return nothing
         set curtainValue to the item at found's position in (editor's documentValue's current's curtains's values)
         set editor's partCode to the bim system part code of curtainValue at along and height in editor's documentValue's current
-        set editor's message to (the bim system part name of curtainValue coded editor's partCode in editor's documentValue's current) + (the string form of " (Esc: the whole system)")
+        set editor's message to (the bim displayed system part of curtainValue coded editor's partCode in editor's documentValue's current) + (the string form of " (Esc: the whole system)")
 
 # A click on building system `curtainId` at model point `spot` (its height
 # above the system's storey): the system selected with its part there
@@ -2819,14 +2843,22 @@ function select bim editor element at {cad vector2:location} in {a pointer to a 
                             select bim editor 30 numbered spec's id in editor
                             return nothing
         set modelValue to editor's documentValue's current
+        if bim category bim space category is visible in editor's planRules:
+            loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+                set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
+                if spaceValue's levelId = editor's levelId:
+                    set tagPoint to a bim point inside (spaceValue's outline's values)
+                    if ((the absolute value of (location's x - tagPoint's x)) <= (editor's pickTolerance * 5.0)) and ((the absolute value of (location's y - tagPoint's y)) <= (editor's pickTolerance * 1.5)):
+                        select bim editor bim space object picked numbered spaceValue's id in editor
+                        return nothing
         # A room's tag (its area label, about 60 by 13 pixels round the
         # point the plan writes it at) before what lies under it.
         if bim category bim space category is visible in editor's planRules:
             loop cursor from 0 to the length of (editor's spaces's values):
-                set space to the item at cursor in (editor's spaces's values)
-                set tagPoint to a bim point inside (space's outline's values)
-                if ((the absolute value of (location's x - tagPoint's x)) <= (editor's pickTolerance * 5.0)) and ((the absolute value of (location's y - tagPoint's y)) <= (editor's pickTolerance * 1.5)):
-                    select bim editor bim space picked numbered (the bim identity of space) in editor
+                set regionValue to the item at cursor in (editor's spaces's values)
+                set tagPoint to a bim point inside (regionValue's outline's values)
+                if (((the absolute value of (location's x - tagPoint's x)) <= (editor's pickTolerance * 5.0)) and ((the absolute value of (location's y - tagPoint's y)) <= (editor's pickTolerance * 1.5))) and ((bim region regionValue has an explicit space in modelValue) = false):
+                    select bim editor bim space picked numbered (the bim identity of regionValue) in editor
                     return nothing
         set sketchId to the bim sketch at location in (@intrinsic("dereference", editor)) within editor's pickTolerance
         if sketchId != the bim refused id:
@@ -2877,10 +2909,16 @@ function select bim editor element at {cad vector2:location} in {a pointer to a 
             if ((slabValue's levelId = editor's levelId) and (bim category (the bim category of element slabValue's id in modelValue) is visible in editor's planRules)) and (bim slab slabValue has an edge near location within editor's pickTolerance):
                 select bim editor bim slab picked numbered slabValue's id in editor
                 return nothing
+        if bim category bim space category is visible in editor's planRules:
+            loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+                set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
+                if (spaceValue's levelId = editor's levelId) and (bim ring (spaceValue's outline's values) encloses location):
+                    select bim editor bim space object picked numbered spaceValue's id in editor
+                    return nothing
         loop cursor from 0 to the length of (editor's spaces's values):
-            set space to the item at cursor in (editor's spaces's values)
-            if (bim category bim space category is visible in editor's planRules) and (bim ring (space's outline's values) encloses location):
-                select bim editor bim space picked numbered (the bim identity of space) in editor
+            set regionValue to the item at cursor in (editor's spaces's values)
+            if ((bim category bim space category is visible in editor's planRules) and (bim ring (regionValue's outline's values) encloses location)) and ((bim region regionValue has an explicit space in modelValue) = false):
+                select bim editor bim space picked numbered (the bim identity of regionValue) in editor
                 return nothing
         select bim editor bim nothing picked numbered (the bim refused id) in editor
 
@@ -3246,6 +3284,13 @@ function the bim grid head near {cad vector2:location} in {bim editor record:edi
 # The selected space, when a space is selected and still exists.
 function the bim selected space of {bim editor record:editor}:
     execute:
+        if editor's selectionKind = bim space object picked:
+            set savedFound to the bim space object index of editor's selectionId in editor's documentValue's current
+            if savedFound's valid:
+                set savedRegion to the item at savedFound's position in (editor's documentValue's current's spaceObjects's values)
+                set regionArea to the absolute value of (the cad signed area of (savedRegion's outline's values))
+                set chosenRegion to @intrinsic("construct", a bim space record, savedRegion's levelId, a cad topology list of a 64 bit integer, savedRegion's outline, regionArea)
+                return @intrinsic("construct", a bim space choice record, true, chosenRegion)
         loop cursor from 0 to the length of (editor's spaces's values):
             set candidate to the item at cursor in (editor's spaces's values)
             if (editor's selectionKind = bim space picked) and ((the bim identity of candidate) = editor's selectionId):
@@ -3399,6 +3444,14 @@ function the bim selection description of {bim editor record:editor}:
                 set text to (text + (the bim length openingType's sill in units editor's lengthUnit)) + (the string form of ", ")
             set text to ((text + (the string form of "in wall ")) + (the string form of openingValue's hostId)) + (the string form of " at ")
             return text + (the bim length openingValue's offset in units editor's lengthUnit)
+        if editor's selectionKind = bim space object picked:
+            set found to the bim space object index of editor's selectionId in modelValue
+            if found's valid = false:
+                return the string form of ""
+            set spaceValue to the item at found's position in (modelValue's spaceObjects's values)
+            set areaValue to the absolute value of (the cad signed area of (spaceValue's outline's values))
+            set text to (the string form of "Space ") + (the bim tag text of spaceValue's id in modelValue)
+            return (text + (the string form of ": ")) + ((the bim area text of areaValue) + (the string form of " m2"))
         if editor's selectionKind = bim space picked:
             set chosen to the bim selected space of editor
             if chosen's valid = false:
@@ -3591,8 +3644,18 @@ function choose bim editor system type {integer:typeIndex} in {a pointer to a bi
 
 # The view the properties show while nothing is selected: the one last
 # chosen in the project browser, else the active plan.
+# Non-element Properties contexts. Real view IDs remain nonnegative.
+function bim sheet properties context:
+    replacement:
+        -2 as a 64 bit integer
+function bim project properties context:
+    replacement:
+        -3 as a 64 bit integer
+
 function the bim properties view of {bim editor record:editor}:
     execute:
+        if editor's propertiesViewId < (the bim refused id):
+            return the bim refused id
         if (the bim view index of editor's propertiesViewId in editor's documentValue's current)'s valid:
             return editor's propertiesViewId
         return editor's planViewId
@@ -6336,6 +6399,42 @@ function the bim sketch segment near {cad vector2:location} of {bim editor recor
 
 # A click in the sketch: the next point of the line or arc being drawn, or
 # the segment picked.
+function bim boundary point selected in {bim editor record:editor}:
+    execute:
+        if ((editor's editMode = false) or (editor's editKind != bim boundary edit)) or (editor's sketchHostKind != bim slab picked):
+            return false
+        if (the length of (editor's editPicked's values)) != 1:
+            return false
+        if editor's sketchTool != bim sketch pick tool:
+            return false
+        set vertexCode to the item at 0 in (editor's editPicked's values)
+        return (vertexCode >= 0) and (vertexCode < ((the length of (editor's sketchSegments's values)) * 2))
+
+function the bim selected boundary point of {bim editor record:editor}:
+    execute:
+        set vertexCode to the item at 0 in (editor's editPicked's values)
+        set segmentValue to the item at (vertexCode / 2) in (editor's sketchSegments's values)
+        if (the remainder of vertexCode divided by 2) = 1:
+            return segmentValue's finish
+        return segmentValue's start
+
+# Pending sketch only: move every incident endpoint together, so the loop
+# remains joined. Tab applies the existing simple-loop validator and makes
+# the entire boundary one undoable edit; Escape can still discard it.
+function move bim selected boundary point to {cad vector2:destination} in {a pointer to a bim editor record:editor}:
+    execute:
+        if (bim boundary point selected in (@intrinsic("dereference", editor))) = false:
+            return false
+        set originalPoint to the bim selected boundary point of (@intrinsic("dereference", editor))
+        loop cursor from 0 to the length of (editor's sketchSegments's values):
+            set segmentValue to the item at cursor in (editor's sketchSegments's values)
+            if bim boundary point segmentValue's start meets originalPoint:
+                set segmentValue's start to destination
+            if bim boundary point segmentValue's finish meets originalPoint:
+                set segmentValue's finish to destination
+            replace item at index cursor in (editor's sketchSegments's values) with segmentValue
+        return true
+
 function press bim editor boundary sketch in {a pointer to a bim editor record:editor}:
     execute:
         if (bim editor sketches upright (@intrinsic("dereference", editor))) and (editor's sketchInView = false):
@@ -6344,6 +6443,25 @@ function press bim editor boundary sketch in {a pointer to a bim editor record:e
         set location to the bim sketch location of (@intrinsic("dereference", editor))
         set point to the bim sketch point at location of (@intrinsic("dereference", editor))
         if editor's sketchTool = bim sketch pick tool:
+            set editor's editPicked to a cad topology list of an integer
+            if editor's sketchHostKind = bim slab picked:
+                set closestCode to -1
+                set closestGap to editor's pickTolerance * 1.5
+                loop cursor from 0 to the length of (editor's sketchSegments's values):
+                    set segmentValue to the item at cursor in (editor's sketchSegments's values)
+                    set gap to the cad distance from location to segmentValue's start
+                    if gap < closestGap:
+                        set closestGap to gap
+                        set closestCode to cursor * 2
+                    set gap to the cad distance from location to segmentValue's finish
+                    if gap < closestGap:
+                        set closestGap to gap
+                        set closestCode to (cursor * 2) + 1
+                if closestCode >= 0:
+                    append closestCode to (editor's editPicked's values)
+                    set editor's sketchPicked to closestCode / 2
+                    set editor's message to the string form of "Boundary point selected: edit Point X / Point Y in Properties; Tab applies"
+                    return nothing
             set editor's sketchPicked to the bim sketch segment near location of (@intrinsic("dereference", editor))
             if editor's sketchPicked >= 0:
                 set editor's message to the string form of "Picked a segment: Delete removes it | L line, A arc, Tab finishes"
@@ -6351,6 +6469,7 @@ function press bim editor boundary sketch in {a pointer to a bim editor record:e
                 set editor's message to the bim sketch hint of (@intrinsic("dereference", editor))
             return nothing
         set editor's sketchPicked to -1
+        set editor's editPicked to a cad topology list of an integer
         set clicked to the length of (editor's sketchPending's values)
         if clicked = 0:
             append point to (editor's sketchPending's values)
@@ -6454,6 +6573,7 @@ function type bim editor boundary key {integer:code} in {a pointer to a bim edit
             set editor's message to the bim sketch hint of (@intrinsic("dereference", editor))
             return nothing
         if (code = bim delete key code) or (code = bim backspace key code):
+            set editor's editPicked to a cad topology list of an integer
             set segmentCount to the length of (editor's sketchSegments's values)
             if (editor's sketchPicked >= 0) and (editor's sketchPicked < segmentCount):
                 remove item editor's sketchPicked from (editor's sketchSegments's values)

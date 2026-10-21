@@ -3,7 +3,7 @@
 # WiX Toolset 3 is on PATH (heat.exe, candle.exe, light.exe), an MSI
 # installer from `open-bim-studio.wxs`.
 #
-#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Tree <tree> -Output <folder> [-Version 0.1.0]
+#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Tree <tree> -Output <folder> [-Version 0.1.1]
 #
 # -Program is the compiled examples/bim-slice/main.dl; the DLLs the DynLex
 # compiler copied beside it (GLFW, FreeType, the Vulkan loader, the C++ and
@@ -16,7 +16,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $Program,
     [Parameter(Mandatory = $true)] [string] $Tree,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = "0.1.0",
+    [string] $Version = "0.1.1",
     [switch] $RequireMsi
 )
 $ErrorActionPreference = "Stop"

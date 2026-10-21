@@ -21,6 +21,7 @@ import examples/bim-slice/bim_reinforcement.dl
 import examples/bim-slice/bim_connections.dl
 import examples/bim-slice/bim_connection_geometry.dl
 import examples/bim-slice/bim_profiles.dl
+import examples/bim-slice/bim_masonry.dl
 
 class:
     patterns:
@@ -274,7 +275,7 @@ function the bim profile rings of {bim linear record:linearValue} as {bim linear
         # The outline of its profile (`bim_profiles.dl`): a rectangle or a
         # circle, or an I, L, U, T, C or Z shape, a hollow section's outside.
         set profileCorners to an empty list of a cad vector2
-        set profileShapes to the bim rings of profile (the bim profile of linear type linearType in modelValue) at roundCorners round corners
+        set profileShapes to the bim rings of linear type linearType in modelValue at roundCorners round corners
         set outerRing to the item at 0 in profileShapes
         loop cursor from 0 to the length of outerRing:
             append (the item at cursor in outerRing) to profileCorners
@@ -431,7 +432,7 @@ function the bim swept shape of {bim linear record:linearValue} typed {bim linea
         # Each ring of the profile (its outline, a hollow section's hole
         # too) placed at both ends, and its sides between them.
         set linearFrame to the bim frame of linear linearValue in modelValue
-        set profileShapes to the bim rings of profile (the bim profile of linear type linearType in modelValue) at roundCorners round corners
+        set profileShapes to the bim rings of linear type linearType in modelValue at roundCorners round corners
         loop shapeCursor from 0 to the length of profileShapes:
             set shapeRing to the item at shapeCursor in profileShapes
             set ringCount to the length of shapeRing
@@ -1041,6 +1042,49 @@ function the bim reinforcement line shape of {reinforcement definition:spec} in 
                 append upward to (lineShape's normals's values)
         return lineShape
 
+# A wall's masonry module (`bim_masonry.dl`) as light lines: one upright
+# line per module line on its masonry face, from the wall's foot to its top,
+# as pairs of model points with no triangles. Nothing for a module that is
+# not measured, and never a solid per brick.
+function the bim masonry line shape of {bim masonry record:masonryValue}:
+    execute:
+        set lineShape to an empty fast mesh
+        if masonryValue's status != (bim masonry measured):
+            return lineShape
+        set facing to a cad vector3 with x masonryValue's onward's y, y (0.0 - masonryValue's onward's x) and z 0.0
+        set stride to the bim masonry drawing stride of masonryValue
+        set lineNumber to 0
+        loop while lineNumber <= masonryValue's whole:
+            set footSpot to the bim masonry spot lineNumber of masonryValue
+            append footSpot to (lineShape's positions's values)
+            append (a cad vector3 with x footSpot's x, y footSpot's y and z (footSpot's z + masonryValue's height)) to (lineShape's positions's values)
+            append facing to (lineShape's normals's values)
+            append facing to (lineShape's normals's values)
+            set lineNumber to lineNumber + stride
+        return lineShape
+
+# Clip module stations to the host's actual opening heights before drawing.
+function the bim masonry line shape of {bim masonry record:masonryValue} on {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set lineShape to an empty fast mesh
+        if masonryValue's status != (bim masonry measured):
+            return lineShape
+        set facing to a cad vector3 with x masonryValue's onward's y, y (0.0 - masonryValue's onward's x) and z 0.0
+        set stride to the bim masonry drawing stride of masonryValue
+        set lineNumber to 0
+        loop while lineNumber <= masonryValue's whole:
+            set spotValue to the bim masonry point lineNumber of masonryValue
+            set visibleRanges to the bim masonry vertical spans at spotValue on wallValue in modelValue
+            loop cursor from 0 to the length of visibleRanges:
+                set spanValue to the item at cursor in visibleRanges
+                append (a cad vector3 with x spotValue's x, y spotValue's y and z spanValue's x) to (lineShape's positions's values)
+                append (a cad vector3 with x spotValue's x, y spotValue's y and z spanValue's y) to (lineShape's positions's values)
+                append facing to (lineShape's normals's values)
+                append facing to (lineShape's normals's values)
+            free visibleRanges
+            set lineNumber to lineNumber + stride
+        return lineShape
+
 # Whether scene mesh `entry` holds lines (pairs of points, as `the bim
 # reinforcement line shape of` makes) instead of triangles.
 function bim scene mesh {bim scene mesh record:entry} draws lines:
@@ -1394,6 +1438,23 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
                 else:
                     set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
                     append (@intrinsic("construct", a bim scene mesh record, meshValue's id, 0 as a 64 bit integer, the bim mesh shape of meshValue at elevation, bim mass category, the bim category colouring)) to (result's values)
+        # Masonry module lines, one line mesh for each wall whose module is
+        # measured (`the bim masonry line shape of`), under the wall's id.
+        set masonryWalls to an empty list of an integer
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            if (the bim setting (bim masonry module setting) of ((the item at cursor in (modelValue's walls's values))'s id) in modelValue)'s found:
+                append cursor to masonryWalls
+        if (the length of masonryWalls) > 0:
+            set masonryIndex to the bim join index of modelValue
+            loop cursor from 0 to the length of masonryWalls:
+                set masonryWallValue to the item at (the item at cursor in masonryWalls) in (modelValue's walls's values)
+                set masonryValue to the bim masonry of wall masonryWallValue in modelValue using masonryIndex
+                if masonryValue's status = (bim masonry measured):
+                    if bim mesh (the length of (result's values)) stays among remade of previous:
+                        append (the item at (the length of (result's values)) in previous) to (result's values)
+                    else:
+                        append (@intrinsic("construct", a bim scene mesh record, masonryWallValue's id, 0 as a 64 bit integer, the bim masonry line shape of masonryValue on masonryWallValue in modelValue, bim other category, the bim material colour of (the string form of "brick"))) to (result's values)
+        free masonryWalls
         # Kept meshes are found by their position; should an element come
         # out in another number of meshes, every mesh is made again.
         if ((the length of remade) > 0) and ((the length of (result's values)) != (the length of previous)):
@@ -1477,6 +1538,11 @@ function bim curtain picked:
 function bim level picked:
     replacement:
         14
+
+# A persistent, explicitly placed spatial object (not a derived room hash).
+function bim space object picked:
+    replacement:
+        15
 
 # Scene meshes of imported elements have ids from here up, above any id the
 # model hands out.
@@ -1792,15 +1858,15 @@ function the bim pick along {bim ray record:ray} among {a pointer to a list:mesh
                             if (openingDistance < best's distance) or nearHost:
                                 set best to @intrinsic("construct", a bim pick record, bim opening picked, openingValue's id, openingDistance)
         loop spaceCursor from 0 to the length of spaces:
-            set space to the item at spaceCursor in spaces
-            set levelFound to the bim level index of space's levelId in modelValue
-            if levelFound's valid and ((the absolute value of ray's direction's z) > 1e-12):
+            set regionValue to the item at spaceCursor in spaces
+            set levelFound to the bim level index of regionValue's levelId in modelValue
+            if (levelFound's valid and ((the absolute value of ray's direction's z) > 1e-12)) and ((bim region regionValue has an explicit space in modelValue) = false):
                 set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
                 set floorDistance to (elevation - ray's origin's z) / ray's direction's z
                 if (floorDistance > 0.0) and (floorDistance < (best's distance - the bim pick margin)):
                     set floorPoint to a cad vector2 with x (ray's origin's x + (floorDistance * ray's direction's x)) and y (ray's origin's y + (floorDistance * ray's direction's y))
-                    if bim flat point floorPoint lies in (space's outline's values):
-                        set best to @intrinsic("construct", a bim pick record, bim space picked, the bim identity of space, floorDistance)
+                    if bim flat point floorPoint lies in (regionValue's outline's values):
+                        set best to @intrinsic("construct", a bim pick record, bim space picked, the bim identity of regionValue, floorDistance)
         return best
 
 # ---------------------------------------------------------------- section box
@@ -2077,3 +2143,53 @@ function the bim meshes among {a pointer to a list:sceneMeshes} leaving out {a p
             if (bim element entry's elementId is among leftOut) = false:
                 append entry to (kept's values)
         return kept
+
+# Wire edges shared by display and picking. They need no triangulation and
+# follow the object's own height, not the storey's default height.
+function the bim wire of space object {bim space object record:spaceValue} in {bim model record:modelValue}:
+    execute:
+        set wireShape to an empty fast mesh
+        set levelFound to the bim level index of spaceValue's levelId in modelValue
+        if levelFound's valid = false:
+            return wireShape
+        set low to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set high to low + spaceValue's height
+        set count to the length of (spaceValue's outline's values)
+        loop edge from 0 to count:
+            set here to the item at edge in (spaceValue's outline's values)
+            set following to the item at (the remainder of (edge + 1) divided by count) in (spaceValue's outline's values)
+            set lowA to a cad vector3 with x here's x, y here's y and z low
+            set lowB to a cad vector3 with x following's x, y following's y and z low
+            set highA to a cad vector3 with x here's x, y here's y and z high
+            set highB to a cad vector3 with x following's x, y following's y and z high
+            append lowA to (wireShape's positions's values)
+            append lowB to (wireShape's positions's values)
+            append highA to (wireShape's positions's values)
+            append highB to (wireShape's positions's values)
+            append lowA to (wireShape's positions's values)
+            append highA to (wireShape's positions's values)
+        return wireShape
+
+# Spaces pick on their visible wires, not on an invisible volume enclosing
+# every chair and wall. The caller gates by category. A negative level
+# means all storeys. Clipping happens before distance tests, as for display.
+function the bim space object pick along {bim ray record:ray} in {bim model record:modelValue} on level {a 64 bit integer:levelId} within {a 64 bit floating-point number:reach} clipped {boolean:boxed} from {cad vector3:low} to {cad vector3:high}:
+    execute:
+        set best to no bim pick
+        if reach <= 0.0:
+            return best
+        loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+            set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
+            if (levelId < (0 as a 64 bit integer)) or (spaceValue's levelId = levelId):
+                set shapeValue to the bim wire of space object spaceValue in modelValue
+                if boxed:
+                    set shapeValue to the bim line shape shapeValue clipped to box from low to high
+                set edge to 0
+                loop while (edge + 1) < (the length of (shapeValue's positions's values)):
+                    set first to the item at edge in (shapeValue's positions's values)
+                    set last to the item at (edge + 1) in (shapeValue's positions's values)
+                    set hitTravel to the bim ray distance to segment from first to last along ray within reach
+                    if hitTravel < best's distance:
+                        set best to @intrinsic("construct", a bim pick record, bim space object picked, spaceValue's id, hitTravel)
+                    set edge to edge + 2
+        return best

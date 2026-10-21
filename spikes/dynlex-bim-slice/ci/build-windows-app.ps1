@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $CompilerTree,
     [Parameter(Mandatory = $true)] [string] $Slice,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = '0.1.0'
+    [string] $Version = '0.1.1'
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'This script requires native Windows, not WSL.' }

@@ -4,10 +4,13 @@
 from the selected checkout, runs three headless checks, then produces a ZIP
 and MSI. It uploads artifacts only; it does not publish a release.
 
+The release candidate package version is **0.1.1**; the existing v0.1 source
+asset is only the compiler bootstrap input and is never overwritten.
+
 ## Run prerequisites
 
 1. Merge the Windows port from `codex/windows-v0.1` with the current Linux UI.
-   The default `required_ancestor` is `5bff3a3`; the workflow refuses a source
+   The default `required_ancestor` is `779634b`; the workflow refuses a source
    ref without that commit. This prevents shipping the old app bundled in the
    compiler-source snapshot. Resolve port changes in loading, file dialogs,
    runtime paths, theme setup and the platform C shim, not just installer files.
