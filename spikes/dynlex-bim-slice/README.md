@@ -5,6 +5,13 @@ installer, command (`open-bim-studio`), menu entry and default file
 (`open-bim-studio.ifcx`) carry that name. The spike's directories and DynLex
 module paths (`examples/bim-slice/...`) keep their working name.
 
+The native window frame follows the app's appearance setting. On the shipped
+Linux/X11 backend, Dark requests a dark decoration and Light restores the window
+manager's default; support depends on the desktop theme. Windows uses the native
+DWM preference and preserves High Contrast. The title bar keeps its native
+window controls. Windows builds stage `platform/windows/bim_window_style.dl`
+over the Linux module; the Windows CI build script performs this step.
+
 **Question.** Does the chain the roadmap names as the architectural risk —
 *parametric → geometry → 2D → IFC, with changes propagating* — work end to end in
 DynLex on the native `cadkernel` port, with stable identifiers, semantic
