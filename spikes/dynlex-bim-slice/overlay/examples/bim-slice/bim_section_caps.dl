@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: MPL-2.0
+# View-only section faces. Each original material mesh is cut separately;
+# closed rings retain voids through the existing hole-aware triangulator.
+import examples/bim-slice/bim_ifc_read.dl
+
+function append bim cut point {cad vector3:spotValue} once into {a pointer to a list:pointValues}:
+    execute:
+        loop pointCursor from 0 to the length of pointValues:
+            if (the cad distance from spotValue to (the item at pointCursor in pointValues)) < 1e-7:
+                return nothing
+        append spotValue to pointValues
+
+function append bim cut segment from {cad vector3:firstSpot} to {cad vector3:lastSpot} once into {a pointer to a list:endValues}:
+    execute:
+        if (the cad distance from firstSpot to lastSpot) < 1e-7:
+            return nothing
+        set pairCursor to 0
+        loop while (pairCursor + 1) < (the length of endValues):
+            set oldFirst to the item at pairCursor in endValues
+            set oldLast to the item at (pairCursor + 1) in endValues
+            set sameForward to ((the cad distance from firstSpot to oldFirst) < 1e-7) and ((the cad distance from lastSpot to oldLast) < 1e-7)
+            set sameReverse to ((the cad distance from firstSpot to oldLast) < 1e-7) and ((the cad distance from lastSpot to oldFirst) < 1e-7)
+            if sameForward or sameReverse:
+                return nothing
+            set pairCursor to pairCursor + 2
+        append firstSpot to endValues
+        append lastSpot to endValues
+
+function append bim cut triangles {fast mesh record:sourceShape} into {a pointer to a fast mesh record:destinationShape}:
+    execute:
+        loop cornerCursor from 0 to the length of (sourceShape's triangles's values):
+            set sourceCorner to the item at cornerCursor in (sourceShape's triangles's values)
+            set freshCorner to the length of (destinationShape's positions's values)
+            append (the item at sourceCorner in (sourceShape's positions's values)) to (destinationShape's positions's values)
+            append (the item at sourceCorner in (sourceShape's normals's values)) to (destinationShape's normals's values)
+            append freshCorner to (destinationShape's triangles's values)
+
+function the bim cut caps of {fast mesh record:sourceShape} from {cad vector3:lowCorner} to {cad vector3:highCorner}:
+    execute:
+        set capResult to an empty fast mesh
+        loop faceIndex from 0 to 6:
+            set cutAxis to faceIndex / 2
+            set cutValue to the bim coordinate cutAxis of highCorner
+            set outward to 1.0
+            if (the remainder of faceIndex divided by 2) = 0:
+                set cutValue to the bim coordinate cutAxis of lowCorner
+                set outward to -1.0
+            set hasLower to false
+            set hasUpper to false
+            loop spotCursor from 0 to the length of (sourceShape's positions's values):
+                set signedGap to (the bim coordinate cutAxis of (the item at spotCursor in (sourceShape's positions's values))) - cutValue
+                if signedGap < -1e-7:
+                    set hasLower to true
+                if signedGap > 1e-7:
+                    set hasUpper to true
+            # Tangency is an existing surface, not a new cut face.
+            if hasLower and hasUpper:
+                set cutEnds to an empty list of a cad vector3
+                set triangleCursor to 0
+                loop while (triangleCursor + 2) < (the length of (sourceShape's triangles's values)):
+                    set hits to an empty list of a cad vector3
+                    loop edgeCursor from 0 to 3:
+                        set edgeFirst to the item at (the item at (triangleCursor + edgeCursor) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+                        set edgeLast to the item at (the item at (triangleCursor + (the remainder of (edgeCursor + 1) divided by 3)) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+                        set firstGap to (the bim coordinate cutAxis of edgeFirst) - cutValue
+                        set lastGap to (the bim coordinate cutAxis of edgeLast) - cutValue
+                        if (the absolute value of firstGap) < 1e-7:
+                            append bim cut point edgeFirst once into hits
+                        if ((firstGap < -1e-7) and (lastGap > 1e-7)) or ((firstGap > 1e-7) and (lastGap < -1e-7)):
+                            set crossingSpot to the cad sum of edgeFirst and ((the cad difference of edgeLast and edgeFirst) scaled by (firstGap / (firstGap - lastGap)))
+                            append bim cut point crossingSpot once into hits
+                    if (the length of hits) = 2:
+                        append bim cut segment from (the item at 0 in hits) to (the item at 1 in hits) once into cutEnds
+                    free hits
+                    set triangleCursor to triangleCursor + 3
+                set planeSpot to a cad vector3 with x cutValue, y 0.0 and z 0.0
+                set planeFacing to a cad vector3 with x outward, y 0.0 and z 0.0
+                if cutAxis = 1:
+                    set planeSpot to a cad vector3 with x 0.0, y cutValue and z 0.0
+                    set planeFacing to a cad vector3 with x 0.0, y outward and z 0.0
+                if cutAxis = 2:
+                    set planeSpot to a cad vector3 with x 0.0, y 0.0 and z cutValue
+                    set planeFacing to a cad vector3 with x 0.0, y 0.0 and z outward
+                set wholeFace to the bim closed cut face from cutEnds at planeSpot facing planeFacing
+                # Other box planes trim the cap itself, including corner cuts.
+                set boundedFace to the bim mesh wholeFace clipped to box from lowCorner to highCorner
+                append bim cut triangles boundedFace into (the address of capResult)
+                free cutEnds
+        return capResult
+
+# Diagonal hatch strokes are clipped to each cap triangle in its actual
+# world plane. No screen overlay can leak across a void or another solid.
+# One 200 mm world-space grid is shared by adjacent triangles/materials.
+function the bim cut hatching of {fast mesh record:capShape}:
+    execute:
+        set strokeShape to an empty fast mesh
+        set faceCursor to 0
+        loop while (faceCursor + 2) < (the length of (capShape's triangles's values)):
+            set corners to an empty list of a cad vector3
+            set scalarValues to an empty list of a 64 bit floating-point number
+            set faceNormal to the item at (the item at faceCursor in (capShape's triangles's values)) in (capShape's normals's values)
+            set axisFirst to 0
+            set axisLast to 1
+            if (the absolute value of faceNormal's x) > 0.9:
+                set axisFirst to 1
+                set axisLast to 2
+            else if (the absolute value of faceNormal's y) > 0.9:
+                set axisLast to 2
+            set minimumScalar to 1e30
+            set maximumScalar to -1e30
+            loop cornerCursor from 0 to 3:
+                set cornerSpot to the item at (the item at (faceCursor + cornerCursor) in (capShape's triangles's values)) in (capShape's positions's values)
+                set scalarValue to (the bim coordinate axisFirst of cornerSpot) + (the bim coordinate axisLast of cornerSpot)
+                append cornerSpot to corners
+                append scalarValue to scalarValues
+                set minimumScalar to the minimum of minimumScalar and scalarValue
+                set maximumScalar to the maximum of maximumScalar and scalarValue
+            set firstStroke to (the floor of (minimumScalar / 0.2)) as an integer
+            set lastStroke to ((the floor of (maximumScalar / 0.2)) as an integer) + 1
+            # Bounded work for abnormally large imported triangles.
+            set strokeStride to 1
+            if (lastStroke - firstStroke) > 2048:
+                set strokeStride to ((lastStroke - firstStroke) / 2048) + 1
+            set strokeCursor to firstStroke
+            loop while strokeCursor <= lastStroke:
+                set strokeScalar to (strokeCursor as a 64 bit floating-point number) * 0.2
+                set strokeHits to an empty list of a cad vector3
+                loop edgeCursor from 0 to 3:
+                    set nextCorner to the remainder of (edgeCursor + 1) divided by 3
+                    set firstGap to (the item at edgeCursor in scalarValues) - strokeScalar
+                    set lastGap to (the item at nextCorner in scalarValues) - strokeScalar
+                    set firstSpot to the item at edgeCursor in corners
+                    set lastSpot to the item at nextCorner in corners
+                    if (the absolute value of firstGap) < 1e-8:
+                        append bim cut point firstSpot once into strokeHits
+                    if ((firstGap < -1e-8) and (lastGap > 1e-8)) or ((firstGap > 1e-8) and (lastGap < -1e-8)):
+                        append bim cut point (the cad sum of firstSpot and ((the cad difference of lastSpot and firstSpot) scaled by (firstGap / (firstGap - lastGap)))) once into strokeHits
+                if (the length of strokeHits) = 2:
+                    loop hitCursor from 0 to 2:
+                        append (the item at hitCursor in strokeHits) to (strokeShape's positions's values)
+                        append faceNormal to (strokeShape's normals's values)
+                free strokeHits
+                set strokeCursor to strokeCursor + strokeStride
+            free corners
+            free scalarValues
+            set faceCursor to faceCursor + 3
+        return strokeShape
