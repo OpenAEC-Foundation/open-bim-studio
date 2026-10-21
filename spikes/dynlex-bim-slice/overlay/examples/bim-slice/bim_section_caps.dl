@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MPL-2.0
+# View-only section faces. Each original material mesh is cut separately;
+# closed rings retain voids through the existing hole-aware triangulator.
+import examples/bim-slice/bim_ifc_read.dl
+
+function append bim cut point {cad vector3:spotValue} once into {a pointer to a list:pointValues}:
+    execute:
+        loop pointCursor from 0 to the length of pointValues:
+            if (the cad distance from spotValue to (the item at pointCursor in pointValues)) < 1e-7:
+                return nothing
+        append spotValue to pointValues
+
+function append bim cut segment from {cad vector3:firstSpot} to {cad vector3:lastSpot} once into {a pointer to a list:endValues}:
+    execute:
+        if (the cad distance from firstSpot to lastSpot) < 1e-7:
+            return nothing
+        set pairCursor to 0
+        loop while (pairCursor + 1) < (the length of endValues):
+            set oldFirst to the item at pairCursor in endValues
+            set oldLast to the item at (pairCursor + 1) in endValues
+            set sameForward to ((the cad distance from firstSpot to oldFirst) < 1e-7) and ((the cad distance from lastSpot to oldLast) < 1e-7)
+            set sameReverse to ((the cad distance from firstSpot to oldLast) < 1e-7) and ((the cad distance from lastSpot to oldFirst) < 1e-7)
+            if sameForward or sameReverse:
+                return nothing
+            set pairCursor to pairCursor + 2
+        append firstSpot to endValues
+        append lastSpot to endValues
+
+function append bim cut triangles {fast mesh record:sourceShape} into {a pointer to a fast mesh record:destinationShape}:
+    execute:
+        loop cornerCursor from 0 to the length of (sourceShape's triangles's values):
+            set sourceCorner to the item at cornerCursor in (sourceShape's triangles's values)
+            set freshCorner to the length of (destinationShape's positions's values)
+            append (the item at sourceCorner in (sourceShape's positions's values)) to (destinationShape's positions's values)
+            append (the item at sourceCorner in (sourceShape's normals's values)) to (destinationShape's normals's values)
+            append freshCorner to (destinationShape's triangles's values)
+
+function the bim cut caps of {fast mesh record:sourceShape} from {cad vector3:lowCorner} to {cad vector3:highCorner}:
+    execute:
+        set capResult to an empty fast mesh
+        loop faceIndex from 0 to 6:
+            set cutAxis to faceIndex / 2
+            set cutValue to the bim coordinate cutAxis of highCorner
+            set outward to 1.0
+            if (the remainder of faceIndex divided by 2) = 0:
+                set cutValue to the bim coordinate cutAxis of lowCorner
+                set outward to -1.0
+            set hasLower to false
+            set hasUpper to false
+            loop spotCursor from 0 to the length of (sourceShape's positions's values):
+                set signedGap to (the bim coordinate cutAxis of (the item at spotCursor in (sourceShape's positions's values))) - cutValue
+                if signedGap < -1e-7:
+                    set hasLower to true
+                if signedGap > 1e-7:
+                    set hasUpper to true
+            # Tangency is an existing surface, not a new cut face.
+            if hasLower and hasUpper:
+                set cutEnds to an empty list of a cad vector3
+                set triangleCursor to 0
+                loop while (triangleCursor + 2) < (the length of (sourceShape's triangles's values)):
+                    set hits to an empty list of a cad vector3
+                    loop edgeCursor from 0 to 3:
+                        set edgeFirst to the item at (the item at (triangleCursor + edgeCursor) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+                        set edgeLast to the item at (the item at (triangleCursor + (the remainder of (edgeCursor + 1) divided by 3)) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+                        set firstGap to (the bim coordinate cutAxis of edgeFirst) - cutValue
+                        set lastGap to (the bim coordinate cutAxis of edgeLast) - cutValue
+                        if (the absolute value of firstGap) < 1e-7:
+                            append bim cut point edgeFirst once into hits
+                        if ((firstGap < -1e-7) and (lastGap > 1e-7)) or ((firstGap > 1e-7) and (lastGap < -1e-7)):
+                            set crossingSpot to the cad sum of edgeFirst and ((the cad difference of edgeLast and edgeFirst) scaled by (firstGap / (firstGap - lastGap)))
+                            append bim cut point crossingSpot once into hits
+                    if (the length of hits) = 2:
+                        append bim cut segment from (the item at 0 in hits) to (the item at 1 in hits) once into cutEnds
+                    free hits
+                    set triangleCursor to triangleCursor + 3
+                set planeSpot to a cad vector3 with x cutValue, y 0.0 and z 0.0
+                set planeFacing to a cad vector3 with x outward, y 0.0 and z 0.0
+                if cutAxis = 1:
+                    set planeSpot to a cad vector3 with x 0.0, y cutValue and z 0.0
+                    set planeFacing to a cad vector3 with x 0.0, y outward and z 0.0
+                if cutAxis = 2:
+                    set planeSpot to a cad vector3 with x 0.0, y 0.0 and z cutValue
+                    set planeFacing to a cad vector3 with x 0.0, y 0.0 and z outward
+                set wholeFace to the bim closed cut face from cutEnds at planeSpot facing planeFacing
+                # Other box planes trim the cap itself, including corner cuts.
+                set boundedFace to the bim mesh wholeFace clipped to box from lowCorner to highCorner
+                append bim cut triangles boundedFace into (the address of capResult)
+                free cutEnds
+        return capResult
