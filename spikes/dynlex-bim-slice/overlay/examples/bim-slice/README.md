@@ -190,6 +190,8 @@ installer again replaces it; `~/.local/share/bim-slice/uninstall` removes it.
 | B | Add a 0.25 m slab under the selected space, following its outline |
 | I | Grid tool: click the start and the end; grids running north-south are numbered 1, 2, 3..., the others lettered A, B, C... Grids show in the plan with heads at both ends, in the section where it crosses them, and in 3D as outlined planes; they export as `IfcGrid` |
 | L | Visibility panel: per category, check boxes for visibility in the plan, the section and the 3D view, and halftone in the plan. The rules are saved with the model |
+| HH | Hide the selected element(s) temporarily in the active view. Hidden elements cannot be picked there; the model geometry is unchanged |
+| HR | Restore elements hidden with HH in the active view |
 | Page Up / Page Down | Make the storey above or below active; Page Up on the top storey adds a storey on it. The plan cuts the active storey and outlines the walls of the storey below. Over the 3D view with a storey isolated: isolate the storey above or below |
 | View > Isolate storey | Show in the 3D view only what belongs to one storey: native elements by their level, imported ones by the storey that contains them (IFC and IfcX). It starts at the active level; again shows all |
 | View cube (3D view, top right) | Turns with the camera; a click on a face's middle looks from that side, on a border strip from that edge, on a corner square from that corner |
