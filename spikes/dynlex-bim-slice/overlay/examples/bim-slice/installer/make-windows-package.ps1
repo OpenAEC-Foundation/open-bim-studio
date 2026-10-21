@@ -16,7 +16,8 @@ param(
     [Parameter(Mandatory = $true)] [string] $Program,
     [Parameter(Mandatory = $true)] [string] $Tree,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = "0.1.0"
+    [string] $Version = "0.1.0",
+    [switch] $RequireMsi
 )
 $ErrorActionPreference = "Stop"
 
@@ -83,6 +84,7 @@ $heat = Get-Command heat.exe -ErrorAction SilentlyContinue
 $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
 $light = Get-Command light.exe -ErrorAction SilentlyContinue
 if (-not ($heat -and $candle -and $light)) {
+    if ($RequireMsi) { throw "WiX Toolset 3 is required for this release build." }
     Write-Host "WiX Toolset 3 not on PATH: no MSI."
     exit 0
 }
