@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-# Native, bounded ASCII DXF reference reader. Geometry is flattened once on
+# Native, bounded text DXF reference reader. Geometry is flattened once on
 # import, never while painting. Coordinates become metres; unsupported
 # entities and paperspace are counted rather than mistaken for model lines.
 # DXF INSERT / INSUNITS: Autodesk DXF reference, group codes 10/20,41/42,50,
@@ -130,6 +130,151 @@ function the bim dxf metres of units {integer:code}:
             return 0.1
         return 0.0
 
+# Text DXF since AC1021 uses UTF-8 even when DWGCODEPAGE says ANSI_1252.
+# Legacy Windows-1252 is decoded explicitly; undefined bytes are refused.
+function the bim dxf windows point of {integer:octet}:
+    execute:
+        if (octet < 128) or (octet >= 160):
+            return octet
+        if octet = 128:
+            return 8364
+        if octet = 130:
+            return 8218
+        if octet = 131:
+            return 402
+        if octet = 132:
+            return 8222
+        if octet = 133:
+            return 8230
+        if octet = 134:
+            return 8224
+        if octet = 135:
+            return 8225
+        if octet = 136:
+            return 710
+        if octet = 137:
+            return 8240
+        if octet = 138:
+            return 352
+        if octet = 139:
+            return 8249
+        if octet = 140:
+            return 338
+        if octet = 142:
+            return 381
+        if octet = 145:
+            return 8216
+        if octet = 146:
+            return 8217
+        if octet = 147:
+            return 8220
+        if octet = 148:
+            return 8221
+        if octet = 149:
+            return 8226
+        if octet = 150:
+            return 8211
+        if octet = 151:
+            return 8212
+        if octet = 152:
+            return 732
+        if octet = 153:
+            return 8482
+        if octet = 154:
+            return 353
+        if octet = 155:
+            return 8250
+        if octet = 156:
+            return 339
+        if octet = 158:
+            return 382
+        if octet = 159:
+            return 376
+        return 0
+
+function the bim dxf utf8 validity of {a string:source}:
+    execute:
+        set cursor to 0
+        loop while cursor < (the length of source):
+            set lead to (((the character at cursor in source) as a 32 bit integer) bitwise and 255) as an integer
+            set count to 0
+            set point to lead
+            set minimum to 0
+            if lead >= 128:
+                if (lead >= 194) and (lead <= 223):
+                    set count to 1
+                    set point to lead - 192
+                    set minimum to 128
+                else if (lead >= 224) and (lead <= 239):
+                    set count to 2
+                    set point to lead - 224
+                    set minimum to 2048
+                else if (lead >= 240) and (lead <= 244):
+                    set count to 3
+                    set point to lead - 240
+                    set minimum to 65536
+                else:
+                    return false
+            if (cursor + count) >= (the length of source):
+                return false
+            loop offset from 1 to (count + 1):
+                set continuation to (((the character at (cursor + offset) in source) as a 32 bit integer) bitwise and 255) as an integer
+                if (continuation < 128) or (continuation > 191):
+                    return false
+                set point to (point * 64) + (continuation - 128)
+            if ((point < minimum) or (point > 1114111)) or ((point >= 55296) and (point <= 57343)):
+                return false
+            set cursor to cursor + (count + 1)
+        return true
+
+function the bim dxf decoded {a string:source} modern {a boolean:modern} codepage {a string:codepage}:
+    execute:
+        set failure to @intrinsic("construct", a bim text reading record, false, the string form of "")
+        set nonAscii to false
+        loop cursor from 0 to the length of source:
+            set octet to (((the character at cursor in source) as a 32 bit integer) bitwise and 255) as an integer
+            if octet >= 128:
+                set nonAscii to true
+        if nonAscii = false:
+            return @intrinsic("construct", a bim text reading record, true, source)
+        if modern:
+            return @intrinsic("construct", a bim text reading record, the bim dxf utf8 validity of source, source)
+        if codepage != (the string form of "ANSI_1252"):
+            return failure
+        set size to 0
+        loop cursor from 0 to the length of source:
+            set octet to (((the character at cursor in source) as a 32 bit integer) bitwise and 255) as an integer
+            set point to the bim dxf windows point of octet
+            if point = 0:
+                return failure
+            if point < 128:
+                set size to size + 1
+            else if point < 2048:
+                set size to size + 2
+            else:
+                set size to size + 3
+        if size > 64000000:
+            return failure
+        set result to a new string buffer containing size bytes
+        set position to 0
+        loop cursor from 0 to the length of source:
+            set octet to (((the character at cursor in source) as a 32 bit integer) bitwise and 255) as an integer
+            set point to the bim dxf windows point of octet
+            if point < 128:
+                store (point as a byte) into the data of result at position
+                set position to position + 1
+            else:
+                if point >= 2048:
+                    store ((224 + (point / 4096)) as a byte) into the data of result at position
+                    set position to position + 1
+                    store ((128 + (the remainder of (point / 64) divided by 64)) as a byte) into the data of result at position
+                else:
+                    store ((192 + (point / 64)) as a byte) into the data of result at position
+                set position to position + 1
+                store ((128 + (the remainder of point divided by 64)) as a byte) into the data of result at position
+                set position to position + 1
+        return @intrinsic("construct", a bim text reading record, true, result)
+
 function the bim dxf document from {a string:source}:
     execute:
         set made to @intrinsic("construct", a bim dxf document record, false, the string form of "DXF refused", 0, 0.0, the string form of "unspecified ASCII", a cad topology list of a bim dxf pair record, a cad topology list of a bim dxf entity record, a cad topology list of a bim dxf block record)
@@ -138,8 +283,8 @@ function the bim dxf document from {a string:source}:
             return made
         loop cursor from 0 to the length of source:
             set octet to (((the character at cursor in source) as a 32 bit integer) bitwise and 255) as an integer
-            if (octet = 0) or (octet > 127):
-                set made's message to the string form of "Only ASCII DXF is supported; binary or non-ASCII text needs conversion"
+            if octet = 0:
+                set made's message to the string form of "Binary DXF or embedded NUL is not supported"
                 return made
         set rows to source split at "\n"
         set row to 0
@@ -170,6 +315,41 @@ function the bim dxf document from {a string:source}:
                 free rows
                 return made
         free rows
+        # Resolve the HEADER before interpreting any layer or BLOCK names.
+        set headerSection to the string form of ""
+        set pendingSection to false
+        set modernText to false
+        loop headerCursor from 0 to the length of (made's pairs's values):
+            set headerPair to the item at headerCursor in (made's pairs's values)
+            if (headerPair's code = 0) and (headerPair's value = (the string form of "SECTION")):
+                set pendingSection to true
+            else if pendingSection and (headerPair's code = 2):
+                set headerSection to headerPair's value
+                set pendingSection to false
+            else if (headerPair's code = 0) and (headerPair's value = (the string form of "ENDSEC")):
+                set headerSection to the string form of ""
+            if ((headerSection = (the string form of "HEADER")) and (headerPair's code = 9)) and ((headerCursor + 1) < (the length of (made's pairs's values))):
+                set headerValue to (the item at (headerCursor + 1) in (made's pairs's values))'s value
+                if headerPair's value = (the string form of "$DWGCODEPAGE"):
+                    set made's codepage to headerValue
+                if headerPair's value = (the string form of "$ACADVER"):
+                    if (the length of headerValue) = 6:
+                        if (the substring of headerValue from 0 spanning 2 bytes) = (the string form of "AC"):
+                            set version to the bim whole reading of (the substring of headerValue from 2 spanning 4 bytes)
+                            set modernText to version's valid and (version's value >= 1021)
+        set decodedBytes to 0
+        loop textCursor from 0 to the length of (made's pairs's values):
+            set textPair to the item at textCursor in (made's pairs's values)
+            set decoded to the bim dxf decoded textPair's value modern modernText codepage made's codepage
+            if decoded's valid = false:
+                set made's message to the string form of "Invalid UTF-8 or unsupported legacy DXF codepage; non-ASCII legacy text requires ANSI_1252"
+                return made
+            set decodedBytes to decodedBytes + (the length of decoded's text)
+            if decodedBytes > 64000000:
+                set made's message to the string form of "Decoded DXF exceeds 64 MB text limit"
+                return made
+            set textPair's value to decoded's text
+            replace item at index textCursor in (made's pairs's values) with textPair
         set section to the string form of ""
         set owner to -1
         set cursor to 0
