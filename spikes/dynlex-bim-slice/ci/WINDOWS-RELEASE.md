@@ -67,3 +67,10 @@ Still required before public release:
 The new workflow is configuration awaiting Windows execution, not evidence of a
 successful Windows build. The through-opening branch is excluded from this
 release preparation.
+
+The first native run stopped before dependency installation because Windows
+checkout converted patch files to CRLF, while the verified tarball contains LF
+sources. `.gitattributes` now keeps the compiler patches at LF. Reproduced
+locally without compiling: the exact verified snapshot passes the LF local
+patch reverse-check, and the shader/library patches pass forward-checks; a
+CRLF copy of the local patch fails its reverse-check.
