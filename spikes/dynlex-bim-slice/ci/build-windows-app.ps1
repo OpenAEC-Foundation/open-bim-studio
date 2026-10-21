@@ -15,6 +15,7 @@ $outPath = (Resolve-Path $Output).Path
 $compiler = Join-Path $treePath 'build\dynlex.exe'
 if (-not (Test-Path $compiler)) { throw "Missing compiler: $compiler" }
 if (-not $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT) { throw 'Run scripts/install.ps1 first.' }
+if ($env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -ne 'x86_64-w64-mingw32') { throw 'A native x64 llvm-mingw target is required.' }
 
 # Use this checkout's app and library overlay, never the app in the snapshot.
 # Keep the snapshot's CAD library, runtime and fallback font.
