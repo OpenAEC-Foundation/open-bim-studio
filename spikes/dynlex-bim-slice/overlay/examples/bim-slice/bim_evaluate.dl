@@ -587,6 +587,12 @@ function the bim signature of {bim wall record:wallValue} in {bim model record:m
         loop cursor from 0 to the length of contour:
             set written to (written + (the string form of ";c")) + (the bim point text of (the item at cursor in contour))
         free contour
+        # Its layers' own feet and tops (`the bim layer reach of layer`).
+        loop cursor from 0 to the length of (modelValue's settings's values):
+            set reachEntry to the item at cursor in (modelValue's settings's values)
+            if reachEntry's elementId = wallValue's id:
+                if ((reachEntry's code >= bim layer foot setting) and (reachEntry's code < ((bim layer foot setting) + 100))) or ((reachEntry's code >= bim layer top setting) and (reachEntry's code < ((bim layer top setting) + 100))):
+                    set written to (written + (the string form of ";x")) + ((the string form of reachEntry's code) + ((the string form of "=") + (the string form of reachEntry's value)))
         set hostedOpenings to the bim openings of wallValue in modelValue through hostedIndex
         loop cursor from 0 to the length of hostedOpenings:
             set openingValue to the item at cursor in hostedOpenings
@@ -723,6 +729,16 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
         set contour to the bim face contour of wallValue's id in modelValue
         set profiled to ((the length of contour) >= 3) and (curved = false)
         set fastWanted to preferringFast and (profiled = false)
+        # A wall whose layers have feet or tops of their own (`the bim layer
+        # reach of layer`) is its layer solids in one polyhedron, a shell
+        # each, so that a plan or section meets every layer where it
+        # stands. When a layer cannot be built so, the wall is built whole,
+        # at its own height.
+        if fastWanted and (bim wall wallValue's id has layers of their own height in modelValue):
+            set layerSolids to the bim layer solids of wallValue in modelValue using index
+            if (the length of (layerSolids's values)) > 0:
+                set shells to the bim polyhedron of layers (layerSolids's values)
+                return @intrinsic("construct", a bim solid record, 0, an empty cad body, true, shells)
         set hosted to an empty list of a bim opening record
         set fastOpenings to an empty list of a fast opening record
         set ownOpenings to the bim openings of wallValue in modelValue through hostedIndex
@@ -1292,43 +1308,84 @@ function the bim layer solids of {bim wall record:wallValue} in {bim model recor
         loop cursor from 0 to the length of (wallType's layers's values):
             set layerValue to the item at cursor in (wallType's layers's values)
             set bottom to top - layerValue's thickness
-            # Fractions from the exterior corner toward the interior one.
-            set nearFraction to (half - top) / breadth
-            set farFraction to (half - bottom) / breadth
-            set corners to an empty list of a cad vector2
-            append (the cad lerp from footprint's startExterior to footprint's startInterior at nearFraction) to corners
-            append (the cad lerp from footprint's finishExterior to footprint's finishInterior at nearFraction) to corners
-            append (the cad lerp from footprint's finishExterior to footprint's finishInterior at farFraction) to corners
-            append (the cad lerp from footprint's startExterior to footprint's startInterior at farFraction) to corners
-            set built to @intrinsic("construct", a fast wall result record, fast wall degenerate footprint, an empty fast polyhedron)
-            if arc's curved:
-                # The layer's own arc, with the openings at the same angles.
-                set middleOffset to (top + bottom) * 0.5
-                set layerRadius to arc's radius + (side * middleOffset)
+            # The layer's own foot and top (`the bim layer reach of layer`),
+            # its openings measured from its foot: a door through a layer
+            # reaching below the wall's foot leaves a sill, one through a
+            # layer starting above it is cut from the layer's foot up. A
+            # layer left no height is no solid.
+            set layerReach to the bim layer reach of layer cursor of wall wallValue's id in modelValue
+            set layerFoot to elevation - layerReach's x
+            set layerHeight to (wallValue's height + layerReach's x) + layerReach's y
+            if layerHeight > 1e-9:
+                # Fractions from the exterior corner toward the interior one.
+                set nearFraction to (half - top) / breadth
+                set farFraction to (half - bottom) / breadth
+                set corners to an empty list of a cad vector2
+                append (the cad lerp from footprint's startExterior to footprint's startInterior at nearFraction) to corners
+                append (the cad lerp from footprint's finishExterior to footprint's finishInterior at nearFraction) to corners
+                append (the cad lerp from footprint's finishExterior to footprint's finishInterior at farFraction) to corners
+                append (the cad lerp from footprint's startExterior to footprint's startInterior at farFraction) to corners
+                set built to @intrinsic("construct", a fast wall result record, fast wall degenerate footprint, an empty fast polyhedron)
+                set ratio to 1.0
+                set layerRadius to 0.0
+                if arc's curved:
+                    # The layer's own arc, with the openings at the same angles.
+                    set middleOffset to (top + bottom) * 0.5
+                    set layerRadius to arc's radius + (side * middleOffset)
+                    set ratio to layerRadius / arc's radius
                 set layerOpenings to an empty list of a fast opening record
                 loop openingCursor from 0 to the length of openings:
                     set opening to the item at openingCursor in openings
-                    set ratio to layerRadius / arc's radius
-                    append (@intrinsic("construct", a fast opening record, opening's along * ratio, opening's width * ratio, opening's sill, opening's height)) to layerOpenings
-                set built to the fast curved wall on corners about arc's centre spanning layerRadius, arc's startAngle and arc's sweep wide layerValue's thickness in (the bim pieces of arc reaching half) pieces from elevation rising wallValue's height with layerOpenings within the bim fast tolerance
+                    set openingSill to opening's sill + layerReach's x
+                    set openingHeight to opening's height
+                    if openingSill < 0.0:
+                        set openingHeight to openingHeight + openingSill
+                        set openingSill to 0.0
+                    if openingHeight > 1e-9:
+                        append (@intrinsic("construct", a fast opening record, opening's along * ratio, opening's width * ratio, openingSill, openingHeight)) to layerOpenings
+                if arc's curved:
+                    set built to the fast curved wall on corners about arc's centre spanning layerRadius, arc's startAngle and arc's sweep wide layerValue's thickness in (the bim pieces of arc reaching half) pieces from layerFoot rising layerHeight with layerOpenings within the bim fast tolerance
+                else:
+                    set built to the fast wall on corners from layerFoot rising layerHeight along wallValue's start toward (the bim direction of wallValue) with layerOpenings within the bim fast tolerance
                 free layerOpenings
-            else:
-                set built to the fast wall on corners from elevation rising wallValue's height along wallValue's start toward (the bim direction of wallValue) with openings within the bim fast tolerance
-            free corners
-            set layerShaping to the bim shaping of wallValue from elevation in modelValue using index
-            if (built's reason = fast wall built) and (bim shaping layerShaping moves):
-                set built to the bim polyhedron built's shape shaped by layerShaping
-            # A cavity (air) takes its place in the wall but is not a solid.
-            if built's reason = fast wall built:
-                if layerValue's material != (the string form of "air"):
-                    append (@intrinsic("construct", a bim layer solid record, layerValue's material, built's shape)) to (layered's values)
-            else:
-                set failed to true
+                free corners
+                set layerShaping to the bim shaping of wallValue from elevation in modelValue using index
+                if (built's reason = fast wall built) and (bim shaping layerShaping moves):
+                    set built to the bim polyhedron built's shape shaped by layerShaping
+                # A cavity (air) takes its place in the wall but is not a solid.
+                if built's reason = fast wall built:
+                    if layerValue's material != (the string form of "air"):
+                        append (@intrinsic("construct", a bim layer solid record, layerValue's material, built's shape)) to (layered's values)
+                else:
+                    set failed to true
             set top to bottom
         free openings
         if failed:
             return a cad topology list of a bim layer solid record
         return layered
+
+# The layer solids `layerList` as one polyhedron, a closed shell each: the
+# positions, loops and faces of every layer after the previous layer's. A
+# plane cut meets each shell as its own loop.
+function the bim polyhedron of layers {a pointer to a list:layerList}:
+    execute:
+        set result to an empty fast polyhedron
+        loop layerCursor from 0 to the length of layerList:
+            set layerShape to (the item at layerCursor in layerList)'s shape
+            set indexBase to the length of (result's positions's values)
+            loop cursor from 0 to the length of (layerShape's positions's values):
+                append (the item at cursor in (layerShape's positions's values)) to (result's positions's values)
+            loop faceCursor from 0 to the length of (layerShape's faces's values):
+                set faceValue to the item at faceCursor in (layerShape's faces's values)
+                set firstLoop to (the length of (result's loopStarts's values)) - 1
+                loop ringCursor from faceValue's firstLoop to (faceValue's firstLoop + faceValue's loopCount):
+                    set ringFirst to the item at ringCursor in (layerShape's loopStarts's values)
+                    set ringPast to the item at (ringCursor + 1) in (layerShape's loopStarts's values)
+                    loop cursor from ringFirst to ringPast:
+                        append ((the item at cursor in (layerShape's indices's values)) + indexBase) to (result's indices's values)
+                    append (the length of (result's indices's values)) to (result's loopStarts's values)
+                append (@intrinsic("construct", a fast face record, firstLoop, faceValue's loopCount, faceValue's normal, faceValue's offset)) to (result's faces's values)
+        return result
 
 function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
     execute:
