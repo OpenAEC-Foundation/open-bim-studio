@@ -42,7 +42,18 @@ is niet aan de repository toegevoegd. Deze stap pusht niets naar GitHub.
   hebben beide 129 argumenten/velden.
 - DynLex-preflight: 320 gewijzigde/nieuwe functies gecontroleerd, geen meldingen.
 - Bash-syntax en Linux C-platformbrug met -Wall -Wextra -Werror gecontroleerd.
-- Testbundel plate_anchor, plate_openings, push_pick: loopt; resultaat volgt.
+- Kernbundel op broncommit 722a740: plate_anchor, plate_openings en push_pick
+  PASS (54 checks), zonder compilerdiagnoses; 7m28s, piek 4.42 GiB.
+  De eerste poging ontdekte een double-free bij het weigeren van een contour.
+  Deze is hersteld; de extra regressies testen helling en sparingen samen.
+  De gecompileerde bundel is nogmaals afzonderlijk uitgevoerd en vergeleken,
+  exit 0. De oorspronkelijke wrapper eindigde na de drie PASS-regels met een
+  Bash-parsefout doordat build.sh tijdens die run was aangepast. Het huidige
+  script slaagt voor bash -n; wijzig een lopend buildscript voortaan niet.
+- Editorbundel sketch_split, hide_element, layer_heights: loopt.
+- Compilerbinary SHA-256: 2dbd12c50b009233682a76a923cb961eb8974d25d1eac71aa15e040bd7bfb4ed.
+  Dit is de vastgelegde lokale binary, geen claim over een reproduceerbare
+  upstream-compilerbuild.
 - Volledige applicatie, Windows-app/MSI en GUI-regressies zijn nog niet bevestigd.
   Vloersparingen hebben nog geen volledige gebruikersinterface.
 
