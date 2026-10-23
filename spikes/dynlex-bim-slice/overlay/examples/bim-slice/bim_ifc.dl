@@ -19,10 +19,11 @@ class:
     members:
         text as a string
         nextEntity as an integer
+        schema43 as a boolean
 
 local function a new bim step writer:
     execute:
-        return @intrinsic("construct", a bim step writer record, the string form of "", 1)
+        return @intrinsic("construct", a bim step writer record, the string form of "", 1, false)
 
 # Appends one entity and returns its instance number.
 local function write bim entity {a string:body} to {a pointer to a bim step writer record:writer}:
@@ -150,7 +151,11 @@ local function the bim ifc tessellation of {fast mesh record:triangles} in conte
             if cursor > 0:
                 set pointText to pointText + (the string form of ",")
             set pointText to pointText + ((((the string form of "(") + (the bim real text of spot's x)) + (((the string form of ",") + (the bim real text of spot's y)) + (the string form of ","))) + ((the bim real text of spot's z) + (the string form of ")")))
-        set pointList to write bim entity (pointText + (the string form of "))")) to writer
+        set pointEnding to the string form of "))"
+        if writer's schema43:
+            # IFC 4.3 adds the optional TagList after CoordList.
+            set pointEnding to the string form of "),$)"
+        set pointList to write bim entity (pointText + pointEnding) to writer
         set indexText to the string form of "("
         set cursor to 0
         loop while (cursor + 2) < the length of (triangles's triangles's values):
@@ -322,7 +327,16 @@ local function write bim pset {a string:wantedSet} of {a pointer to a list:owned
 # The complete IFC4 file text of `modelValue`.
 function the bim ifc text of {bim model record:modelValue}:
     execute:
+        return the bim ifc text of modelValue using schema43 false
+
+function the bim ifc43 text of {bim model record:modelValue}:
+    execute:
+        return the bim ifc text of modelValue using schema43 true
+
+function the bim ifc text of {bim model record:modelValue} using schema43 {boolean:use43}:
+    execute:
         set writer to a new bim step writer
+        set writer's schema43 to use43
         set w to the address of writer
         set lengthUnit to write bim entity (the string form of "IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)") to w
         set areaUnit to write bim entity (the string form of "IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)") to w
@@ -482,7 +496,6 @@ function the bim ifc text of {bim model record:modelValue}:
                 set wallList to an empty list of an integer
                 append wall to wallList
                 relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 24 from usage to wallList first false in w
-                relate bim (the string form of "IFCRELDEFINESBYTYPE") named 25 from (the item at typeFound's position in typeNumbers) to wallList first false in w
                 free wallList
                 set direction to the bim direction of wallValue
                 set normal to the bim exterior normal of wallValue
@@ -549,16 +562,29 @@ function the bim ifc text of {bim model record:modelValue}:
                         append openingValue's id to containedOwners
                         append levelFound's position to containedStoreys
                         relate bim single (the string form of "IFCRELFILLSELEMENT") named 27 from openingElement to window in w
-        # Slabs, extruded up to their level from their underside.
+        # Plates use the evaluated solid: top offset, pitch, typed thickness
+        # and through-openings must match the modeller, not a level-zero prism.
         loop cursor from 0 to the length of (modelValue's slabs's values):
             set slabValue to the item at cursor in (modelValue's slabs's values)
             set levelFound to the bim level index of slabValue's levelId in modelValue
             if levelFound's valid:
-                set slabShape to the bim ifc extrusion through (slabValue's outline's values) depth slabValue's thickness in context bodyContext with w
-                set slabLocal to the bim ifc placement at height (0.0 - slabValue's thickness) relative to (the item at levelFound's position in storeyPlacements) in w
-                set slabBody to ((the string form of "IFCSLAB(") + (the bim lasting global id for kind 10 of slabValue's id in modelValue)) + (the string form of ",$,")
+                set slabShape to 0
+                set slabLocal to 0
+                set plateSolid to the bim slab solid of slabValue in modelValue
+                if (plateSolid's status = 0) and plateSolid's fast:
+                    set plateMesh to an empty fast mesh
+                    append fast mesh of plateSolid's shape to (the address of plateMesh)
+                    set slabShape to the bim ifc tessellation of plateMesh in context bodyContext with w
+                    set slabLocal to the bim ifc placement at height (0.0 - (the item at levelFound's position in (modelValue's levels's values))'s elevation) relative to (the item at levelFound's position in storeyPlacements) in w
+                else:
+                    set slabShape to the bim ifc extrusion through (slabValue's outline's values) depth slabValue's thickness in context bodyContext with w
+                    set slabLocal to the bim ifc placement at height (0.0 - slabValue's thickness) relative to (the item at levelFound's position in storeyPlacements) in w
+                set plateRole to the bim role of plate slabValue in modelValue
+                set plateClass to the uppercase form of (the bim ifc class of planar role plateRole)
+                set platePredefined to the bim ifc predefined type of planar role plateRole
+                set slabBody to ((plateClass + (the string form of "(")) + (the bim lasting global id for kind 10 of slabValue's id in modelValue)) + (the string form of ",$,")
                 set slabBody to (((slabBody + (the bim label text of (the bim lasting name of slabValue's id in modelValue or ((the string form of "Slab ") + (the string form of slabValue's id))))) + (the string form of ",$,$,")) + (the bim reference text of slabLocal)) + (the string form of ",")
-                append (write bim entity ((slabBody + (the bim reference text of slabShape)) + (the string form of ",$,.FLOOR.)")) to w) to containedNumbers
+                append (write bim entity ((slabBody + (the bim reference text of slabShape)) + ((the string form of ",$,.") + (platePredefined + (the string form of ".)")))) to w) to containedNumbers
                 append slabValue's id to containedOwners
                 append levelFound's position to containedStoreys
         # Grids: one IfcGrid of all grid lines, lettered lines as U axes and
@@ -727,6 +753,18 @@ function the bim ifc text of {bim model record:modelValue}:
                 append (write bim entity ((spaceBody + (the bim reference text of spaceShape)) + (the string form of ",$,.ELEMENT.,.SPACE.,$)")) to w) to spaceNumbers
             relate bim (the string form of "IFCRELAGGREGATES") named 29 from (the item at levelCursor in storeyNumbers) to spaceNumbers first true in w
             free spaceNumbers
+        # A type has at most one Types inverse relationship. Group every
+        # occurrence of the type, including walls on different storeys.
+        loop typeCursor from 0 to the length of typeNumbers:
+            set typedWalls to an empty list of an integer
+            set typeId to (the item at typeCursor in (modelValue's wallTypes's values))'s id
+            loop ownerCursor from 0 to the length of containedOwners:
+                set ownerWall to the bim wall index of (the item at ownerCursor in containedOwners) in modelValue
+                if ownerWall's valid:
+                    if (the item at ownerWall's position in (modelValue's walls's values))'s typeId = typeId:
+                        append (the item at ownerCursor in containedNumbers) to typedWalls
+            relate bim (the string form of "IFCRELDEFINESBYTYPE") named 25 from (the item at typeCursor in typeNumbers) to typedWalls first false in w
+            free typedWalls
         free containedNumbers
         free containedOwners
         free containedStoreys
@@ -735,5 +773,10 @@ function the bim ifc text of {bim model record:modelValue}:
         free typeNumbers
         free layerSetNumbers
         set header to the string form of "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');\n"
-        set header to header + (the string form of "FILE_NAME('open-bim-studio.ifc','',(''),(''),'Open BIM Studio','Open BIM Studio','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n")
+        set schemaName to the string form of "IFC4"
+        if use43:
+            set schemaName to the string form of "IFC4X3_ADD2"
+            # Do not claim conformance to the IFC4 Design Transfer MVD.
+            set header to the string form of "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Open BIM Studio model exchange'),'2;1');\n"
+        set header to header + ((the string form of "FILE_NAME('open-bim-studio.ifc','',(''),(''),'Open BIM Studio','Open BIM Studio','');\nFILE_SCHEMA(('") + (schemaName + (the string form of "'));\nENDSEC;\nDATA;\n")))
         return (header + writer's text) + (the string form of "ENDSEC;\nEND-ISO-10303-21;\n")
