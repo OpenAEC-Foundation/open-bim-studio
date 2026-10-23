@@ -27,6 +27,9 @@ function bim select tool:
 function bim wall tool:
     replacement:
         1
+function bim arc wall tool:
+    replacement:
+        29
 function bim opening tool:
     replacement:
         2
@@ -4121,6 +4124,43 @@ function place bim editor reinforcement at {cad vector2:point} in {a pointer to 
 function press bim editor pointer in {a pointer to a bim editor record:editor}:
     execute:
         set point to editor's snap's point
+        if editor's tool = bim arc wall tool:
+            if editor's moveStage = 0:
+                set editor's solidCorner to point
+                set editor's moveStage to 1
+                set editor's message to the string form of "Arc wall: click the end point"
+                return nothing
+            if editor's moveStage = 1:
+                if (the cad distance from editor's solidCorner to point) <= 1e-6:
+                    return nothing
+                set editor's solidReach to point
+                set editor's moveStage to 2
+                set editor's message to the string form of "Arc wall: click a point on the arc"
+                return nothing
+            set bulgeValue to the bim boundary bulge from editor's solidCorner to editor's solidReach through point
+            set chordLength to the cad distance from editor's solidCorner to editor's solidReach
+            if ((the absolute value of bulgeValue) <= 1e-7) or ((the absolute value of bulgeValue) > ((chordLength * 0.5) + 1e-7)):
+                set editor's message to the string form of "Arc wall: choose a non-collinear point within a half-circle"
+                return nothing
+            set curve to the bim arc of boundary segment (the bim boundary arc from editor's solidCorner to editor's solidReach bulging bulgeValue)
+            set chosenType to the bim wall type index of editor's wallTypeId in editor's documentValue's current
+            if chosenType's valid:
+                set wallBreadth to the bim thickness of (the item at chosenType's position in (editor's documentValue's current's wallTypes's values))
+                if curve's radius <= ((wallBreadth * 0.5) + 1e-7):
+                    set editor's message to the string form of "Arc wall: radius is too small for this wall thickness"
+                    return nothing
+            set target to the address of (editor's documentValue's current)
+            begin bim transaction in (the address of (editor's documentValue))
+            set made to add bim wall typed editor's wallTypeId on editor's levelId from editor's solidCorner to editor's solidReach to target
+            if made = the bim refused id:
+                roll back bim transaction in (the address of (editor's documentValue))
+                return nothing
+            ignore bend bim wall made by bulgeValue in target
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's moveStage to 0
+            select bim editor bim wall picked numbered made in editor
+            set editor's message to the string form of "Arc wall created; click the start of another arc"
+            return nothing
         if editor's tool = bim vertical opening tool:
             if editor's moveStage = 0:
                 set editor's moveBase to point
@@ -5216,8 +5256,7 @@ function drag bim editor gizmo by {cad vector2:offset} lifting {a 64 bit floatin
             set editor's message to (the string form of "Turn ") + ((the string form of ((the floor of (((turnAngle * 180.0) / 3.141592653589793) + 0.5)) as an integer)) + (the string form of " deg"))
             return nothing
         reposition bim editor selection by (the bim shift transform by offset) in editor
-        if rise != 0.0:
-            lift bim editor selection by rise in editor
+        lift bim editor selection by rise in editor
         set editor's message to (the string form of "Move X ") + ((the bim length offset's x in units unitCode) + ((the string form of ", Y ") + ((the bim length offset's y in units unitCode) + ((the string form of ", Z ") + (the bim length rise in units unitCode)))))
 
 # The selected element's control points `rise` higher than when the open
@@ -5228,6 +5267,14 @@ function lift bim editor selection by {a 64 bit floating-point number:rise} in {
         if ((the length of stack) = 0) or ((bim kind (editor's selectionKind) has handles) = false):
             return nothing
         set original to the item at ((the length of stack) - 1) in stack
+        if editor's selectionKind = bim slab picked:
+            set plateFound to the bim slab index of editor's selectionId in editor's documentValue's current
+            set originalFound to the bim slab index of editor's selectionId in original
+            if plateFound's valid and originalFound's valid:
+                set plate to the item at plateFound's position in (editor's documentValue's current's slabs's values)
+                set beforePlate to the item at originalFound's position in (original's slabs's values)
+                ignore set bim plate plate's id top to (beforePlate's top + rise) pitch plate's pitch heading plate's heading in (the address of (editor's documentValue's current))
+            return nothing
         set before to the bim handles of editor's selectionKind numbered editor's selectionId in original
         set present to the bim handles of editor's selectionKind numbered editor's selectionId in editor's documentValue's current
         if (the length of (before's values)) != (the length of (present's values)):
@@ -6652,6 +6699,9 @@ function bim sketch arc tool:
 function bim sketch pick tool:
     replacement:
         2
+function bim sketch move tool:
+    replacement:
+        3
 
 function bim editor sketches a boundary {bim editor record:editor}:
     execute:
@@ -6661,7 +6711,9 @@ function bim editor sketches a boundary {bim editor record:editor}:
 function the bim sketch hint of {bim editor record:editor}:
     execute:
         set clicked to the length of (editor's sketchPending's values)
-        set asked to the string form of "Pick: click a line or arc, Delete removes it"
+        set asked to the string form of "Pick a point or edge; G moves, Delete removes an edge"
+        if editor's sketchTool = bim sketch move tool:
+            set asked to the string form of "Move: click to place, Esc cancels the move"
         if editor's sketchTool = bim sketch line tool:
             set asked to the string form of "Line: click its start"
             if clicked > 0:
@@ -6674,7 +6726,7 @@ function the bim sketch hint of {bim editor record:editor}:
                 set asked to the string form of "Arc: click a point on the arc"
         return asked + (the string form of " | L line, A arc, Esc pick, Tab finishes")
 
-# Tab on a selected plate: its boundary as a sketch, the line tool ready.
+# Tab on a selected host: its boundary ready for point or edge selection.
 function open bim editor boundary sketch in {a pointer to a bim editor record:editor}:
     execute:
         set modelValue to editor's documentValue's current
@@ -6699,11 +6751,12 @@ function open bim editor boundary sketch in {a pointer to a bim editor record:ed
                 return nothing
             set editor's sketchSegments to the bim boundary segments of slab editor's selectionId in modelValue
         set editor's sketchPending to a cad topology list of a cad vector2
-        set editor's sketchTool to bim sketch line tool
+        set editor's sketchTool to bim sketch pick tool
         set editor's sketchPicked to -1
         set editor's tool to bim select tool
         set editor's editMode to true
         set editor's editKind to bim boundary edit
+        set editor's editMesh to false
         set editor's editSketchId to editor's selectionId
         set editor's editPicked to a cad topology list of an integer
         set editor's partCode to -1
@@ -6711,31 +6764,67 @@ function open bim editor boundary sketch in {a pointer to a bim editor record:ed
         if bim editor sketches upright (@intrinsic("dereference", editor)):
             set editor's message to (the string form of "Sketch mode (contour, in the 3D view): ") + (the bim sketch hint of (@intrinsic("dereference", editor)))
 
-# Where a click in the sketch lands: on the end of a segment or a point
-# already clicked near the pointer, else where the editor snaps.
-function the bim sketch point at {cad vector2:location} of {bim editor record:editor}:
+# Snap only to geometry in this host's sketch coordinates. Never reuse the
+# plan/model snap: its XY coordinates are unrelated to an upright wall face.
+function the bim sketch snap at {cad vector2:location} of {bim editor record:editor}:
     execute:
-        set best to editor's snap's point
-        if (editor's sketchHostKind = bim curtain picked) or (editor's sketchHostKind = bim wall picked):
-            set best to the bim face snap of location for editor
-        set bestGap to editor's pickTolerance * 1.5
+        if editor's snapOff:
+            return the bim snap location labelled "Free"
+        set tolerance to editor's pickTolerance * 1.5
+        set bestValue to @intrinsic("construct", a bim snap candidate record, location, the string form of "", 99, 0.0, false, editor's snapRefused)
+        set best to the address of bestValue
         loop cursor from 0 to the length of (editor's sketchSegments's values):
             set piece to the item at cursor in (editor's sketchSegments's values)
-            set gap to the cad distance from location to piece's start
-            if gap < bestGap:
-                set best to piece's start
-                set bestGap to gap
-            set gap to the cad distance from location to piece's finish
-            if gap < bestGap:
-                set best to piece's finish
-                set bestGap to gap
+            offer bim snap piece's start labelled (the string form of "End point") ranked 0 near location within tolerance to best
+            offer bim snap piece's finish labelled (the string form of "End point") ranked 0 near location within tolerance to best
         loop cursor from 0 to the length of (editor's sketchPending's values):
-            set clickedPoint to the item at cursor in (editor's sketchPending's values)
-            set gap to the cad distance from location to clickedPoint
-            if gap < bestGap:
-                set best to clickedPoint
-                set bestGap to gap
-        return best
+            offer bim snap (the item at cursor in (editor's sketchPending's values)) labelled (the string form of "End point") ranked 0 near location within tolerance to best
+        if bestValue's found:
+            return the bim snap bestValue's point labelled bestValue's label
+        loop cursor from 0 to the length of (editor's sketchSegments's values):
+            set piece to the item at cursor in (editor's sketchSegments's values)
+            offer bim snap (the bim middle of boundary segment piece) labelled (the string form of "Mid point") ranked 1 near location within tolerance to best
+        if bestValue's found:
+            return the bim snap bestValue's point labelled bestValue's label
+        set reference to location
+        set tracking to false
+        if (the length of (editor's sketchPending's values)) > 0:
+            set reference to the item at ((the length of (editor's sketchPending's values)) - 1) in (editor's sketchPending's values)
+            set tracking to true
+        if editor's sketchTool = bim sketch move tool:
+            set reference to editor's moveBase
+            set tracking to true
+        if tracking:
+            if (the absolute value of (location's x - reference's x)) < tolerance:
+                offer bim snap (a cad vector2 with x reference's x and y location's y) labelled (the string form of "Vertical") ranked 3 near location within tolerance to best
+            if (the absolute value of (location's y - reference's y)) < tolerance:
+                offer bim snap (a cad vector2 with x location's x and y reference's y) labelled (the string form of "Horizontal") ranked 3 near location within tolerance to best
+            if bestValue's found:
+                return the bim snap bestValue's point labelled bestValue's label from reference
+        # Nearest edge follows the same sampled arc displayed in the sketch.
+        loop cursor from 0 to the length of (editor's sketchSegments's values):
+            set points to the bim drawn points of boundary segment (the item at cursor in (editor's sketchSegments's values))
+            loop edgeCursor from 0 to (the length of points) - 1:
+                set firstPoint to the item at edgeCursor in points
+                set lastPoint to the item at (edgeCursor + 1) in points
+                set dx to lastPoint's x - firstPoint's x
+                set dy to lastPoint's y - firstPoint's y
+                set run to (dx * dx) + (dy * dy)
+                if run > 1e-18:
+                    set along to (((location's x - firstPoint's x) * dx) + ((location's y - firstPoint's y) * dy)) / run
+                    set along to the maximum of 0.0 and (the minimum of 1.0 and along)
+                    set closest to a cad vector2 with x (firstPoint's x + (along * dx)) and y (firstPoint's y + (along * dy))
+                    offer bim snap closest labelled (the string form of "Nearest") ranked 4 near location within tolerance to best
+            free points
+        if bestValue's found:
+            return the bim snap bestValue's point labelled bestValue's label
+        if (editor's snapRefused bitwise and (the bim snap bit of 5)) != 0:
+            return the bim snap location labelled "Free"
+        return the bim snap (the bim grid point near location step 0.05) labelled "Grid"
+
+function the bim sketch point at {cad vector2:location} of {bim editor record:editor}:
+    execute:
+        return (the bim sketch snap at location of editor)'s point
 
 # Whether `point` is the end of a segment of the sketch: a chain that
 # reaches one ends there.
@@ -6767,11 +6856,11 @@ function the bim sketch segment near {cad vector2:location} of {bim editor recor
 # the segment picked.
 function bim boundary point selected in {bim editor record:editor}:
     execute:
-        if ((editor's editMode = false) or (editor's editKind != bim boundary edit)) or (editor's sketchHostKind != bim slab picked):
+        if (editor's editMode = false) or (editor's editKind != bim boundary edit):
             return false
         if (the length of (editor's editPicked's values)) != 1:
             return false
-        if editor's sketchTool != bim sketch pick tool:
+        if (editor's sketchTool != bim sketch pick tool) and (editor's sketchTool != bim sketch move tool):
             return false
         set vertexCode to the item at 0 in (editor's editPicked's values)
         return (vertexCode >= 0) and (vertexCode < ((the length of (editor's sketchSegments's values)) * 2))
@@ -6801,6 +6890,32 @@ function move bim selected boundary point to {cad vector2:destination} in {a poi
             replace item at index cursor in (editor's sketchSegments's values) with segmentValue
         return true
 
+# Preview and commit share the same endpoint translation. Incident edges stay
+# joined; a picked edge translates both endpoints, including neighbouring edges.
+function the bim displayed boundary segment at {integer:cursor} of {bim editor record:editor}:
+    execute:
+        set piece to the item at cursor in (editor's sketchSegments's values)
+        if editor's sketchTool != bim sketch move tool:
+            return piece
+        set chosen to the item at editor's sketchPicked in (editor's sketchSegments's values)
+        set firstPoint to chosen's start
+        set lastPoint to chosen's finish
+        if bim boundary point selected in editor:
+            set firstPoint to the bim selected boundary point of editor
+            set lastPoint to firstPoint
+        set destination to the bim sketch point at (the bim sketch location of editor) of editor
+        set displacement to a cad vector2 with x (destination's x - editor's moveBase's x) and y (destination's y - editor's moveBase's y)
+        return the bim boundary segment piece moving endpoints firstPoint and lastPoint by displacement
+
+function place bim boundary move in {a pointer to a bim editor record:editor}:
+    execute:
+        set movedPieces to a cad topology list of a bim boundary segment record
+        loop cursor from 0 to the length of (editor's sketchSegments's values):
+            append (the bim displayed boundary segment at cursor of (@intrinsic("dereference", editor))) to (movedPieces's values)
+        set editor's sketchSegments to movedPieces
+        set editor's sketchTool to bim sketch pick tool
+        set editor's message to the string form of "Moved in sketch; G moves again, Tab applies the boundary"
+
 function press bim editor boundary sketch in {a pointer to a bim editor record:editor}:
     execute:
         if (bim editor sketches upright (@intrinsic("dereference", editor))) and (editor's sketchInView = false):
@@ -6808,29 +6923,31 @@ function press bim editor boundary sketch in {a pointer to a bim editor record:e
             return nothing
         set location to the bim sketch location of (@intrinsic("dereference", editor))
         set point to the bim sketch point at location of (@intrinsic("dereference", editor))
+        if editor's sketchTool = bim sketch move tool:
+            place bim boundary move in editor
+            return nothing
         if editor's sketchTool = bim sketch pick tool:
             set editor's editPicked to a cad topology list of an integer
-            if editor's sketchHostKind = bim slab picked:
-                set closestCode to -1
-                set closestGap to editor's pickTolerance * 1.5
-                loop cursor from 0 to the length of (editor's sketchSegments's values):
-                    set segmentValue to the item at cursor in (editor's sketchSegments's values)
-                    set gap to the cad distance from location to segmentValue's start
-                    if gap < closestGap:
-                        set closestGap to gap
-                        set closestCode to cursor * 2
-                    set gap to the cad distance from location to segmentValue's finish
-                    if gap < closestGap:
-                        set closestGap to gap
-                        set closestCode to (cursor * 2) + 1
-                if closestCode >= 0:
-                    append closestCode to (editor's editPicked's values)
-                    set editor's sketchPicked to closestCode / 2
-                    set editor's message to the string form of "Boundary point selected: edit Point X / Point Y in Properties; Tab applies"
-                    return nothing
+            set closestCode to -1
+            set closestGap to editor's pickTolerance * 1.5
+            loop cursor from 0 to the length of (editor's sketchSegments's values):
+                set segmentValue to the item at cursor in (editor's sketchSegments's values)
+                set gap to the cad distance from location to segmentValue's start
+                if gap < closestGap:
+                    set closestGap to gap
+                    set closestCode to cursor * 2
+                set gap to the cad distance from location to segmentValue's finish
+                if gap < closestGap:
+                    set closestGap to gap
+                    set closestCode to (cursor * 2) + 1
+            if closestCode >= 0:
+                append closestCode to (editor's editPicked's values)
+                set editor's sketchPicked to closestCode / 2
+                set editor's message to the string form of "Boundary point selected: G moves; edit coordinates in Properties; Tab applies"
+                return nothing
             set editor's sketchPicked to the bim sketch segment near location of (@intrinsic("dereference", editor))
             if editor's sketchPicked >= 0:
-                set editor's message to the string form of "Picked a segment: Delete removes it | L line, A arc, Tab finishes"
+                set editor's message to the string form of "Picked an edge: G moves, Delete removes it | L line, A arc, Tab finishes"
             else:
                 set editor's message to the bim sketch hint of (@intrinsic("dereference", editor))
             return nothing
@@ -6912,6 +7029,24 @@ function finish bim editor boundary sketch in {a pointer to a bim editor record:
 # a chain.
 function type bim editor boundary key {integer:code} in {a pointer to a bim editor record:editor}:
     execute:
+        if editor's sketchTool = bim sketch move tool:
+            if code = bim escape key code:
+                set editor's sketchTool to bim sketch pick tool
+                set editor's message to the string form of "Move cancelled; sketch selection kept"
+                return nothing
+            if (code = bim enter key code) or (code = 258):
+                place bim boundary move in editor
+                if code = 258:
+                    finish bim editor boundary sketch in editor
+            return nothing
+        if code = 71:
+            if (editor's sketchTool != bim sketch pick tool) or (editor's sketchPicked < 0):
+                set editor's message to the string form of "Select a boundary point or edge before G"
+                return nothing
+            set editor's moveBase to the bim sketch point at (the bim sketch location of (@intrinsic("dereference", editor))) of (@intrinsic("dereference", editor))
+            set editor's sketchTool to bim sketch move tool
+            set editor's message to the bim sketch hint of (@intrinsic("dereference", editor))
+            return nothing
         if code = 258:
             finish bim editor boundary sketch in editor
             return nothing
@@ -7038,6 +7173,10 @@ function the bim sketch world point of {cad vector2:spot} for {bim editor record
         if plateFound's valid:
             set plate to the item at plateFound's position in (modelValue's slabs's values)
             set z to (the bim elevation of level plate's levelId in modelValue) + plate's top
+            if (the length of (plate's outline's values)) > 0:
+                set anchor to the item at 0 in (plate's outline's values)
+                set slope to (the sine of plate's pitch) / (the cosine of plate's pitch)
+                set z to z + (slope * (((spot's x - anchor's x) * (the cosine of plate's heading)) + ((spot's y - anchor's y) * (the sine of plate's heading))))
         return a cad vector3 with x spot's x, y spot's y and z z
 
 # Where a ray (from the 3D view) meets the face of the building system
@@ -7053,6 +7192,27 @@ function the bim sketch hit along {bim ray record:ray} for {bim editor record:ed
     execute:
         set missed to @intrinsic("construct", a bim sketch hit record, false, a cad vector2 with x 0.0 and y 0.0)
         set modelValue to editor's documentValue's current
+        if editor's sketchHostKind = bim slab picked:
+            set plateFound to the bim slab index of editor's editSketchId in modelValue
+            if plateFound's valid = false:
+                return missed
+            set plate to the item at plateFound's position in (modelValue's slabs's values)
+            if (the length of (plate's outline's values)) = 0:
+                return missed
+            set anchor to the item at 0 in (plate's outline's values)
+            set planePoint to the bim sketch world point of anchor for editor
+            set slope to (the sine of plate's pitch) / (the cosine of plate's pitch)
+            set slopeX to slope * (the cosine of plate's heading)
+            set slopeY to slope * (the sine of plate's heading)
+            set facing to (ray's direction's z - (slopeX * ray's direction's x)) - (slopeY * ray's direction's y)
+            if (the absolute value of facing) <= 1e-9:
+                return missed
+            set numerator to ((planePoint's z - ray's origin's z) + (slopeX * (ray's origin's x - anchor's x))) + (slopeY * (ray's origin's y - anchor's y))
+            set planeReach to numerator / facing
+            if planeReach < 0.0:
+                return missed
+            set hitSpot to a cad vector2 with x (ray's origin's x + (planeReach * ray's direction's x)) and y (ray's origin's y + (planeReach * ray's direction's y))
+            return @intrinsic("construct", a bim sketch hit record, true, hitSpot)
         if editor's sketchHostKind = bim wall picked:
             # A wall's: the upright plane through its line.
             set wallFound to the bim wall index of editor's editSketchId in modelValue
@@ -7119,3 +7279,126 @@ function the bim point on linear {bim linear record:member} at plan {cad vector2
             return member's start
         set along to (((location's x - member's start's x) * dx) + ((location's y - member's start's y) * dy)) / span
         return a cad vector3 with x location's x, y location's y and z (member's start's z + (along * (member's finish's z - member's start's z)))
+
+# Visible classification uses the same role mapping as IFC/IFCX export.
+function the bim ifc class of editor selection {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim wall picked:
+            return the string form of "IfcWall"
+        if editor's selectionKind = bim slab picked:
+            set found to the bim slab index of editor's selectionId in modelValue
+            if found's valid:
+                set plate to the item at found's position in (modelValue's slabs's values)
+                set role to the bim role of plate plate in modelValue
+                return ((the bim ifc class of planar role role) + (the string form of " / ")) + (the bim ifc predefined type of planar role role)
+        if editor's selectionKind = bim linear picked:
+            set found to the bim linear index of editor's selectionId in modelValue
+            if found's valid:
+                set member to the item at found's position in (modelValue's linears's values)
+                return the bim ifc class of linear role (the bim type of linear member in modelValue)'s role
+        if editor's selectionKind = bim opening picked:
+            set found to the bim opening index of editor's selectionId in modelValue
+            if found's valid:
+                set openingValue to the item at found's position in (modelValue's openings's values)
+                set typed to the bim opening type index of openingValue's typeId in modelValue
+                if typed's valid:
+                    if (the item at typed's position in (modelValue's openingTypes's values))'s isDoor:
+                        return the string form of "IfcDoor"
+                    return the string form of "IfcWindow"
+        if editor's selectionKind = bim curtain picked:
+            if editor's partCode < 0:
+                return the string form of "IfcCurtainWall"
+            if editor's partCode < 2000:
+                return the string form of "IfcMember"
+            return the string form of "IfcPlate"
+        if editor's selectionKind = bim space picked:
+            return the string form of "IfcSpace"
+        if editor's selectionKind = bim stair picked:
+            return the string form of "IfcStair"
+        if editor's selectionKind = bim railing picked:
+            return the string form of "IfcRailing"
+        if editor's selectionKind = bim level picked:
+            return the string form of "IfcBuildingStorey"
+        if editor's selectionKind = bim grid picked:
+            return the string form of "IfcGrid"
+        return the string form of ""
+
+class:
+    patterns:
+        [a|] bim object frame record
+    members:
+        found as a boolean
+        origin as a cad vector3
+        xAxis as a cad vector3
+        yAxis as a cad vector3
+        zAxis as a cad vector3
+
+function no bim object frame:
+    execute:
+        return @intrinsic("construct", a bim object frame record, false, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 1.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 1.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 1.0))
+
+function the bim world point of {cad vector3:localPoint} in frame {bim object frame record:basis}:
+    execute:
+        return the cad sum of basis's origin and (the cad sum of (basis's xAxis scaled by localPoint's x) and (the cad sum of (basis's yAxis scaled by localPoint's y) and (basis's zAxis scaled by localPoint's z)))
+
+function the bim object frame of {bim editor record:editor}:
+    execute:
+        set basis to no bim object frame
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim wall picked:
+            set found to the bim wall index of editor's selectionId in modelValue
+            if found's valid:
+                set wallValue to the item at found's position in (modelValue's walls's values)
+                set direction to the bim direction of wallValue
+                set basis's origin to a cad vector3 with x wallValue's start's x, y wallValue's start's y and z ((the bim elevation of level wallValue's levelId in modelValue) + wallValue's baseOffset)
+                set basis's xAxis to a cad vector3 with x direction's x, y direction's y and z 0.0
+                set basis's yAxis to a cad vector3 with x (0.0 - direction's y), y direction's x and z 0.0
+                set basis's found to true
+        if editor's selectionKind = bim slab picked:
+            set found to the bim slab index of editor's selectionId in modelValue
+            if found's valid:
+                set plate to the item at found's position in (modelValue's slabs's values)
+                if (the length of (plate's outline's values)) > 0:
+                    set anchor to the item at 0 in (plate's outline's values)
+                    set basis's origin to a cad vector3 with x anchor's x, y anchor's y and z ((the bim elevation of level plate's levelId in modelValue) + plate's top)
+                    set basis's xAxis to a cad vector3 with x ((the cosine of plate's heading) * (the cosine of plate's pitch)), y ((the sine of plate's heading) * (the cosine of plate's pitch)) and z (the sine of plate's pitch)
+                    set basis's yAxis to a cad vector3 with x (0.0 - (the sine of plate's heading)), y (the cosine of plate's heading) and z 0.0
+                    set basis's zAxis to the cad cross of basis's xAxis and basis's yAxis
+                    set basis's found to true
+        if editor's selectionKind = bim linear picked:
+            set found to the bim linear index of editor's selectionId in modelValue
+            if found's valid:
+                set member to the item at found's position in (modelValue's linears's values)
+                set direction to the cad difference of member's finish and member's start
+                set span to the cad length of direction
+                if span > 1e-9:
+                    set basis's xAxis to direction scaled by (1.0 / span)
+                    set across to the cad cross of basis's zAxis and basis's xAxis
+                    if (the cad length of across) < 1e-9:
+                        set across to a cad vector3 with x 0.0, y 1.0 and z 0.0
+                    set across to across scaled by (1.0 / (the cad length of across))
+                    set upward to the cad cross of basis's xAxis and across
+                    set basis's yAxis to the cad sum of (across scaled by (the cosine of member's angle)) and (upward scaled by (the sine of member's angle))
+                    set basis's zAxis to the cad cross of basis's xAxis and basis's yAxis
+                    set basis's origin to a cad vector3 with x member's start's x, y member's start's y and z (member's start's z + (the bim elevation of level member's levelId in modelValue))
+                    set basis's found to true
+        if editor's selectionKind = bim curtain picked:
+            set found to the bim curtain index of editor's selectionId in modelValue
+            if found's valid:
+                set system to the item at found's position in (modelValue's curtains's values)
+                set dx to system's finish's x - system's start's x
+                set dy to system's finish's y - system's start's y
+                set span to the square root of ((dx * dx) + (dy * dy))
+                if span > 1e-9:
+                    set basis's origin to a cad vector3 with x system's start's x, y system's start's y and z (the bim elevation of level system's levelId in modelValue)
+                    set basis's xAxis to a cad vector3 with x (dx / span), y (dy / span) and z 0.0
+                    set basis's yAxis to a cad vector3 with x (0.0 - (dy / span)), y (dx / span) and z 0.0
+                    set basis's found to true
+        if ((basis's found = false) and (bim kind editor's selectionKind has handles)) and (editor's selectionKind != bim level picked):
+            set points to the bim handles of editor's selectionKind numbered editor's selectionId in modelValue
+            if (the length of (points's values)) > 0:
+                set firstPoint to the item at 0 in (points's values)
+                set basis's origin to a cad vector3 with x firstPoint's x, y firstPoint's y and z (firstPoint's z + (the bim handle lift of editor's selectionKind numbered editor's selectionId in modelValue))
+                set basis's found to true
+        return basis
