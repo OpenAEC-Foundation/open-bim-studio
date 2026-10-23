@@ -125,6 +125,11 @@ function bim zoom region tool:
     replacement:
         26
 
+# Explicit face subdivision: two edge points, no extra loose sketch line.
+function bim split tool:
+    replacement:
+        27
+
 # Key codes follow the windowing layer: printable keys are their upper-case
 # ASCII code.
 function bim enter key code:
@@ -537,7 +542,7 @@ function the bim tracking origin of {bim editor record:editor}:
         if (editor's tool = bim wall tool) and editor's chainActive:
             return @intrinsic("construct", a bim snap candidate record, editor's chainStart, the string form of "", 0, 0.0, true, 0)
         set chain to editor's sketchChain's values
-        if ((editor's tool = bim line tool) or (editor's tool = bim rectangle tool)) and ((the length of chain) > 0):
+        if (((editor's tool = bim line tool) or (editor's tool = bim rectangle tool)) or (editor's tool = bim split tool)) and ((the length of chain) > 0):
             return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true, 0)
         if (editor's tool = bim grid tool) and editor's gridActive:
             return @intrinsic("construct", a bim snap candidate record, editor's gridStart, the string form of "", 0, 0.0, true, 0)
@@ -2596,7 +2601,11 @@ function split bim editor faces along {cad vector2:first} to {cad vector2:second
         loop cursor from 0 to the length of (target's sketches's values):
             set element to the item at cursor in (target's sketches's values)
             if ((element's levelId = editor's levelId) and (element's kind = bim face sketch)) and (bim flat point middle lies in (element's points's values)):
-                append element's id to candidates
+                set allowed to true
+                if editor's tool = bim split tool:
+                    set allowed to (editor's selectionKind = bim sketch picked) and (editor's selectionId = element's id)
+                if allowed:
+                    append element's id to candidates
         set splitCount to 0
         loop candidateCursor from 0 to the length of candidates:
             set faceId to the item at candidateCursor in candidates
@@ -2640,7 +2649,12 @@ function split bim editor faces along {cad vector2:first} to {cad vector2:second
                     if step = firstAt:
                         set walking to false
                     set step to the remainder of (step + 1) divided by (the length of cut)
-                if ((the length of onePart) >= 3) and ((the length of otherPart) >= 3):
+                set validCut to (bim outline onePart is simple) and (bim outline otherPart is simple)
+                set oldArea to the absolute value of (the cad signed area of ring)
+                set splitArea to (the absolute value of (the cad signed area of onePart)) + (the absolute value of (the cad signed area of otherPart))
+                if (the absolute value of (splitArea - oldArea)) > (1e-7 * (the maximum of 1.0 and oldArea)):
+                    set validCut to false
+                if validCut:
                     set rise to element's height
                     ignore delete bim sketch faceId from target
                     set oneId to add bim face on editor's levelId around onePart to target
@@ -2654,6 +2668,69 @@ function split bim editor faces along {cad vector2:first} to {cad vector2:second
                 free cut
         free candidates
         return splitCount
+
+# A pointer near an outline is projected onto its nearest edge. This keeps
+# the same snapping tolerance as picking while giving the splitter exact ends.
+function the bim split edge point of {bim sketch record:faceValue} near {cad vector2:pointValue} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set result to @intrinsic("construct", a bim snap candidate record, pointValue, the string form of "Edge", 0, tolerance, false, 0)
+        set bestGap to tolerance
+        set ring to faceValue's points's values
+        loop corner from 0 to the length of ring:
+            set firstSpot to the item at corner in ring
+            set lastSpot to the item at (the remainder of (corner + 1) divided by (the length of ring)) in ring
+            set dx to lastSpot's x - firstSpot's x
+            set dy to lastSpot's y - firstSpot's y
+            set squared to (dx * dx) + (dy * dy)
+            if squared > 1e-16:
+                set fraction to ((((pointValue's x - firstSpot's x) * dx) + ((pointValue's y - firstSpot's y) * dy)) / squared) clamped between 0.0 and 1.0
+                set projected to a cad vector2 with x (firstSpot's x + (fraction * dx)) and y (firstSpot's y + (fraction * dy))
+                set gap to the cad distance from pointValue to projected
+                if gap <= bestGap:
+                    set bestGap to gap
+                    set result's point to projected
+                    set result's found to true
+        return result
+
+function press bim editor split at {cad vector2:pointValue} in {a pointer to a bim editor record:editor}:
+    execute:
+        if (bim category bim mass category is visible in editor's planRules) = false:
+            set editor's message to the string form of "Split: show sketch faces and masses in this view first"
+            return nothing
+        set chosenId to the bim refused id
+        set snapped to pointValue
+        set bestGap to editor's pickTolerance
+        loop cursor from 0 to the length of (editor's documentValue's current's sketches's values):
+            set faceValue to the item at cursor in (editor's documentValue's current's sketches's values)
+            set allowed to ((faceValue's kind = bim face sketch) and (faceValue's levelId = editor's levelId)) and (faceValue's height >= 0.0)
+            if editor's selectionKind = bim sketch picked:
+                set allowed to allowed and (faceValue's id = editor's selectionId)
+            if allowed:
+                set edgePoint to the bim split edge point of faceValue near pointValue within bestGap
+                if edgePoint's found:
+                    set chosenId to faceValue's id
+                    set snapped to edgePoint's point
+                    set bestGap to the cad distance from pointValue to snapped
+        if chosenId = the bim refused id:
+            set editor's message to the string form of "Split: click an edge of a flat face or positive-height sketch mass"
+            return nothing
+        if (the length of (editor's sketchChain's values)) = 0:
+            select bim editor bim sketch picked numbered chosenId in editor
+            append snapped to (editor's sketchChain's values)
+            set editor's message to the string form of "Split: click another edge of the same face; Esc cancels"
+            return nothing
+        set startSpot to the item at 0 in (editor's sketchChain's values)
+        begin bim transaction in (the address of (editor's documentValue))
+        set madeCount to split bim editor faces along startSpot to snapped in editor
+        if madeCount > 0:
+            commit bim transaction in (the address of (editor's documentValue))
+            select bim editor bim nothing picked numbered (the bim refused id) in editor
+            set editor's sketchChain to a cad topology list of a cad vector2
+            set editor's viewsDirty to true
+            set editor's message to the string form of "Face split; pick two edges for another split"
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Split refused: choose a different edge across the face"
 
 # The next line of the sketch chain, to `point`. Returning to the chain's
 # first point closes it: the loop becomes a face, as in SketchUp.
@@ -3959,6 +4036,9 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                 finish bim editor grab in editor
             else:
                 pick bim editor points at editor's pointerLocation in editor
+            return nothing
+        if editor's tool = bim split tool:
+            press bim editor split at point in editor
             return nothing
         if editor's tool = bim line tool:
             if (the length of (editor's sketchChain's values)) = 0:
@@ -5468,6 +5548,66 @@ function split bim editor mesh {a 64 bit integer:meshId} face {integer:start} fr
         roll back bim transaction in (the address of (editor's documentValue))
         set editor's message to the string form of "Line on a face: click two points on its edges, not on one edge"
         return false
+
+# Explicit Split commits mass conversion and subdivision together. Only free
+# sketch masses or meshes qualify; semantic BIM objects never become meshes.
+function split bim editor sketch mesh {a 64 bit integer:sourceId} mass {boolean:isMass} face {integer:faceStart} from {cad vector3:fromSpot} to {cad vector3:toSpot} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set meshId to sourceId
+        if isMass:
+            set sourceFound to the bim sketch index of sourceId in (@intrinsic("dereference", target))
+            if sourceFound's valid = false:
+                return false
+            set sourceValue to the item at sourceFound's position in (target's sketches's values)
+            if (sourceValue's kind != bim face sketch) or (sourceValue's height <= 0.0):
+                set editor's message to the string form of "3D Split currently requires a positive-height sketch mass or an existing mesh"
+                return false
+        else if (the bim mesh index of meshId in (@intrinsic("dereference", target)))'s valid = false:
+            return false
+        begin bim transaction in (the address of (editor's documentValue))
+        if isMass:
+            set meshId to make bim mesh of mass sourceId in target
+        set changed to false
+        if meshId != the bim refused id:
+            set changed to split bim mesh meshId face faceStart from fromSpot to toSpot in target
+        if changed:
+            commit bim transaction in (the address of (editor's documentValue))
+            select bim editor bim mesh picked numbered meshId in editor
+            set editor's viewsDirty to true
+            set editor's message to the string form of "Split the sketch face; Push/Pull can move either part"
+            return true
+        roll back bim transaction in (the address of (editor's documentValue))
+        set editor's message to the string form of "Split refused: choose two different edges of the same face"
+        return false
+
+# Start from the actual 3D hit ID, rather than repicking an overlapping plan face.
+function start bim editor push of sketch {a 64 bit integer:sketchId} side {integer:edgeIndex} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's pushId != the bim refused id:
+            return false
+        set found to the bim sketch index of sketchId in editor's documentValue's current
+        if found's valid = false:
+            return false
+        set faceValue to the item at found's position in (editor's documentValue's current's sketches's values)
+        if faceValue's kind != bim face sketch:
+            return false
+        if (edgeIndex >= 0) and (faceValue's height = 0.0):
+            return false
+        if (edgeIndex < -1) or (edgeIndex >= (the length of (faceValue's points's values))):
+            return false
+        begin bim transaction in (the address of (editor's documentValue))
+        set editor's tool to bim push tool
+        set editor's pushId to sketchId
+        set editor's pushEdge to edgeIndex
+        set editor's pushFace to -1
+        set editor's pushOrigin to editor's pointerLocation
+        set editor's pushBase to faceValue's height
+        set editor's numeric to the string form of ""
+        set editor's message to the string form of "Push/pull the side: move out or in, or type a distance, then click or Enter"
+        if edgeIndex = -1:
+            set editor's message to the string form of "Push/pull: move up or type a height, then click or Enter"
+        return true
 
 # ---------------------------------------------------------------- push/pull of a side
 
