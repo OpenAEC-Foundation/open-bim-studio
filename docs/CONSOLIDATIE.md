@@ -2,7 +2,7 @@
 
 Op verzoek van Maarten zijn alle 40 bestaande lokale branches verenigd.
 De basis is work/project1357-integration op b90cc2f. De merges zijn voorbereid
-in integration/consolidate-main; main wordt daarna met fast-forward bijgewerkt.
+in integration/consolidate-main; main neemt deze geschiedenis met fast-forward over.
 Dit is consolidatie van ontwikkeling, geen nieuwe release of installer.
 
 ## Inhoudelijk samengevoegd
@@ -50,7 +50,13 @@ is niet aan de repository toegevoegd. Deze stap pusht niets naar GitHub.
   exit 0. De oorspronkelijke wrapper eindigde na de drie PASS-regels met een
   Bash-parsefout doordat build.sh tijdens die run was aangepast. Het huidige
   script slaagt voor bash -n; wijzig een lopend buildscript voortaan niet.
-- Editorbundel sketch_split, hide_element, layer_heights: loopt.
+- Editorbundel op 9912496: sketch_split, hide_element, layer_heights NIET
+  UITGEVOERD. De compile is na circa 10m34s gestopt wegens te weinig beschikbaar
+  geheugen (compiler circa 9.3 GiB RSS). De guard meldde 582484 kB beschikbaar;
+  de compilerchild is daarna expliciet gestopt omdat timeout een eigen groep had.
+  Geen nieuwe automatische poging gestart; de gebruikersapp bleef open.
+  Deze editortests en een volledige appbuild blijven open. Main is de lokale
+  geconsolideerde ontwikkelbasis, niet een gevalideerde release.
 - Compilerbinary SHA-256: 2dbd12c50b009233682a76a923cb961eb8974d25d1eac71aa15e040bd7bfb4ed.
   Dit is de vastgelegde lokale binary, geen claim over een reproduceerbare
   upstream-compilerbuild.
