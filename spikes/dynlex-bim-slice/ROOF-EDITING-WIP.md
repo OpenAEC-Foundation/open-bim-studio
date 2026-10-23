@@ -13,8 +13,26 @@ This branch is not part of the Linux 0.1.1 preview release.
   GUI/API integration and tests are not complete. Do not expose it as finished.
 - Roof grips: identified base-level coordinates in `the bim grips of`; use the
   actual roof top, slope and curved profile consistently for display and picking.
-- Edit Sketch: existing boundary mode already uses Tab to enter/finish. Add an
-  explicit contextual label and finish/cancel controls without changing that rule.
+- Edit Sketch: Tab opens point/edge selection; G previews a move, Esc cancels
+  that move, and Tab validates and commits the contour. Endpoint, midpoint,
+  nearest and local alignment snapping use the host plane, including sloped
+  roofs. The boundary core run passed 40 checks; GUI validation remains
+  open. Ellipse segments and persistence are a draft, not an exposed tool yet.
+- Local gizmo: object-origin frames and local-axis dragging are implemented in
+  source. Frame and roof-height regression checks passed in `boundary_move`; the
+  projected GUI interaction still needs an app build and visual check.
+- Section-box materials: scene meshes carry material names; native layered walls
+  and plates supply individual cut solids even in coarse display. Cut fills,
+  diagonal/crossed hatching and insulation zigzags use the existing drawing
+  standard patterns. Dutch material names are recognised. Pattern strokes are
+  clipped against cap triangles, preserving holes. Camera movement does not
+  regenerate the cap cache. Mesh reuse also compares material names, since two
+  materials can share a display colour but require different hatches.
+  Imported meshes without material metadata retain a generic fallback.
+  `section_caps` passed all 12 checks alongside `boundary_move` (40 checks),
+  without compiler diagnostics. The later material-name reuse guard has static
+  review only. Full GPU/app validation remains open; do not describe this as
+  release-tested.
 - Graph Explorer: investigate real relation data, navigation and node selection.
 
 Keep private project data outside the public repository. Preserve the running

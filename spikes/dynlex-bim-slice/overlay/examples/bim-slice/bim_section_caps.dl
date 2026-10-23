@@ -2,6 +2,7 @@
 # View-only section faces. Each original material mesh is cut separately;
 # closed rings retain voids through the existing hole-aware triangulator.
 import examples/bim-slice/bim_ifc_read.dl
+import examples/bim-slice/bim_hatch.dl
 
 function append bim cut point {cad vector3:spotValue} once into {a pointer to a list:pointValues}:
     execute:
@@ -93,7 +94,16 @@ function the bim cut caps of {fast mesh record:sourceShape} from {cad vector3:lo
 # One 200 mm world-space grid is shared by adjacent triangles/materials.
 function the bim cut hatching of {fast mesh record:capShape}:
     execute:
+        return the bim cut hatching of capShape angled -45.0 spaced 0.1414213562373095
+
+function the bim cut hatching of {fast mesh record:capShape} angled {a 64 bit floating-point number:degrees} spaced {a 64 bit floating-point number:spacing}:
+    execute:
         set strokeShape to an empty fast mesh
+        if spacing <= 0.0:
+            return strokeShape
+        set turn to degrees * (3.141592653589793 / 180.0)
+        set normalU to 0.0 - (the sine of turn)
+        set normalV to the cosine of turn
         set faceCursor to 0
         loop while (faceCursor + 2) < (the length of (capShape's triangles's values)):
             set corners to an empty list of a cad vector3
@@ -110,20 +120,20 @@ function the bim cut hatching of {fast mesh record:capShape}:
             set maximumScalar to -1e30
             loop cornerCursor from 0 to 3:
                 set cornerSpot to the item at (the item at (faceCursor + cornerCursor) in (capShape's triangles's values)) in (capShape's positions's values)
-                set scalarValue to (the bim coordinate axisFirst of cornerSpot) + (the bim coordinate axisLast of cornerSpot)
+                set scalarValue to (normalU * (the bim coordinate axisFirst of cornerSpot)) + (normalV * (the bim coordinate axisLast of cornerSpot))
                 append cornerSpot to corners
                 append scalarValue to scalarValues
                 set minimumScalar to the minimum of minimumScalar and scalarValue
                 set maximumScalar to the maximum of maximumScalar and scalarValue
-            set firstStroke to (the floor of (minimumScalar / 0.2)) as an integer
-            set lastStroke to ((the floor of (maximumScalar / 0.2)) as an integer) + 1
+            set firstStroke to (the floor of (minimumScalar / spacing)) as an integer
+            set lastStroke to ((the floor of (maximumScalar / spacing)) as an integer) + 1
             # Bounded work for abnormally large imported triangles.
             set strokeStride to 1
             if (lastStroke - firstStroke) > 2048:
                 set strokeStride to ((lastStroke - firstStroke) / 2048) + 1
             set strokeCursor to firstStroke
             loop while strokeCursor <= lastStroke:
-                set strokeScalar to (strokeCursor as a 64 bit floating-point number) * 0.2
+                set strokeScalar to (strokeCursor as a 64 bit floating-point number) * spacing
                 set strokeHits to an empty list of a cad vector3
                 loop edgeCursor from 0 to 3:
                     set nextCorner to the remainder of (edgeCursor + 1) divided by 3
@@ -145,3 +155,108 @@ function the bim cut hatching of {fast mesh record:capShape}:
             free scalarValues
             set faceCursor to faceCursor + 3
         return strokeShape
+
+function the bim cut hatching of {fast mesh record:capShape} patterned {bim hatch pattern record:pattern}:
+    execute:
+        if pattern's zigzag:
+            return the bim zigzag cut hatching of capShape
+        set strokes to the bim cut hatching of capShape angled pattern's angle spaced pattern's spacing
+        if pattern's crossed:
+            set second to the bim cut hatching of capShape angled (pattern's angle + 90.0) spaced pattern's spacing
+            loop cursor from 0 to the length of (second's positions's values):
+                append (the item at cursor in (second's positions's values)) to (strokes's positions's values)
+                append (the item at cursor in (second's normals's values)) to (strokes's normals's values)
+        return strokes
+
+# Clip a finite pattern stroke against one cap triangle in its own plane.
+# The cap triangulation already excludes holes; clipping cannot bridge them.
+function append bim cut stroke from {cad vector3:firstSpot} to {cad vector3:lastSpot} inside {a pointer to a list:corners} facing {cad vector3:normal} into {a pointer to a fast mesh record:target}:
+    execute:
+        set firstShare to 0.0
+        set lastShare to 1.0
+        set signedArea to the cad dot of (the cad cross of (the cad difference of (the item at 1 in corners) and (the item at 0 in corners)) and (the cad difference of (the item at 2 in corners) and (the item at 0 in corners))) and normal
+        set sign to 1.0
+        if signedArea < 0.0:
+            set sign to -1.0
+        loop edgeCursor from 0 to 3:
+            set edgeStart to the item at edgeCursor in corners
+            set edgeFinish to the item at (the remainder of (edgeCursor + 1) divided by 3) in corners
+            set edgeVector to the cad difference of edgeFinish and edgeStart
+            set firstGap to sign * (the cad dot of (the cad cross of edgeVector and (the cad difference of firstSpot and edgeStart)) and normal)
+            set lastGap to sign * (the cad dot of (the cad cross of edgeVector and (the cad difference of lastSpot and edgeStart)) and normal)
+            if (firstGap < -1e-9) and (lastGap < -1e-9):
+                return nothing
+            if ((firstGap < 0.0) and (lastGap >= 0.0)) or ((lastGap < 0.0) and (firstGap >= 0.0)):
+                set crossingShare to firstGap / (firstGap - lastGap)
+                if firstGap < 0.0:
+                    set firstShare to the maximum of firstShare and crossingShare
+                else:
+                    set lastShare to the minimum of lastShare and crossingShare
+        if (lastShare - firstShare) > 1e-9:
+            set direction to the cad difference of lastSpot and firstSpot
+            append (the cad sum of firstSpot and (direction scaled by firstShare)) to (target's positions's values)
+            append (the cad sum of firstSpot and (direction scaled by lastShare)) to (target's positions's values)
+            append normal to (target's normals's values)
+            append normal to (target's normals's values)
+
+function the bim cut plane point at {a 64 bit floating-point number:u} and {a 64 bit floating-point number:v} through {cad vector3:origin} normal {cad vector3:normal}:
+    execute:
+        if (the absolute value of normal's x) > 0.9:
+            return a cad vector3 with x origin's x, y u and z v
+        if (the absolute value of normal's y) > 0.9:
+            return a cad vector3 with x u, y origin's y and z v
+        return a cad vector3 with x u, y v and z origin's z
+
+function the bim zigzag cut hatching of {fast mesh record:capShape}:
+    execute:
+        set strokes to an empty fast mesh
+        set boundsLow to a cad vector3 with x 1e30, y 1e30 and z 1e30
+        set boundsHigh to a cad vector3 with x -1e30, y -1e30 and z -1e30
+        loop cursor from 0 to the length of (capShape's positions's values):
+            set spot to the item at cursor in (capShape's positions's values)
+            set boundsLow to a cad vector3 with x (the minimum of boundsLow's x and spot's x), y (the minimum of boundsLow's y and spot's y) and z (the minimum of boundsLow's z and spot's z)
+            set boundsHigh to a cad vector3 with x (the maximum of boundsHigh's x and spot's x), y (the maximum of boundsHigh's y and spot's y) and z (the maximum of boundsHigh's z and spot's z)
+        # A shared pitch across this cap keeps neighbouring triangles aligned.
+        set pitch to the maximum of 0.05 and ((the cad distance from boundsLow to boundsHigh) / 128.0)
+        set faceCursor to 0
+        loop while (faceCursor + 2) < (the length of (capShape's triangles's values)):
+            set corners to an empty list of a cad vector3
+            set normal to the item at (the item at faceCursor in (capShape's triangles's values)) in (capShape's normals's values)
+            set axisU to 0
+            set axisV to 1
+            if (the absolute value of normal's x) > 0.9:
+                set axisU to 1
+                set axisV to 2
+            else if (the absolute value of normal's y) > 0.9:
+                set axisV to 2
+            set lowU to 1e30
+            set lowV to 1e30
+            set highU to -1e30
+            set highV to -1e30
+            loop cornerCursor from 0 to 3:
+                set spot to the item at (the item at (faceCursor + cornerCursor) in (capShape's triangles's values)) in (capShape's positions's values)
+                append spot to corners
+                set lowU to the minimum of lowU and (the bim coordinate axisU of spot)
+                set highU to the maximum of highU and (the bim coordinate axisU of spot)
+                set lowV to the minimum of lowV and (the bim coordinate axisV of spot)
+                set highV to the maximum of highV and (the bim coordinate axisV of spot)
+            set origin to the item at 0 in corners
+            set firstColumn to ((the floor of (lowU / pitch)) as an integer) - 1
+            set lastColumn to ((the floor of (highU / pitch)) as an integer) + 1
+            set firstRow to ((the floor of (lowV / (pitch * 2.0))) as an integer) - 1
+            set lastRow to ((the floor of (highV / (pitch * 2.0))) as an integer) + 1
+            loop rowCursor from firstRow to lastRow + 1:
+                loop columnCursor from firstColumn to lastColumn + 1:
+                    set u to (columnCursor as a 64 bit floating-point number) * pitch
+                    set v to (rowCursor as a 64 bit floating-point number) * (pitch * 2.0)
+                    set firstV to v
+                    set lastV to v + pitch
+                    if (the remainder of columnCursor divided by 2) != 0:
+                        set firstV to v + pitch
+                        set lastV to v
+                    set firstSpot to the bim cut plane point at u and firstV through origin normal normal
+                    set lastSpot to the bim cut plane point at (u + pitch) and lastV through origin normal normal
+                    append bim cut stroke from firstSpot to lastSpot inside corners facing normal into (the address of strokes)
+            free corners
+            set faceCursor to faceCursor + 3
+        return strokes
