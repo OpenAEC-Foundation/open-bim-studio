@@ -1,7 +1,21 @@
 # Contributing
 
-This is a research repository. Contributions are documents, measurements, and decisions — not
-code. The goal is that when the build starts, nobody has to think about architecture again.
+This repository contains the native Open BIM Studio application and its supporting
+research. Application code lives in spikes/dynlex-bim-slice. Read README.md for
+setup, docs/WERKBORD.md for ownership and docs/TWEE-COMPUTERS.md for coordination.
+
+## Application changes
+
+Start one short task branch from main and submit a PR back to main. Keep BIM
+product logic in DynLex; compiler changes belong in the separate DynLex repo.
+Claim shared editor, renderer and schema files before editing them in parallel.
+Include the problem, resulting behaviour, relevant checks and known limitations
+in the PR. Use generic fixtures and keep customer models and credentials private.
+
+Run only one local DynLex compiler at a time and at most three tests per bundle.
+Record the app commit and compiler identity with results. A headless check alone
+does not validate the full app or a platform installer. Do not publish a release
+without the corresponding build, interactive and installation checks.
 
 ## Where things go
 
@@ -45,8 +59,9 @@ one and update the old one's status.
 
 ## Running a spike
 
-Spikes are throwaway code that answers one question. They are exempt from quality standards and
-must never grow into the product.
+New research spikes answer one bounded question and record their findings.
+The historical spikes/dynlex-bim-slice directory is an exception: it now contains
+the application and follows the application contribution rules above.
 
 Each spike gets a directory in `spikes/` containing:
 - Whatever code is needed

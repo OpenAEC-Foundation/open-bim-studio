@@ -1,4 +1,7 @@
-# Spike — the vertical BIM slice on the native DynLex kernel
+# Open BIM Studio — application and toolchain notes
+
+For the current overview and quick start, read the [repository README](../../README.md).
+The experiment described below is retained as architectural background.
 
 The editor built from this spike is called **Open BIM Studio**: its window,
 installer, command (`open-bim-studio`), menu entry and default file
@@ -110,7 +113,7 @@ scheduled separately. The source revision alone is not binary provenance.
 **How to run.** Select a checkout with its compiler built at `build/dynlex`, then:
 
 ```
-./build.sh app             # the editor, optimised, in build/bim-slice
+./build.sh app             # the editor, optimised, in build/open-bim-studio
 ./build.sh run --example   # open the example building (or a .bim file, or --import FILE...)
 ./build.sh test            # every headless test; or ./build.sh test sketch ifcx ...
 ./build.sh dev             # unoptimised with debug information

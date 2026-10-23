@@ -2,9 +2,12 @@
 
 ## What this repository is
 
-A preparation and research repository for a future BIM modeller. There is no product code here
-and none should be added during the research phases. The output is documentation: research
-notes, benchmarks, architecture decisions, and ultimately `docs/BUILD-BRIEF.md`.
+The native Open BIM Studio application lives in spikes/dynlex-bim-slice and is
+implemented in DynLex. The repository also retains its architecture and research
+programme. Main is the shared development baseline; use short task branches and
+PRs. Read docs/WERKBORD.md and docs/TWEE-COMPUTERS.md before parallel changes.
+Compiler work belongs in its separate checkout. Run one DynLex compiler per
+physical computer, and keep private project data out of this public repository.
 
 Read `README.md` and `docs/roadmap.md` before acting. Read `docs/risks.md` to see what is
 actually open.
