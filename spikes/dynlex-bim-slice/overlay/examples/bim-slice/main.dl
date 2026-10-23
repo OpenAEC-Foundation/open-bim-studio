@@ -30,6 +30,7 @@
 # coordinates moved by X and Y metres; with --generate N, with an imaginary
 # tower of at least N walls.
 import examples/bim-slice/bim_editor.dl
+import examples/bim-slice/bim_push_pick.dl
 import examples/bim-slice/bim_window_style.dl
 import lib/vulkan/graphics.dl
 import examples/bim-slice/bim_ifcx_read.dl
@@ -296,7 +297,6 @@ set flying to false
 set viewPressActive to false
 set pushPixel to a cad vector2 with x 0.0 and y 0.0
 set pushInView to false
-set pushPlaneZ to 0.0
 # A mesh face's push in the 3D view: one metre along its normal on screen.
 set meshPushStep to a cad vector2 with x 0.0 and y 0.0
 # The line tool over a mesh face in the 3D view: the outline point under the
@@ -310,6 +310,7 @@ set meshLineHoverZ to 0.0
 # Whether the face under the pointer is a mass's, made a mesh on the click.
 set meshLineHoverMass to false
 set meshLineActive to false
+set meshLineMass to false
 set meshLineId to 0 as a 64 bit integer
 set meshLineFace to -1
 set meshLineSpot to a cad vector3 with x 0.0, y 0.0 and z 0.0
@@ -798,17 +799,18 @@ loop while window remains open:
     # active storey's plane there (push/pull: over the face under it, then up
     # and down the screen), and a click draws instead of orbiting.
     set drawingInView to overView and ((bim tool editor's tool draws in 3D) or editor's editMode)
+    set meshLineHover to false
+    if (editor's tool != bim line tool) and (editor's tool != bim split tool):
+        set meshLineActive to false
     if drawingInView and ((viewPressActive = false) and (viewGripActive = false)):
         set ray to the bim view ray through pixel in viewLayout with camera
-        set stepLength to (meshPushStep's x * meshPushStep's x) + (meshPushStep's y * meshPushStep's y)
-        if (((editor's tool = bim push tool) and (editor's pushFace >= 0)) and (pushInView and (stepLength > 1e-6))) and ((the length of editor's numeric) = 0):
+        if (((editor's tool = bim push tool) and (editor's pushFace >= 0)) and pushInView) and ((the length of editor's numeric) = 0):
             # A mesh face follows the pointer along its normal as seen.
-            push bim editor mesh face by ((((pixel's x - pushPixel's x) * meshPushStep's x) + ((pixel's y - pushPixel's y) * meshPushStep's y)) / stepLength) in (the address of editor)
+            push bim editor mesh face by (the bim push travel from pushPixel to pixel along meshPushStep scaled camera's viewScale) in (the address of editor)
         else if ((editor's tool = bim push tool) and (editor's pushId != the bim refused id)) and (editor's pushEdge >= 0):
-            # A side follows the pointer across the level of the click.
-            if pushInView and ((the absolute value of ray's direction's z) > 1e-9):
-                set reach to (pushPlaneZ - ray's origin's z) / ray's direction's z
-                move bim editor pointer to (a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))) within 0.0001 in (the address of editor)
+            # The same projected normal works in elevation/head-on views.
+            if pushInView and ((the length of editor's numeric) = 0):
+                push bim editor side by (the bim push travel from pushPixel to pixel along meshPushStep scaled camera's viewScale) in (the address of editor)
         else if (editor's tool = bim push tool) and (editor's pushId != the bim refused id):
             if pushInView:
                 set axesNow to the bim view axes of camera
@@ -824,9 +826,11 @@ loop while window remains open:
             set sketchHit to the bim sketch hit along ray for editor
             if sketchHit's found:
                 move bim editor sketch pointer to sketchHit's spot within (8.0 / camera's viewScale) in (the address of editor)
-        else if (the absolute value of ray's direction's z) > 1e-9:
-            set reach to ((the bim storey elevation of editor) - ray's origin's z) / ray's direction's z
-            set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
+        else:
+            set onPlane to editor's pointerLocation
+            if (the absolute value of ray's direction's z) > 1e-9:
+                set reach to ((the bim storey elevation of editor) - ray's origin's z) / ray's direction's z
+                set onPlane to a cad vector2 with x (ray's origin's x + (reach * ray's direction's x)) and y (ray's origin's y + (reach * ray's direction's y))
             # Over a face or mass, the pointer lies on it, so that a line
             # snaps to the face's points and edges where the face is seen.
             set underPointer to the bim pick along ray among (shownMeshes's values) in editor's documentValue's current with (editor's spaces's values)
@@ -835,13 +839,13 @@ loop while window remains open:
             set meshLineHoverMass to false
             set hoverUsable to false
             set hoverMesh to an empty bim mesh form
-            if (editor's tool = bim line tool) and (underPointer's kind = bim mesh picked):
+            if ((editor's tool = bim line tool) or (editor's tool = bim split tool)) and (underPointer's kind = bim mesh picked):
                 set hoverFound to the bim mesh index of underPointer's id in editor's documentValue's current
                 if hoverFound's valid:
                     set hoverMesh to the item at hoverFound's position in (editor's documentValue's current's meshes's values)
                     set hoverUsable to true
             # A mass is drawn on as the mesh it becomes on the click.
-            if (editor's tool = bim line tool) and (underPointer's kind = bim sketch picked):
+            if ((editor's tool = bim line tool) or (editor's tool = bim split tool)) and (underPointer's kind = bim sketch picked):
                 set massFound to the bim sketch index of underPointer's id in editor's documentValue's current
                 if massFound's valid:
                     set massElement to the item at massFound's position in (editor's documentValue's current's sketches's values)
@@ -1297,7 +1301,8 @@ loop while window remains open:
                     set hitFace to -1
                     if (faceHit's kind = bim mesh picked) and (faceHit's id = editedMesh's id):
                         set hitSpot to the cad sum of faceRay's origin and (faceRay's direction scaled by faceHit's distance)
-                        set hitFace to the bim face of mesh editedMesh through (a cad vector3 with x hitSpot's x, y hitSpot's y and z (hitSpot's z - (the bim storey elevation of editor)))
+                        set editedElevation to the bim elevation of level editedMesh's levelId in editor's documentValue's current
+                        set hitFace to the bim face of mesh editedMesh through (a cad vector3 with x hitSpot's x, y hitSpot's y and z (hitSpot's z - editedElevation))
                     if hitFace >= 0:
                         pick bim editor mesh face hitFace in (the address of editor)
                     else:
@@ -1307,31 +1312,28 @@ loop while window remains open:
             set editor's extending to false
         # The line tool on a mesh face's outline: the first click starts a line
         # across the face, the second, on the same face, cuts it there.
-        if editor's tool != bim line tool:
+        if (editor's tool != bim line tool) and (editor's tool != bim split tool):
             set meshLineActive to false
-        if ((editor's tool = bim line tool) and meshLineHover) and (clickHandled = false):
+        if (((editor's tool = bim line tool) or (editor's tool = bim split tool)) and meshLineHover) and (clickHandled = false):
             set clickHandled to true
             if (meshLineActive and (meshLineId = meshLineHoverId)) and (meshLineFace = meshLineHoverFace):
-                ignore split bim editor mesh meshLineId face meshLineFace from meshLineSpot to meshLineHoverSpot in (the address of editor)
+                ignore split bim editor sketch mesh meshLineId mass meshLineMass face meshLineFace from meshLineSpot to meshLineHoverSpot in (the address of editor)
                 set meshLineActive to false
             else:
-                set lineMeshId to meshLineHoverId
-                # A line begun on a mass makes it a mesh, with the same faces.
-                if meshLineHoverMass:
-                    begin bim transaction in (the address of (editor's documentValue))
-                    set lineMeshId to make bim mesh of mass meshLineHoverId in (the address of (editor's documentValue's current))
-                    if lineMeshId = the bim refused id:
-                        roll back bim transaction in (the address of (editor's documentValue))
-                    else:
-                        commit bim transaction in (the address of (editor's documentValue))
-                set meshLineActive to lineMeshId != the bim refused id
-                set meshLineId to lineMeshId
+                # First click only remembers geometry. Conversion and split
+                # happen together after a valid second click, as one undo.
+                set meshLineActive to true
+                set meshLineId to meshLineHoverId
+                set meshLineMass to meshLineHoverMass
                 set meshLineFace to meshLineHoverFace
                 set meshLineSpot to meshLineHoverSpot
                 set meshLineZ to meshLineHoverZ
                 set editor's message to the string form of "Line on a face: click a second point on the same face's outline"
         else if (editor's tool = bim line tool) and (clickHandled = false):
             set meshLineActive to false
+        if (editor's tool = bim split tool) and (clickHandled = false):
+            set clickHandled to true
+            set editor's message to the string form of "Split: click two edges on the same Sketch mass or mesh face; Esc cancels"
         # A push/pull on a face of a mesh pushes that face along its normal.
         if ((editor's tool = bim push tool) and (editor's pushId = the bim refused id)) and (clickHandled = false):
             set meshRay to the bim view ray through pixel in viewLayout with camera
@@ -1365,19 +1367,30 @@ loop while window remains open:
                 set massFound to the bim sketch index of sideHit's id in editor's documentValue's current
                 if massFound's valid:
                     set massElement to the item at massFound's position in (editor's documentValue's current's sketches's values)
-                    set floorZ to the bim storey elevation of editor
-                    if ((massElement's height > 0.0) and (hitZ > (floorZ + 0.001))) and (hitZ < ((floorZ + massElement's height) - 0.001)):
-                        set ring to massElement's points's values
-                        set nearestEdge to 0
-                        set nearestGap to 1.0 / 0.0
-                        loop edgeCursor from 0 to the length of ring:
-                            set gap to the cad distance from hitPoint to the segment from (the item at edgeCursor in ring) to (the item at (the remainder of (edgeCursor + 1) divided by (the length of ring)) in ring)
-                            if gap < nearestGap:
-                                set nearestGap to gap
-                                set nearestEdge to edgeCursor
-                        set editor's pushEdge to nearestEdge
-                        set pushPlaneZ to hitZ
-                        move bim editor pointer to hitPoint within 0.0001 in (the address of editor)
+                    set sideSpot to a cad vector3 with x hitPoint's x, y hitPoint's y and z hitZ
+                    set nearestEdge to the bim side of mass massElement at sideSpot in editor's documentValue's current
+                    if nearestEdge >= 0:
+                        set editor's pointerLocation to hitPoint
+                        if start bim editor push of sketch massElement's id side nearestEdge in (the address of editor):
+                            set sideNormal to the bim push normal of editor
+                            set fromPixel to the bim view point hitPoint's x hitPoint's y hitZ in viewLayout with camera
+                            set toPixel to the bim view point (hitPoint's x + sideNormal's x) (hitPoint's y + sideNormal's y) hitZ in viewLayout with camera
+                            set meshPushStep to a cad vector2 with x (toPixel's x - fromPixel's x) and y (toPixel's y - fromPixel's y)
+                            set clickHandled to true
+                    else if massElement's kind = bim face sketch:
+                        set massBaseZ to the bim elevation of level massElement's levelId in editor's documentValue's current
+                        set onMassCap to ((the absolute value of (hitZ - massBaseZ)) < 1e-6) or ((the absolute value of (hitZ - (massBaseZ + massElement's height))) < 1e-6)
+                        if ((the absolute value of massElement's height) < 1e-8) and ((the absolute value of (hitZ - massBaseZ)) < 0.0021):
+                            # Flat sketch faces render 2 mm above the storey.
+                            set onMassCap to true
+                        if onMassCap:
+                            set editor's pointerLocation to hitPoint
+                            set clickHandled to start bim editor push of sketch massElement's id side -1 in (the address of editor)
+        if ((editor's tool = bim push tool) and (editor's pushId = the bim refused id)) and (clickHandled = false):
+            # A 3D miss or semantic BIM surface must never repick a mass
+            # hidden behind it through the active storey's plan.
+            set clickHandled to true
+            set editor's message to the string form of "Push/pull: click a Sketch mass or editable mesh face"
         if clickHandled = false:
             press bim editor pointer in (the address of editor)
     set overSection to ((pixel's x > layout's planRight) and ((pixel's y > lowerLayout's top) and (pixel's y < lowerLayout's bottom))) and (showSection and editor's hasSection)
@@ -2241,6 +2254,8 @@ loop while window remains open:
             # Escape cancels what is under way and clears the selection;
             # it never closes the window.
             set showVisibility to false
+            set meshLineActive to false
+            set meshLineHover to false
             type bim editor key code in (the address of editor)
         else if (code = 45) and ((editor's grabbing = false) and (editor's propertyCode < 0)):
             set camera's scale to camera's scale / 1.2
@@ -2719,15 +2734,16 @@ loop while window remains open:
             draw bim gesture in view of editor in viewLayout with camera in frame
         if viewPressActive and viewDragged:
             draw bim selection box from viewPressPixel to pixel in frame
+        if drawingInView:
             # A line across a mesh face: its first point, the outline point
             # under the pointer, and the line between them.
-            if editor's tool = bim line tool:
+            if (editor's tool = bim line tool) or (editor's tool = bim split tool):
                 start triangles in frame
                 if meshLineActive:
                     set lineStartPixel to the bim view point (meshLineSpot's x) (meshLineSpot's y) (meshLineSpot's z + meshLineZ) in viewLayout with camera
                     use vertex color red 255, green 140 and blue 0 in frame
                     add bim square at lineStartPixel sized 8.0 in frame
-                    if meshLineHover:
+                    if (meshLineHover and (meshLineHoverId = meshLineId)) and (meshLineHoverFace = meshLineFace):
                         add bim stroke from lineStartPixel to (the bim view point (meshLineHoverSpot's x) (meshLineHoverSpot's y) (meshLineHoverSpot's z + meshLineHoverZ) in viewLayout with camera) wide 2.0 in frame
                 if meshLineHover:
                     use vertex color red 40, green 160 and blue 60 in frame
