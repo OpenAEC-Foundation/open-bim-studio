@@ -89,6 +89,9 @@ Copy-Item $toolchainLicence (Join-Path $stage "licenses\llvm-mingw.txt")
 # The interface's icons and the drawing import's script (it needs Python 3).
 Copy-Item (Join-Path $slice "icons\ui-icons.txt") (Join-Path $stage "icons")
 Copy-Item (Join-Path $slice "icons\README.md") (Join-Path $stage "icons")
+foreach ($icon in "open-bim-studio.svg", "open-bim-studio.png", "open-bim-studio.ico") {
+    Copy-Item (Join-Path $slice "icons\$icon") (Join-Path $stage "icons")
+}
 Copy-Item (Join-Path $slice "import\drawing_to_lines.py") (Join-Path $stage "import")
 
 @"

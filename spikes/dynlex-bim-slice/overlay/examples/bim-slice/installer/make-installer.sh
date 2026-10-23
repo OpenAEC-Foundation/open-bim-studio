@@ -57,6 +57,7 @@ done
 # The interface's icons (CC BY-SA 4.0, see icons/README.md).
 mkdir -p "$stage/payload/icons"
 cp "$root/examples/bim-slice/icons/ui-icons.txt" "$root/examples/bim-slice/icons/README.md" "$stage/payload/icons/"
+cp "$root/examples/bim-slice/icons/open-bim-studio.svg" "$root/examples/bim-slice/icons/open-bim-studio.png" "$stage/payload/icons/"
 # The script that reads 2D drawings (DXF, DWG, PDF) for Collaborate > Import.
 mkdir -p "$stage/payload/import"
 cp "$root/examples/bim-slice/import/drawing_to_lines.py" "$stage/payload/import/"
@@ -125,6 +126,7 @@ cat > "$HOME/.local/share/applications/@NAME@.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=@TITLE@
+Icon=$target/icons/open-bim-studio.svg
 Comment=Plan, section and 3D BIM editor on the native DynLex CAD kernel
 Exec=$target/open-bim-studio
 Path=$documents

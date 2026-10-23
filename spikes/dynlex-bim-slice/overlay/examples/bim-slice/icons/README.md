@@ -1,5 +1,17 @@
 # Interface icons
 
+## Application icon
+
+`open-bim-studio.svg` is the editable application mark: an open building block
+on a dark rounded tile. This original project asset is licensed under MPL-2.0,
+separately from the interface glyphs below. The PNG is a 256-pixel rendering;
+the ICO contains 16, 32, 48 and 256-pixel PNG images rendered from the SVG.
+Linux menu entries use the SVG. The Windows installer uses the ICO for its
+Start menu shortcut and installed-program entry. This does not embed an icon
+into the executable or set the native window icon.
+
+## Interface glyphs
+
 `ui-icons.txt` holds the editor's interface icons as coverage images at 16
 and 22 pixels: one line per icon, size and part (glyph, size, part, then one
 hex byte per pixel). The editor puts them in its glyph atlas at start and
