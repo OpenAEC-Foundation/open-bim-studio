@@ -153,8 +153,13 @@ case "$command" in
         if ! build/dynlex examples/bim-slice/tests/bundle.dl -O0 -o "$out/tests/bundle" > "$out/tests/bundle.diag" 2>&1 || [ -s "$out/tests/bundle.diag" ]; then
             echo "bundle DIAG"; head -20 "$out/tests/bundle.diag"; exit 1
         fi
-        "$out/tests/bundle" > "$out/tests/bundle.out" 2>&1 || true
-        python3 "$here/tools/bundle_tests.py" split "$out/tests/bundle.out" examples/bim-slice/tests/bundle.expected.txt "$out/tests/bundled" ;;
+        runtime_status=0
+        (ulimit -c 0; stdbuf -oL "$out/tests/bundle") > "$out/tests/bundle.out" 2>&1 || runtime_status=$?
+        if [ "$runtime_status" -ne 0 ]; then
+            echo "bundle RUNTIME FAIL (exit $runtime_status)"
+        fi
+        python3 "$here/tools/bundle_tests.py" split "$out/tests/bundle.out" examples/bim-slice/tests/bundle.expected.txt "$out/tests/bundled"
+        exit "$runtime_status" ;;
     installer)
         bash examples/bim-slice/installer/make-installer.sh "$out/open-bim-studio" "${1:?installer output path}" ;;
     *)
