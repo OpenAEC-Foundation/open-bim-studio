@@ -9,7 +9,7 @@ asset is only the compiler bootstrap input and is never overwritten.
 
 ## Run prerequisites
 
-1. Merge the Windows port from `codex/windows-v0.1` with the current Linux UI.
+1. Use the consolidated `main` source, which includes the Windows port and current Linux UI.
    The default `required_ancestor` is `fb36c86`; the workflow refuses a source
    ref without that commit. This prevents shipping the old app bundled in the
    compiler-source snapshot. Resolve port changes in loading, file dialogs,
@@ -18,7 +18,7 @@ asset is only the compiler bootstrap input and is never overwritten.
 3. Copy `ci/windows-release.yml` to `.github/workflows/windows-release.yml`
    on a branch permitted to host workflows. Repository credentials need
    permission to write workflows. `source_ref` identifies the merged commit.
-   Pushes trigger only on `codex/windows-release-0.1.1`; without dispatch
+   Pushes trigger only on `main`; without dispatch
    inputs the source is `github.sha` and the required ancestor is `fb36c86`.
 4. The v0.1 release asset `Open-BIM-Studio-0.1-source.tar.gz` must be accessible
    to the workflow token. Its SHA-256 must equal
@@ -31,7 +31,7 @@ asset is only the compiler bootstrap input and is never overwritten.
 5. Dispatch on GitHub's native Windows runner. The initial LLVM build has a
    six-hour ceiling; its duration and memory requirement have not been measured.
 
-The existing compiler-only workflow remains unchanged. The release candidate
+The old compiler-only workflow is manual-only; main uses the application workflow. The release candidate
 workflow caches dependency toolchains, stages the compiler, builds the platform
 bridge using the same llvm-mingw target, and requires WiX packaging to succeed.
 It records the actual application commit and package SHA-256 hashes. Diagnostic
@@ -54,7 +54,7 @@ or app build was started. PowerShell was unavailable for syntax/runtime checks.
 
 Still required before public release:
 
-- Merge the current UI with the Windows platform port and run this workflow.
+- Run this workflow on the consolidated commit.
 - Confirm the three headless checks and application compile emit no diagnostics.
 - Inspect dependency DLLs and try ZIP startup on a clean Windows machine with a
   Vulkan driver (CI headless checks cannot prove interactive rendering).
@@ -65,8 +65,7 @@ Still required before public release:
   this Windows workflow does not build Linux.
 
 The new workflow is configuration awaiting Windows execution, not evidence of a
-successful Windows build. The through-opening branch is excluded from this
-release preparation.
+successful Windows build. The plate-opening core is integrated; its GUI remains incomplete.
 
 The first native run stopped before dependency installation because Windows
 checkout converted patch files to CRLF, while the verified tarball contains LF

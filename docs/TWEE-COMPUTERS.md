@@ -10,20 +10,15 @@ geometrie worden in **DynLex** ontwikkeld. De overlay wordt bij het bouwen over
 een afzonderlijke DynLex-checkout gelegd. De bestaande platformbrug en
 buildscripts zijn infrastructuur; voeg geen Python-implementatie van BIM-tools toe.
 
-Gebruik deze branches, niet een willekeurige oude checkout van `main`:
+Gebruik **main** als gezamenlijke ontwikkelbasis, zodra de lokale consolidatie
+naar GitHub is gepusht. Controleer altijd de commit-hash; de remote kan nog achterlopen.
+De voormalige integratie-, Windows-, Sketch- en modulebranches zijn lokaal
+samengevoegd. Begin nieuw werk vanaf main in één korte taakbranch en lever een
+PR naar main. Na integratie en controle kan die taakbranch worden verwijderd.
 
-| Branch | Betekenis |
-|---|---|
-| `work/project1357-integration` | Actuele applicatie-integratie van computer 1; ontwikkeling, geen vrijgegeven versie |
-| `codex/windows-release-0.1.1` | Gezamenlijke bestaande UI + Windows-port en verpakkingspipeline; startbasis voor computer 2 |
-| `work/sketch-split` | WIP: Split face, editortransacties en regressietests |
-| `work/side-push` | WIP: 3D-zijvlakselectie en extrusie; hangt af van de Split/core-API |
-| `work/plate-anchor` | Afzonderlijke correctie voor hoogtebehoud bij dak-/vloercontourwijzigingen; nog te testen |
-| `work/plate-openings` | Afzonderlijke kern voor vloersparingen; GUI en acceptatie nog onvolledig |
-
-Een gepushte branch is **geen bewijs van een geslaagde build**. De twee Sketch-
-branches horen bij elkaar en zijn niet elk zelfstandig een complete applicatie.
-De lokale hoofdwerkmap op computer 1 bevat niet automatisch de nieuwste code.
+Main is een ontwikkelbasis, geen releasecertificaat. Vloersparingen hebben nu een
+geïntegreerde kern; de GUI is nog onvolledig. Volledige app- en Windows-validatie
+blijven expliciete releasevoorwaarden. Zie [het consolidatieverslag](CONSOLIDATIE.md).
 
 ## Demarcatie
 
@@ -77,7 +72,7 @@ Maak een eigen clone op de eigen schijf. Deel geen `.git`-map, worktree of
 builddirectory via een netwerkschijf/OneDrive. GitHub is de uitwissellaag.
 
 ```sh
-git clone --branch codex/windows-release-0.1.1 https://github.com/OpenAEC-Foundation/open-bim-studio.git
+git clone --branch main https://github.com/OpenAEC-Foundation/open-bim-studio.git
 cd open-bim-studio
 git switch -c pc2/build-installers
 git rev-parse HEAD
@@ -87,7 +82,7 @@ git rev-parse HEAD
    de toolchain-/buildtaak heeft aangenomen, met de exacte startcommit.
 2. Gebruik één taak per branch, bijvoorbeeld `pc2/compiler-memory` of
    `pc2/windows-installer`. Maak een draft PR naar
-   `codex/windows-release-0.1.1`; de coördinator bepaalt de uiteindelijke integratie.
+   `main`; de coördinator controleert en integreert.
 3. Begin met een reproduceerbare build, niet met een grote compilerverbouwing.
    Noteer OS, compilercommit, compilerbinary-hash, appcommit, opdracht, duur,
    piekgeheugen, diagnostics en testuitslagen.
@@ -138,7 +133,7 @@ een geslaagde headless test vervangt geen Windows-GUI-controle.
 ## Starttekst voor de sessie op computer 2
 
 > Werk aan Open BIM Studio in je eigen clone, vanaf
-> `origin/codex/windows-release-0.1.1`. Lees eerst `docs/TWEE-COMPUTERS.md` en
+> `origin/main`. Lees eerst `docs/TWEE-COMPUTERS.md` en
 > `docs/WERKBORD.md`. Jij beheert voorlopig compiler, buildprestaties, CI en
 > installers. Computer 1 beheert Sketch/Push-Pull/Split, UI, BIM-model en
 > integratie. Maak een `pc2/...`-branch en meld je startcommit en bestandsclaim.
