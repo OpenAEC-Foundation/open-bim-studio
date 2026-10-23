@@ -37,6 +37,9 @@ rsync -a --delete "$here/examples/" "$tree/examples/bim-slice/models/"
 if ! grep -q "the JSON document parsed from" "$tree/lib/json.dl"; then
     (cd "$tree" && patch -p1 -s < "$here/patches/lib-json-public-parse.patch")
 fi
+if ! grep -q "Bound storage by this encoded string" "$tree/lib/json.dl"; then
+    (cd "$tree" && patch -p1 -s < "$here/patches/lib-json-bounded-string.patch")
+fi
 cp "$here"/shaders/*.spv "$tree/build/shaders/"
 # The fallback font and its licence, which the installer also ships.
 mkdir -p "$tree/tests/games/fonts"
