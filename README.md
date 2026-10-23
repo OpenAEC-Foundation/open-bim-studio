@@ -1,61 +1,49 @@
-# open-bim-studio
+# Open BIM Studio
 
-Preparation repository for a BIM modeller that combines the capabilities of a professional
-BIM authoring tool (3D modelling, parametric components, 2D drawings) with the immediacy of a
-real-time 3D application (direct manipulation, fast iteration, low friction).
+Open BIM Studio is a native BIM modeller developed in **DynLex**. The current
+application lives in [spikes/dynlex-bim-slice](spikes/dynlex-bim-slice/README.md):
+parametric building elements, reinforcement, direct geometry editing, IFCX
+persistence, views, drawings and sheets.
 
-## What this repository is — and is not
+**main is the shared development baseline.** Use a short task branch from main
+and submit a PR back to main. A merged commit is not automatically a tested release.
+The local October 2026 consolidation is recorded in
+[docs/CONSOLIDATIE.md](docs/CONSOLIDATIE.md).
 
-**This repository contains no product code.** Not yet, and not by accident.
+## Start here
 
-The application is intended to be built later this year, in a short and concentrated effort,
-with heavy AI assistance. That is only realistic if the build phase contains *no design phase*.
-Every open question — which kernel, which host, which scope, which interaction model — must be
-answered and recorded before the build starts.
-
-So the deliverable here is knowledge: research, benchmarks, decisions, and their reasoning.
-
-The endpoint is [`docs/BUILD-BRIEF.md`](docs/BUILD-BRIEF.md) — a single handover document
-complete enough that an AI agent with no other context can produce a coherent implementation
-plan from it. That is the acceptance test for this entire repository.
-
-## Where to start
-
-| If you want to… | Read |
+| Purpose | Location |
 |---|---|
-| Understand the goal | [`docs/vision/vision.md`](docs/vision/vision.md) |
-| Understand the boundaries | [`docs/vision/non-goals.md`](docs/vision/non-goals.md) |
-| Know what needs doing | [`docs/risks.md`](docs/risks.md) — open uncertainties are the backlog |
-| Contribute research | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| See the technical thesis | [`docs/architecture/layers.md`](docs/architecture/layers.md) |
-| See where we are | [`docs/roadmap.md`](docs/roadmap.md) |
+| Build and run the modeller | [Application README](spikes/dynlex-bim-slice/README.md) |
+| Coordinate work on two computers | [Working agreement](docs/TWEE-COMPUTERS.md) |
+| See ownership and unfinished work | [Task board](docs/WERKBORD.md) |
+| Prepare Windows packages | [Windows build instructions](spikes/dynlex-bim-slice/ci/WINDOWS-RELEASE.md) |
+| Review the branch consolidation | [Consolidation report](docs/CONSOLIDATIE.md) |
 
-## Layout
-
-```
-docs/vision/          Goal, boundaries, shared vocabulary
-docs/domain/          BIM domain knowledge: IFC, parametrics, drawings, standards
-docs/research/        Technology evaluation — the bulk of the work
-docs/architecture/    System design and frozen decisions (ADRs)
-docs/ux/              The interaction model: why this should feel different
-docs/roadmap.md       Phases and their artefacts
-docs/risks.md         Open uncertainties, each linked to a spike
-docs/BUILD-BRIEF.md   The handover document (grows throughout)
-spikes/               Throwaway experiments, each with measured findings
-reference/            External specs and benchmark models
-PROMPTS.md            Log of originating prompts — the intent trail
-```
+The application overlay is staged over a separate DynLex compiler checkout.
+Set DYNLEX_ROOT to that checkout and give each build its own BIM_BUILD_DIR.
+Run at most one DynLex compiler per physical computer; compilation can require
+several GB of memory. Do not close another person's running app to make room.
+BIM product logic remains DynLex; the C platform bridge and build helpers are
+infrastructure. Private project drawings and models stay outside this public repo.
 
 ## Status
 
-**Phase 0 — skeleton in place.** Most documents are stubs. Each stub states the decision
-question it exists to answer; none contain filler. Answering them is the work.
+This is active development. The consolidated code includes the Linux application,
+Windows port, Sketch tools, wall-layer editing and plate-opening geometry. The
+plate-opening GUI is incomplete. Full application/GUI validation and native
+Windows installer validation are still required before a new release.
 
-See [`docs/roadmap.md`](docs/roadmap.md) for the phase plan.
+## Research and architecture
 
-## A note on the working hypothesis
+The repository began as a research programme. Its original findings and decisions
+remain available; older research documents may describe plans predating the app.
 
-[`docs/architecture/layers.md`](docs/architecture/layers.md) contains an early technical
-hypothesis. It is written to be **falsified, not assumed**. It exists so that research has a
-target to attack, not so that the conclusion is settled in advance. If the spikes in phase 3
-contradict it, the hypothesis loses.
+- [Vision](docs/vision/vision.md) and [scope](docs/vision/non-goals.md)
+- [Architecture](docs/architecture/layers.md) and [build brief](docs/BUILD-BRIEF.md)
+- [Research roadmap](docs/roadmap.md) and [risks](docs/risks.md)
+- [Research contribution guide](CONTRIBUTING.md)
+
+Other directories under spikes contain experiments; they are not alternative
+production branches of the modeller. Compiler development belongs in the separate
+DynLex repository, with its exact revision recorded for reproducible builds.
