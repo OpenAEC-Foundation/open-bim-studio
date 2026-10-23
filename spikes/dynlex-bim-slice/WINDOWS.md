@@ -89,7 +89,36 @@ every symbol must exist in the CRT or the link fails.
 6. Test on a Windows machine with a Vulkan driver: start, open the
    demonstration pavilion, save, reopen.
 
+## Port (2026-10-21)
+
+Measured in the pinned llvm-mingw 20260616 (UCRT), by reading its import
+libraries with `nm`: `time`, `mktime`, `localtime`, `gmtime`,
+`localtime_r`, `gmtime_r`, `setenv`, `putenv`, `getcwd`, `mkdir` and
+`realpath` are not defined there; `_time64`, `_localtime64_s`,
+`_gmtime64_s`, `_putenv_s`, `_wmkdir`, `_wfullpath`, `_fseeki64` and
+`_ftelli64` are, which glibc lacks; `pthread_*` and `clock_gettime` are in
+winpthreads. No single name links on both, so the slice now calls
+`overlay/examples/bim-slice/platform/obs_platform.c`, a static library
+built per platform (by `build.sh` on Linux, by the workflow on Windows):
+environment, wall and monotonic clocks, a thread-safe calendar, folders,
+absolute paths and the program's folder (UTF-16 on Windows), 64-bit file
+sizes, and the import thread (`_beginthreadex`, so no winpthreads DLL).
+The dialogs ask zenity on Linux and the Windows Forms dialogs through
+PowerShell on Windows; scratch files go to %TEMP%; the drawing import runs
+`python`. `installer/make-windows-package.ps1` and
+`installer/open-bim-studio.wxs` make a portable ZIP and an MSI (WiX 3).
+`ci/windows-compiler.yml` and `ci/windows-app.yml` build them on
+`windows-latest` once copied to `.github/workflows`.
+
+Tests that still call POSIX directly run on Linux only: `app_files`,
+`api`, `steel_library`, `large_model`, `fast_timing`, `fast_differential`.
+Files are opened with `fopen`, so paths outside the ANSI code page do not
+open on Windows yet.
+
 ## Verdict
+
+(Written before the port above; it stands until a Windows run of
+`ci/windows-app.yml` and a start on a real Windows machine say otherwise.)
 
 Not for v0.1. Read from the code, the slice would not link on Windows as
 it stands (ten symbols: `setenv`, five `pthread_` functions,
