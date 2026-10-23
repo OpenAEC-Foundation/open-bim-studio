@@ -124,3 +124,25 @@ overlay, the patch and the shaders; the checkout itself is not changed.
 `overlay/examples/bim-slice/README.md` describes the editor's keys and the test programs.
 
 **Status:** run. See `FINDINGS.md` for the measurements.
+
+**Drawing references and crop editing.** `CV` creates a plan crop. In Select,
+its corner and side handles resize it; selecting a handle also reveals a centre
+handle for moving the whole crop. Release commits one undoable change; Escape
+cancels. `UC` removes the crop. Native annotation text keeps its screen size when
+zooming the model; exported text uses paper units. An element property
+`OpenBIM_Annotation.Text` overrides its tag text (for example, a window mark);
+clearing that property restores the normal type label.
+
+Views can carry registered source artwork in `OpenBIM_VectorTriangles`
+properties: each ordered value is RGB followed by model-space triangle corners.
+This read-only drawing reference is retained in native files and rendered in 2D,
+not evaluated as model geometry. A sheet property
+`OpenBIM_Drawing.SourceArtwork=true` omits the generated sheet frame and view
+captions when the reference already includes them. Source artwork does not
+update when building objects change; outlined source lettering scales with the
+reference, unlike native annotation text.
+
+`patches/lib-json-bounded-string.patch` bounds each decoded JSON string's
+allocation by that string's encoded length. It is applied only to the staged
+build tree. The `json_text_storage` regression parses an 8 MB document with
+2,000 text values and exercises escaped quotes, Unicode and invalid input.
