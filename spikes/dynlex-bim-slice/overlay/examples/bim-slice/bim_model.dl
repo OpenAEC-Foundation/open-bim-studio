@@ -2971,7 +2971,13 @@ function set bim slab {a 64 bit integer:slabId} outline to {a pointer to a list:
             set alongSlope to ((newAnchor's x - oldAnchor's x) * (the cosine of slabValue's heading)) + ((newAnchor's y - oldAnchor's y) * (the sine of slabValue's heading))
             set slope to (the sine of slabValue's pitch) / (the cosine of slabValue's pitch)
             set anchoredTop to slabValue's top + (slope * alongSlope)
-        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, copied, slabValue's thickness, slabValue's material, slabValue's typeId, anchoredTop, slabValue's pitch, slabValue's heading))
+        set candidate to slabValue
+        set candidate's outline to copied
+        set candidate's top to anchoredTop
+        if (bim plate openings of candidate are valid in (@intrinsic("dereference", target))) = false:
+            free (copied's values)
+            return false
+        replace item at index found's position in (target's slabs's values) with candidate
         note bim change of slabId in target
         return true
 
@@ -3051,7 +3057,11 @@ function set bim plate {a 64 bit integer:slabId} type to {a 64 bit integer:typeI
         if (found's valid = false) or ((the bim wall type index of typeId in (@intrinsic("dereference", target)))'s valid = false):
             return false
         set slabValue to the item at found's position in (target's slabs's values)
-        replace item at index found's position in (target's slabs's values) with (@intrinsic("construct", a bim slab record, slabValue's id, slabValue's levelId, slabValue's outline, slabValue's thickness, slabValue's material, typeId, slabValue's top, slabValue's pitch, slabValue's heading))
+        set candidate to slabValue
+        set candidate's typeId to typeId
+        if (bim plate openings of candidate are valid in (@intrinsic("dereference", target))) = false:
+            return false
+        replace item at index found's position in (target's slabs's values) with candidate
         note bim change of slabId in target
         return true
 
@@ -3095,6 +3105,9 @@ function explode bim plate {a 64 bit integer:slabId} in {a pointer to a bim mode
         if found's valid = false:
             return 0
         set slabValue to the item at found's position in (target's slabs's values)
+        # Until layer splitting can carry identified openings, refuse it.
+        if bim plate slabId has openings in (@intrinsic("dereference", target)):
+            return 0
         set typeFound to the bim wall type index of slabValue's typeId in (@intrinsic("dereference", target))
         if typeFound's valid = false:
             return 0
@@ -3123,6 +3136,9 @@ function delete bim slab {a 64 bit integer:slabId} from {a pointer to a bim mode
         set found to the bim slab index of slabId in (@intrinsic("dereference", target))
         if found's valid = false:
             return false
+        loop openingId from 1 to ((the bim plate opening serials of slabId in (@intrinsic("dereference", target))) + 1):
+            ignore delete bim plate opening openingId on slabId in target
+        set bim setting (bim plate opening count setting) of slabId to (0 as a 64 bit integer) keeping false in target
         remove item found's position from (target's slabs's values)
         set rebarCursor to (the length of (target's reinforcements's values)) - 1
         loop while rebarCursor >= 0:
@@ -4120,3 +4136,226 @@ function redo bim transaction in {a pointer to a bim document record:documentVal
         set documentValue's current's journal to a cad topology list of a 64 bit integer
         set documentValue's revision to documentValue's revision + (1 as a 64 bit integer)
         return true
+
+# Rectangular through-openings in plates. Host-owned settings preserve the
+# native and IFCX format. IDs are monotonic within each plate (1..128);
+# deleting one never renumbers the others. Eight micrometre coordinates per
+# rectangle retain rotation. A single outer slab contour remains unchanged.
+function bim plate opening count setting:
+    replacement:
+        2300000
+function bim plate opening coordinates setting:
+    replacement:
+        2300100
+function the bim plate opening limit:
+    replacement:
+        128
+
+function the bim plate opening serials of {a 64 bit integer:plateId} in {bim model record:modelValue}:
+    execute:
+        set serialCount to ((the bim setting (bim plate opening count setting) of plateId in modelValue)'s value) as an integer
+        if (serialCount < 0) or (serialCount > the bim plate opening limit):
+            return 0
+        return serialCount
+
+function the bim plate opening {integer:openingId} of {a 64 bit integer:plateId} in {bim model record:modelValue}:
+    execute:
+        set ringPoints to an empty list of a cad vector2
+        if (openingId < 1) or (openingId > the bim plate opening limit):
+            return ringPoints
+        set firstCode to (bim plate opening coordinates setting) + ((openingId - 1) * 8)
+        loop corner from 0 to 4:
+            set xReading to the bim setting (firstCode + (corner * 2)) of plateId in modelValue
+            set yReading to the bim setting (firstCode + ((corner * 2) + 1)) of plateId in modelValue
+            if (xReading's found and yReading's found) = false:
+                clear ringPoints
+                return ringPoints
+            append (a cad vector2 with x ((xReading's value as a 64 bit floating-point number) / 1000000.0) and y ((yReading's value as a 64 bit floating-point number) / 1000000.0)) to ringPoints
+        return ringPoints
+
+function bim plate {a 64 bit integer:plateId} has openings in {bim model record:modelValue}:
+    execute:
+        loop openingId from 1 to ((the bim plate opening serials of plateId in modelValue) + 1):
+            if (the bim setting ((bim plate opening coordinates setting) + ((openingId - 1) * 8)) of plateId in modelValue)'s found:
+                return true
+        return false
+
+function the bim plate holes of {a 64 bit integer:plateId} in {bim model record:modelValue}:
+    execute:
+        set holeRings to an empty list of the type of (an empty list of a cad vector2)
+        loop openingId from 1 to ((the bim plate opening serials of plateId in modelValue) + 1):
+            set ringPoints to the bim plate opening openingId of plateId in modelValue
+            if (the length of ringPoints) = 4:
+                append ringPoints to holeRings
+            else:
+                free ringPoints
+        return holeRings
+
+function free bim plate holes {a pointer to a list:holeRings}:
+    execute:
+        loop ringCursor from 0 to the length of holeRings:
+            free (the item at ringCursor in holeRings)
+        free holeRings
+
+# Ray crossing only; callers separately reject boundary intersections.
+function bim plate point {cad vector2:pointValue} is inside {a pointer to a list:ringPoints}:
+    execute:
+        set enclosed to false
+        set count to the length of ringPoints
+        loop corner from 0 to count:
+            set a to the item at corner in ringPoints
+            set b to the item at (the remainder of (corner + 1) divided by count) in ringPoints
+            if (a's y > pointValue's y) != (b's y > pointValue's y):
+                set crossX to a's x + (((pointValue's y - a's y) * (b's x - a's x)) / (b's y - a's y))
+                if pointValue's x < crossX:
+                    set enclosed to (enclosed = false)
+        return enclosed
+
+function bim plate rings {a pointer to a list:firstRing} and {a pointer to a list:secondRing} touch:
+    execute:
+        loop aCursor from 0 to the length of firstRing:
+            set a to the item at aCursor in firstRing
+            set b to the item at (the remainder of (aCursor + 1) divided by (the length of firstRing)) in firstRing
+            loop cCursor from 0 to the length of secondRing:
+                set c to the item at cCursor in secondRing
+                set d to the item at (the remainder of (cCursor + 1) divided by (the length of secondRing)) in secondRing
+                if bim segments a to b and c to d meet:
+                    return true
+        return false
+
+function bim plate opening rectangle {a pointer to a list:ringPoints} fits {a pointer to a list:outerRing}:
+    execute:
+        if ((the length of ringPoints) != 4) or ((bim outline ringPoints is simple) = false):
+            return false
+        loop corner from 0 to 4:
+            set a to the item at corner in ringPoints
+            set b to the item at (the remainder of (corner + 1) divided by 4) in ringPoints
+            set c to the item at (the remainder of (corner + 2) divided by 4) in ringPoints
+            set firstLength to the cad distance from a to b
+            set secondLength to the cad distance from b to c
+            if (firstLength < 0.00001) or (secondLength < 0.00001):
+                return false
+            set dotValue to ((b's x - a's x) * (c's x - b's x)) + ((b's y - a's y) * (c's y - b's y))
+            # Quantized coordinates may differ from perpendicular by a few
+            # micrometres after rotation.
+            if (the absolute value of dotValue) > (0.000003 * (firstLength + secondLength)):
+                return false
+            if (bim plate point a is inside outerRing) = false:
+                return false
+        return (bim plate rings ringPoints and outerRing touch) = false
+
+function bim plate opening {a pointer to a list:ringPoints} numbered {integer:openingId} fits {bim slab record:plateValue} in {bim model record:modelValue}:
+    execute:
+        if (bim plate opening rectangle ringPoints fits (plateValue's outline's values)) = false:
+            return false
+        # All material layers must retain the same through-opening.
+        set typeFound to the bim wall type index of plateValue's typeId in modelValue
+        if typeFound's valid:
+            set planarType to the item at typeFound's position in (modelValue's wallTypes's values)
+            loop layerCursor from 0 to the length of (planarType's layers's values):
+                set edgeReach to the bim layer edge of layer layerCursor of type planarType's id in modelValue
+                set layerOutline to the bim outline (plateValue's outline's values) offset by edgeReach
+                set layerFits to bim plate opening rectangle ringPoints fits layerOutline
+                free layerOutline
+                if layerFits = false:
+                    return false
+        loop otherId from 1 to ((the bim plate opening serials of plateValue's id in modelValue) + 1):
+            if otherId != openingId:
+                set otherRing to the bim plate opening otherId of plateValue's id in modelValue
+                if (the length of otherRing) = 4:
+                    set overlapping to bim plate rings ringPoints and otherRing touch
+                    if (bim plate point (the item at 0 in ringPoints) is inside otherRing) or (bim plate point (the item at 0 in otherRing) is inside ringPoints):
+                        set overlapping to true
+                    free otherRing
+                    if overlapping:
+                        return false
+                else:
+                    free otherRing
+        return true
+
+function bim plate openings of {bim slab record:plateValue} are valid in {bim model record:modelValue}:
+    execute:
+        set countReading to the bim setting (bim plate opening count setting) of plateValue's id in modelValue
+        if countReading's found = false:
+            return true
+        set storedCount to countReading's value
+        if (storedCount < (0 as a 64 bit integer)) or (storedCount > ((the bim plate opening limit) as a 64 bit integer)):
+            return false
+        loop openingId from 1 to ((the bim plate opening limit) + 1):
+            set firstCode to (bim plate opening coordinates setting) + ((openingId - 1) * 8)
+            set present to 0
+            loop coordinate from 0 to 8:
+                if (the bim setting (firstCode + coordinate) of plateValue's id in modelValue)'s found:
+                    set present to present + 1
+            if present > 0:
+                if (present != 8) or (openingId > (the bim plate opening serials of plateValue's id in modelValue)):
+                    return false
+                set ringPoints to the bim plate opening openingId of plateValue's id in modelValue
+                set fits to bim plate opening ringPoints numbered openingId fits plateValue in modelValue
+                free ringPoints
+                if fits = false:
+                    return false
+        return true
+
+# Updates an existing opening, or appends exactly the next serial. Invalid
+# geometry is rejected before any settings or IDs change.
+function store bim plate opening {integer:openingId} on {a 64 bit integer:plateId} around {a pointer to a list:outlinePoints} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim slab index of plateId in (@intrinsic("dereference", target))
+        if (found's valid = false) or ((the length of outlinePoints) != 4):
+            return false
+        set serialCount to the bim plate opening serials of plateId in (@intrinsic("dereference", target))
+        if ((openingId < 1) or (openingId > (serialCount + 1))) or (openingId > the bim plate opening limit):
+            return false
+        set firstCode to (bim plate opening coordinates setting) + ((openingId - 1) * 8)
+        if openingId <= serialCount:
+            if ((the bim setting firstCode of plateId in (@intrinsic("dereference", target)))'s found) = false:
+                return false
+        set quantized to an empty list of a cad vector2
+        loop corner from 0 to 4:
+            set pointValue to the item at corner in outlinePoints
+            set qx to (the rounded value of (pointValue's x * 1000000.0)) / 1000000.0
+            set qy to (the rounded value of (pointValue's y * 1000000.0)) / 1000000.0
+            append (a cad vector2 with x qx and y qy) to quantized
+        set plateValue to the item at found's position in (target's slabs's values)
+        set fits to bim plate opening quantized numbered openingId fits plateValue in (@intrinsic("dereference", target))
+        if fits = false:
+            free quantized
+            return false
+        loop corner from 0 to 4:
+            set pointValue to the item at corner in quantized
+            set bim setting (firstCode + (corner * 2)) of plateId to ((the rounded value of (pointValue's x * 1000000.0)) as a 64 bit integer) keeping true in target
+            set bim setting (firstCode + ((corner * 2) + 1)) of plateId to ((the rounded value of (pointValue's y * 1000000.0)) as a 64 bit integer) keeping true in target
+        free quantized
+        if openingId > serialCount:
+            set bim setting (bim plate opening count setting) of plateId to (openingId as a 64 bit integer) keeping true in target
+        note bim change of plateId in target
+        return true
+
+function add bim plate opening on {a 64 bit integer:plateId} around {a pointer to a list:outlinePoints} in {a pointer to a bim model record:target}:
+    execute:
+        set openingId to 1 + (the bim plate opening serials of plateId in (@intrinsic("dereference", target)))
+        if store bim plate opening openingId on plateId around outlinePoints in target:
+            return openingId
+        return -1
+
+function delete bim plate opening {integer:openingId} on {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+    execute:
+        if (openingId < 1) or (openingId > (the bim plate opening serials of plateId in (@intrinsic("dereference", target)))):
+            return false
+        set firstCode to (bim plate opening coordinates setting) + ((openingId - 1) * 8)
+        if ((the bim setting firstCode of plateId in (@intrinsic("dereference", target)))'s found) = false:
+            return false
+        loop coordinate from 0 to 8:
+            set bim setting (firstCode + coordinate) of plateId to (0 as a 64 bit integer) keeping false in target
+        note bim change of plateId in target
+        return true
+
+function the bim net plan area of plate {bim slab record:plateValue} in {bim model record:modelValue}:
+    execute:
+        set netArea to the absolute value of (the cad signed area of (plateValue's outline's values))
+        set holeRings to the bim plate holes of plateValue's id in modelValue
+        loop cursor from 0 to the length of holeRings:
+            set netArea to netArea - (the absolute value of (the cad signed area of (the item at cursor in holeRings)))
+        free bim plate holes holeRings
+        return netArea
