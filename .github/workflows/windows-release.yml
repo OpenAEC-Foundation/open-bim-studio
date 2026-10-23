@@ -1,0 +1,200 @@
+name: Windows application release candidate (v0.1.1)
+
+on:
+  push:
+    branches: [codex/windows-release-0.1.1]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Merged Windows-port and current UI commit/ref'
+        required: true
+        type: string
+      required_ancestor:
+        description: 'Current UI commit that must be included'
+        default: 'fb36c86'
+        required: true
+        type: string
+
+permissions:
+  # A draft release's assets may need `contents: write` to be listed; the
+  # download step says so when it cannot find the asset.
+  contents: read
+
+jobs:
+  compiler:
+    runs-on: windows-latest
+    # The pinned LLVM fork is built from source on the first run.
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: dynlex
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: open-bim-studio
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Require the current UI source
+        working-directory: open-bim-studio
+        shell: pwsh
+        env:
+          REQUIRED_ANCESTOR: ${{ inputs.required_ancestor || 'fb36c86' }}
+        run: |
+          git merge-base --is-ancestor $env:REQUIRED_ANCESTOR HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Source ref does not include required current UI commit." }
+          git rev-parse HEAD | Set-Content "$env:RUNNER_TEMP/app-source-sha.txt"
+
+
+      - name: Download the v0.1 source snapshot
+        working-directory: .
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1 --repo "${{ github.repository }}" `
+            --pattern "Open-BIM-Studio-0.1-source.tar.gz" --dir snapshot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the v0.1 source asset; a draft release may need contents: write."
+          }
+          $expectedHash = '086aa0704607372473f0604a6f9bdd7143589cea9b18f3d3a65e1705b3efbf5a'
+          $actualHash = (Get-FileHash snapshot/Open-BIM-Studio-0.1-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Source snapshot SHA256 mismatch: $actualHash" }
+          New-Item -ItemType Directory -Force dynlex | Out-Null
+          tar -xzf snapshot/Open-BIM-Studio-0.1-source.tar.gz -C dynlex
+          if ($LASTEXITCODE -ne 0) { throw "Could not unpack the source snapshot." }
+          if (-not (Test-Path dynlex/scripts/install.ps1)) {
+            throw "The snapshot has no scripts/install.ps1 at its root."
+          }
+
+      - name: Apply the slice's compiler patches
+        shell: pwsh
+        run: |
+          $patches = "../open-bim-studio/spikes/dynlex-bim-slice/patches"
+          foreach ($name in "dynlex-compiler-local", "dynlex-shader-extensions", "dynlex-windows-library-names") {
+            $patch = "$patches/$name.patch"
+            git apply --check -p1 --whitespace=nowarn $patch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              git apply -p1 --whitespace=nowarn $patch
+              if ($LASTEXITCODE -ne 0) { throw "Patch $name failed after its applicability check." }
+            } else {
+              git apply --reverse --check -p1 --whitespace=nowarn $patch 2>$null
+              if ($LASTEXITCODE -ne 0) { throw "Patch $name neither applies nor is already applied." }
+              Write-Host "Already applied: $name"
+            }
+          }
+
+      - name: Restore pinned dependencies
+        id: dependency-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            dynlex/.cache/llvm-mingw
+            dynlex/.cache/vcpkg
+            dynlex/.cache/vcpkg-installed
+          key: obs-windows-dependencies-v2-${{ runner.arch }}-${{ hashFiles('dynlex/metadata/LLVM_MINGW_TOOLCHAIN', 'dynlex/metadata/VCPKG_TOOLCHAIN', 'dynlex/vcpkg.json', 'dynlex/cmake/vcpkg-triplets/*.cmake', 'dynlex/scripts/install.ps1', 'dynlex/scripts/llvm-mingw-toolchain.ps1') }}
+
+      - name: Restore LLVM compiler toolchain
+        id: llvm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: dynlex/.cache/llvm-toolchain
+          key: obs-windows-llvm-v2-${{ runner.arch }}-${{ hashFiles('dynlex/metadata/LLVM_TOOLCHAIN', 'dynlex/scripts/llvm_toolchain.sh') }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: ./scripts/install.ps1
+
+      - name: Save dependencies before compiler and app work
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            dynlex/.cache/llvm-mingw
+            dynlex/.cache/vcpkg
+            dynlex/.cache/vcpkg-installed
+          key: ${{ steps.dependency-cache.outputs.cache-primary-key }}
+
+      - name: Verify persisted Windows toolchain environment
+        shell: pwsh
+        run: |
+          # A separate step verifies install.ps1 persisted these via GITHUB_ENV.
+          foreach ($name in 'DYNLEX_WINDOWS_TOOLCHAIN_ROOT', 'DYNLEX_WINDOWS_DEPENDENCY_ROOT', 'DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION') {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing persisted variable: $name" }
+          }
+          if ($env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -ne 'x86_64-w64-mingw32') { throw "Unexpected clang target: $env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET" }
+          if ($env:DYNLEX_WINDOWS_TOOLCHAIN_ARCHITECTURE -ne 'x86_64') { throw 'The release package requires x64.' }
+          foreach ($tool in "clang-$env:DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION.exe", 'llvm-ar.exe') {
+            if (-not (Test-Path "$env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT/bin/$tool")) { throw "Missing tool: $tool" }
+          }
+
+      - name: Build the compiler (Release)
+        shell: bash
+        run: ./scripts/build.sh --release
+
+      - name: Save LLVM before staging and app work
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: dynlex/.cache/llvm-toolchain
+          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
+
+      - name: Stage the compiler with its toolchain
+        shell: pwsh
+        run: |
+          if (Test-Path "build/windows-stage") { Remove-Item -Recurse -Force "build/windows-stage" }
+          cmake --install build --prefix build/windows-stage
+          if ($LASTEXITCODE -ne 0) { throw "CMake failed to stage the compiler." }
+          ./scripts/stage-windows-toolchain.ps1 `
+            -InstallationRoot (Resolve-Path "build/windows-stage") `
+            -ToolchainRoot $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT `
+            -TargetArchitecture $env:DYNLEX_WINDOWS_TOOLCHAIN_ARCHITECTURE `
+            -LlvmVersion $env:DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION `
+            -DependencyRoot $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT
+
+      - name: Upload the staged compiler
+        uses: actions/upload-artifact@v7
+        with:
+          name: dynlex-windows-x64-v0.1
+          path: dynlex/build/windows-stage
+          if-no-files-found: error
+
+      - name: Install WiX 3 for MSI packaging
+        shell: pwsh
+        run: |
+          $wixArchive = "$env:RUNNER_TEMP/wix314-binaries.zip"
+          Invoke-WebRequest 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' -OutFile $wixArchive
+          $wixFolder = "$env:RUNNER_TEMP/wix314"
+          Expand-Archive $wixArchive $wixFolder
+          if (-not (Test-Path "$wixFolder/heat.exe")) { throw "WiX 3 archive is incomplete." }
+          $wixFolder | Add-Content $env:GITHUB_PATH
+
+      - name: Build current app and package Windows ZIP and MSI
+        shell: pwsh
+        run: |
+          & ../open-bim-studio/spikes/dynlex-bim-slice/ci/build-windows-app.ps1 `
+            -CompilerTree . -Slice ../open-bim-studio/spikes/dynlex-bim-slice `
+            -Output build/app-release -Version '0.1.1'
+          Copy-Item "$env:RUNNER_TEMP/app-source-sha.txt" build/app-release/packages/
+          Get-FileHash build/app-release/packages/*.msi, build/app-release/packages/*.zip -Algorithm SHA256 | Format-List | Out-File build/app-release/packages/SHA256SUMS.txt
+
+      - name: Upload release candidates (not published)
+        uses: actions/upload-artifact@v7
+        with:
+          name: Open-BIM-Studio-0.1.1-windows-x64
+          path: |
+            dynlex/build/app-release/packages/*.msi
+            dynlex/build/app-release/packages/*.zip
+            dynlex/build/app-release/packages/app-source-sha.txt
+            dynlex/build/app-release/packages/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload diagnostics even after failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-build-diagnostics
+          path: |
+            dynlex/build/app-release/*.diag
+            dynlex/build/app-release/*.out
+          if-no-files-found: ignore
