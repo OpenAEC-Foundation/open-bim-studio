@@ -2,7 +2,7 @@
 
 Op verzoek van Maarten zijn alle 40 bestaande lokale branches verenigd.
 De basis is work/project1357-integration op b90cc2f. De merges zijn voorbereid
-in integration/consolidate-main; main neemt deze geschiedenis met fast-forward over.
+in integration/consolidate-main; main heeft deze geschiedenis met fast-forward overgenomen.
 Dit is consolidatie van ontwikkeling, geen nieuwe release of installer.
 
 ## Inhoudelijk samengevoegd
@@ -27,13 +27,18 @@ Vooraf is buiten de repository een volledige git bundle gemaakt en geverifieerd.
 Ook de status, tracked diffs en untracked bestanden van iedere bestaande worktree
 zijn veiliggesteld. De enige losse wijzigingen stonden in de oude hoofdwerkmap:
 overlay/bim-slice/, overlay/gpu/ en patches/overlay-realistic-view.patch.
-Die zijn niet automatisch gecommit of geïntegreerd; hun eigenaar en werking
-moeten eerst worden vastgesteld. Alle bestaande worktrees blijven behouden.
+Die zijn niet als actieve modules geïntegreerd. Inmiddels zijn alle 166 bestanden
+vastgelegd in het manifest onder docs/recovery/2026-10-23-rendering: 159 bestaan
+al in de Git-geschiedenis, de zeven overige varianten zijn daar apart gearchiveerd
+in bef64ab. De lokale originelen en alle bestaande worktrees blijven behouden.
 
 Twee uitsluitend remote experimentele takken vallen buiten deze lokale opdracht:
 origin/codex/dynedra-dwg-viewer en origin/spike/bim-slice-linear-members. Zij
 blijven beschikbaar voor een aparte inhoudelijke beoordeling. Privéprojectdata
-is niet aan de repository toegevoegd. Deze stap pusht niets naar GitHub.
+is niet aan de repository toegevoegd. Op aanvullend verzoek van Maarten zijn
+de consolidatie, het herstelarchief en de daaropvolgende fixes naar origin/main
+gepusht. De oorspronkelijke lokale branchnamen zijn niet afzonderlijk gepusht;
+hun vastgelegde commits zijn bereikbaar via main.
 
 ## Validatie
 
@@ -55,13 +60,31 @@ is niet aan de repository toegevoegd. Deze stap pusht niets naar GitHub.
   geheugen (compiler circa 9.3 GiB RSS). De guard meldde 582484 kB beschikbaar;
   de compilerchild is daarna expliciet gestopt omdat timeout een eigen groep had.
   Geen nieuwe automatische poging gestart; de gebruikersapp bleef open.
-  Deze editortests en een volledige appbuild blijven open. Main is de lokale
+  Deze editortests blijven open; de latere appbuild staat hieronder. Main is de
   geconsolideerde ontwikkelbasis, niet een gevalideerde release.
 - Compilerbinary SHA-256: 2dbd12c50b009233682a76a923cb961eb8974d25d1eac71aa15e040bd7bfb4ed.
   Dit is de vastgelegde lokale binary, geen claim over een reproduceerbare
   upstream-compilerbuild.
-- Volledige applicatie, Windows-app/MSI en GUI-regressies zijn nog niet bevestigd.
+- Windows-app/MSI en volledige GUI-regressies zijn nog niet bevestigd.
   Vloersparingen hebben nog geen volledige gebruikersinterface.
+
+## Vervolgvalidatie na de consolidatie
+
+De oude gebruikersapp is op verzoek opgeslagen en gesloten om geheugen vrij te
+maken voor een volledige appbuild. De eerste poging ontdekte fouten in de
+section-boxdispatch en de groepering van negatieve property-contextcodes;
+f111f2f herstelt die. De tweede poging ontdekte een record/pointerverschil in
+de wandpreview; 42992c6 herstelt dat. Deze builds zijn niet geslaagd en leveren
+geen gevalideerde nieuwe app op.
+
+De volledige Linux-developmentbuild op 42992c6 is vervolgens geslaagd zonder
+compilerdiagnoses: 14m47s, piek 8.54 GiB, exit 0, -O0 zonder debug-symbolen.
+De nieuwe binary heeft het vooraf opgeslagen IFCXB-model geopend. De lokale
+API bevestigt de geladen objecten; plattegrond en 3D-weergave zijn visueel
+gecontroleerd, inclusief modelboom, view-properties, frames en section box.
+Dit is een opstartcontrole met een klein QA-model, geen volledige regressietest
+of installercontrole. De geneste X11-preview meldt ontbrekende DRI3-ondersteuning;
+weergave werkt, maar deze controle valideert geen GPU-prestaties.
 
 ## Vastgelegde oorspronkelijke tips
 
