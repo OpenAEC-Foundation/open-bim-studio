@@ -89,3 +89,24 @@ export inspected: technical colours and view-local persistence confirmed.
 A registered private reference comparison still shows substantial geometric,
 annotation and sheet-layout differences; visual equivalence is not established.
 Private reference review data is kept outside the repository.
+
+### PC1 — sheet paper units, grid ends and custom frames
+
+PC1 owns the paper-unit member in `bim_canvas.dl`, grid/dimension symbol scaling
+in `bim_plan_panel.dl` and `bim_drawing_standard.dl`, the sheet context/template
+branches in `bim_app_parts.dl`, and the grid-head property in
+`bim_editor_properties.dl`. Grid head setting **2400410**, property **12611**.
+`OpenBIM_Drawing.CustomFrame=true` supports an independent frame viewport;
+all-hidden template views no longer draw model annotations. View-bound vector
+artwork is now included when recording sheets, as it already is in plan views.
+Details: `spikes/dynlex-bim-slice/DRAWING-FIDELITY.md`.
+
+`paper_units` and existing `dimension_text` PASS in
+`/tmp/obs-paper-units-check`. The full application with `paper_units`, `grid_sheet`, `plan_presentation`
+PASS in `/tmp/obs-paper-plan-app-r3` (24 assertions, no compiler diagnostics).
+Earlier staged compiles were stopped to complete template isolation checks.
+Live plan, grid-head controls and SVG sheet export were inspected. The
+registered private comparison improves, but complete source equivalence is
+not established. A static frame template is reported separately from native
+model geometry; it is not counted as model-detail completeness.
+Private project source-frame and measured grid-chain data stay outside Git.
