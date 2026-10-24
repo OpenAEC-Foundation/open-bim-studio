@@ -47,3 +47,19 @@ Validation snapshot: `baseplate`, `workspace_tabs`, `viewport_overlay` PASS;
 `bending_schedule` and `reinforcement_schedule` are still running. Full app,
 GUI, installer and large-steel-model checks remain pending. This is a development
 branch, not a release or fabrication-ready connection library.
+
+### PC1 — fastener thread preview and service-network isolation
+
+`feature/steel-baseplates`: PC1 owns `bim_fastener_detail.dl`, the connection
+line-mesh insertion in `bim_scene.dl`, and connector grouping in
+`bim_network.dl`. Cosmetic thread is a bounded helix on the exposed start of
+the fastener, with approximate pitch; it is not a manufactured thread profile.
+It retains the connection's selection ID and uses the existing GPU line path.
+Service connectors must share both their linear role and system assignment;
+coincident pipes, ducts and cable trays must not form cross-discipline fittings.
+Validation: `fastener_detail`, `network_isolation` and `fastener_scene` PASS
+in `/tmp/obs-fastener-network-r3`, without compiler diagnostics. The isolated
+fastener check also passes with only connection-kernel imports. Full application
+visual inspection and the existing broad `network` regression remain pending.
+The thread preview covers at most two diameters, with 192 line segments per
+fastener; distant-view performance has not yet been measured.
