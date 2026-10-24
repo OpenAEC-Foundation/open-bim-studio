@@ -9,6 +9,8 @@ function the bim connection index of {a 64 bit integer:wanted} in {bim model rec
 
 function the bim connection evaluation of {connection definition:spec} in {bim model record:modelValue}:
     execute:
+        set basePlate to (spec's category = 1) and (spec's style = 2)
+        set baseAngle to 0.0
         set frames to an empty list of a connection member frame
         loop cursor from 0 to the length of (spec's members's values):
             set memberValue to the item at cursor in (spec's members's values)
@@ -18,16 +20,53 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                 return a connection refusal saying (the string form of "Connection host is missing")
             set hostValue to the item at found's position in (modelValue's linears's values)
             set orientation to the bim frame of linear hostValue in modelValue
+            if basePlate:
+                set profile to the bim type of linear hostValue in modelValue
+                if ((profile's role != bim column role) or (profile's material != (the string form of "steel"))) or ((the absolute value of orientation's along's z) < 0.999999):
+                    free frames
+                    return a connection refusal saying (the string form of "Base plate requires a vertical steel column")
+                set baseAngle to hostValue's angle
+                if orientation's along's z < 0.0:
+                    set baseAngle to 0.0 - baseAngle
             set endpoint to orientation's first
             set inward to orientation's along
             if memberValue's end = 1:
                 set endpoint to orientation's last
                 set inward to inward scaled by -1.0
+            if basePlate and (inward's z < 0.999999):
+                free frames
+                return a connection refusal saying (the string form of "Base plate must use the lower column end")
             append (@intrinsic("construct", a connection member frame, hostValue's id, endpoint, inward, orientation's length)) to frames
         set resolved to spec
         if (the length of frames) > 0:
             set resolved's origin to (the item at 0 in frames)'s endpoint
         set generated to the connection of resolved using frames
+        if basePlate and generated's valid:
+            set plateValue to the item at 0 in (generated's plates's values)
+            set firstHost to the item at (the bim linear index of (the item at 0 in (spec's members's values))'s elementId in modelValue)'s position in (modelValue's linears's values)
+            set hostProfile to the bim type of linear firstHost in modelValue
+            if (plateValue's width <= hostProfile's width) or (plateValue's height <= hostProfile's depth):
+                free frames
+                return a connection refusal saying (the string form of "Base plate must cover the column section")
+            set memberValue to the item at 0 in (spec's members's values)
+            if memberValue's setback != 0.0:
+                free frames
+                return a connection refusal saying (the string form of "Base plate column setback must remain zero")
+            # The column endpoint is the top face of the base plate.
+            set plateValue's origin's z to 0.0 - (plateValue's thickness * 0.5)
+            replace item at index 0 in (generated's plates's values) with plateValue
+            loop anchorCursor from 0 to the length of (generated's fasteners's values):
+                set anchorValue to the item at anchorCursor in (generated's fasteners's values)
+                set offset to the cad difference of anchorValue's origin and resolved's origin
+                if ((the absolute value of offset's x) < ((hostProfile's width + (anchorValue's diameter * 1.7)) * 0.5)) and ((the absolute value of offset's y) < ((hostProfile's depth + (anchorValue's diameter * 1.7)) * 0.5)):
+                    free frames
+                    return a connection refusal saying (the string form of "Anchor head intersects the column envelope")
+                if (offset's z < 0.0) or (anchorValue's length <= (offset's z + plateValue's thickness)):
+                    free frames
+                    return a connection refusal saying (the string form of "Anchor must extend through the plate into the support")
+                set rotated to a cad vector3 with x ((offset's x * (the cosine of baseAngle)) - (offset's y * (the sine of baseAngle))), y ((offset's x * (the sine of baseAngle)) + (offset's y * (the cosine of baseAngle))) and z offset's z
+                set anchorValue's origin to the cad sum of resolved's origin and rotated
+                replace item at index anchorCursor in (generated's fasteners's values) with anchorValue
         # In a butt joint the second member stops at the first member's
         # section envelope. The primary retains its square end.
         if generated's valid and ((spec's category = 0) and (spec's style = 0)):
@@ -171,6 +210,8 @@ function add bim connection part of kind {integer:partKind} to node {a 64 bit in
         set spec to the item at found's position in (target's connections's values)
         if spec's category != 1:
             return false
+        if spec's style = 2:
+            return false
         set memberValue to the item at 1 in (spec's members's values)
         set hostFound to the bim linear index of memberValue's elementId in (@intrinsic("dereference", target))
         if hostFound's valid = false:
@@ -225,6 +266,12 @@ function the bim parts of connection {connection definition:spec} in {bim model 
             set ending to the cad sum of centre and (forward scaled by (plateValue's thickness * 0.5))
             set profile to @intrinsic("construct", a bim linear type record, the bim refused id, the string form of "Connection plate", bim generic linear role, plateValue's width, plateValue's height, false, the string form of "steel")
             set piece to @intrinsic("construct", a bim linear record, spec's id, the bim refused id, spec's levelId, beginning, ending, 0.0, 0.0, (a cad vector2 with x 1.0 and y 1.0))
+            if spec's style = 2:
+                set primary to the item at 0 in (spec's members's values)
+                set hostValue to the item at (the bim linear index of primary's elementId in modelValue)'s position in (modelValue's linears's values)
+                set piece's angle to 0.0 - hostValue's angle
+                if hostValue's start's z > hostValue's finish's z:
+                    set piece's angle to hostValue's angle
             append (@intrinsic("construct", a bim stair part record, piece, profile)) to (derived's values)
         loop cursor from 0 to the length of (generated's fasteners's values):
             set fastener to the item at cursor in (generated's fasteners's values)
@@ -232,6 +279,8 @@ function the bim parts of connection {connection definition:spec} in {bim model 
             set beginning's z to beginning's z - lift
             set ending to the cad sum of beginning and (fastener's axis scaled by fastener's length)
             set label to the string form of "Bolt"
+            if fastener's kind = 3:
+                set label to the string form of "Anchor rod"
             if fastener's kind = 2:
                 set label to the string form of "Screw"
             set profile to @intrinsic("construct", a bim linear type record, the bim refused id, label, bim generic linear role, fastener's diameter, fastener's diameter, true, the string form of "steel")

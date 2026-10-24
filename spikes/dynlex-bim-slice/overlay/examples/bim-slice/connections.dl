@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 # Modular connection definitions. No dependency on the BIM editor or renderer.
-# Node -> 2..6 semantic member references -> parametric voids + independent parts.
+# Node -> 1 base-plate host or 2..6 joint member references -> parametric voids + independent parts.
 import lib/cadkernel/core.dl
 import lib/cadkernel/topology_list.dl
 import lib/text.dl
@@ -21,7 +21,7 @@ class:
         # Stable within its node, not a list index.
         key as an integer
         memberId as a 64 bit integer
-        # 0 plate, 1 bolt group, 2 screw group.
+        # 0 plate, 1 bolt group, 2 screw group, 3 anchor group.
         kind as an integer
         origin as a cad vector3
         axis as a cad vector3
@@ -43,7 +43,7 @@ class:
         id as a 64 bit integer
         levelId as a 64 bit integer
         name as a string
-        # Simple = 0, Complex = 1. Simple style: butt = 0, miter = 1.
+        # Simple = 0, Complex = 1. Styles: butt = 0, miter = 1, base plate = 2.
         category as an integer
         style as an integer
         origin as a cad vector3
@@ -112,13 +112,16 @@ function the connection issue of {connection definition:spec}:
         if (the length of (spec's additions's values)) > 128:
             return the string form of "A node supports at most 128 additions"
         set count to the length of (spec's members's values)
-        if (count < 2) or (count > 6):
+        set basePlate to (spec's category = 1) and (spec's style = 2)
+        if ((count < 2) or (count > 6)) and (basePlate = false):
             return the string form of "A connection requires 2 to 6 members"
         if (spec's category != 0) and (spec's category != 1):
             return the string form of "Unknown connection category"
         if (spec's category = 0) and (count != 2):
             return the string form of "Simple joints require exactly two members"
-        if (spec's style < 0) or (spec's style > 1):
+        if basePlate and (count != 1):
+            return the string form of "A base plate requires one column"
+        if ((spec's style < 0) or (spec's style > 1)) and (basePlate = false):
             return the string form of "Unknown joint style"
         if (spec's category = 0) and (spec's style = 1):
             if count != 2:
@@ -138,7 +141,7 @@ function the connection issue of {connection definition:spec}:
             set partValue to the item at cursor in (spec's additions's values)
             if ((the cad length of partValue's origin) < 100000.0) = false:
                 return the string form of "Invalid addition offset"
-            if (partValue's kind < 0) or (partValue's kind > 2):
+            if (partValue's kind < 0) or (partValue's kind > 3):
                 return the string form of "Unknown addition kind"
             if partValue's key < 1:
                 return the string form of "Addition keys must be positive"
@@ -172,8 +175,29 @@ function the connection issue of {connection definition:spec}:
                     return the string form of "Invalid fastener pitch"
                 if ((partValue's holeDiameter > 0.0) and (partValue's holeDiameter < 1.0)) = false:
                     return the string form of "Invalid hole diameter"
-                if (partValue's kind = 1) and (partValue's holeDiameter < partValue's diameter):
+                if ((partValue's kind = 1) or (partValue's kind = 3)) and (partValue's holeDiameter < partValue's diameter):
                     return the string form of "Bolt clearance hole is smaller than the bolt"
+        if basePlate:
+            if (the length of (spec's additions's values)) != 2:
+                return the string form of "Base plate requires one plate and one anchor group"
+            set plateValue to the item at 0 in (spec's additions's values)
+            set anchors to the item at 1 in (spec's additions's values)
+            if (plateValue's kind != 0) or (anchors's kind != 3):
+                return the string form of "Invalid base plate parts"
+            if ((anchors's rows < 2) or (anchors's columns < 2)) or ((anchors's rows > 10) or (anchors's columns > 10)):
+                return the string form of "Base plate anchor grid requires 2 to 10 rows and columns"
+            set extentX to ((anchors's columns - 1) as a 64 bit floating-point number) * anchors's columnPitch
+            set extentY to ((anchors's rows - 1) as a 64 bit floating-point number) * anchors's rowPitch
+            if ((extentX + anchors's holeDiameter) >= plateValue's width) or ((extentY + anchors's holeDiameter) >= plateValue's height):
+                return the string form of "Anchor holes must lie inside the plate"
+            if (anchors's columnPitch <= anchors's holeDiameter) or (anchors's rowPitch <= anchors's holeDiameter):
+                return the string form of "Anchor holes overlap"
+            loop partCursor from 0 to 2:
+                set basePart to the item at partCursor in (spec's additions's values)
+                if ((basePart's axis's x != 0.0) or (basePart's axis's y != 0.0)) or (basePart's axis's z != -1.0):
+                    return the string form of "Base plate parts use a downward axis"
+                if (basePart's origin's x != 0.0) or (basePart's origin's y != 0.0):
+                    return the string form of "Base plate parts must be centred"
         return the string form of ""
 
 # Resolve a node from fresh host geometry. Each member receives an independent
@@ -229,5 +253,7 @@ function the connection of {connection definition:spec} using {a pointer to a li
                         set vertical to ((rowIndex as a 64 bit floating-point number) - ((partValue's rows - 1) as a 64 bit floating-point number) * 0.5) * partValue's rowPitch
                         set spotValue to the cad sum of spec's origin and (the cad sum of partValue's origin and (the cad sum of (across scaled by horizontal) and (upward scaled by vertical)))
                         append (@intrinsic("construct", a connection fastener, partValue's key, partValue's memberId, partValue's kind, spotValue, forward, partValue's diameter, partValue's length)) to (output's fasteners's values)
-                        append (@intrinsic("construct", a connection void, partValue's memberId, 1, spotValue, forward, partValue's holeDiameter, partValue's length, partValue's key)) to (output's voids's values)
+                        # Anchors penetrate the support, not the column.
+                        if partValue's kind != 3:
+                            append (@intrinsic("construct", a connection void, partValue's memberId, 1, spotValue, forward, partValue's holeDiameter, partValue's length, partValue's key)) to (output's voids's values)
         return output

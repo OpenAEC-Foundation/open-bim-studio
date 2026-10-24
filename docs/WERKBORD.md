@@ -19,3 +19,31 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 Command `2360` en tool-id `27` zijn gereserveerd voor Sketch Split. Hergebruik
 die nummers niet voor een andere functie. Leg nieuwe openbare commandocodes
 vooraf vast. Zie [de werkafspraken en startinstructie](TWEE-COMPUTERS.md).
+
+## PC1 claim — 24 October 2026
+
+Codex owns `feature/steel-baseplates`: the single-column base-plate recipe,
+connection validation and its ribbon/properties integration. Command **2313** is
+reserved for **Base plate**. Complex style **2** denotes a one-column base plate;
+addition kind **3** denotes an anchor group. Existing styles remain unchanged.
+Files: `connections.dl`, `bim_connections.dl`, `bim_baseplate.dl`,
+`bim_editor.dl`, `bim_editor_properties.dl`, `bim_ui.dl`, and related tests.
+
+The same PC1 task fixes selection overlay clipping and adds view-tab dragging in
+`main.dl`, `bim_workspace_tabs.dl` and `overlay/lib/vulkan/context.dl`.
+The Vulkan change separates overlay scissoring from its full-window projection;
+mesh viewports and the batch record layout are unchanged. PC2 should not edit
+these files concurrently. Full application/interactive validation is pending.
+
+Additional PC1 scope on this branch: commands **2228** (bending schedule),
+**2229** (optional reinforcement diameter display) and **2314** (opening detail).
+Opening-detail settings use **2400100–2400105** on the opening; properties use
+**12600–12604**. Window recipes are appended after the existing 21 entries so
+stored indices remain stable. The application icon module and the two installer
+asset lists are included in the user-requested taskbar-icon work.
+
+Validation snapshot: `baseplate`, `workspace_tabs`, `viewport_overlay` PASS;
+`connections_model` PASS in the preceding bundle. `opening_detail`,
+`bending_schedule` and `reinforcement_schedule` are still running. Full app,
+GUI, installer and large-steel-model checks remain pending. This is a development
+branch, not a release or fabrication-ready connection library.

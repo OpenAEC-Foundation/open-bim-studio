@@ -57,7 +57,7 @@ done
 # The interface's icons (CC BY-SA 4.0, see icons/README.md).
 mkdir -p "$stage/payload/icons"
 cp "$root/examples/bim-slice/icons/ui-icons.txt" "$root/examples/bim-slice/icons/README.md" "$stage/payload/icons/"
-cp "$root/examples/bim-slice/icons/open-bim-studio.svg" "$root/examples/bim-slice/icons/open-bim-studio.png" "$stage/payload/icons/"
+cp "$root/examples/bim-slice/icons/open-bim-studio.svg" "$root/examples/bim-slice/icons/open-bim-studio.png" "$root/examples/bim-slice/icons/open-bim-studio.rgba" "$stage/payload/icons/"
 # The script that reads 2D drawings (DXF, DWG, PDF) for Collaborate > Import.
 mkdir -p "$stage/payload/import"
 cp "$root/examples/bim-slice/import/drawing_to_lines.py" "$stage/payload/import/"
@@ -132,6 +132,7 @@ Exec=$target/open-bim-studio
 Path=$documents
 Terminal=false
 Categories=Graphics;Engineering;
+StartupWMClass=open-bim-studio
 Actions=example;
 
 [Desktop Action example]
