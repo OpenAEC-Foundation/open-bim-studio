@@ -72,3 +72,24 @@ A first session:
    `set_property` with the Height row's code and "2800" (lengths are in the
    project's unit, millimetres by default);
 5. `screenshot` again.
+
+## Local Codex registration and live screenshots
+
+Register the existing stdio bridge using an absolute path:
+
+```sh
+codex mcp add open-bim-studio --env DISPLAY=:0 -- python3 /absolute/path/to/open_bim_studio_mcp.py
+```
+
+After the client reloads its MCP configuration, call `connect` with the running
+application's API folder and display, then `state` and `screenshot`.
+`screenshot` returns an MCP image block (`image/png`) and accepts an optional
+`save_to` path. Use `whole_screen: false` for the application window.
+The present X11 implementation chooses a window by title; when no matching
+window is found it falls back to the screen. Check the returned image before
+sharing it. Multiple application windows are not yet explicitly addressable.
+
+The bridge remains Python infrastructure; modelling commands execute inside
+the DynLex application. Linux/X11 screenshot support does not establish Windows
+or Wayland screenshot support. Registration starts the server on demand through
+the client; it is not a permanent background daemon.

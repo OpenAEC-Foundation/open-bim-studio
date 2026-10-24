@@ -63,3 +63,13 @@ fastener check also passes with only connection-kernel imports. Full application
 visual inspection and the existing broad `network` regression remain pending.
 The thread preview covers at most two diameters, with 192 line segments per
 fastener; distant-view performance has not yet been measured.
+
+### PC1 — timber and Reynaers window recipes
+
+PC1 extends `bim_system_types.dl` with append-only recipe indices 33–42,
+updates `system_types.expected.txt`, and adds the lightweight `window_recipes`
+check. Sources and explicit schematic-geometry limits are in
+`spikes/dynlex-bim-slice/WINDOW-SYSTEMS.md`. No model schema or new command codes.
+Validation: `window_recipes` PASS (seven checks, no compiler diagnostics) in
+`/tmp/obs-window-recipes`. Full gallery and GUI validation remain pending;
+no new application build has been launched.
