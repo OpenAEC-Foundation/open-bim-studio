@@ -73,3 +73,19 @@ check. Sources and explicit schematic-geometry limits are in
 Validation: `window_recipes` PASS (seven checks, no compiler diagnostics) in
 `/tmp/obs-window-recipes`. Full gallery and GUI validation remain pending;
 no new application build has been launched.
+
+### PC1 — technical plan presentation and registered reference review
+
+PC1 owns `bim_plan_presentation.dl`, the palette branches in
+`bim_plan_panel.dl`, the view property in `bim_editor_properties.dl`, and
+`tests/plan_presentation.*`. View setting **2400400** enables a technical
+palette: unfilled room interiors, black room labels and blue plan grids.
+Property **12610** toggles it. Section and 3D grids retain their existing style.
+The plan recording key now includes the view ID, so view-local presentation
+changes cannot reuse another view's cached plan. Screen and sheet plan drawing
+use the same palette helpers. Full app/check build PASS in `/tmp/obs-plan-presentation-app` with no compiler
+diagnostics; `plan_presentation` PASS (six checks). Live plan and SVG sheet
+export inspected: technical colours and view-local persistence confirmed.
+A registered private reference comparison still shows substantial geometric,
+annotation and sheet-layout differences; visual equivalence is not established.
+Private reference review data is kept outside the repository.
