@@ -61,6 +61,9 @@ import examples/bim-slice/bim_ui_files.dl
 import examples/bim-slice/bim_model_explorer.dl
 import examples/bim-slice/bim_demo_pavilion_editor.dl
 import examples/bim-slice/bim_pavilion_drawings.dl
+import examples/bim-slice/bim_images.dl
+import examples/bim-slice/bim_sheet_workspace.dl
+import examples/bim-slice/bim_sheet_workspace_ui.dl
 
 # When the start began, for the time until the editor answers.
 set startedAt to the bim microseconds now
@@ -359,8 +362,11 @@ set sketchMeshes to a cad topology list of a bim scene mesh record
 # they were found for.
 set headCovers to an empty list of a boolean
 # The sheet open in its tab, as recorded, for the key it was recorded for.
-set sheetCanvas to a new bim canvas
-set sheetKey to the string form of "none"
+set sheetWorkspace to a new bim sheet workspace
+set sheetGpuCache to a new bim sheet gpu cache
+set sheetBoardCamera to a new bim sheet camera
+set sheetBoardLastHit to -1
+set sheetBoardLastClick to (-1) as a 64 bit integer
 set headCoversKey to the string form of "none"
 set meshedRevision to (-1) as a 64 bit integer
 # The rooms the 3D view shows, of the document revision `roomRevision`.
@@ -456,6 +462,7 @@ set gizmoHeight to 0.0
 set gizmoPressPixel to a cad vector2 with x 0.0 and y 0.0
 set gizmoRiseDirection to a cad vector2 with x 0.0 and y -1.0
 set gizmoRiseScale to 1.0
+set imageCache to a new bim image cache
 set planCanvas to a new bim canvas
 # Counts every rebuild of the scene meshes, including those during a drag,
 # which leave the document's revision unchanged.
@@ -796,6 +803,7 @@ loop while window remains open:
     if showSchedule:
         set editor's scheduleCode to scheduleCode
     # A sheet tab shows its sheet across the drawing.
+    set showSheetBoard to (activeKind = bim sheet board tab) or (tiledViews and (sideKind = bim sheet board tab))
     set showSheet to (activeKind = bim sheet tab) or (tiledViews and (sideKind = bim sheet tab))
     if showSheet:
         if activeKind = bim sheet tab:
@@ -805,10 +813,18 @@ loop while window remains open:
         set splitViews to false
         set showSection to false
         set showSchedule to false
-    # A full sheet owns the single resident GPU canvas. Tiled sheets keep
-    # the plan resident and replay the sheet separately.
-    set sheetOwnsCanvas to showSheet and (layout's planRight <= (layout's planLeft + 1.0))
-    set drawModel to (((showSection and editor's hasSection) = false) and (showSchedule = false)) and (showSheet = false)
+    if showSheetBoard:
+        set splitViews to false
+        set showSection to false
+        set showSchedule to false
+    # Full sheet workspaces skip the invisible plan; tiled panes have
+    # independent retained canvas buffers.
+    set sheetOwnsCanvas to (showSheet or showSheetBoard) and (layout's planRight <= (layout's planLeft + 1.0))
+    if showSheet and (sheetWorkspace's sheetId != editor's sheetId):
+        deactivate bim sheet viewport in (the address of sheetWorkspace) for (the address of editor)
+        set sheetWorkspace to a new bim sheet workspace
+        set sheetWorkspace's sheetId to editor's sheetId
+    set drawModel to (((showSection and editor's hasSection) = false) and (showSchedule = false)) and ((showSheet = false) and (showSheetBoard = false))
     set splitAt to layout's bottom
     set lowerTop to layout's top
     if splitViews:
@@ -843,9 +859,32 @@ loop while window remains open:
     set cursorPosition to the cursor position of window
     set pixel to a cad vector2 with x (cursorPosition's x as a 64 bit floating-point number) and y (cursorPosition's y as a 64 bit floating-point number)
     set commandPixel to pixel
+    if showSheet:
+        set workspaceSheetFound to the bim sheet index of editor's sheetId in editor's documentValue's current
+        if workspaceSheetFound's valid:
+            set workspaceSheet to the item at workspaceSheetFound's position in (editor's documentValue's current's sheets's values)
+            fit bim sheet workspaceSheet between layout's planRight, layout's top, layout's width and layout's bottom in (the address of sheetWorkspace)
+            if sheetWorkspace's active >= (the length of (workspaceSheet's viewports's values)):
+                deactivate bim sheet viewport in (the address of sheetWorkspace) for (the address of editor)
+            if sheetWorkspace's selected >= (the length of (workspaceSheet's viewports's values)):
+                set sheetWorkspace's selected to -1
+                set sheetWorkspace's dragging to false
+        else:
+            deactivate bim sheet viewport in (the address of sheetWorkspace) for (the address of editor)
+    set overSheetBoard to (showSheetBoard and ((pixel's x > layout's planRight) and (pixel's x < layout's width))) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))
+    set overSheet to (showSheet and ((pixel's x > layout's planRight) and (pixel's x < layout's width))) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))
     set overPlan to ((pixel's x > layout's planLeft) and (pixel's x < layout's planRight)) and ((pixel's y > layout's top) and (pixel's y < layout's bottom))
     # The system pointer, as in Open 2D Studio: a crosshair while a tool
     # draws over the plan or the 3D view, else the arrow.
+    set editingSheet to false
+    set sheetEditingTransform to the bim plan transform of layout with camera
+    if (showSheet and (sheetWorkspace's active >= 0)) and overSheet:
+        set paperPoint to the bim sheet point under pixel in sheetWorkspace
+        set paperHit to the bim viewport near paperPoint among (sheetWorkspace's frames's values) within 0.0
+        if paperHit = sheetWorkspace's active:
+            set editingSheet to true
+            set sheetEditingTransform to the bim active sheet transform of sheetWorkspace for editor
+            set overPlan to true
     set wantCrosshair to (overPlan or ((pixel's x > layout's planRight) and ((pixel's y > layout's top) and (pixel's y < layout's bottom)))) and (editor's tool != bim select tool)
     if wantCrosshair != pointerHidden:
         set the pointer of window to crosshair wantCrosshair
@@ -853,7 +892,9 @@ loop while window remains open:
     set pointerStarted to 0 as a 64 bit integer
     if profileFrames:
         set pointerStarted to the bim microseconds now
-    if overPlan:
+    if editingSheet:
+        move bim editor pointer to (the bim plan point under pixel through sheetEditingTransform) within (8.0 / sheetEditingTransform's scale) in (the address of editor)
+    else if overPlan:
         move bim editor pointer to (the bim model point of pixel in layout with camera) within (8.0 / camera's scale) in (the address of editor)
     set pointerMicros to 0 as a 64 bit integer
     if profileFrames:
@@ -1381,6 +1422,35 @@ loop while window remains open:
                 set editor's message to (the string form of "3D view: ") + (the bim name of view mode viewMode)
     if ((leftDown and (previousLeft = false)) and showVisibility) and (panelClicked = false):
         set panelClicked to click bim visibility panel at pixel of (the address of editor) in layout
+    if showSheet:
+        update bim sheet drag at pixel in (the address of sheetWorkspace)
+        if ((leftDown and (previousLeft = false)) and overPlan) and (editingSheet = false):
+            set sheetWorkspace's selected to -1
+        if ((leftDown and (previousLeft = false)) and overSheet) and (panelClicked = false):
+            set sheetCopyHeld to (key 341 is down in window) or (key 345 is down in window)
+            set panelClicked to press bim sheet at pixel copying sheetCopyHeld in (the address of sheetWorkspace) for (the address of editor)
+        if (leftDown = false) and previousLeft:
+            release bim sheet pointer in (the address of sheetWorkspace) for (the address of editor)
+    if ((leftDown and (previousLeft = false)) and overSheetBoard) and (panelClicked = false):
+        set panelClicked to true
+        set boardPoint to the bim unprojected sheet pixel pixel through sheetBoardCamera
+        set boardColumns to the maximum of 1 and (the minimum of 3 and ((((layout's width - layout's planRight) - 40.0) / 320.0) as an integer))
+        set boardColumn to (the floor of ((boardPoint's x - (layout's planRight + 20.0)) / 320.0)) as an integer
+        set boardRow to (the floor of ((boardPoint's y - (layout's top + 38.0)) / 280.0)) as an integer
+        set boardHit to (boardRow * boardColumns) + boardColumn
+        if (((boardColumn >= 0) and (boardColumn < boardColumns)) and (boardRow >= 0)) and ((boardHit >= 0) and (boardHit < (the length of (editor's documentValue's current's sheets's values)))):
+            set boardNow to the bim microseconds now
+            if (sheetBoardLastHit = boardHit) and ((boardNow - sheetBoardLastClick) < (400000 as a 64 bit integer)):
+                set chosenSheet to the item at boardHit in (editor's documentValue's current's sheets's values)
+                set editor's sheetId to chosenSheet's id
+                set foundTab to the bim tab of kind (bim sheet tab) detail chosenSheet's id among tabKinds and tabDetails
+                if foundTab < 0:
+                    append bim sheet tab to tabKinds
+                    append chosenSheet's id to tabDetails
+                    set foundTab to (the length of tabKinds) - 1
+                set activeTab to foundTab
+            set sheetBoardLastHit to boardHit
+            set sheetBoardLastClick to boardNow
     # Crop handles operate on the view, independently of model selection.
     if (((leftDown and (previousLeft = false)) and overPlan) and (panelClicked = false)) and (editor's tool = bim select tool):
         set showCropCentre to cropSelected
@@ -1936,7 +2006,11 @@ loop while window remains open:
     # The middle button pans; with Shift held it orbits the 3D view.
     set middleDown to the middle mouse button is pressed in window
     if middleDown and previousMiddle:
-        if overSection:
+        if overSheetBoard:
+            set sheetBoardCamera's pan to a cad vector2 with x (sheetBoardCamera's pan's x + dx) and y (sheetBoardCamera's pan's y + dy)
+        else if overSheet:
+            set sheetWorkspace's camera's pan to a cad vector2 with x (sheetWorkspace's camera's pan's x + dx) and y (sheetWorkspace's camera's pan's y + dy)
+        else if overSection:
             set editor's sectionPanX to editor's sectionPanX + dx
             set editor's sectionPanY to editor's sectionPanY + dy
         else if overPlan:
@@ -1975,6 +2049,10 @@ loop while window remains open:
             set propertiesScroll to the minimum of maximumScroll and (the maximum of 0.0 and (propertiesScroll - (wheel * 42.0)))
         else if overBrowser:
             set browserScroll to the maximum of 0.0 and (browserScroll - (wheel * 40.0))
+        else if overSheetBoard:
+            set sheetBoardCamera to the bim sheet camera sheetBoardCamera zoomed by factor at pixel
+        else if overSheet:
+            set sheetWorkspace's camera to the bim sheet camera sheetWorkspace's camera zoomed by factor at pixel
         else if overSection:
             # Zooms about the pointer: the point under it stays there.
             set zoomFit to the bim section fit of editor in lowerLayout
@@ -2177,6 +2255,7 @@ loop while window remains open:
             set lowerTab to -1
             set tabScroll to 0.0
             set tabScrollActive to -1
+            set sheetWorkspace to a new bim sheet workspace
             set savedRevision to editor's documentValue's revision
             set modelUnsaved to false
             set startScreen to false
@@ -2312,6 +2391,11 @@ loop while window remains open:
             set editor's message to ((the string form of "Storey isolated: ") + (the item at nearest in (storeyChoices's names))) + (the string form of " (Page Up / Page Down over the 3D view: the storey above / below)")
         free (storeyChoices's elevations)
         free (storeyChoices's names)
+    loop imageCommandCursor from 0 to the length of pressedCodes:
+        if (the item at imageCommandCursor in pressedCodes) = 2270:
+            set pickedImage to the bim file picked titled (the string form of "Import linked image") among (the string form of "PNG image|*.png *.PNG") saving false from (the string form of "")
+            if (the length of pickedImage) > 0:
+                ignore (import bim png image at (the bim absolute path of pickedImage) centred on camera's centre in (the address of editor) for window)
     # 2127 imports a 2D drawing (DXF, DWG or PDF) picked in a file dialog.
     loop drawingCursor from 0 to the length of pressedCodes:
         if (the item at drawingCursor in pressedCodes) = 2127:
@@ -2381,6 +2465,23 @@ loop while window remains open:
             else if rulesKey = bim escape key code:
                 set rulesOpen to false
         clear pressedCodes
+    loop boardCommandCursor from 0 to the length of pressedCodes:
+        if (the item at boardCommandCursor in pressedCodes) = 2271:
+            set boardTab to the bim tab of kind (bim sheet board tab) detail (0 as a 64 bit integer) among tabKinds and tabDetails
+            if boardTab < 0:
+                append bim sheet board tab to tabKinds
+                append (0 as a 64 bit integer) to tabDetails
+                set boardTab to (the length of tabKinds) - 1
+            set activeTab to boardTab
+            replace item at index boardCommandCursor in pressedCodes with -1
+        else if showSheetBoard and ((the item at boardCommandCursor in pressedCodes) = 2279):
+            set sheetBoardCamera to a new bim sheet camera
+            replace item at index boardCommandCursor in pressedCodes with -1
+    if showSheet:
+        loop sheetCommandCursor from 0 to the length of pressedCodes:
+            set sheetCode to the item at sheetCommandCursor in pressedCodes
+            if take bim sheet command sheetCode at pixel in (the address of sheetWorkspace) for (the address of editor):
+                replace item at index sheetCommandCursor in pressedCodes with -1
     loop pressedCursor from 0 to the length of pressedCodes:
         set entry to the item at pressedCursor in pressedCodes
         set control to entry >= (bim ui control command)
@@ -2741,6 +2842,7 @@ loop while window remains open:
         set cutMeshes to the bim cap meshes among (cutSourceMeshes's values) from sectionBoxLow to sectionBoxHigh for editor's evaluation
         set cutGeometryKey to wantedCutGeometry
         set cutUploadKey to the string form of ""
+    refresh bim images of editor's documentValue in (the address of imageCache) for window
     set frame to a new graphics frame in window with background red 1.0, green 1.0, blue 1.0 and alpha 1.0
     use screen coordinates in frame
     # A section drawn opens its tab.
@@ -2753,6 +2855,7 @@ loop while window remains open:
         append bim section tab to tabKinds
         append editor's sectionViewId to tabDetails
         set activeTab to (the length of tabKinds) - 1
+    select gpu canvas slot 0 in (the gpu context of window)
     set planTransform to the bim plan transform of layout with camera
     if gridShown:
         draw bim grid in layout with camera in frame
@@ -3111,30 +3214,47 @@ loop while window remains open:
         draw a rectangle at x layout's planRight and y layout's top with width (layout's width - layout's planRight) and height (layout's bottom - layout's top) in color red 200, green 203 and blue 208 in frame
         if sheetFound's valid:
             set openSheet to the item at sheetFound's position in (editor's documentValue's current's sheets's values)
-            set openSize to the bim size of sheet openSheet
-            set paneWidth to (layout's width - layout's planRight) - 40.0
-            set paneHeight to (layout's bottom - layout's top) - 40.0
-            set perMillimetre to the minimum of (paneWidth / openSize's x) and (paneHeight / openSize's y)
-            set sheetCorner to a cad vector2 with x (((layout's planRight + layout's width) * 0.5) - ((openSize's x * perMillimetre) * 0.5)) and y (((layout's top + layout's bottom) * 0.5) + ((openSize's y * perMillimetre) * 0.5))
-            set sheetVisibilityKey to the string form of ""
-            loop viewportCursor from 0 to the length of (openSheet's viewports's values):
-                set viewportValue to the item at viewportCursor in (openSheet's viewports's values)
-                set sheetVisibilityKey to (sheetVisibilityKey + (the string form of " ")) + (the bim hidden key in view viewportValue's viewId among (editor's hiddenElements's values))
-            set wantedSheetKey to the bim sheet recording key at revision editor's documentValue's revision for editor's sheetId density perMillimetre at sheetCorner sized (the framebuffer width of window) by (the framebuffer height of window) hiding sheetVisibilityKey
-            if wantedSheetKey != sheetKey:
-                set sheetCanvas to a new bim canvas
-                record bim sheet openSheet of editor among (sketchMeshes's values) from sheetCorner at perMillimetre using typeface on (the address of sheetCanvas)
-                set sheetKey to wantedSheetKey
-            if sheetOwnsCanvas:
-                set wantedSheetUpload to (the string form of "sheet ") + sheetKey
-                if frame's drawable and (uploadedCanvasKey != wantedSheetUpload):
-                    begin gpu canvas recording in (the gpu context of window)
-                    replay bim canvas sheetCanvas shifted by 0.0 and 0.0 lettering at ((2.5 * perMillimetre) / 13.0) with typeface in frame
-                    end gpu canvas recording in (the gpu context of window)
-                    set uploadedCanvasKey to wantedSheetUpload
-                draw gpu canvas shifted by 0.0 and 0.0 in (the gpu context of window)
-            else:
-                replay bim canvas sheetCanvas shifted by 0.0 and 0.0 lettering at ((2.5 * perMillimetre) / 13.0) with typeface in frame
+            set entry to the retained bim sheet openSheet of editor among (sketchMeshes's values) using typeface in (the address of sheetGpuCache) for frame
+            set sheetWorkspace's frames to entry's frames
+            set scale to sheetWorkspace's density * sheetWorkspace's camera's zoom
+            set shift to a cad vector2 with x ((sheetWorkspace's corner's x * sheetWorkspace's camera's zoom) + sheetWorkspace's camera's pan's x) and y (((sheetWorkspace's corner's y - (sheetWorkspace's size's y * sheetWorkspace's density)) * sheetWorkspace's camera's zoom) + sheetWorkspace's camera's pan's y)
+            set moving to -1
+            set delta to a cad vector2 with x 0.0 and y 0.0
+            if sheetWorkspace's dragging:
+                set moving to sheetWorkspace's selected
+                set delta to sheetWorkspace's delta
+                if sheetWorkspace's copying:
+                    set moving to -1
+            set sheetBatchStart to the length of ((the gpu context of window)'s batches)
+            draw retained bim sheet entry scaled by scale at shift moving moving by delta in frame
+            if (sheetWorkspace's dragging and sheetWorkspace's copying) and (sheetWorkspace's selected >= 0):
+                select gpu canvas slot (entry's firstSlot + 2 + sheetWorkspace's selected) in (the gpu context of window)
+                draw gpu canvas scaled by scale shifted by (shift's x + (delta's x * scale)) and (shift's y - (delta's y * scale)) in (the gpu context of window)
+            if (sheetWorkspace's selected >= 0) and (sheetWorkspace's selected < (the length of (entry's frames's values))):
+                outline bim sheet viewport (the item at sheetWorkspace's selected in (entry's frames's values)) on paper high sheetWorkspace's size's y scaled by scale at shift moving by delta in frame
+            if editingSheet:
+                draw bim selection in plan of editor through sheetEditingTransform in frame
+            clip gpu overlays since sheetBatchStart within layout's planRight, layout's top, layout's width and layout's bottom in (the gpu context of window)
+    if showSheetBoard:
+        draw a rectangle at x layout's planRight and y layout's top with width (layout's width - layout's planRight) and height (layout's bottom - layout's top) in color red 200, green 203 and blue 208 in frame
+        set boardColumns to the maximum of 1 and (the minimum of 3 and ((((layout's width - layout's planRight) - 40.0) / 320.0) as an integer))
+        set boardBatchStart to the length of ((the gpu context of window)'s batches)
+        loop boardIndex from 0 to the length of (editor's documentValue's current's sheets's values):
+            set boardSheet to the item at boardIndex in (editor's documentValue's current's sheets's values)
+            set boardSize to the bim size of sheet boardSheet
+            set column to the remainder of boardIndex divided by boardColumns
+            set row to (boardIndex / boardColumns) as an integer
+            set baseX to (layout's planRight + 20.0) + ((column as a 64 bit floating-point number) * 320.0)
+            set baseY to (layout's top + 38.0) + ((row as a 64 bit floating-point number) * 280.0)
+            set shift to a cad vector2 with x ((baseX * sheetBoardCamera's zoom) + sheetBoardCamera's pan's x) and y ((baseY * sheetBoardCamera's zoom) + sheetBoardCamera's pan's y)
+            set scale to (the minimum of (280.0 / boardSize's x) and (220.0 / boardSize's y)) * sheetBoardCamera's zoom
+            if ((shift's x < layout's width) and ((shift's x + (boardSize's x * scale)) > layout's planRight)) and ((shift's y < layout's bottom) and ((shift's y + (boardSize's y * scale)) > layout's top)):
+                set entry to the retained bim sheet boardSheet of editor among (sketchMeshes's values) using typeface in (the address of sheetGpuCache) for frame
+                draw retained bim sheet entry scaled by scale at shift moving -1 by (a cad vector2 with x 0.0 and y 0.0) in frame
+                set caption to boardSheet's number + ((the string form of "  ") + boardSheet's name)
+                set caption to the bim fitted form of caption in (280.0 * sheetBoardCamera's zoom) pixels of face (bim text small) with typeface
+                draw bim text caption at shift's x and (shift's y - 8.0) in face (bim text small) with typeface coloured 35, 40 and 50 in frame
+        clip gpu overlays since boardBatchStart within layout's planRight, layout's top, layout's width and layout's bottom in (the gpu context of window)
     set sheetMicros to 0 as a 64 bit integer
     if profileFrames:
         set sheetMicros to (the bim microseconds now) - sheetStarted
@@ -3368,5 +3488,6 @@ loop while window remains open:
         else:
             set importMessage to (startupMessage + (the string form of "; ")) + importMessage
 free previousKeys
+release bim images in window
 release bim text atlas typeface
 close window

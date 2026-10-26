@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: MPL-2.0
+# PNG decoding happens once on import/cache miss, never during navigation.
+# libpng's simplified API handles palette, transparency and interlaced PNGs.
+# Application ownership, limits and the model are implemented in DynLex.
+import examples/bim-slice/bim_file.dl
+
+class:
+    patterns:
+        [a|] bim decoded image record
+    members:
+        valid as a boolean
+        width as an integer
+        height as an integer
+        rgba as a string
+
+function the bim decoded png at {a string:path}:
+    execute:
+        set imageFailure to @intrinsic("construct", a bim decoded image record, false, 0, 0, the string form of "")
+        set handle to @intrinsic("call", "libc", "fopen", a pointer, the data of path, "rb")
+        if handle = (0 as a pointer):
+            return imageFailure
+        set size to @intrinsic("call", "obs_platform", "obs_platform_file_size", a 64 bit integer, handle)
+        if (size < (8 as a 64 bit integer)) or (size > (67108864 as a 64 bit integer)):
+            ignore @intrinsic("call", "libc", "fclose", an integer, handle)
+            return imageFailure
+        set encoded to a new string buffer containing (size as an integer) bytes
+        set received to @intrinsic("call", "libc", "fread", a word sized unsigned integer, the data of encoded, 1 as a word sized unsigned integer, size as a word sized unsigned integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", an integer, handle)
+        if received != (size as a word sized unsigned integer):
+            return imageFailure
+        # png_image v1, 64-bit ABI: opaque pointer, seven uint32s, message[64].
+        set header to a new string buffer containing 104 bytes
+        ignore @intrinsic("call", "libc", "memset", a pointer, the data of header, 0, 104 as a word sized unsigned integer)
+        set base to (the data of header) as a pointer to a byte
+        @intrinsic("store at", (base + 8) as a pointer to a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        if (@intrinsic("call", ":libpng16.so.16", "png_image_begin_read_from_memory", an integer, base, the data of encoded, size as a word sized unsigned integer)) = 0:
+            @intrinsic("call", ":libpng16.so.16", "png_image_free", nothing, base)
+            return imageFailure
+        set width to (@intrinsic("dereference", (base + 12) as a pointer to a 32 bit unsigned integer)) as an integer
+        set height to (@intrinsic("dereference", (base + 16) as a pointer to a 32 bit unsigned integer)) as an integer
+        set count to ((width as a 64 bit integer) * height) * 4
+        if (((width <= 0) or (height <= 0)) or ((width > 8192) or (height > 8192))) or (count > (67108864 as a 64 bit integer)):
+            @intrinsic("call", ":libpng16.so.16", "png_image_free", nothing, base)
+            return imageFailure
+        # PNG_FORMAT_RGBA = colour | alpha (straight alpha, eight bit).
+        @intrinsic("store at", (base + 20) as a pointer to a 32 bit unsigned integer, 3 as a 32 bit unsigned integer)
+        set pixels to a new string buffer containing (count as an integer) bytes
+        set outcome to @intrinsic("call", ":libpng16.so.16", "png_image_finish_read", an integer, base, 0 as a pointer, the data of pixels, 0, 0 as a pointer)
+        @intrinsic("call", ":libpng16.so.16", "png_image_free", nothing, base)
+        if outcome = 0:
+            return imageFailure
+        return @intrinsic("construct", a bim decoded image record, true, width, height, pixels)

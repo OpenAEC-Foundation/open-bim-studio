@@ -165,3 +165,7 @@ memory; the local 16 GB optimized attempt reached its memory guard. The opt-in
 frame diagnostics go to stdout; keep them disabled for normal use.
 See [the plan performance investigation](PLAN-PERFORMANCE.md) for stage definitions,
 reference-artwork costs, object semantics and measurement limits.
+
+The current development work on image references, interactive sheet viewports,
+and compact view tabs is tracked in [SHEET-WORKSPACE.md](SHEET-WORKSPACE.md),
+including supported operations and remaining validation work.

@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: MPL-2.0
+# Canonical paper coordinates (one unit/mm), with separate resident layers
+# for paper, title block and each viewport. Pan, zoom and viewport previews
+# only change 16-byte instance transforms, including in a multi-sheet board.
+import examples/bim-slice/bim_app_parts.dl
+
+class:
+    patterns:
+        [a|] bim sheet gpu entry record
+    members:
+        sheetId as a 64 bit integer
+        key as a string
+        firstSlot as an integer
+        slotCount as an integer
+        frames as the type of (a cad topology list of a bim sheet frame record)
+
+class:
+    patterns:
+        [a|] bim sheet gpu cache record
+    members:
+        entries as the type of (a cad topology list of a bim sheet gpu entry record)
+        nextSlot as an integer
+
+function a new bim sheet gpu cache:
+    execute:
+        return @intrinsic("construct", a bim sheet gpu cache record, a cad topology list of a bim sheet gpu entry record, 1)
+
+function the retained bim sheet {bim sheet record:sheetValue} of {bim editor record:editor} among {a pointer to a list:sceneMeshes} using {bim text atlas record:typeface} in {a pointer to a bim sheet gpu cache record:cache} for {graphics frame:frame}:
+    execute:
+        set key to the string form of editor's documentValue's revision
+        loop cursor from 0 to the length of (sheetValue's viewports's values):
+            set placed to the item at cursor in (sheetValue's viewports's values)
+            set key to (key + (the string form of " ")) + (the bim hidden key in view placed's viewId among (editor's hiddenElements's values))
+        set found to -1
+        loop cursor from 0 to the length of (cache's entries's values):
+            if (the item at cursor in (cache's entries's values))'s sheetId = sheetValue's id:
+                set found to cursor
+        set needed to 2 + (the length of (sheetValue's viewports's values))
+        if found < 0:
+            set found to the length of (cache's entries's values)
+            append (@intrinsic("construct", a bim sheet gpu entry record, sheetValue's id, the string form of "", cache's nextSlot, needed, a cad topology list of a bim sheet frame record)) to (cache's entries's values)
+            set cache's nextSlot to cache's nextSlot + needed
+        set entry to the item at found in (cache's entries's values)
+        if entry's key = key:
+            return entry
+        if entry's slotCount < needed:
+            set entry's firstSlot to cache's nextSlot
+            set entry's slotCount to needed
+            set cache's nextSlot to cache's nextSlot + needed
+        set size to the bim size of sheet sheetValue
+        set corner to a cad vector2 with x 0.0 and y size's y
+        set context to the gpu context of frame's window
+        loop layer from 0 to needed:
+            set canvas to a new bim canvas
+            if layer = 0:
+                record bim sheet paper sheetValue of editor among sceneMeshes from corner at 1.0 using typeface on (the address of canvas)
+            else if layer = 1:
+                record bim sheet frame sheetValue of editor among sceneMeshes from corner at 1.0 using typeface on (the address of canvas)
+            else:
+                record bim sheet viewport (layer - 2) of sheetValue of editor among sceneMeshes from corner at 1.0 using typeface on (the address of canvas)
+            select gpu canvas slot (entry's firstSlot + layer) in context
+            begin gpu canvas recording in context
+            replay bim canvas canvas shifted by 0.0 and 0.0 lettering at (2.5 / 13.0) with typeface in frame
+            end gpu canvas recording in context
+        set entry's frames to a cad topology list of a bim sheet frame record
+        loop cursor from 0 to (needed - 2):
+            append (the bim frame of viewport (the item at cursor in (sheetValue's viewports's values)) in editor's documentValue's current) to (entry's frames's values)
+        set entry's key to key
+        replace item at index found in (cache's entries's values) with entry
+        return entry
+
+function draw retained bim sheet {bim sheet gpu entry record:entry} scaled by {a 64 bit floating-point number:scale} at {cad vector2:shift} moving {integer:movingIndex} by {cad vector2:delta} in {graphics frame:frame}:
+    execute:
+        set context to the gpu context of frame's window
+        select gpu canvas slot entry's firstSlot in context
+        draw gpu canvas scaled by scale shifted by shift's x and shift's y in context
+        loop cursor from 0 to the length of (entry's frames's values):
+            set movedX to shift's x
+            set movedY to shift's y
+            if cursor = movingIndex:
+                set movedX to movedX + (delta's x * scale)
+                set movedY to movedY - (delta's y * scale)
+            select gpu canvas slot (entry's firstSlot + 2 + cursor) in context
+            draw gpu canvas scaled by scale shifted by movedX and movedY in context
+        select gpu canvas slot (entry's firstSlot + 1) in context
+        draw gpu canvas scaled by scale shifted by shift's x and shift's y in context
+
+function the bim viewport near {cad vector2:pointValue} among {a pointer to a list:frames} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set chosen to -1
+        set chosenArea to 1e100
+        loop cursor from 0 to the length of frames:
+            set box to the item at cursor in frames
+            if box's valid:
+                set insideX to (pointValue's x >= (box's low's x - tolerance)) and (pointValue's x <= (box's high's x + tolerance))
+                set insideY to (pointValue's y >= ((box's low's y - 12.0) - tolerance)) and (pointValue's y <= (box's high's y + tolerance))
+                if insideX and insideY:
+                    set area to (box's high's x - box's low's x) * (box's high's y - box's low's y)
+                    if area <= chosenArea:
+                        set chosen to cursor
+                        set chosenArea to area
+        return chosen
+
+function outline bim sheet viewport {bim sheet frame record:box} on paper high {a 64 bit floating-point number:paperHeight} scaled by {a 64 bit floating-point number:scale} at {cad vector2:shift} moving by {cad vector2:delta} in {graphics frame:frame}:
+    execute:
+        if box's valid = false:
+            return nothing
+        set lowX to shift's x + ((box's low's x + delta's x) * scale)
+        set highX to shift's x + ((box's high's x + delta's x) * scale)
+        set lowY to shift's y + (((paperHeight - box's high's y) - delta's y) * scale)
+        set highY to shift's y + ((((paperHeight - box's low's y) + 12.0) - delta's y) * scale)
+        start triangles in frame
+        use vertex color red 0, green 120 and blue 215 in frame
+        add bim stroke from (a cad vector2 with x lowX and y lowY) to (a cad vector2 with x highX and y lowY) wide 1.5 in frame
+        add bim stroke from (a cad vector2 with x highX and y lowY) to (a cad vector2 with x highX and y highY) wide 1.5 in frame
+        add bim stroke from (a cad vector2 with x highX and y highY) to (a cad vector2 with x lowX and y highY) wide 1.5 in frame
+        add bim stroke from (a cad vector2 with x lowX and y highY) to (a cad vector2 with x lowX and y lowY) wide 1.5 in frame
+        finish triangles in frame

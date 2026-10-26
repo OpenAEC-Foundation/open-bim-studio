@@ -110,3 +110,50 @@ registered private comparison improves, but complete source equivalence is
 not established. A static frame template is reported separately from native
 model geometry; it is not counted as model-detail completeness.
 Private project source-frame and measured grid-chain data stay outside Git.
+
+## PC1 claim — plan performance and object audit, 24 October 2026
+
+Codex investigates native plan/source reference/sheet interaction separately on
+`feature/steel-baseplates`. Files: `main.dl`, new `bim_sheet_cache.dl`, cache fixture,
+`PLAN-PERFORMANCE.md`. Full-sheet resident GPU cache and opt-in frame-stage logging
+are under validation. Preserve tiled views; do not replace two panes' GPU buffers
+in one frame. Private project model/audit/screenshots remain outside Git.
+Latest upstream DynLex `95d87e0e` was fetched and built in an isolated worktree;
+compatibility checks are running with the existing CAD fork libraries. The dirty
+CAD compiler/library checkout and default toolchain selection remain unchanged.
+
+The same plan-performance claim includes `bim_import_cache.dl` and its fixture,
+`bim_canvas.dl` triangle replay batching, and `build.sh`/README support for an
+explicit optimized development/self-test build (`BIM_DEV_OPT_LEVEL=2`). An initial
+cache fixture compile diagnosed uncast 32-bit test IDs where 64-bit IDs were
+required; corrected before the optimized candidate compile. No app-ready claim yet.
+
+Upstream compiler compatibility result: clean `95d87e0e` compiler builds, but the
+BIM app compile aborts on a missing class-instantiation cache entry (13m13s,
+peak 2.4 GiB; not an out-of-memory stop). Keep the default CAD fork/toolchain.
+The optimized rendering candidate is rebuilding with the previously working
+compiler. Core inspection points to the built-in list class; a trial rollback
+cache-cleanup difference exists between upstream and the local fork and needs
+an isolated compiler regression test before upstream adoption.
+
+### PC1 — image references and interactive sheets (26 October 2026)
+
+PC1 owns image-reference import, `bim_images.dl`, `bim_image_data.dl`,
+`overlay/lib/vulkan/images.dl`, the related canvas/context shaders and tests.
+Command **2270** is reserved for linked PNG image import. This is in progress,
+not yet a validated application feature. Physical drawing content must still
+come from editable 3D objects; raster references are explicitly 2D underlays.
+
+The user prioritizes sheet interaction: cursor-anchored fast pan/zoom, real
+selectable viewports, move/copy and selectable viewport-title types. Work must
+reuse resident GPU drawing data while navigating or previewing a move. Actual
+interaction/frame measurements are required before claiming a high frame rate.
+The open application contains unsaved user edits and must be preserved.
+
+26 October candidate update: commands **2271–2279** are reserved for sheet board,
+viewport title types, move/copy/delete, deactivate, and fit. Viewport title type
+metadata uses **2400600–2401599** on the sheet. PC1 also owns
+`bim_sheet_workspace*.dl`, `bim_sheet_renderer.dl`, `bim_workspace_tabs.dl`,
+`bim_app_parts.dl` and their integration in `main.dl`/`bim_ui.dl`.
+The tested render checkpoint **9b0767c** was pushed. Candidate details and explicit
+validation gaps are in `spikes/dynlex-bim-slice/SHEET-WORKSPACE.md`.
