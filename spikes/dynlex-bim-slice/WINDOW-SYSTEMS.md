@@ -40,7 +40,7 @@ not a claim that every jamb, head and interlock uses that dimension. Timber
 sizes are generic presets. Curved, contoured and horizontal systems retain
 their existing infill; cells too small for a sash retain their plain infill.
 
-Profile cavities, rebates, seals, hardware, drainage, opening/sliding motion and thermal
+Profile cavities, supplier-specific rebates, hardware, drainage, opening/sliding motion and thermal
 performance are not modelled. The existing `DetailStatus` property records the
 simplification. No manufacturer approval or fabrication suitability is implied.
 
@@ -67,3 +67,89 @@ faces**. Setting 1700002 remembers that clear gap in millimetres; assigning a
 new window recipe recalculates the centre-line hosting inset using its frame
 width. Previously authored models without this setting retain their explicit
 hosting inset. Older models can therefore keep their established placement.
+
+The type menu has its own bounded scroll position. It opens around the current
+type and scrolls through the complete library independently of property rows.
+
+`type_menu` passed six range/navigation checks. The manual
+`tools/type_menu_probe.dl` passed four checks against the production properties
+renderer, including actual first/last row hit targets, and was inspected
+visually. Build/run it with `build.sh probe type_menu_probe` and
+`build.sh run-probe type_menu_probe` on a Vulkan display. Its compile used
+about 3.84 GiB locally; it is smaller in memory but still takes about ten minutes
+with the current compiler.
+
+The full app on `73f9552` passed hosted creation/selection, placement property
+edits and undo/redo, and includes the type-menu scroll fix. Its local dev build
+completed in 15m04s with a peak RSS of 9,415,700 KiB after safely saving and
+closing the previous app.
+
+## Hosted placement editing
+
+The full-system properties now expose **Host opening (click)**,
+**Installation gap** and **Depth in wall**. The host action selects the
+associated opening so its width, height and sill can be edited there.
+Distances follow the project length unit and are stored in whole millimetres.
+Positive depth follows the right side of the wall direction; negative depth
+moves to the opposite side, including on rotated walls.
+
+Changing the installation gap preserves bay/row counts. Explicitly moved grid
+lines retain their offsets. An edit is refused if a cell can no longer contain
+its frame and operable sash. Gap changes on sketched/contoured frames are not
+supported; their existing outline is preserved. Depth changes translate the
+whole hosted system. Unhosted systems reject these opening placement edits.
+
+Placement edits use one transaction. Re-entering the same value creates no undo
+step; invalid input leaves both the revision and redo history intact.
+`window_placement` tests the model operations and native persistence;
+`window_placement_editor` exercises the exact action helpers used by Props/MCP.
+
+A custom outer-frame profile must agree with **Frame width** before its gap can
+be edited. Inconsistent widths are refused so the displayed gap cannot silently
+place a wider profile through the wall. Profile cavities and supplier-specific
+rebates remain outside this schematic modelling layer.
+
+Validation for the added placement controls: 16 model checks and 12 editor-action
+checks passed, including history preservation, project units and refusals.
+The 43-type gallery, construction and profile regressions passed as well.
+The full `73f9552` app also passed the placement property dispatcher, no-op and
+invalid-input handling, opening/system selection, frame-width refit and refusal,
+and undo/redo. The saved 1357 project was reopened in that build.
+
+## Glazing detail
+
+Window presets 3–5 and 21–42 derive glazing beads and dark rubber seals on
+both sides of each glass pane. Four butt-jointed members form each ring;
+the bead leaves a 4 mm seal reveal. Their depth follows the actual available
+frame/sash depth and stays inside its nominal envelope. Profiles too thin
+for this detail retain plain glass, as do tiny cells and opaque panel types.
+Operable windows retain the same sash and glazing dimensions and sliding
+track offsets. All detail keeps the editable system identity and is grouped
+by material in the existing scene. No extra persistent objects are added.
+
+Existing window grids receive this detail without retyping, moving grid
+lines or changing their opening linkage. These generic sections are not
+manufacturer fabrication profiles. `window_glazing` checks rotated placement,
+glass clearance, frame envelope, ownership, persistence and safe fallbacks.
+
+In a plan, the schematic three-line window symbol is omitted when its hosted
+system is visible. The view uses the actual frame and glazing geometry.
+Unfilled openings retain the placeholder; door swing symbols are retained.
+
+Plan overviews skip generating the tiny glazing rings, as well as omitting
+them from the all-pairs end-join calculation. Their 4 mm seal reveal must occupy at least one screen pixel;
+zooming in resolves the detail automatically. Main frame/sash members and
+glass remain visible at every scale. This drawing LOD does not alter the
+stored system, its complete 3D geometry or the exported model.
+
+Validation: `window_glazing` (15 checks), `window_construction` (11 checks)
+and `window_recipes` (7 checks) passed. The 43-type geometry gallery passed
+with the added trim. Linux app `89fb563` built without diagnostics and loaded
+the existing project; hosted property edits and undo/redo were also checked
+in the app during this change.
+
+On the same local model and 60 Hz input, baseline `73f9552` measured 60.81 fps
+pan / 50.06 fps zoom; the final build measured 60.89 / 48.39 fps. These are
+four-second overview-plan samples, not guarantees for every view or closeup.
+Generating all trim and only hiding its strokes was insufficient; the plan
+now skips both its generation and its join processing at overview scale.

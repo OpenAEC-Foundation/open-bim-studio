@@ -146,3 +146,27 @@ Next scope: independent retained sheet/view canvases, camera-only sheet pan/zoom
 and selectable sheet viewports with move/copy and viewport-title types. The current
 single-canvas tiled fallback still streams sheet geometry. Imported raster images
 must be retained textures, separate from physical model geometry.
+
+### Building System catalogue ownership (26 October 2026)
+
+Repeated type-name/property lookups allocated complete temporary recipe lists.
+The type application, name/follows-type queries, gallery and editor selection
+paths now release their owned lists. Copied names and nested recipe layers stay
+owned by their consumers. Temporary contour queries and derived-part contours
+are also released after use.
+
+An isolated Linux `-O0` process queried one typed system's name 2,000 times.
+The same probe source and toolchain were used against baseline `6cb3c54` and the
+cleanup. Both produced `lookups=2000 checksum=72000` and the identical full type
+name. `/usr/bin/time -v` reported peak resident memory:
+
+| Revision | Peak RSS, KiB | Runtime, seconds |
+|---|---:|---:|
+| Baseline `6cb3c54` | 58,432 | 0.14 |
+| Temporary-list cleanup | 2,224 | 0.13 |
+
+This isolates catalogue lookups, not a whole-app/project memory comparison or
+an FPS measurement. Run `build.sh probe system_library_probe`, then measure the
+compiled `tools/system_library_probe` process independently of compilation.
+Compact menu labels retain the full model/API name; ordinary labels reuse their
+original string to avoid extra per-frame copies.

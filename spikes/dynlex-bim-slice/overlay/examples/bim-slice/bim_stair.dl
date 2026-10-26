@@ -1468,6 +1468,12 @@ function append bim contour frame of {bim curtain record:curtainValue} along {a 
 # fills that panel). Openings hosted in it follow its opening rule.
 function the bim parts of curtain wall {bim curtain record:storedValue} in {bim model record:modelValue}:
     execute:
+        return the bim parts of curtain wall storedValue in modelValue with glazing detail true
+
+# Plan overviews request the same main construction without allocating tiny
+# glazing trim. The default path keeps full detail for 3D and model export.
+function the bim parts of curtain wall {bim curtain record:storedValue} in {bim model record:modelValue} with glazing detail {boolean:glazingDetail}:
+    execute:
         set derived to a cad topology list of a bim stair part record
         set placement to the bim placed system storedValue in modelValue
         set curtainValue to placement's curtain
@@ -1633,7 +1639,7 @@ function the bim parts of curtain wall {bim curtain record:storedValue} in {bim 
                                 append panelArea to (areas's values)
                         if panelCover = 1:
                             loop areaCursor from 0 to the length of (areas's values):
-                                append bim window infill of curtainValue in cell panelIndex typed panelTypeId over (the item at areaCursor in (areas's values)) in modelValue into (derived's values)
+                                append bim window infill of curtainValue in cell panelIndex typed panelTypeId over (the item at areaCursor in (areas's values)) in modelValue with glazing detail glazingDetail into (derived's values)
         # Point objects (wall ties, hangers) at every node of the grid, as
         # short round rods: across the face upright, upward lying level.
         set pointLength to ((the bim setting (bim system points setting) of curtainValue's id in modelValue)'s value as a 64 bit floating-point number) / 1000.0
@@ -1663,6 +1669,7 @@ function the bim parts of curtain wall {bim curtain record:storedValue} in {bim 
                 set raised's finish to a cad vector3 with x raised's finish's x, y raised's finish's y and z (raised's finish's z + placement's lift)
                 set lifted's element to raised
                 replace item at index cursor in (derived's values) with lifted
+        free contour
         return derived
 
 # ---------------------------------------------------------------- building system examples
@@ -1775,14 +1782,20 @@ function the bim system name of {bim curtain record:systemValue}:
 # Operable window bays derive real sash members and inset glazing from the
 # same hosted system as their outer frame. Removing/unpinning a cell removes
 # its sash as well. Fixed windows and non-window systems keep their infill.
-function append bim window infill of {bim curtain record:curtainValue} in cell {integer:panelIndex} typed {a 64 bit integer:panelTypeId} over {bim face rectangle record:area} in {bim model record:modelValue} into {a pointer to a list:partList}:
+function append bim window infill of {bim curtain record:curtainValue} in cell {integer:panelIndex} typed {a 64 bit integer:panelTypeId} over {bim face rectangle record:area} in {bim model record:modelValue} with glazing detail {boolean:glazingDetail} into {a pointer to a list:partList}:
     execute:
         set operationCode to the bim window operation of curtainValue's id in modelValue
-        set canFrame to (operationCode > 0) and ((bim system curtainValue's id lies level in modelValue) = false)
+        set canFrame to (bim system curtainValue's id has window construction in modelValue) and ((bim system curtainValue's id lies level in modelValue) = false)
         set canFrame to canFrame and ((the bim system path of curtainValue)'s curved = false)
-        set canFrame to canFrame and ((the length of (the bim face contour of curtainValue's id in modelValue)) < 3)
+        set canFrame to canFrame and ((bim window curtainValue's id has a face contour in modelValue) = false)
         if canFrame = false:
             append bim panel of curtainValue typed panelTypeId over area in modelValue into partList
+            return nothing
+        if operationCode = 0:
+            if glazingDetail:
+                append bim window glazing of curtainValue typed panelTypeId over area in modelValue into partList
+            else:
+                append bim panel of curtainValue typed panelTypeId over area in modelValue into partList
             return nothing
         set sashWidth to the bim window sash width of curtainValue's id in modelValue
         set sashDepth to the bim window sash depth of curtainValue's id in modelValue
@@ -1811,7 +1824,55 @@ function append bim window infill of {bim curtain record:curtainValue} in cell {
         append (@intrinsic("construct", a bim stair part record, the bim system member of sashValue at (bottom + (sashWidth * 0.5)) from left until right level true in modelValue, levelType)) to partList
         append (@intrinsic("construct", a bim stair part record, the bim system member of sashValue at (top - (sashWidth * 0.5)) from left until right level true in modelValue, levelType)) to partList
         set glazedArea to @intrinsic("construct", a bim face rectangle record, (area's fromAlong + gap) + sashWidth, (area's untilAlong - gap) - sashWidth, bottom + sashWidth, top - sashWidth)
-        append bim panel of sashValue typed panelTypeId over glazedArea in modelValue into partList
+        if glazingDetail:
+            append bim window glazing of sashValue typed panelTypeId over glazedArea in modelValue into partList
+        else:
+            append bim panel of sashValue typed panelTypeId over glazedArea in modelValue into partList
+
+# A shallow stepped glazing pocket. The pane extends behind its seals and
+# beads, as in a rebate. Rings touch at butt joints instead of overlapping
+# at corners; their depth faces do not coincide with the glass faces.
+# All members retain the system id, so detail never becomes loose geometry.
+function append bim window glazing rim of {bim curtain record:curtainValue} over {bim face rectangle record:area} wide {a 64 bit floating-point number:breadth} deep {a 64 bit floating-point number:depthValue} offset {a 64 bit floating-point number:offsetValue} named {a string:partName} of {a string:materialName} in {bim model record:modelValue} into {a pointer to a list:partList}:
+    execute:
+        set shifted to curtainValue
+        set heading to the bim system heading at 0.0 of curtainValue
+        set dx to (the sine of heading) * offsetValue
+        set dy to (0.0 - (the cosine of heading)) * offsetValue
+        set shifted's start to a cad vector2 with x (curtainValue's start's x + dx) and y (curtainValue's start's y + dy)
+        set shifted's finish to a cad vector2 with x (curtainValue's finish's x + dx) and y (curtainValue's finish's y + dy)
+        set uprightType to @intrinsic("construct", a bim linear type record, the bim refused id, partName, bim mullion role, breadth, depthValue, false, materialName)
+        set levelType to @intrinsic("construct", a bim linear type record, the bim refused id, partName, bim mullion role, depthValue, breadth, false, materialName)
+        set left to area's fromAlong + (breadth * 0.5)
+        set right to area's untilAlong - (breadth * 0.5)
+        append (@intrinsic("construct", a bim stair part record, the bim system member of shifted at left from area's bottom until area's top level false in modelValue, uprightType)) to partList
+        append (@intrinsic("construct", a bim stair part record, the bim system member of shifted at right from area's bottom until area's top level false in modelValue, uprightType)) to partList
+        append (@intrinsic("construct", a bim stair part record, the bim system member of shifted at (area's bottom + (breadth * 0.5)) from (area's fromAlong + breadth) until (area's untilAlong - breadth) level true in modelValue, levelType)) to partList
+        append (@intrinsic("construct", a bim stair part record, the bim system member of shifted at (area's top - (breadth * 0.5)) from (area's fromAlong + breadth) until (area's untilAlong - breadth) level true in modelValue, levelType)) to partList
+
+function append bim window glazing of {bim curtain record:curtainValue} typed {a 64 bit integer:panelTypeId} over {bim face rectangle record:area} in {bim model record:modelValue} into {a pointer to a list:partList}:
+    execute:
+        append bim panel of curtainValue typed panelTypeId over area in modelValue into partList
+        # An opaque infill is not glazing. Keep supplier/typed panels intact.
+        if (the bim wall type index of panelTypeId in modelValue)'s valid:
+            return nothing
+        set frameDepth to the bim joint depth of system curtainValue's id in modelValue
+        if (the bim window operation of curtainValue's id in modelValue) > 0:
+            set frameDepth to the bim window sash depth of curtainValue's id in modelValue
+        # Keep detail inside the nominal profile envelope, even in narrow
+        # sliding tracks. Thin profiles keep the existing plain glass.
+        set glassHalf to (the bim glass thickness) * 0.5
+        set beadDepth to the minimum of 0.014 and (((frameDepth * 0.5) - glassHalf) - 0.003)
+        if beadDepth < 0.002:
+            return nothing
+        if ((area's untilAlong - area's fromAlong) <= 0.04) or ((area's top - area's bottom) <= 0.04):
+            return nothing
+        loop side from 0 to 2:
+            set signValue to 1.0
+            if side = 1:
+                set signValue to -1.0
+            append bim window glazing rim of curtainValue over area wide 0.018 deep 0.003 offset ((glassHalf + 0.0015) * signValue) named (the string form of "Glazing seal") of (the string form of "rubber") in modelValue into partList
+            append bim window glazing rim of curtainValue over area wide 0.014 deep beadDepth offset (((glassHalf + 0.003) + (beadDepth * 0.5)) * signValue) named (the string form of "Glazing bead") of curtainValue's material in modelValue into partList
 
 # Each sliding track has a real guide at sill and head. Their centre lines
 # agree with the sash/glass depth offsets; no extra objects are persisted.
@@ -1821,7 +1882,7 @@ function append bim window tracks of {bim curtain record:curtainValue} in {bim m
             return nothing
         if (bim system curtainValue's id lies level in modelValue) or (the bim system path of curtainValue)'s curved:
             return nothing
-        if (the length of (the bim face contour of curtainValue's id in modelValue)) >= 3:
+        if bim window curtainValue's id has a face contour in modelValue:
             return nothing
         set trackCount to the bim window track count of curtainValue's id in modelValue
         set widthValue to the bim joint width of system curtainValue's id in modelValue

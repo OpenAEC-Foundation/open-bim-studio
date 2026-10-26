@@ -179,3 +179,16 @@ Window recipes generate sash members and inset glazing; sliding recipes add
 separated depth tracks and sill/head guides. These remain parts of the hosted,
 editable Building System. See [WINDOW-SYSTEMS.md](WINDOW-SYSTEMS.md) for available
 recipes and the schematic profile limits.
+
+For a local UI/rendering change, compile an isolated production-component probe
+before the full editor. Probes use the same staged toolchain, shaders and fonts;
+compiling one does not start a window:
+
+```sh
+BIM_BUILD_DIR=/tmp/obs-type-menu bash build.sh probe type_menu_probe
+DISPLAY=:0 BIM_BUILD_DIR=/tmp/obs-type-menu bash build.sh run-probe type_menu_probe
+```
+
+The probe needs a Vulkan-capable display when run. `type_menu_probe` uses the
+production properties renderer and checks actual menu hit targets. Full-editor
+integration still needs its own app build. Keep the one-compiler memory rule.

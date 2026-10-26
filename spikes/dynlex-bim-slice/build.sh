@@ -8,10 +8,12 @@
 #   DYNLEX_ROOT=... ./build.sh run [ARGS...]                     run the editor (--example, FILE, --import ...)
 #   DYNLEX_ROOT=... ./build.sh test [NAME...]                    headless tests (all when no name)
 #   DYNLEX_ROOT=... ./build.sh bundle [NAME...]                  the same tests compiled once as one program
+#   DYNLEX_ROOT=... ./build.sh probe NAME                        compile one manual tools/ probe
+#   DYNLEX_ROOT=... ./build.sh run-probe NAME [ARGS...]          run an already compiled probe
 #   DYNLEX_ROOT=... ./build.sh installer OUT.sh                  self-contained installer
 #
 # BIM_BUILD_DIR (default build/) is where the tree and the outputs go, so two
-# builds can run side by side.
+# builds have independent outputs. Run only one compiler per PC.
 #
 # DYNLEX_ROOT is a DynLex checkout with a built compiler at build/dynlex (the
 # cadkernel fork). The tree is assembled in build/tree: the checkout's lib/,
@@ -168,6 +170,29 @@ case "$command" in
         fi
         python3 "$here/tools/bundle_tests.py" split "$out/tests/bundle.out" examples/bim-slice/tests/bundle.expected.txt "$out/tests/bundled"
         exit "$runtime_status" ;;
+    probe|run-probe)
+        probe_name=${1:-}
+        case "$probe_name" in
+            ''|*[!a-zA-Z0-9_-]*) echo 'give a probe name using letters, digits, underscore or dash' >&2; exit 2 ;;
+        esac
+        shift
+        probe_source="examples/bim-slice/tools/$probe_name.dl"
+        probe_binary="$out/tools/$probe_name"
+        if [ ! -f "$probe_source" ]; then
+            echo "unknown probe $probe_name" >&2; exit 2
+        fi
+        if [ "$command" = probe ]; then
+            mkdir -p "$out/tools"
+            if ! build/dynlex "$probe_source" -O0 -o "$probe_binary" > "$probe_binary.diag" 2>&1 || [ -s "$probe_binary.diag" ]; then
+                echo "$probe_name DIAG"; head -20 "$probe_binary.diag"; exit 1
+            fi
+            echo "built $probe_binary"
+        else
+            if [ ! -x "$probe_binary" ]; then
+                echo "compile first: build.sh probe $probe_name" >&2; exit 2
+            fi
+            exec "$probe_binary" "$@"
+        fi ;;
     installer)
         bash examples/bim-slice/installer/make-installer.sh "$out/open-bim-studio" "${1:?installer output path}" ;;
     *)
