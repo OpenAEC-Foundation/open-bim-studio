@@ -166,3 +166,7 @@ BIM adapter, native connection persistence, connection commands/properties,
 headless tests and a synthetic steel hall example. Command range 2320–2330
 is reserved for steel recipes, welds and reusable connection types. Existing
 base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
+
+The required full-build repair also renames local identifiers in sheet paper
+recording and plan/mesh helpers to avoid DynLex pattern-word capture. These are
+identifier-only changes; sheet/layout behaviour is unchanged.
