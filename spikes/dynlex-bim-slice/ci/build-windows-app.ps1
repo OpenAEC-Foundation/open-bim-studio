@@ -45,8 +45,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Platform bridge compilation failed.' }
     & "$toolBin\llvm-ar.exe" rcs "$outPath\libobs_platform.a" $object
     if ($LASTEXITCODE -ne 0) { throw 'Platform bridge archive failed.' }
-    $env:LIBRARY_PATH = "$outPath;$env:LIBRARY_PATH"
-    $env:LIB = "$outPath;$env:LIB"
+    # The staged toolchain carries only the GLFW, Vulkan and FreeType import
+    # libraries; zlib's (z.lib, for the binary IfcX file) is in the vcpkg root.
+    $dependencyLib = Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT 'lib'
+    if (-not (Test-Path "$dependencyLib\z.lib")) { throw "Missing zlib import library: $dependencyLib\z.lib" }
+    $env:LIBRARY_PATH = "$outPath;$dependencyLib;$env:LIBRARY_PATH"
+    $env:LIB = "$outPath;$dependencyLib;$env:LIB"
 
     foreach ($name in 'ui_layout', 'plan_pan', 'text_glyphs') {
         $program = "$outPath\check-$name.exe"

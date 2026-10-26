@@ -81,3 +81,19 @@ versioned executable. Dependency and LLVM caches are restored separately and
 saved immediately after successful installation/compiler build respectively;
 a later application or MSI failure does not discard completed toolchains.
 The staged compiler artifact is also uploaded before the application build.
+
+The third native run (42992c6) built and staged the compiler and passed the
+three headless checks; the application compile then failed without a
+diagnostic. Reproduced locally on Windows 11 with that run's compiler
+artifact and the app at 52093c5: the compiler ended with
+STATUS_STACK_OVERFLOW (0xC00000FD) after about five minutes. Its PE header
+reserves the Windows default of 1 MiB of stack. In a copy with 512 MiB
+reserved, compilation reached the link, which failed on `-l:libz.so.1`
+(the zlib calls of the binary IfcX file). `dynlex-windows-compiler-stack.patch`
+now sets that reserve when the compiler is linked; the library-name patch
+maps zlib to the vcpkg package's `z`, whose import library
+`build-windows-app.ps1` puts on the link path. With both changes made by hand
+locally, the `-O2` application compile took 596 s without diagnostics and the
+program opened the example building. Measured peak working set of the
+compiler on the overflowing run: 5.0 GB. No CI run has confirmed these
+changes yet.
