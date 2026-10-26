@@ -83,3 +83,35 @@ The full app on `6759607` passed hosted creation, duplicate prevention and
 undo/redo. The later full app build including the type-menu scroll fix was
 stopped by the 700 MiB available-memory guard. The standalone menu probe passed;
 a complete app binary containing that final UI change remains to be built.
+
+## Hosted placement editing
+
+The full-system properties now expose **Host opening (click)**,
+**Installation gap** and **Depth in wall**. The host action selects the
+associated opening so its width, height and sill can be edited there.
+Distances follow the project length unit and are stored in whole millimetres.
+Positive depth follows the right side of the wall direction; negative depth
+moves to the opposite side, including on rotated walls.
+
+Changing the installation gap preserves bay/row counts. Explicitly moved grid
+lines retain their offsets. An edit is refused if a cell can no longer contain
+its frame and operable sash. Gap changes on sketched/contoured frames are not
+supported; their existing outline is preserved. Depth changes translate the
+whole hosted system. Unhosted systems reject these opening placement edits.
+
+Placement edits use one transaction. Re-entering the same value creates no undo
+step; invalid input leaves both the revision and redo history intact.
+`window_placement` tests the model operations and native persistence;
+`window_placement_editor` exercises the exact action helpers used by Props/MCP.
+
+A custom outer-frame profile must agree with **Frame width** before its gap can
+be edited. Inconsistent widths are refused so the displayed gap cannot silently
+place a wider profile through the wall. Profile cavities and supplier-specific
+rebates remain outside this schematic modelling layer.
+
+Validation for the added placement controls: 16 model checks and 12 editor-action
+checks passed, including history preservation, project units and refusals.
+The 43-type gallery, construction and profile regressions passed as well.
+These controls are in source; a full app build containing them is still pending
+sufficient free memory. The previously validated `6759607` binary does not
+contain these new controls.
