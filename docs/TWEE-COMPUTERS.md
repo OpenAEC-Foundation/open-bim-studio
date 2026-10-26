@@ -160,3 +160,10 @@ The build repair includes `build.sh` and `tools/check_dynlex_locals.py`: a fast
 application-source preflight for these proven local/pattern-name collisions,
 with focused Python regression tests. It does not modify the compiler or the
 active source snapshots/build scripts.
+
+GUI validation exposed a connection-hole meshing hotspot in the overlay's
+`lib/cadkernel/brep_append.dl`. The connection task also owns its bounded
+face-component traversal repair and geometric regression checks: direct
+arena-slot membership and adjacency, preserving seed and breadth-first order.
+The compiler checkout is unchanged. Application readiness still requires the
+full steel-hall scene and GUI checks.

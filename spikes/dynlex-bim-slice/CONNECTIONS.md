@@ -86,6 +86,11 @@ Geometry tests compare cut volumes, including a hole through both walls of a
 hollow section. Full application and cache test results belong in the build
 report; they must not be inferred from headless parameter checks.
 
+The `steel_scene` check also meshes the complete hall: every connection body
+and member must produce triangles. Boolean shell grouping uses arena-slot
+membership and direct face adjacency, preserving seed and breadth-first order;
+this avoids repeated whole-body scans while drilling multiple holes.
+
 Public commands: 2320–2325 recipes, 2326/2327 fillet/butt weld, 2328 Save type,
 2329 Apply type, 2330 Next type. Property 8998 edits the node name. Global
 setting 2400500 stores the chosen library type id. Existing part properties
