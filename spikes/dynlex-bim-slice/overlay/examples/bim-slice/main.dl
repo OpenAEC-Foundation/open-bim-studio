@@ -1,3 +1,5 @@
+import examples/bim-slice/bim_import_cache.dl
+import examples/bim-slice/bim_sheet_cache.dl
 import examples/bim-slice/bim_application_icon.dl
 import examples/bim-slice/bim_workspace_tabs.dl
 # SPDX-License-Identifier: MPL-2.0
@@ -205,6 +207,7 @@ set imported to the bim import of (the string form of "")
 # number changes (an element made editable, undone, redone).
 set importedFull to imported
 set promotedSeen to 0
+set importMetadata to a new bim import metadata cache
 # The IFC file the import shown was read from: a model linked to another
 # (opened, or the link undone) has its own read again.
 set linkedLoaded to the string form of ""
@@ -414,6 +417,11 @@ set occludedRebar to a cad topology list of a 64 bit integer
 set occludedText to the string form of ""
 # The status bar's technical figures, only with OBS_DEBUG_STATUS=1.
 set debugStatus to bim ui shows debug figures
+# Optional stage timings; no output or extra clock reads in normal use.
+set profilePointer to @intrinsic("call", "libc", "getenv", a pointer to a byte, "OBS_PROFILE_FRAMES")
+set profileFrames to false
+if profilePointer != (0 as a pointer to a byte):
+    set profileFrames to (@intrinsic("call", "libc", "atoi", integer, profilePointer)) = 1
 # The graphics menu open on a view's bar: 0 none, 1 the plan's, 2 the
 # section's, 3 the 3D view's.
 set graphicsMenu to 0
@@ -460,7 +468,7 @@ set recordedPlanKey to the string form of ""
 set importPlanKey to the string form of "none"
 set importCutLines to an empty list of a cad vector2
 set importBelowLines to an empty list of a cad vector2
-set uploadedPlanKey to the string form of "nothing uploaded"
+set uploadedCanvasKey to the string form of "nothing uploaded"
 set recordedOrigin to a cad vector2 with x 0.0 and y 0.0
 set codes to [87, 79, 83, 90, 89, 88, 261, 257, 259, 256, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 46, 45, 61, 67, 91, 93, 59, 39, 86, 70, 68, 66, 266, 267, 76, 73, 81, 84, 69, 75, 78, 82, 80, 77, 71, 85, 65, 292, 296, 297, 299, 258, 72]
 set showVisibility to false
@@ -780,6 +788,9 @@ loop while window remains open:
         set splitViews to false
         set showSection to false
         set showSchedule to false
+    # A full sheet owns the single resident GPU canvas. Tiled sheets keep
+    # the plan resident and replay the sheet separately.
+    set sheetOwnsCanvas to showSheet and (layout's planRight <= (layout's planLeft + 1.0))
     set drawModel to (((showSection and editor's hasSection) = false) and (showSchedule = false)) and (showSheet = false)
     set splitAt to layout's bottom
     set lowerTop to layout's top
@@ -822,8 +833,14 @@ loop while window remains open:
     if wantCrosshair != pointerHidden:
         set the pointer of window to crosshair wantCrosshair
         set pointerHidden to wantCrosshair
+    set pointerStarted to 0 as a 64 bit integer
+    if profileFrames:
+        set pointerStarted to the bim microseconds now
     if overPlan:
         move bim editor pointer to (the bim model point of pixel in layout with camera) within (8.0 / camera's scale) in (the address of editor)
+    set pointerMicros to 0 as a 64 bit integer
+    if profileFrames:
+        set pointerMicros to (the bim microseconds now) - pointerStarted
     set leftDown to the left mouse button is pressed in window
     set overView to ((pixel's x > layout's planRight) and ((pixel's y > viewLayout's top) and (pixel's y < viewLayout's bottom))) and drawModel
     # Explicit Space outlines use the same level and clip for drawing and
@@ -2139,7 +2156,8 @@ loop while window remains open:
                     set importGeneration to importGeneration + 1
     # A model linked to an IFC file other than the one shown (just opened)
     # has it read, on the import's thread.
-    set linkWanted to the bim linked ifc of editor's documentValue's current
+    ignore refresh bim import metadata of editor's documentValue in (the address of importMetadata)
+    set linkWanted to importMetadata's linkedPath
     if ((the length of linkWanted) > 0) and ((linkWanted != linkedLoaded) and (importRunning = false)):
         set linkedLoaded to linkWanted
         set linkPaths to an empty list of a string
@@ -2150,7 +2168,7 @@ loop while window remains open:
             set importRunning to true
             set importLanding to false
             set importAfterSteps to 0
-    set promotedNow to the bim promoted count of editor's documentValue's current
+    set promotedNow to importMetadata's promotedCount
     # The section box the model keeps, when that changed (opened, undone).
     set boxKeyNow to the bim stored section box key of editor's documentValue's current
     if boxKeyNow != boxKeySeen:
@@ -2701,7 +2719,12 @@ loop while window remains open:
     # What the plan hides (HH), by the ids hidden.
     set planKey to (planKey + (the string form of " ")) + (the bim hidden key in view (editor's planViewId) among (editor's hiddenElements's values))
     set originPixel to the bim pixel of (a cad vector2 with x 0.0 and y 0.0) through planTransform
-    if planKey != recordedPlanKey:
+    set planStarted to 0 as a 64 bit integer
+    if profileFrames:
+        set planStarted to the bim microseconds now
+    set planRerecorded to false
+    if (sheetOwnsCanvas = false) and (planKey != recordedPlanKey):
+        set planRerecorded to true
         set planCanvas to a new bim canvas
         set planCanvas's sketchy to bim view editor's planViewId is sketchy in editor's documentValue's current
         if bim category bim space category is visible in editor's planRules:
@@ -2739,14 +2762,19 @@ loop while window remains open:
         set recordedOrigin to originPixel
     # The recorded plan is kept on the GPU and drawn shifted; it is written
     # there again only when it was recorded again.
-    if frame's drawable and (uploadedPlanKey != recordedPlanKey):
+    set wantedPlanUpload to (the string form of "plan ") + recordedPlanKey
+    if ((sheetOwnsCanvas = false) and frame's drawable) and (uploadedCanvasKey != wantedPlanUpload):
         begin gpu canvas recording in (the gpu context of window)
         replay bim canvas planCanvas shifted by 0.0 and 0.0 with typeface in frame
         end gpu canvas recording in (the gpu context of window)
-        set uploadedPlanKey to recordedPlanKey
+        set uploadedCanvasKey to wantedPlanUpload
     # Slab edges first, so that the cut outlines over them stay black.
-    draw bim slabs of editor through planTransform in frame
-    draw gpu canvas shifted by (originPixel's x - recordedOrigin's x) and (originPixel's y - recordedOrigin's y) in (the gpu context of window)
+    if sheetOwnsCanvas = false:
+        draw bim slabs of editor through planTransform in frame
+        draw gpu canvas shifted by (originPixel's x - recordedOrigin's x) and (originPixel's y - recordedOrigin's y) in (the gpu context of window)
+    set planMicros to 0 as a 64 bit integer
+    if profileFrames:
+        set planMicros to (the bim microseconds now) - planStarted
     draw bim selection in plan of editor through planTransform in frame
     # A cropped plan view shows only its crop: the plan outside is covered,
     # and the crop drawn as a thin frame.
@@ -3030,6 +3058,9 @@ loop while window remains open:
         draw a rectangle at x layout's planRight and y splitAt with width (layout's width - layout's planRight) and height 3 in color red 200, green 206 and blue 216 in frame
     # A sheet: fitted into the pane on a grey ground, recorded again when the
     # model or the pane changes.
+    set sheetStarted to 0 as a 64 bit integer
+    if profileFrames:
+        set sheetStarted to the bim microseconds now
     if showSheet:
         set sheetFound to the bim sheet index of editor's sheetId in editor's documentValue's current
         draw a rectangle at x layout's planRight and y layout's top with width (layout's width - layout's planRight) and height (layout's bottom - layout's top) in color red 200, green 203 and blue 208 in frame
@@ -3040,12 +3071,28 @@ loop while window remains open:
             set paneHeight to (layout's bottom - layout's top) - 40.0
             set perMillimetre to the minimum of (paneWidth / openSize's x) and (paneHeight / openSize's y)
             set sheetCorner to a cad vector2 with x (((layout's planRight + layout's width) * 0.5) - ((openSize's x * perMillimetre) * 0.5)) and y (((layout's top + layout's bottom) * 0.5) + ((openSize's y * perMillimetre) * 0.5))
-            set wantedSheetKey to (((the string form of editor's documentValue's revision) + (the string form of " ")) + ((the string form of editor's sheetId) + (the string form of " "))) + ((the string form of perMillimetre) + ((the string form of " ") + (the string form of sheetCorner's x)))
+            set sheetVisibilityKey to the string form of ""
+            loop viewportCursor from 0 to the length of (openSheet's viewports's values):
+                set viewportValue to the item at viewportCursor in (openSheet's viewports's values)
+                set sheetVisibilityKey to (sheetVisibilityKey + (the string form of " ")) + (the bim hidden key in view viewportValue's viewId among (editor's hiddenElements's values))
+            set wantedSheetKey to the bim sheet recording key at revision editor's documentValue's revision for editor's sheetId density perMillimetre at sheetCorner sized (the framebuffer width of window) by (the framebuffer height of window) hiding sheetVisibilityKey
             if wantedSheetKey != sheetKey:
                 set sheetCanvas to a new bim canvas
                 record bim sheet openSheet of editor among (sketchMeshes's values) from sheetCorner at perMillimetre using typeface on (the address of sheetCanvas)
                 set sheetKey to wantedSheetKey
-            replay bim canvas sheetCanvas shifted by 0.0 and 0.0 lettering at ((2.5 * perMillimetre) / 13.0) with typeface in frame
+            if sheetOwnsCanvas:
+                set wantedSheetUpload to (the string form of "sheet ") + sheetKey
+                if frame's drawable and (uploadedCanvasKey != wantedSheetUpload):
+                    begin gpu canvas recording in (the gpu context of window)
+                    replay bim canvas sheetCanvas shifted by 0.0 and 0.0 lettering at ((2.5 * perMillimetre) / 13.0) with typeface in frame
+                    end gpu canvas recording in (the gpu context of window)
+                    set uploadedCanvasKey to wantedSheetUpload
+                draw gpu canvas shifted by 0.0 and 0.0 in (the gpu context of window)
+            else:
+                replay bim canvas sheetCanvas shifted by 0.0 and 0.0 lettering at ((2.5 * perMillimetre) / 13.0) with typeface in frame
+    set sheetMicros to 0 as a 64 bit integer
+    if profileFrames:
+        set sheetMicros to (the bim microseconds now) - sheetStarted
     draw a rectangle at x 0 and y 0 with width windowWidth and height layout's top in color red 247, green 249 and blue 252 in frame
     draw a rectangle at x 0 and y layout's bottom with width windowWidth and height (layout's height - layout's bottom) in color red 247, green 249 and blue 252 in frame
     draw a rectangle at x layout's planRight and y 0 with width 2 and height layout's height in color red 200, green 206 and blue 216 in frame
@@ -3180,12 +3227,18 @@ loop while window remains open:
         set modelExplorerHit to draw bim model explorer explorerRows scrolled explorerScroll marking editor's selectionId graph explorerGraph pointing at pixel's x and pixel's y from layout's width below chromeBottom down to explorerBottom using typeface in frame
         if modelExplorerHit's inChrome:
             set uiHit to modelExplorerHit
+    set propertiesStarted to 0 as a 64 bit integer
+    if profileFrames:
+        set propertiesStarted to the bim microseconds now
     if propertiesShown:
         set propertiesRows to the bim property rows of editor with imported
         set propertiesHit to draw bim properties of editor listing propertiesRows scrolled propertiesScroll choosing typeSelectorOpen folding headingsClosed pointing at pixel's x and pixel's y from layout's width below explorerBottom down to layout's bottom using typeface in frame
         free propertiesRows
         if propertiesHit's inChrome:
             set uiHit to propertiesHit
+    set propertiesMicros to 0 as a 64 bit integer
+    if profileFrames:
+        set propertiesMicros to (the bim microseconds now) - propertiesStarted
     draw bim command line saying prompt and status uiStatus in windowWidth by layout's height using typeface in frame
     if rulesOpen:
         set rulesHit to draw bim drawing rules of editor choosing rulesTypeId on tab rulesTab renaming rulesRenaming as rulesText across windowWidth by layout's height pointing at pixel's x and pixel's y using typeface in frame
@@ -3222,6 +3275,22 @@ loop while window remains open:
         draw bim loading card of (the address of importJob) after importAfterSteps steps centred on ((layout's planLeft + layout's width) * 0.5) from (layout's bottom - 96.0) landing importLanding using typeface in frame
     set frameMicroseconds to (the bim microseconds now) - frameStarted
     display frame
+    if profileFrames:
+        set profileText to (the string form of "OBS_FRAME view=") + (the string form of editor's planViewId)
+        set profileText to (profileText + (the string form of " sheet=")) + (the string form of showSheet)
+        set profileText to (profileText + (the string form of " pointer_us=")) + (the string form of pointerMicros)
+        set profileText to (profileText + (the string form of " plan_us=")) + (the string form of planMicros)
+        set profileText to (profileText + (the string form of " rerecorded=")) + (the string form of planRerecorded)
+        set profileText to (profileText + (the string form of " sheet_us=")) + (the string form of sheetMicros)
+        set profileText to (profileText + (the string form of " cpu_us=")) + (the string form of frameMicroseconds)
+        set profileText to (profileText + (the string form of " presented_us=")) + (the string form of ((the bim microseconds now) - frameStarted))
+        set profileText to (profileText + (the string form of " properties_us=")) + (the string form of propertiesMicros)
+        set profileText to (profileText + (the string form of " gpu_us=")) + (the string form of (((the gpu frame microseconds of (the gpu context of window)) + 0.5) as a 64 bit integer))
+        set profileContext to the gpu context of window
+        set profileText to (profileText + (the string form of " canvas_batches=")) + (the string form of (the length of (profileContext's canvasBatches)))
+        set profileText to (profileText + (the string form of " canvas_vertices=")) + (the string form of profileContext's canvasCount)
+        set profileText to (profileText + (the string form of " draw_batches=")) + (the string form of (the length of (profileContext's batches)))
+        print profileText as a line
     # Whether anything happened this frame: input, an edit, the camera
     # still settling, a drag; twenty quiet frames in a row let the loop sleep.
     set markNow to the bim input mark of window over watchedKeys

@@ -146,3 +146,22 @@ reference, unlike native annotation text.
 allocation by that string's encoded length. It is applied only to the staged
 build tree. The `json_text_storage` regression parses an 8 MB document with
 2,000 text values and exercises escaped quotes, Unicode and invalid input.
+
+### Measuring interactive plan performance
+
+`dev` and `dev-test` default to `-O0`. Keep compiler and optimization level the
+same when measuring the effect of source changes. A combined app/self-test build:
+
+```sh
+BIM_DEBUG=0 BIM_BUILD_DIR=/tmp/obs-plan-profile \
+  bash build.sh dev-test sheet_cache import_metadata_cache
+OBS_PROFILE_FRAMES=1 BIM_BUILD_DIR=/tmp/obs-plan-profile \
+  bash build.sh run-dev /absolute/path/to/model.ifcxb
+```
+
+`BIM_DEV_OPT_LEVEL` accepts `0`, `1` or `2` and affects only development targets.
+`BIM_DEV_OPT_LEVEL=2` enables optimization when the machine has enough build
+memory; the local 16 GB optimized attempt reached its memory guard. The opt-in
+frame diagnostics go to stdout; keep them disabled for normal use.
+See [the plan performance investigation](PLAN-PERFORMANCE.md) for stage definitions,
+reference-artwork costs, object semantics and measurement limits.

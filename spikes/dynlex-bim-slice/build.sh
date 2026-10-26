@@ -69,6 +69,11 @@ case "$command" in
         build/dynlex examples/bim-slice/main.dl -O2 -o "$out/open-bim-studio"
         echo "built $out/open-bim-studio" ;;
     dev|dev-test)
+        dev_opt=${BIM_DEV_OPT_LEVEL:-0}
+        case "$dev_opt" in
+            0|1|2) ;;
+            *) echo 'BIM_DEV_OPT_LEVEL must be 0, 1 or 2' >&2; exit 2 ;;
+        esac
         debug_flags=()
         if [ "${BIM_DEBUG:-1}" != 0 ]; then debug_flags+=(-g); fi
         if [ "$command" = dev-test ]; then
@@ -101,7 +106,7 @@ case "$command" in
                 { print }
             ' examples/bim-slice/main.dl > examples/bim-slice/main.tmp
             mv examples/bim-slice/main.tmp examples/bim-slice/main.dl
-            if ! build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev" > "$out/tests/app.diag" 2>&1 || [ -s "$out/tests/app.diag" ]; then
+            if ! build/dynlex examples/bim-slice/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev" > "$out/tests/app.diag" 2>&1 || [ -s "$out/tests/app.diag" ]; then
                 echo 'app DIAG'; head -20 "$out/tests/app.diag"; exit 1
             fi
             if ! (ulimit -c 0; "$out/open-bim-studio-dev" --self-test) > "$out/tests/app_checks.out" 2>&1; then
@@ -109,7 +114,7 @@ case "$command" in
             fi
             python3 "$here/tools/bundle_tests.py" split "$out/tests/app_checks.out" examples/bim-slice/tests/app_checks.expected.txt "$out/tests/app_checks"
         else
-            build/dynlex examples/bim-slice/main.dl -O0 "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
+            build/dynlex examples/bim-slice/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
         fi
         echo "built $out/open-bim-studio-dev" ;;
     run)
