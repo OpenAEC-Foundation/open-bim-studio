@@ -41,3 +41,22 @@ Local isolated measurement, 26 October 2026: the 1357 source view contains
 4.00009 seconds (59.9987 presented fps), with one upload in total. This is a
 presentation-limited GPU-layer result, not a before/after whole-editor score.
 The benchmark used a separate hidden 1280 × 900 Vulkan window and `-O0`.
+
+Full-app validation on `6759607` also passed (Linux, `-O0`, 1440 × 900):
+
+| Content | Pan presented fps | Zoom presented fps | Sheet rerecords |
+|---|---:|---:|---:|
+| 1357 vector plan, view 1067 | 60.99 | 60.83 | n/a |
+| Source sheet BP-22 | 60.73 | 52.61 | 0 |
+| Model/frame sheet BP-22-M | 60.91 | 55.68 | 0 |
+
+Each sample ran for about four seconds. Sheet zoom used alternating wheel input
+at approximately 60 Hz; the plan zoom sample used input at approximately 8 Hz
+and continued presenting between events. Frame rates are local observations,
+not guarantees across GPUs or projects. `cpu_us` in the frame log includes
+presentation pacing; process CPU time was measured separately. PNG/image
+interactions and every viewport operation are not covered by these measurements.
+
+The same app passed the new opening property action, duplicate prevention and
+undo/redo through its file API. The original user model was preserved; tests
+used a separate file copy and process.

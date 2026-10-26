@@ -67,3 +67,6 @@ faces**. Setting 1700002 remembers that clear gap in millimetres; assigning a
 new window recipe recalculates the centre-line hosting inset using its frame
 width. Previously authored models without this setting retain their explicit
 hosting inset. Older models can therefore keep their established placement.
+
+The type menu has its own bounded scroll position. It opens around the current
+type and scrolls through the complete library independently of property rows.
