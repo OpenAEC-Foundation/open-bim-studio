@@ -141,3 +141,15 @@ them from the all-pairs end-join calculation. Their 4 mm seal reveal must occupy
 zooming in resolves the detail automatically. Main frame/sash members and
 glass remain visible at every scale. This drawing LOD does not alter the
 stored system, its complete 3D geometry or the exported model.
+
+Validation: `window_glazing` (15 checks), `window_construction` (11 checks)
+and `window_recipes` (7 checks) passed. The 43-type geometry gallery passed
+with the added trim. Linux app `89fb563` built without diagnostics and loaded
+the existing project; hosted property edits and undo/redo were also checked
+in the app during this change.
+
+On the same local model and 60 Hz input, baseline `73f9552` measured 60.81 fps
+pan / 50.06 fps zoom; the final build measured 60.89 / 48.39 fps. These are
+four-second overview-plan samples, not guarantees for every view or closeup.
+Generating all trim and only hiding its strokes was insufficient; the plan
+now skips both its generation and its join processing at overview scale.
