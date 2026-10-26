@@ -40,7 +40,7 @@ not a claim that every jamb, head and interlock uses that dimension. Timber
 sizes are generic presets. Curved, contoured and horizontal systems retain
 their existing infill; cells too small for a sash retain their plain infill.
 
-Profile cavities, rebates, seals, hardware, drainage, opening/sliding motion and thermal
+Profile cavities, supplier-specific rebates, hardware, drainage, opening/sliding motion and thermal
 performance are not modelled. The existing `DetailStatus` property records the
 simplification. No manufacturer approval or fabrication suitability is implied.
 
@@ -79,10 +79,10 @@ visually. Build/run it with `build.sh probe type_menu_probe` and
 about 3.84 GiB locally; it is smaller in memory but still takes about ten minutes
 with the current compiler.
 
-The full app on `6759607` passed hosted creation, duplicate prevention and
-undo/redo. The later full app build including the type-menu scroll fix was
-stopped by the 700 MiB available-memory guard. The standalone menu probe passed;
-a complete app binary containing that final UI change remains to be built.
+The full app on `73f9552` passed hosted creation/selection, placement property
+edits and undo/redo, and includes the type-menu scroll fix. Its local dev build
+completed in 15m04s with a peak RSS of 9,415,700 KiB after safely saving and
+closing the previous app.
 
 ## Hosted placement editing
 
@@ -112,6 +112,26 @@ rebates remain outside this schematic modelling layer.
 Validation for the added placement controls: 16 model checks and 12 editor-action
 checks passed, including history preservation, project units and refusals.
 The 43-type gallery, construction and profile regressions passed as well.
-These controls are in source; a full app build containing them is still pending
-sufficient free memory. The previously validated `6759607` binary does not
-contain these new controls.
+The full `73f9552` app also passed the placement property dispatcher, no-op and
+invalid-input handling, opening/system selection, frame-width refit and refusal,
+and undo/redo. The saved 1357 project was reopened in that build.
+
+## Glazing detail
+
+Window presets 3–5 and 21–42 derive glazing beads and dark rubber seals on
+both sides of each glass pane. Four butt-jointed members form each ring;
+the bead leaves a 4 mm seal reveal. Their depth follows the actual available
+frame/sash depth and stays inside its nominal envelope. Profiles too thin
+for this detail retain plain glass, as do tiny cells and opaque panel types.
+Operable windows retain the same sash and glazing dimensions and sliding
+track offsets. All detail keeps the editable system identity and is grouped
+by material in the existing scene. No extra persistent objects are added.
+
+Existing window grids receive this detail without retyping, moving grid
+lines or changing their opening linkage. These generic sections are not
+manufacturer fabrication profiles. `window_glazing` checks rotated placement,
+glass clearance, frame envelope, ownership, persistence and safe fallbacks.
+
+In a plan, the schematic three-line window symbol is omitted when its hosted
+system is visible. The view uses the actual frame and glazing geometry.
+Unfilled openings retain the placeholder; door swing symbols are retained.
