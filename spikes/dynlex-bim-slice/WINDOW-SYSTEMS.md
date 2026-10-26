@@ -70,3 +70,16 @@ hosting inset. Older models can therefore keep their established placement.
 
 The type menu has its own bounded scroll position. It opens around the current
 type and scrolls through the complete library independently of property rows.
+
+`type_menu` passed six range/navigation checks. The manual
+`tools/type_menu_probe.dl` passed four checks against the production properties
+renderer, including actual first/last row hit targets, and was inspected
+visually. Build/run it with `build.sh probe type_menu_probe` and
+`build.sh run-probe type_menu_probe` on a Vulkan display. Its compile used
+about 3.84 GiB locally; it is smaller in memory but still takes about ten minutes
+with the current compiler.
+
+The full app on `6759607` passed hosted creation, duplicate prevention and
+undo/redo. The later full app build including the type-menu scroll fix was
+stopped by the 700 MiB available-memory guard. The standalone menu probe passed;
+a complete app binary containing that final UI change remains to be built.
