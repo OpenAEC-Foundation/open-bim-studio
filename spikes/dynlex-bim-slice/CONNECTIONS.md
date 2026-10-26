@@ -11,13 +11,22 @@ Select the primary steel member, then Shift-select the secondary, and open the
 **Double cleat**, **Splice**, **Gusset**, and **End cap**. A splice needs opposite
 collinear members; an end cap takes one member and starts at its finish end.
 The existing Butt, Miter, custom multi-member node and Base plate remain available.
+The flat recipes support I-sections, solid rectangular sections and SHS/RHS.
+Splices require matching, aligned sections. End plates and cleats require a
+normal approach to a profile face; fin plates and gussets seat their edges and
+welds on the supporting face when the member slopes. A member intersecting
+primary I-section flanges is refused with a request for a cope/different joint.
 Custom nodes no longer impose the previous six-member limit. The predefined
 crossing recipes take two members; base plates/end caps take one.
 
 Select a node to edit plate sizes, fastening grids, setbacks and weld parameters
 in Properties. Recipe part coordinates use the secondary section's frame: X
 width, Y depth, Z inward from its participating end. Rotating the member also
-rotates parts and grids. The node's Status reports failed geometry conditions;
+rotates parts and grids. Fin/gusset plate and weld positions are projected onto
+the supporting face; the plate centroid follows the member slope. Primary
+profile contact uses its actual outer contour, so web connections do not float
+at the flange bounding envelope. Axial cleat bolts attach to the primary; a
+splice has one web through-bolt group and distributes holes between both halves. The node's Status reports failed geometry conditions;
 invalid connection parts are withheld. A host's twist/taper must be zero/one
 for these steel recipes. Fillet and butt welds retain their own kind, nominal
 size and length; they do not generate bolt holes or heads. Their preview uses
