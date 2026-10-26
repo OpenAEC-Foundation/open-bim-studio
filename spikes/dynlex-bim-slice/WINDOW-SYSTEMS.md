@@ -49,3 +49,15 @@ counts and retyping; `window_construction` checks derived sash/glass dimensions,
 track separation, ownership, persistence and unpinning. `system_profiles`
 checks that unrelated building systems retain their original member geometry.
 Full GUI and manufacturer profile-detail verification remain separate.
+
+## Create from a wall opening
+
+Select a window/door opening and click **Building System (click)** in Props.
+**Create window system** adds a hosted timber system with a 10 mm installation
+joint and selects it. Choose its recipe in the existing type selector.
+Selecting that opening again shows **Select window system**; clicking it selects
+the same system without adding a duplicate or changing its recipe.
+
+Creation is one undoable action. Curved-wall or unsupported openings are refused
+and rolled back. Automation uses the same action: `select` the opening, inspect
+`properties`, then invoke `set_property` for **12612**, without a text value.
