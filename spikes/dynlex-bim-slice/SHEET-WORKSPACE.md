@@ -100,3 +100,8 @@ guard at 619,852 KiB available memory. No compiler diagnostics were produced,
 but there is no usable binary and the combined self-tests did not run. The
 existing user application and its unsaved edits were preserved. A further heavy
 build needs a different memory/build strategy; it is not automatically retried.
+
+The app-only retry r7 stopped on an operand-grouping diagnostic in the SVG paper
+corner constructor. Coordinate member expressions at that call and the new
+sheet renderer are now parenthesized explicitly. The full app remains unvalidated;
+pushing this development snapshot to main is not a release or an installer build.
