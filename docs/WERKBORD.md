@@ -157,3 +157,12 @@ metadata uses **2400600–2401599** on the sheet. PC1 also owns
 `bim_app_parts.dl` and their integration in `main.dl`/`bim_ui.dl`.
 The tested render checkpoint **9b0767c** was pushed. Candidate details and explicit
 validation gaps are in `spikes/dynlex-bim-slice/SHEET-WORKSPACE.md`.
+
+## Connection module development — 2026-10-26
+
+The explicit module assignment extends this session to issue #6 on
+`feature/connection-module`, based on `1768c2d`. Scope: connection kernel,
+BIM adapter, native connection persistence, connection commands/properties,
+headless tests and a synthetic steel hall example. Command range 2320–2330
+is reserved for steel recipes, welds and reusable connection types. Existing
+base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
