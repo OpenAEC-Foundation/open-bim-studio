@@ -61,3 +61,9 @@ the same system without adding a duplicate or changing its recipe.
 Creation is one undoable action. Curved-wall or unsupported openings are refused
 and rolled back. Automation uses the same action: `select` the opening, inspect
 `properties`, then invoke `set_property` for **12612**, without a text value.
+
+For this new action, the installation joint is measured to the **outer frame
+faces**. Setting 1700002 remembers that clear gap in millimetres; assigning a
+new window recipe recalculates the centre-line hosting inset using its frame
+width. Previously authored models without this setting retain their explicit
+hosting inset. Older models can therefore keep their established placement.
