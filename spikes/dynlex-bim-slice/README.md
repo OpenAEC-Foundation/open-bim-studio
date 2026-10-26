@@ -169,3 +169,13 @@ reference-artwork costs, object semantics and measurement limits.
 The current development work on image references, interactive sheet viewports,
 and compact view tabs is tracked in [SHEET-WORKSPACE.md](SHEET-WORKSPACE.md),
 including supported operations and remaining validation work.
+
+Vector references now have a decoded document cache and a resident model-space
+GPU layer. Camera changes reuse their vertex buffer. See
+[VECTOR-RENDERING.md](VECTOR-RENDERING.md) for the rendering path, targeted checks
+and the isolated 1357 navigation measurement.
+
+Window recipes generate sash members and inset glazing; sliding recipes add
+separated depth tracks and sill/head guides. These remain parts of the hosted,
+editable Building System. See [WINDOW-SYSTEMS.md](WINDOW-SYSTEMS.md) for available
+recipes and the schematic profile limits.

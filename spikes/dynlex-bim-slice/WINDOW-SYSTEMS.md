@@ -26,16 +26,26 @@ Frame depths for ConceptPatio 130 and MasterPatio are taken from the official
 SlimPatio 68 frame depths and the 34 mm visible vent dimension are taken from
 the official [Reynaers product overview](https://www.reynaers.com.au/sites/default/files/public/2023-01/reynaers-aluminium-product-overview-en.pdf).
 
-These are schematic rectangular frame envelopes and coplanar glazed bays,
-not manufacturer CAD profiles. In particular, a rail count selects the bay
-layout and nominal system depth; it does not yet generate offset tracks or
-moving sashes. The 50 mm width is a schematic common frame width, not a claim
-that every jamb, head and interlock uses that dimension. Timber sizes are
-generic modelling presets, not a supplier specification.
+The generator now derives rectangular sash stiles, sash rails and inset glazing
+for casement, tilt-turn and door recipes. Sliding recipes derive a sash per
+bay at a separate track depth, with a guide at sill and head for each track.
+All parts belong to the editable Building System; they follow its hosted
+opening, remain derived after saving/loading, and disappear with an unpinned
+cell. Plan edges and 3D meshes use those same derived parts.
 
-Profile cavities, rebates, seals, hardware, drainage, sliding motion and thermal
+These are schematic rectangular profiles, not manufacturer CAD sections.
+Track spacing and sash dimensions are generic modelling choices within the
+nominal frame envelope. The 50 mm frame width is a schematic common width,
+not a claim that every jamb, head and interlock uses that dimension. Timber
+sizes are generic presets. Curved, contoured and horizontal systems retain
+their existing infill; cells too small for a sash retain their plain infill.
+
+Profile cavities, rebates, seals, hardware, drainage, opening/sliding motion and thermal
 performance are not modelled. The existing `DetailStatus` property records the
 simplification. No manufacturer approval or fabrication suitability is implied.
 
 Validation: `window_recipes` checks recipe application, dimensions, layout
-counts and retyping. Full GUI and profile-detail verification remain separate.
+counts and retyping; `window_construction` checks derived sash/glass dimensions,
+track separation, ownership, persistence and unpinning. `system_profiles`
+checks that unrelated building systems retain their original member geometry.
+Full GUI and manufacturer profile-detail verification remain separate.
