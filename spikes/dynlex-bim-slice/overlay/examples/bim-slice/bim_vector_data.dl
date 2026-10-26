@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MPL-2.0
+# Decode source artwork once. Model edits reuse unchanged payloads; camera
+# movement never parses property strings. Kept outside the editor/GPU layer.
+import examples/bim-slice/bim_file.dl
+
+class:
+    patterns:
+        [a|] bim vector batch record
+    members:
+        viewId as a 64 bit integer
+        name as a string
+        payload as a string
+        valid as a boolean
+        red as an integer
+        green as an integer
+        blue as an integer
+        corners as the type of (a cad topology list of a cad vector2)
+
+class:
+    patterns:
+        [a|] bim vector cache record
+    members:
+        revision as a 64 bit integer
+        generation as an integer
+        batches as the type of (a cad topology list of a bim vector batch record)
+
+function a new bim vector cache:
+    execute:
+        return @intrinsic("construct", a bim vector cache record, (-1) as a 64 bit integer, 0, a cad topology list of a bim vector batch record)
+
+function the bim decoded vector {a string:payload} named {a string:name} for {a 64 bit integer:viewId}:
+    execute:
+        set resultValue to @intrinsic("construct", a bim vector batch record, viewId, name, payload, false, 0, 0, 0, a cad topology list of a cad vector2)
+        set tokens to payload split at " "
+        set count to the length of tokens
+        if ((count < 9) or (count > 49155)) or ((the remainder of (count - 3) divided by 6) != 0):
+            free tokens
+            return resultValue
+        set numbers to an empty list of a 64 bit floating-point number
+        set validValue to true
+        loop cursor from 0 to count:
+            set reading to the bim real reading of (the item at cursor in tokens)
+            if reading's valid = false:
+                set validValue to false
+            if (the absolute value of reading's value) > 1000000.0:
+                set validValue to false
+            if cursor < 3:
+                if (reading's value < 0.0) or (reading's value > 255.0):
+                    set validValue to false
+            append reading's value to numbers
+        free tokens
+        if validValue:
+            set resultValue's red to (the item at 0 in numbers) as an integer
+            set resultValue's green to (the item at 1 in numbers) as an integer
+            set resultValue's blue to (the item at 2 in numbers) as an integer
+            set cursor to 3
+            loop while cursor < count:
+                append (a cad vector2 with x (the item at cursor in numbers) and y (the item at (cursor + 1) in numbers)) to (resultValue's corners's values)
+                set cursor to cursor + 2
+            set resultValue's valid to true
+        free numbers
+        return resultValue
+
+# Ordinals follow painter order. Ordinary edits do not reorder vector
+# properties, so reuse is linear even with thousands of coloured batches.
+# Reimports/reordering are decoded once, preserving their new painter order.
+function refresh bim vectors of {bim model record:modelValue} at revision {a 64 bit integer:revision} in {a pointer to a bim vector cache record:cache}:
+    execute:
+        if cache's revision = revision:
+            return 0
+        set updated to a cad topology list of a bim vector batch record
+        set decodedCount to 0
+        set changed to false
+        loop cursor from 0 to the length of (modelValue's properties's values):
+            set propertyValue to the item at cursor in (modelValue's properties's values)
+            if propertyValue's setName = (the string form of "OpenBIM_VectorTriangles"):
+                set ordinal to the length of (updated's values)
+                set reused to false
+                if ordinal < (the length of (cache's batches's values)):
+                    set previous to the item at ordinal in (cache's batches's values)
+                    if (previous's viewId = propertyValue's elementId) and (previous's name = propertyValue's name):
+                        set samePayload to (the data of previous's payload) = (the data of propertyValue's value)
+                        if samePayload = false:
+                            set samePayload to previous's payload = propertyValue's value
+                        if samePayload:
+                            append previous to (updated's values)
+                            set reused to true
+                if reused = false:
+                    append (the bim decoded vector propertyValue's value named propertyValue's name for propertyValue's elementId) to (updated's values)
+                    set decodedCount to decodedCount + 1
+                    set changed to true
+        if (the length of (updated's values)) != (the length of (cache's batches's values)):
+            set changed to true
+        set cache's revision to revision
+        if changed:
+            set cache's batches to updated
+            set cache's generation to cache's generation + 1
+        return decodedCount
