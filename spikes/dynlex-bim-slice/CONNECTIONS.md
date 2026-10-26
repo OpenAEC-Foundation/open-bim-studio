@@ -90,3 +90,10 @@ Public commands: 2320–2325 recipes, 2326/2327 fillet/butt weld, 2328 Save type
 2329 Apply type, 2330 Next type. Property 8998 edits the node name. Global
 setting 2400500 stores the chosen library type id. Existing part properties
 10000+20*i and removal 50000+i remain in use.
+
+Compilation modes run `tools/check_dynlex_locals.py` before staging or invoking
+DynLex. This checks application locals for a proven implicit-parameter capture:
+a local such as `paper` reused as an otherwise unbound word in its function
+pattern. Its nine small regression cases run with
+`python3 tools/test_check_dynlex_locals.py`. This targeted lexical guard catches
+that class of error early; full typing and integration remain compiler checks.

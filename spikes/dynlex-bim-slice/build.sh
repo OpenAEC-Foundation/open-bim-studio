@@ -19,6 +19,12 @@
 # in the checkout is changed.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+# Fail before staging/type inference on known implicit-parameter name captures.
+case "${1:-app}" in
+    app|dev|dev-test|test|bundle)
+        python3 "$here/tools/check_dynlex_locals.py" "$here/overlay/examples/bim-slice"
+        ;;
+esac
 source "$here/toolchain.sh"
 resolve_bim_toolchain "$here"
 # Inspect the selected fork without staging files or invoking the compiler.

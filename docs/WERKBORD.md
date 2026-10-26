@@ -170,3 +170,8 @@ base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
 The required full-build repair also renames local identifiers in sheet paper
 recording and plan/mesh helpers to avoid DynLex pattern-word capture. These are
 identifier-only changes; sheet/layout behaviour is unchanged.
+
+The build repair includes `build.sh` and `tools/check_dynlex_locals.py`: a fast
+application-source preflight for these proven local/pattern-name collisions,
+with focused Python regression tests. It does not modify the compiler or the
+active source snapshots/build scripts.
