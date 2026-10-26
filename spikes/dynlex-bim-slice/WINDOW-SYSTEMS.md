@@ -136,8 +136,8 @@ In a plan, the schematic three-line window symbol is omitted when its hosted
 system is visible. The view uses the actual frame and glazing geometry.
 Unfilled openings retain the placeholder; door swing symbols are retained.
 
-Plan overviews omit the tiny glazing rings before the all-pairs end-join
-calculation. Their 4 mm seal reveal must occupy at least one screen pixel;
+Plan overviews skip generating the tiny glazing rings, as well as omitting
+them from the all-pairs end-join calculation. Their 4 mm seal reveal must occupy at least one screen pixel;
 zooming in resolves the detail automatically. Main frame/sash members and
 glass remain visible at every scale. This drawing LOD does not alter the
 stored system, its complete 3D geometry or the exported model.
