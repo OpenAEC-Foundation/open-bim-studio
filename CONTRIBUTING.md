@@ -1,7 +1,8 @@
 # Contributing
 
 This repository contains the native Open BIM Studio application and its supporting
-research. Application code lives in spikes/dynlex-bim-slice. Read README.md for
+research. Application code lives in the unit directories at the root (kernel/,
+model/, formats/, graphics/, editor/, app/, automation/). Read README.md for
 setup, docs/WERKBORD.md for ownership and docs/TWEE-COMPUTERS.md for coordination.
 
 ## Application changes
@@ -60,8 +61,8 @@ one and update the old one's status.
 ## Running a spike
 
 New research spikes answer one bounded question and record their findings.
-The historical spikes/dynlex-bim-slice directory is an exception: it now contains
-the application and follows the application contribution rules above.
+The application does not live under `spikes/` (it did until 2026-10-27); it
+follows the application contribution rules above.
 
 Each spike gets a directory in `spikes/` containing:
 - Whatever code is needed

@@ -215,5 +215,5 @@ paths out of the public repository.
 
 Application source files carry MPL-2.0 notices. Dependencies and bundled assets
 have their own terms; the DynLex runtime uses LGPL-3.0. Consult each component's
-source notices and the [installer licence bundle](spikes/dynlex-bim-slice/overlay/examples/bim-slice/installer/licenses/README.txt),
+source notices and the [installer licence bundle](installer/licenses/README.txt),
 plus the font and icon notices, when redistributing builds.

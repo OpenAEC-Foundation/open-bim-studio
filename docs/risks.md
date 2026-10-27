@@ -198,7 +198,7 @@ without a number.
 - **Pass:** 60 fps with picking, reached in under two weeks of effort.
 - **Fail:** below 30 fps, or the effort estimate exceeds a month.
 - **Status:** open — `spikes/renderer-scale/` has not been run. **Partial evidence (2026-10-15)**
-  from a different spike, [`spikes/dynlex-bim-slice/FINDINGS.md`](../spikes/dynlex-bim-slice/FINDINGS.md)
+  from a different spike, [`docs/notes/findings.md`](notes/findings.md)
   §A real building, which draws a real building through its own Vulkan renderer written in DynLex:
   16,506 imported elements, 1,668,688 triangles, each element selectable by an ordinal carried in
   its vertices. *Measured* there: the wireframe frame on the whole model takes 21.5 ms of CPU time
@@ -392,7 +392,7 @@ per-frame transient arena holds at most 25,890 boxes, against a 10⁵-box target
   own arithmetic does not substitute for.
 
   **The precondition is met, the experiment is not run (2026-10-15).** The DynLex compiler is built
-  and runs a Vulkan renderer in [`spikes/dynlex-bim-slice/`](../spikes/dynlex-bim-slice/FINDINGS.md):
+  and runs a Vulkan renderer in [the application](notes/findings.md):
   its own context (`overlay/lib/vulkan/context.dl`) replaces the fixed per-frame arena with a growing
   stream buffer, and keeps a persistent indexed mesh whose vertices are stored relative to the
   scene's centre, with the centre-minus-camera shift computed in binary64 on the CPU and passed as

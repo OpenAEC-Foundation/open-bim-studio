@@ -167,7 +167,7 @@ Headless Python verification from the repository root, without opening or
 controlling the editor:
 
 ```powershell
-python -B -m unittest discover -s spikes/dynlex-bim-slice/overlay/examples/bim-slice/mcp -p test_mcp.py -v
+python -B -m unittest discover -s automation/mcp -p test_mcp.py -v
 ```
 
 The checks cover protocol validation, Unicode/framing, real loopback HTTP
