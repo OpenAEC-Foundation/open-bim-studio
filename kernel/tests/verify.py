@@ -231,7 +231,11 @@ def verify_fixture(
     )
     if status >= 128:
         raise FixtureFailure(f"compiler terminated abnormally (exit {status})\n{output}".rstrip())
-    compare("compiler diagnostics", expected_diagnostics, normalize_diagnostics(output, ROOT))
+    # The compiler's own library lives in its checkout, outside this repository;
+    # the expectations name those files as `lib/...`, as the fork's did.
+    checkout_prefix = compiler.resolve().parents[1].as_posix() + "/"
+    actual_diagnostics = normalize_diagnostics(output.replace(checkout_prefix, ""), ROOT)
+    compare("compiler diagnostics", expected_diagnostics, actual_diagnostics)
     if compile_failure:
         if status == 0 or binary.exists():
             raise FixtureFailure("expected rejected compilation without a binary, but compilation succeeded or emitted output")
