@@ -182,3 +182,44 @@ metadata uses **2400600–2401599** on the sheet. PC1 also owns
 `bim_app_parts.dl` and their integration in `main.dl`/`bim_ui.dl`.
 The tested render checkpoint **9b0767c** was pushed. Candidate details and explicit
 validation gaps are in `docs/notes/sheet-workspace.md`.
+
+## Connection module development — 2026-10-26
+
+The explicit module assignment extends this session to issue #6 on
+`feature/connection-module`, based on `1768c2d`. Scope: connection kernel,
+BIM adapter, native connection persistence, connection commands/properties,
+headless tests and a synthetic steel hall example. Command range 2320–2330
+is reserved for steel recipes, welds and reusable connection types. Existing
+base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
+
+The required full-build repair also renames local identifiers in sheet paper
+recording and plan/mesh helpers to avoid DynLex pattern-word capture. These are
+identifier-only changes; sheet/layout behaviour is unchanged.
+
+The build repair includes `build.sh` and `tools/check_dynlex_locals.py`: a fast
+application-source preflight for these proven local/pattern-name collisions,
+with focused Python regression tests. It does not modify the compiler or the
+active source snapshots/build scripts.
+
+GUI validation exposed a connection-hole meshing hotspot in the overlay's
+`lib/cadkernel/brep_append.dl`. The connection task also owns its bounded
+face-component traversal repair and geometric regression checks: direct
+arena-slot membership and adjacency, preserving seed and breadth-first order.
+The compiler checkout is unchanged. Application readiness still requires the
+full steel-hall scene and GUI checks.
+
+## Compiler and drilled display geometry — 2026-10-27
+
+The explicit performance assignment extends this session to an isolated DynLex
+compiler worktree. The connection task also covers `bim_plate_mesh.dl`,
+`bim_swept_perforations.dl`, `overlay/lib/fastkernel/perforation.dl`, their scene
+integration and geometry tests. `bim_profiles.dl` is included for the missing
+rounded-box tangent points exposed by the hollow-brace drilling checks. Product geometry remains DynLex. The fast display
+path accepts closed planar stock and separate through-bores; unsupported
+cuts retain the existing general BREP path. Validation must establish volumes,
+closed meshes, complete hall rendering and actual editor interaction.
+
+`build.sh` and `toolchain.sh` accept an explicit `BIM_DYNLEX_COMPILER` for isolated
+candidate benchmarking. Compiler-binary hashes must be recorded separately from
+the library checkout commit. Compiler regression checks and application GUI
+checks remain separate acceptance conditions. One compiler runs per machine.

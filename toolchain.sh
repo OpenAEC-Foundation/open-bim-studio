@@ -19,13 +19,18 @@ resolve_bim_toolchain() {
         echo "DynLex checkout requires an executable build/dynlex and a lib directory: $root" >&2
         return 1
     fi
+    bim_compiler=${BIM_DYNLEX_COMPILER:-$root/build/dynlex}
+    if [[ $bim_compiler != /* || ! -x $bim_compiler ]]; then
+        echo "BIM_DYNLEX_COMPILER must name an executable absolute path" >&2
+        return 1
+    fi
 }
 show_bim_toolchain() {
     printf 'DynLex checkout: %s\n' "$root"
-    printf 'Compiler binary: %s\n' "$(readlink -f -- "$root/build/dynlex")"
+    printf 'Compiler binary: %s\n' "$(readlink -f -- "$bim_compiler")"
     printf 'Library directory: %s\n' "$root/lib"
     printf 'Compiler SHA-256: '
-    sha256sum -- "$root/build/dynlex"
+    sha256sum -- "$bim_compiler"
     if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         printf 'Source HEAD: '
         git -C "$root" rev-parse HEAD

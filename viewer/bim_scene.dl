@@ -25,6 +25,8 @@ import elements/connection/bim_connection_geometry.dl
 import elements/linear/bim_profiles.dl
 import elements/planar/bim_masonry.dl
 import viewer/bim_mesh.dl
+import structural/steel/bim_plate_mesh.dl
+import structural/steel/bim_swept_perforations.dl
 
 # Meshes of the evaluated walls and slabs, reusing every mesh of `previous`
 # whose build (serial) is unchanged. Both lists follow ascending element ids.
@@ -324,34 +326,6 @@ function the bim linear shape of {bim linear record:linearValue} typed {bim line
                 append (base + (the item at corner in (pieceShape's triangles's values))) to (combined's triangles's values)
         return combined
 
-# Profile point `flat` (in the profile's coordinates) of `linear` placed at
-# its start (`endIndex` 0) or finish (1), as `the bim profile rings of`
-# places its corners: scaled by the taper and turned by the twist at the
-# finish, slid along the axis onto a cut end's plane.
-function the bim placed profile point {cad vector2:flat} of {bim linear record:linearValue} framed {bim linear frame record:linearFrame} at end {integer:endIndex} cut by {bim end cut record:endCut}:
-    execute:
-        set centre to linearFrame's first
-        set cutting to endCut's startCut
-        set planePoint to endCut's startPoint
-        set planeNormal to endCut's startNormal
-        set stretchedX to flat's x
-        set stretchedY to flat's y
-        set corner to flat
-        if endIndex = 1:
-            set centre to linearFrame's last
-            set cutting to endCut's finishCut
-            set planePoint to endCut's finishPoint
-            set planeNormal to endCut's finishNormal
-            set stretchedX to flat's x * linearValue's taper's x
-            set stretchedY to flat's y * linearValue's taper's y
-            set corner to a cad vector2 with x ((stretchedX * (the cosine of linearValue's twist)) - (stretchedY * (the sine of linearValue's twist))) and y ((stretchedX * (the sine of linearValue's twist)) + (stretchedY * (the cosine of linearValue's twist)))
-        set pointPlaced to the cad sum of centre and (the cad sum of (linearFrame's widthAxis scaled by corner's x) and (linearFrame's depthAxis scaled by corner's y))
-        set slope to the cad dot of linearFrame's along and planeNormal
-        if cutting and ((the absolute value of slope) > 0.05):
-            set slide to (the cad dot of (the cad difference of planePoint and pointPlaced) and planeNormal) / slope
-            set pointPlaced to the cad sum of pointPlaced and (linearFrame's along scaled by slide)
-        return pointPlaced
-
 # One straight sweep of `linearType`'s profile along `linear`, its finish's
 # profile scaled and turned by the element's taper and twist.
 function the bim swept shape of {bim linear record:linearValue} typed {bim linear type record:linearType} in {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} cut by {bim end cut record:endCut}:
@@ -361,11 +335,40 @@ function the bim swept shape of {bim linear record:linearValue} typed {bim linea
         set profileRings to the bim profile rings of linearValue as linearType in modelValue at roundCorners round corners cut by endCut
         set holes to the bim connection perforations of linearValue's id in modelValue
         if (the length of (holes's values)) > 0:
+            set directSweep to the bim drilled sweep of linearValue typed linearType in modelValue using (holes's values) at roundCorners round corners cut by endCut
+            if directSweep's valid:
+                free profileRings
+                return directSweep's shape
             set stockValue to the connection stock from profileRings
             free profileRings
             if stockValue's valid = false:
                 return triangles
-            set drilled to the connection stock stockValue's value perforated by (holes's values)
+            # Retain SHS/RHS/CHS cavities when a fastener adds a boolean cut.
+            set cavities to an empty list of the type of (an empty list of a cad vector3)
+            set sectionFrame to the bim frame of linear linearValue in modelValue
+            set profileShapes to the bim rings of linear type linearType in modelValue at roundCorners round corners
+            loop shapeCursor from 1 to the length of profileShapes:
+                set ring to the bim profile reversed ring (the item at shapeCursor in profileShapes)
+                set cavity to an empty list of a cad vector3
+                loop endCursor from 0 to 2:
+                    set extension to -0.001
+                    if endCursor = 1:
+                        set extension to 0.001
+                    loop cornerCursor from 0 to the length of ring:
+                        set pointValue to the bim placed profile point (the item at cornerCursor in ring) of linearValue framed sectionFrame at end endCursor cut by endCut
+                        append (the cad sum of pointValue and (sectionFrame's along scaled by extension)) to cavity
+                append cavity to cavities
+                free ring
+            loop shapeCursor from 0 to the length of profileShapes:
+                free (the item at shapeCursor in profileShapes)
+            free profileShapes
+            set hollowed to the connection stock stockValue's value hollowed by cavities
+            loop shapeCursor from 0 to the length of cavities:
+                free (the item at shapeCursor in cavities)
+            free cavities
+            if hollowed's status != 0:
+                return triangles
+            set drilled to the connection stock hollowed's solid perforated by (holes's values)
             return the bim component mesh of drilled within 0.001
         set count to (the length of profileRings) / 2
         set first to the item at 0 in profileRings
@@ -1097,11 +1100,15 @@ function the bim independent shapes of {a pointer to a list:parts} in {bim model
                         if cutValue's kind = 1:
                             append cutValue to holes
                     if (the length of holes) > 0:
-                        set vertices to the bim profile rings of partValue's element as partValue's kind in modelValue
-                        set stockValue to the connection stock from vertices
-                        free vertices
-                        if stockValue's valid:
-                            set partShape to the bim component mesh of (the connection stock stockValue's value perforated by holes) within 0.001
+                        set directPlate to the bim perforated flat plate of partValue's element typed partValue's kind in modelValue cut by holes
+                        if directPlate's valid:
+                            set partShape to directPlate's shape
+                        else:
+                            set vertices to the bim profile rings of partValue's element as partValue's kind in modelValue
+                            set stockValue to the connection stock from vertices
+                            free vertices
+                            if stockValue's valid:
+                                set partShape to the bim component mesh of (the connection stock stockValue's value perforated by holes) within 0.001
                     free holes
             set base to the length of (combined's positions's values)
             loop corner from 0 to the length of (partShape's positions's values):
@@ -1124,6 +1131,33 @@ function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit
         set noPrevious to an empty list of a bim scene mesh record
         set built to the bim sketch meshes of modelValue within tolerance reusing noPrevious
         free noPrevious
+        return built
+
+# Connection solids have fixed modelling tolerance. Across edits, retain only
+# nodes whose ids did not occur in the continued dependency journal. Undo/load
+# replaces the journal, so no geometry survives a history/model boundary.
+function the bim connection cache of {bim model record:modelValue} following {cad topology list:journal} since {integer:seen} among {a pointer to a list:previous}:
+    execute:
+        set kept to a cad topology list of a bim scene mesh record
+        set journalLength to the length of (modelValue's journal's values)
+        if (modelValue's journal's references != journal's references) or (journalLength < seen):
+            return kept
+        loop cursor from 0 to the length of previous:
+            set entry to the item at cursor in previous
+            if (the bim connection index of entry's elementId in modelValue)'s valid:
+                set affected to false
+                loop changeCursor from seen to journalLength:
+                    if (the item at changeCursor in (modelValue's journal's values)) = entry's elementId:
+                        set affected to true
+                if affected = false:
+                    append entry to (kept's values)
+        return kept
+
+function the bim sketch meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} reusing {a pointer to a list:previous} with reinforcement detail {boolean:rebarDetail}:
+    execute:
+        set everything to an empty list of a boolean
+        set built to the bim sketch meshes of modelValue within tolerance reusing previous refreshing everything with reinforcement detail rebarDetail
+        free everything
         return built
 
 # Only supply meshes from the same unchanged model revision. Fixed-detail

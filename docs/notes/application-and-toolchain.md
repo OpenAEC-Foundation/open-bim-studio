@@ -234,6 +234,10 @@ OBS_PROFILE_FRAMES=1 BIM_BUILD_DIR=/tmp/obs-plan-profile \
   bash build.sh run-dev /absolute/path/to/model.ifcxb
 ```
 
+`BIM_DYNLEX_COMPILER` optionally selects an absolute executable path for isolated
+compiler candidates while `DYNLEX_ROOT` continues to select matching libraries.
+`build.sh toolchain-info` reports the actual selected binary and its hash.
+
 `BIM_DEV_OPT_LEVEL` accepts `0`, `1` or `2` and affects only development targets.
 `BIM_DEV_OPT_LEVEL=2` enables optimization when the machine has enough build
 memory; the local 16 GB optimized attempt reached its memory guard. The opt-in

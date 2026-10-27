@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 # Modular connection definitions. No dependency on the BIM editor or renderer.
-# Node -> 1 base-plate host or 2..6 joint member references -> parametric voids + independent parts.
+# Semantic member references -> parametric voids and independent connection parts.
 import kernel/core/core.dl
 import kernel/core/topology_list.dl
 import lib/text.dl
@@ -10,9 +10,11 @@ class:
         [a|] connection member
     members:
         elementId as a 64 bit integer
-        # The participating end of the source member, 0 start or 1 finish.
+        # 0 start, 1 finish; 2 is a non-owning host-axis reference.
         end as an integer
         setback as a 64 bit floating-point number
+        # Fraction along the source axis, used only by an interior host.
+        position as a 64 bit floating-point number
 
 class:
     patterns:
@@ -21,7 +23,8 @@ class:
         # Stable within its node, not a list index.
         key as an integer
         memberId as a 64 bit integer
-        # 0 plate, 1 bolt group, 2 screw group, 3 anchor group.
+        # 0 plate, 1 bolts, 2 screws, 3 anchors, 4 fillet weld, 5 butt weld.
+        # Welds use thickness as nominal size, length along axis; no grid/holes.
         kind as an integer
         origin as a cad vector3
         axis as a cad vector3
@@ -94,10 +97,11 @@ class:
         voids as the type of (a cad topology list of a connection void)
         fasteners as the type of (a cad topology list of a connection fastener)
         plates as the type of (a cad topology list of a connection addition)
+        welds as the type of (a cad topology list of a connection addition)
 
 function a connection refusal saying {a string:reason}:
     execute:
-        return @intrinsic("construct", a connection result, false, reason, a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition)
+        return @intrinsic("construct", a connection result, false, reason, a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition, a cad topology list of a connection addition)
 
 function the connection category name of {connection definition:spec}:
     execute:
@@ -113,25 +117,41 @@ function the connection issue of {connection definition:spec}:
             return the string form of "A node supports at most 128 additions"
         set count to the length of (spec's members's values)
         set basePlate to (spec's category = 1) and (spec's style = 2)
-        if ((count < 2) or (count > 6)) and (basePlate = false):
-            return the string form of "A connection requires 2 to 6 members"
+        if (count < 1) or (((count < 2) and (spec's style != 2)) and (spec's style != 8)):
+            return the string form of "A joint requires participating members"
         if (spec's category != 0) and (spec's category != 1):
             return the string form of "Unknown connection category"
         if (spec's category = 0) and (count != 2):
             return the string form of "Simple joints require exactly two members"
         if basePlate and (count != 1):
             return the string form of "A base plate requires one column"
-        if ((spec's style < 0) or (spec's style > 1)) and (basePlate = false):
+        if (spec's style < 0) or (spec's style > 8):
             return the string form of "Unknown joint style"
-        if (spec's category = 0) and (spec's style = 1):
+        if (spec's category = 0) and (spec's style > 1):
+            return the string form of "Steel recipes require the Complex category"
+        if ((spec's style >= 3) and (spec's style <= 7)) and (count != 2):
+            return the string form of "This steel recipe requires two members"
+        if (spec's style = 8) and (count != 1):
+            return the string form of "An end cap requires one member"
+        if spec's style = 1:
             if count != 2:
                 return the string form of "Simple miter requires exactly two members"
         loop cursor from 0 to count:
             set memberValue to the item at cursor in (spec's members's values)
-            if (memberValue's end != 0) and (memberValue's end != 1):
+            if (memberValue's end < 0) or (memberValue's end > 2):
                 return the string form of "Invalid member end"
             if ((memberValue's setback >= 0.0) and (memberValue's setback < 1000.0)) = false:
                 return the string form of "Invalid member setback"
+            if memberValue's end = 2:
+                if (cursor != 0) or ((basePlate or (spec's style = 1)) or (spec's style = 8)):
+                    return the string form of "Only the primary may be an interior host"
+                if ((memberValue's position >= 0.0) and (memberValue's position <= 1.0)) = false:
+                    return the string form of "Host position must lie on the axis"
+                if memberValue's setback != 0.0:
+                    return the string form of "Interior host has no end setback"
+            else:
+                if memberValue's position != 0.0:
+                    return the string form of "End references must have zero interior position"
             loop previous from 0 to cursor:
                 if (the item at previous in (spec's members's values))'s elementId = memberValue's elementId:
                     return the string form of "A member may occur only once"
@@ -141,7 +161,7 @@ function the connection issue of {connection definition:spec}:
             set partValue to the item at cursor in (spec's additions's values)
             if ((the cad length of partValue's origin) < 100000.0) = false:
                 return the string form of "Invalid addition offset"
-            if (partValue's kind < 0) or (partValue's kind > 3):
+            if (partValue's kind < 0) or (partValue's kind > 5):
                 return the string form of "Unknown addition kind"
             if partValue's key < 1:
                 return the string form of "Addition keys must be positive"
@@ -162,6 +182,11 @@ function the connection issue of {connection definition:spec}:
                     return the string form of "Invalid plate dimensions"
                 if ((partValue's thickness > 0.0) and (partValue's thickness < 10.0)) = false:
                     return the string form of "Invalid plate thickness"
+            else if partValue's kind >= 4:
+                if ((partValue's thickness > 0.0) and (partValue's thickness < 0.1)) = false:
+                    return the string form of "Invalid weld size"
+                if ((partValue's length > 0.0) and (partValue's length < 100.0)) = false:
+                    return the string form of "Invalid weld length"
             else:
                 if ((partValue's diameter > 0.0) and (partValue's diameter < 1.0)) = false:
                     return the string form of "Invalid fastener diameter"
@@ -175,6 +200,8 @@ function the connection issue of {connection definition:spec}:
                     return the string form of "Invalid fastener pitch"
                 if ((partValue's holeDiameter > 0.0) and (partValue's holeDiameter < 1.0)) = false:
                     return the string form of "Invalid hole diameter"
+                if ((partValue's rows > 1) and (partValue's rowPitch <= partValue's holeDiameter)) or ((partValue's columns > 1) and (partValue's columnPitch <= partValue's holeDiameter)):
+                    return the string form of "Fastener holes overlap"
                 if ((partValue's kind = 1) or (partValue's kind = 3)) and (partValue's holeDiameter < partValue's diameter):
                     return the string form of "Bolt clearance hole is smaller than the bolt"
         if basePlate:
@@ -210,12 +237,14 @@ function the connection of {connection definition:spec} using {a pointer to a li
         set count to the length of (spec's members's values)
         if (the length of frames) != count:
             return a connection refusal saying (the string form of "Missing member geometry")
-        set output to @intrinsic("construct", a connection result, true, the string form of "", a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition)
+        set output to @intrinsic("construct", a connection result, true, the string form of "", a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition, a cad topology list of a connection addition)
         loop cursor from 0 to count:
             set memberValue to the item at cursor in (spec's members's values)
             set memberFrame to the item at cursor in frames
             if memberFrame's elementId != memberValue's elementId:
                 return a connection refusal saying (the string form of "Member geometry order mismatch")
+            if ((the cad length of memberFrame's endpoint) < 10000000.0) = false:
+                return a connection refusal saying (the string form of "Invalid member endpoint")
             set magnitude to the cad length of memberFrame's inward
             if ((magnitude > 0.000001) and (magnitude < 100000.0)) = false:
                 return a connection refusal saying (the string form of "Invalid member direction")
@@ -234,11 +263,14 @@ function the connection of {connection definition:spec} using {a pointer to a li
                     return a connection refusal saying (the string form of "Coincident directions cannot miter")
                 set normalValue to normalValue scaled by (1.0 / (the cad length of normalValue))
             set planeSpot to the cad sum of memberFrame's endpoint and ((memberFrame's inward scaled by (1.0 / magnitude)) scaled by memberValue's setback)
-            append (@intrinsic("construct", a connection void, memberValue's elementId, 0, planeSpot, normalValue, 0.0, 0.0, 0)) to (output's voids's values)
+            if memberValue's end != 2:
+                append (@intrinsic("construct", a connection void, memberValue's elementId, 0, planeSpot, normalValue, 0.0, 0.0, 0)) to (output's voids's values)
         loop cursor from 0 to the length of (spec's additions's values):
             set partValue to the item at cursor in (spec's additions's values)
             if partValue's kind = 0:
                 append partValue to (output's plates's values)
+            else if partValue's kind >= 4:
+                append partValue to (output's welds's values)
             else:
                 set forward to partValue's axis scaled by (1.0 / (the cad length of partValue's axis))
                 set across to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and forward

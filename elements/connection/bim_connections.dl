@@ -2,14 +2,71 @@
 # BIM adapter for modular steel connections. Parameters persist; geometry is derived.
 import mep/common/bim_network.dl
 import elements/connection/connections.dl
+import structural/steel/steel_connections.dl
+import elements/linear/bim_profiles.dl
 
 function the bim connection index of {a 64 bit integer:wanted} in {bim model record:modelValue}:
     execute:
         return the bim position of wanted among (modelValue's connections's values)
 
+# Transform a vector from the secondary's section frame. Reversing the end
+# reverses depth too, retaining a right-handed local basis.
+function the bim connection vector {cad vector3:localValue} across {cad vector3:across} up {cad vector3:upward} inward {cad vector3:inward}:
+    execute:
+        return the cad sum of (across scaled by localValue's x) and (the cad sum of (upward scaled by localValue's y) and (inward scaled by localValue's z))
+
+function the bim connection anchor of {connection member:reference} on {bim linear frame record:orientation}:
+    execute:
+        if reference's end = 1:
+            return orientation's last
+        if reference's end = 2:
+            return the cad sum of orientation's first and (orientation's along scaled by (orientation's length * reference's position))
+        return orientation's first
+
+class:
+    patterns:
+        [a|] bim steel surface record
+    members:
+        valid as a boolean
+        distance as a 64 bit floating-point number
+        normal as a cad vector3
+
+# First outward boundary of the actual profile, rather than its bounding box.
+# This places fin plates on I-section webs when the approach enters the web bay.
+function the bim steel surface of {bim linear type record:profile} along {cad vector3:normalValue} framed {bim linear frame record:orientation} in {bim model record:modelValue}:
+    execute:
+        set rings to the bim rings of linear type profile in modelValue at 24 round corners
+        set ring to the item at 0 in rings
+        set dx to the cad dot of normalValue and orientation's widthAxis
+        set dy to the cad dot of normalValue and orientation's depthAxis
+        set distanceValue to 1000000.0
+        set outward to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        loop cursor from 0 to the length of ring:
+            set first to the item at cursor in ring
+            set last to the item at (the remainder of (cursor + 1) divided by (the length of ring)) in ring
+            set ex to last's x - first's x
+            set ey to last's y - first's y
+            set determinant to (dx * ey) - (dy * ex)
+            if (the absolute value of determinant) > 1e-12:
+                set travel to ((first's x * ey) - (first's y * ex)) / determinant
+                set fraction to ((first's x * dy) - (first's y * dx)) / determinant
+                if (travel > 0.000001) and ((fraction >= -1e-9) and (fraction <= 1.000000001)):
+                    if travel < distanceValue:
+                        set distanceValue to travel
+                        set edgeLength to the square root of ((ex * ex) + (ey * ey))
+                        set outward to the cad difference of (orientation's widthAxis scaled by (ey / edgeLength)) and (orientation's depthAxis scaled by (ex / edgeLength))
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+        return @intrinsic("construct", a bim steel surface record, distanceValue < 1000000.0, distanceValue, outward)
+
 function the bim connection evaluation of {connection definition:spec} in {bim model record:modelValue}:
     execute:
+        set issue to the connection issue of spec
+        if issue != (the string form of ""):
+            return a connection refusal saying issue
         set basePlate to (spec's category = 1) and (spec's style = 2)
+        set recipe to spec's style >= 3
         set baseAngle to 0.0
         set frames to an empty list of a connection member frame
         loop cursor from 0 to the length of (spec's members's values):
@@ -28,7 +85,7 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                 set baseAngle to hostValue's angle
                 if orientation's along's z < 0.0:
                     set baseAngle to 0.0 - baseAngle
-            set endpoint to orientation's first
+            set endpoint to the bim connection anchor of memberValue on orientation
             set inward to orientation's along
             if memberValue's end = 1:
                 set endpoint to orientation's last
@@ -36,11 +93,186 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
             if basePlate and (inward's z < 0.999999):
                 free frames
                 return a connection refusal saying (the string form of "Base plate must use the lower column end")
+            if recipe:
+                set profile to the bim type of linear hostValue in modelValue
+                if profile's material != (the string form of "steel"):
+                    free frames
+                    return a connection refusal saying (the string form of "Steel recipes require steel members")
+                set shape to the bim profile of linear type profile in modelValue
+                if (((shape's kind != bim no profile) and (shape's kind != bim i shape profile)) and (shape's kind != bim rectangle hollow profile)) or profile's round:
+                    free frames
+                    return a connection refusal saying (the string form of "Flat steel recipes support I, rectangular and rectangular hollow sections")
+                if (hostValue's twist != 0.0) or ((hostValue's taper's x != 1.0) or (hostValue's taper's y != 1.0)):
+                    free frames
+                    return a connection refusal saying (the string form of "Steel recipes require untapered, untwisted members")
             append (@intrinsic("construct", a connection member frame, hostValue's id, endpoint, inward, orientation's length)) to frames
         set resolved to spec
         if (the length of frames) > 0:
             set resolved's origin to (the item at 0 in frames)'s endpoint
+        set anchor to resolved's origin
+        set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+        set upward to a cad vector3 with x 0.0, y 1.0 and z 0.0
+        set forward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        set supportAdvance to 0.0
+        set jointUp to upward
+        set jointOut to forward
+        set seatRise to 0.0
+        if recipe:
+            set secondaryCursor to (the length of frames) - 1
+            if secondaryCursor > 1:
+                set secondaryCursor to 1
+            set secondaryRef to the item at secondaryCursor in (spec's members's values)
+            set secondaryHost to the item at (the bim linear index of secondaryRef's elementId in modelValue)'s position in (modelValue's linears's values)
+            set sectionFrame to the bim frame of linear secondaryHost in modelValue
+            set across to sectionFrame's widthAxis
+            set upward to sectionFrame's depthAxis
+            set forward to sectionFrame's along
+            if secondaryRef's end = 1:
+                set upward to upward scaled by -1.0
+                set forward to forward scaled by -1.0
+            # Every member must still meet the semantic node after edits.
+            loop cursor from 1 to the length of frames:
+                if (the cad distance from anchor to (the item at cursor in frames)'s endpoint) > 0.001:
+                    free frames
+                    return a connection refusal saying (the string form of "Connection member no longer meets its host")
+            if spec's style = 6:
+                set primaryHost to the item at (the bim linear index of (the item at 0 in frames)'s elementId in modelValue)'s position in (modelValue's linears's values)
+                set primaryProfile to the bim type of linear primaryHost in modelValue
+                set secondaryProfile to the bim type of linear secondaryHost in modelValue
+                set primarySection to the bim frame of linear primaryHost in modelValue
+                set primaryShape to the bim profile of linear type primaryProfile in modelValue
+                set secondaryShape to the bim profile of linear type secondaryProfile in modelValue
+                if ((primaryShape's kind != secondaryShape's kind) or ((the absolute value of (primaryShape's web - secondaryShape's web)) > 1e-9)) or ((the absolute value of (primaryShape's flange - secondaryShape's flange)) > 1e-9):
+                    free frames
+                    return a connection refusal saying (the string form of "Splice requires matching section profiles")
+                if ((the absolute value of (primaryProfile's width - secondaryProfile's width)) > 1e-9) or ((the absolute value of (primaryProfile's depth - secondaryProfile's depth)) > 1e-9):
+                    free frames
+                    return a connection refusal saying (the string form of "Splice requires matching section dimensions")
+                if (the absolute value of (the cad dot of primarySection's widthAxis and across)) < 0.999999:
+                    free frames
+                    return a connection refusal saying (the string form of "Splice requires aligned section axes")
+                if (the cad dot of (the item at 0 in frames)'s inward and forward) > -0.999999:
+                    free frames
+                    return a connection refusal saying (the string form of "Splice requires collinear opposite members")
+            else if spec's style != 8:
+                set primaryFrame to the item at 0 in frames
+                set normalValue to the cad difference of forward and (primaryFrame's inward scaled by (the cad dot of forward and primaryFrame's inward))
+                set magnitude to the cad length of normalValue
+                if magnitude < 0.000001:
+                    free frames
+                    return a connection refusal saying (the string form of "This recipe requires a crossing primary member")
+                set normalValue to normalValue scaled by (1.0 / magnitude)
+                set primaryHost to the item at (the bim linear index of primaryFrame's elementId in modelValue)'s position in (modelValue's linears's values)
+                set primarySection to the bim frame of linear primaryHost in modelValue
+                set primaryProfile to the bim type of linear primaryHost in modelValue
+                if (spec's style != 7) and (spec's style != 4):
+                    if (the absolute value of (the cad dot of forward and primaryFrame's inward)) > 0.000001:
+                        free frames
+                        return a connection refusal saying (the string form of "This flat plate recipe requires a perpendicular approach")
+                set surface to the bim steel surface of primaryProfile along normalValue framed primarySection in modelValue
+                if surface's valid = false:
+                    free frames
+                    return a connection refusal saying (the string form of "No supporting profile face at the joint")
+                set supportAdvance to surface's distance / (the cad dot of forward and normalValue)
+                set jointOut to surface's normal
+                set incidence to the cad dot of forward and jointOut
+                if incidence < 0.05:
+                    free frames
+                    return a connection refusal saying (the string form of "Approach is nearly parallel to the supporting face")
+                if (spec's style != 7) and (spec's style != 4):
+                    if incidence < 0.999999:
+                        free frames
+                        return a connection refusal saying (the string form of "This flat plate recipe requires an approach normal to a profile face")
+                set primaryShape to the bim profile of linear type primaryProfile in modelValue
+                if (primaryShape's kind = bim i shape profile) and ((the absolute value of (the cad dot of jointOut and primarySection's widthAxis)) > 0.999999):
+                    set secondaryProfile to the bim type of linear secondaryHost in modelValue
+                    set projectedWidth to the cad difference of across and (forward scaled by ((the cad dot of across and jointOut) / incidence))
+                    set projectedDepth to the cad difference of upward and (forward scaled by ((the cad dot of upward and jointOut) / incidence))
+                    set depthReach to ((the absolute value of (the cad dot of projectedWidth and primarySection's depthAxis)) * secondaryProfile's width) * 0.5
+                    set depthReach to depthReach + (((the absolute value of (the cad dot of projectedDepth and primarySection's depthAxis)) * secondaryProfile's depth) * 0.5)
+                    if depthReach >= ((primaryProfile's depth * 0.5) - primaryShape's flange):
+                        free frames
+                        return a connection refusal saying (the string form of "Member intersects primary flanges; a cope or different connection is required")
+                if (spec's style = 7) or (spec's style = 4):
+                    if (the absolute value of (the cad dot of across and jointOut)) > 0.000001:
+                        free frames
+                        return a connection refusal saying (the string form of "Web plate requires a brace section face aligned with the supporting face")
+                    set jointUp to the cad cross of jointOut and across
+                    set jointUp to jointUp scaled by (1.0 / (the cad length of jointUp))
+                    if (the length of (spec's additions's values)) > 0:
+                        set seatRise to (the item at 0 in (spec's additions's values))'s origin's z * (the cad dot of forward and jointUp)
+                set anchor to the cad sum of anchor and (forward scaled by supportAdvance)
+            # Evaluate part grids in the local frame, then place their output.
+            set resolved's origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
         set generated to the connection of resolved using frames
+        if recipe and generated's valid:
+            if (the length of (spec's additions's values)) = 0:
+                free frames
+                return a connection refusal saying (the string form of "Steel recipe has no parts")
+            if (spec's style = 3) or (spec's style = 8):
+                set cover to the item at 0 in (spec's additions's values)
+                set coverReference to the item at ((the length of (spec's members's values)) - 1) in (spec's members's values)
+                set coverHost to the item at (the bim linear index of coverReference's elementId in modelValue)'s position in (modelValue's linears's values)
+                set hostProfile to the bim type of linear coverHost in modelValue
+                if ((cover's kind != 0) or (cover's width < hostProfile's width)) or (cover's height < hostProfile's depth):
+                    free frames
+                    return a connection refusal saying (the string form of "End plate must cover the member section")
+                loop cursor from 0 to the length of (spec's additions's values):
+                    set bolts to the item at cursor in (spec's additions's values)
+                    if bolts's kind = 1:
+                        set spanX to ((bolts's columns - 1) as a 64 bit floating-point number) * bolts's columnPitch
+                        set spanY to ((bolts's rows - 1) as a 64 bit floating-point number) * bolts's rowPitch
+                        if ((spanX + bolts's holeDiameter + (2.0 * (the absolute value of bolts's origin's x))) >= cover's width) or ((spanY + bolts's holeDiameter + (2.0 * (the absolute value of bolts's origin's y))) >= cover's height):
+                            free frames
+                            return a connection refusal saying (the string form of "Bolt holes must lie inside the end plate")
+            loop cursor from 0 to the length of (generated's plates's values):
+                set part to the item at cursor in (generated's plates's values)
+                set part's origin to the cad sum of (the cad difference of anchor and (the item at 0 in frames)'s endpoint) and (the bim connection vector part's origin across across up upward inward forward)
+                if (spec's style = 7) or (spec's style = 4):
+                    set rawPart to the item at cursor in (generated's plates's values)
+                    set part's origin to the cad sum of (the cad difference of anchor and (the item at 0 in frames)'s endpoint) and (the cad sum of (the bim connection vector rawPart's origin across across up jointUp inward jointOut) and (jointUp scaled by seatRise))
+                set part's axis to the bim connection vector part's axis across across up upward inward forward
+                replace item at index cursor in (generated's plates's values) with part
+            loop cursor from 0 to the length of (generated's welds's values):
+                set part to the item at cursor in (generated's welds's values)
+                set part's origin to the cad sum of (the cad difference of anchor and (the item at 0 in frames)'s endpoint) and (the bim connection vector part's origin across across up upward inward forward)
+                if (spec's style = 7) or (spec's style = 4):
+                    set rawPart to the item at cursor in (generated's welds's values)
+                    set part's origin to the cad sum of (the cad difference of anchor and (the item at 0 in frames)'s endpoint) and (the cad sum of (the bim connection vector rawPart's origin across across up jointUp inward jointOut) and (jointUp scaled by seatRise))
+                    set part's axis to the bim connection vector rawPart's axis across across up jointUp inward jointOut
+                else:
+                    set part's axis to the bim connection vector part's axis across across up upward inward forward
+                replace item at index cursor in (generated's welds's values) with part
+            loop cursor from 0 to the length of (generated's fasteners's values):
+                set part to the item at cursor in (generated's fasteners's values)
+                if (spec's style = 6) and (part's origin's z < 0.0):
+                    set part's memberId to (the item at 0 in frames)'s elementId
+                set part's origin to the cad sum of anchor and (the bim connection vector part's origin across across up upward inward forward)
+                set part's axis to the bim connection vector part's axis across across up upward inward forward
+                replace item at index cursor in (generated's fasteners's values) with part
+            loop cursor from 0 to the length of (generated's voids's values):
+                set cutValue to the item at cursor in (generated's voids's values)
+                if cutValue's kind = 1:
+                    if (spec's style = 6) and (cutValue's origin's z < 0.0):
+                        set cutValue's memberId to (the item at 0 in frames)'s elementId
+                    set cutValue's origin to the cad sum of anchor and (the bim connection vector cutValue's origin across across up upward inward forward)
+                    set cutValue's direction to the bim connection vector cutValue's direction across across up upward inward forward
+                else if (spec's style != 6) and (spec's style != 8):
+                    if cutValue's memberId = (the item at 1 in frames)'s elementId:
+                        set gap to 0.01
+                        if spec's style = 3:
+                            if (the length of (spec's additions's values)) > 0:
+                                set gap to (the item at 0 in (spec's additions's values))'s thickness
+                        if (spec's style = 7) or (spec's style = 4):
+                            set cutValue's origin to the cad sum of cutValue's origin and (the cad sum of (forward scaled by supportAdvance) and (jointOut scaled by gap))
+                            set cutValue's direction to jointOut
+                            set gap to gap / (the cad dot of forward and jointOut)
+                        else:
+                            set cutValue's origin to the cad sum of cutValue's origin and (forward scaled by (supportAdvance + gap))
+                        if ((supportAdvance + gap) + (the item at 1 in (spec's members's values))'s setback) >= (the item at 1 in frames)'s length:
+                            free frames
+                            return a connection refusal saying (the string form of "Connection consumes the secondary member")
+                replace item at index cursor in (generated's voids's values) with cutValue
         if basePlate and generated's valid:
             set plateValue to the item at 0 in (generated's plates's values)
             set firstHost to the item at (the bim linear index of (the item at 0 in (spec's members's values))'s elementId in modelValue)'s position in (modelValue's linears's values)
@@ -109,7 +341,7 @@ function store bim connection {connection definition:spec} in {a pointer to a bi
                     set existing to the item at memberCursor in (other's members's values)
                     loop candidateCursor from 0 to the length of (spec's members's values):
                         set candidate to the item at candidateCursor in (spec's members's values)
-                        if (existing's elementId = candidate's elementId) and (existing's end = candidate's end):
+                        if ((existing's elementId = candidate's elementId) and (existing's end = candidate's end)) and (candidate's end != 2):
                             return the bim refused id
         set replacement to spec
         # Copies own parameter lists so snapshots cannot be mutated through the caller.
@@ -147,7 +379,7 @@ function the bim explicit cuts of {a 64 bit integer:elementId} after {bim end cu
                 set memberValue to the item at memberCursor in (spec's members's values)
                 if memberValue's elementId = elementId:
                     set ownEnd to memberValue's end
-            if ownEnd >= 0:
+            if (ownEnd = 0) or (ownEnd = 1):
                 set generated to the bim connection evaluation of spec in modelValue
                 if generated's valid:
                     loop voidCursor from 0 to the length of (generated's voids's values):
@@ -167,7 +399,7 @@ function the bim explicit cuts of {a 64 bit integer:elementId} after {bim end cu
 function add bim connection among {a pointer to a list:identities} category {integer:categoryCode} style {integer:styleCode} in {a pointer to a bim model record:target}:
     execute:
         set count to the length of identities
-        if (count < 2) or (count > 6):
+        if (count < 2) or ((styleCode = 1) and (count != 2)):
             return the bim refused id
         set modelValue to @intrinsic("dereference", target)
         loop cursor from 0 to count:
@@ -196,7 +428,7 @@ function add bim connection among {a pointer to a list:identities} category {int
             set whichEnd to 0
             if lastDistance < firstDistance:
                 set whichEnd to 1
-            append (@intrinsic("construct", a connection member, hostValue's id, whichEnd, 0.0)) to (members's values)
+            append (@intrinsic("construct", a connection member, hostValue's id, whichEnd, 0.0, 0.0)) to (members's values)
         set label to (the string form of "J") + (the string form of target's nextId)
         set spec to @intrinsic("construct", a connection definition, the bim refused id, firstHost's levelId, label, categoryCode, styleCode, anchor, members, a cad topology list of a connection addition)
         return store bim connection spec in target
@@ -212,7 +444,8 @@ function add bim connection part of kind {integer:partKind} to node {a 64 bit in
             return false
         if spec's style = 2:
             return false
-        set memberValue to the item at 1 in (spec's members's values)
+        set memberCursor to the minimum of 1 and ((the length of (spec's members's values)) - 1)
+        set memberValue to the item at memberCursor in (spec's members's values)
         set hostFound to the bim linear index of memberValue's elementId in (@intrinsic("dereference", target))
         if hostFound's valid = false:
             return false
@@ -232,6 +465,13 @@ function add bim connection part of kind {integer:partKind} to node {a 64 bit in
             set partValue's diameter to 0.006
             set partValue's holeDiameter to 0.004
             set partValue's length to 0.04
+        if partKind >= 4:
+            set partValue's thickness to 0.006
+            set partValue's length to profile's depth * 0.6
+            set partValue's axis to orientation's depthAxis
+        if spec's style >= 3:
+            set partValue's origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+            set partValue's axis to a cad vector3 with x 0.0, y 1.0 and z 0.0
         set spec's additions to the cad clone of spec's additions
         append partValue to (spec's additions's values)
         return (store bim connection spec in target) != the bim refused id
@@ -250,9 +490,7 @@ function the bim parts of connection {connection definition:spec} in {bim model 
             set hostFound to the bim linear index of primary's elementId in modelValue
             if hostFound's valid:
                 set orientation to the bim frame of linear (the item at hostFound's position in (modelValue's linears's values)) in modelValue
-                set anchor to orientation's first
-                if primary's end = 1:
-                    set anchor to orientation's last
+                set anchor to the bim connection anchor of primary on orientation
         set lift to 0.0
         set levelFound to the bim level index of spec's levelId in modelValue
         if levelFound's valid:
@@ -266,12 +504,52 @@ function the bim parts of connection {connection definition:spec} in {bim model 
             set ending to the cad sum of centre and (forward scaled by (plateValue's thickness * 0.5))
             set profile to @intrinsic("construct", a bim linear type record, the bim refused id, the string form of "Connection plate", bim generic linear role, plateValue's width, plateValue's height, false, the string form of "steel")
             set piece to @intrinsic("construct", a bim linear record, spec's id, the bim refused id, spec's levelId, beginning, ending, 0.0, 0.0, (a cad vector2 with x 1.0 and y 1.0))
+            if spec's style >= 3:
+                set secondaryCursor to the minimum of 1 and ((the length of (spec's members's values)) - 1)
+                set reference to the item at secondaryCursor in (spec's members's values)
+                set host to the item at (the bim linear index of reference's elementId in modelValue)'s position in (modelValue's linears's values)
+                set localFrame to the bim frame of linear host in modelValue
+                set localUp to localFrame's depthAxis
+                set localForward to localFrame's along
+                if reference's end = 1:
+                    set localUp to localUp scaled by -1.0
+                    set localForward to localForward scaled by -1.0
+                set localAxis to a cad vector3 with x (the cad dot of plateValue's axis and localFrame's widthAxis), y (the cad dot of plateValue's axis and localUp) and z (the cad dot of plateValue's axis and localForward)
+                set localWidth to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and localAxis
+                if (the cad length of localWidth) < 0.000001:
+                    set localWidth to a cad vector3 with x 1.0, y 0.0 and z 0.0
+                set worldWidth to the bim connection vector localWidth across localFrame's widthAxis up localUp inward localForward
+                if (spec's style = 7) or (spec's style = 4):
+                    set primaryReference to the item at 0 in (spec's members's values)
+                    set primaryHost to the item at (the bim linear index of primaryReference's elementId in modelValue)'s position in (modelValue's linears's values)
+                    set primaryFrame to the bim frame of linear primaryHost in modelValue
+                    set primaryProfile to the bim type of linear primaryHost in modelValue
+                    set normalValue to the cad difference of localForward and (primaryFrame's along scaled by (the cad dot of localForward and primaryFrame's along))
+                    set normalValue to normalValue scaled by (1.0 / (the cad length of normalValue))
+                    set surface to the bim steel surface of primaryProfile along normalValue framed primaryFrame in modelValue
+                    set seatedWidth to the cad cross of surface's normal and plateValue's axis
+                    if (the cad length of seatedWidth) > 0.000001:
+                        set worldWidth to seatedWidth
+                set defaultFrame to the bim frame of linear piece in modelValue
+                set piece's angle to @intrinsic("atan2", (the cad dot of worldWidth and defaultFrame's depthAxis), (the cad dot of worldWidth and defaultFrame's widthAxis))
             if spec's style = 2:
                 set primary to the item at 0 in (spec's members's values)
                 set hostValue to the item at (the bim linear index of primary's elementId in modelValue)'s position in (modelValue's linears's values)
                 set piece's angle to 0.0 - hostValue's angle
                 if hostValue's start's z > hostValue's finish's z:
                     set piece's angle to hostValue's angle
+            append (@intrinsic("construct", a bim stair part record, piece, profile)) to (derived's values)
+        loop cursor from 0 to the length of (generated's welds's values):
+            set weld to the item at cursor in (generated's welds's values)
+            set beginning to the cad sum of anchor and weld's origin
+            set beginning's z to beginning's z - lift
+            set forward to weld's axis scaled by (1.0 / (the cad length of weld's axis))
+            set ending to the cad sum of beginning and (forward scaled by weld's length)
+            set label to the string form of "Fillet weld"
+            if weld's kind = 5:
+                set label to the string form of "Butt weld"
+            set profile to @intrinsic("construct", a bim linear type record, the bim refused id, label, bim generic linear role, weld's thickness, weld's thickness, false, the string form of "steel")
+            set piece to @intrinsic("construct", a bim linear record, spec's id, the bim refused id, spec's levelId, beginning, ending, 0.0, 0.0, (a cad vector2 with x 1.0 and y 1.0))
             append (@intrinsic("construct", a bim stair part record, piece, profile)) to (derived's values)
         loop cursor from 0 to the length of (generated's fasteners's values):
             set fastener to the item at cursor in (generated's fasteners's values)

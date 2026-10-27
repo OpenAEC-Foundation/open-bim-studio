@@ -26,7 +26,7 @@ in DynLex.
 | Parametric systems | Building-system types with frames and panels, hosted window systems, stairs, railings and component libraries |
 | Direct editing | Selection, grips, numerical properties, snapping, transforms, boundary editing with Tab, Push/Pull and face splitting |
 | Reinforcement | Parametric bars, cages, stirrups, area reinforcement and meshes; position labels, schedules and NL/international notation |
-| Connections | Modular connection nodes, member voids and added parts such as plates, bolts and screws |
+| Connections | Parametric steel joints, member cuts, plates, bolts, welds and reusable connection types |
 | Views and drawings | Plans, sections, 3D views, section boxes, dimensions, tags, drawing standards, sheets and PDF/SVG output |
 | Interchange | IFC import/export, IFCX and binary IFCX project persistence, native DXF reference geometry and drawing-import helpers |
 | Automation | A local request/response API and an MCP adapter for driving editor operations |
@@ -41,6 +41,10 @@ Reinforcement is displayed as **depth-tested centre lines by default** to reduce
 The model retains its reinforcement parameters independently of this display mode.
 See [reinforcement scope](docs/notes/reinforcement-scope.md) and the
 [reinforcement library](docs/notes/reinforcement-library.md) for details.
+
+See the [steel connection guide](docs/notes/connections.md) and the
+[editable 3D steel hall](tests/models/steel-connection-hall.bim)
+for the connection recipes, named types and current modelling limits.
 
 ## Try a packaged preview
 
