@@ -16,6 +16,17 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 | Windows/Linux builds en installers | PC2, na taakacceptatie | `pc2/build-installers` | CI/build/installer; geen modelleringscode | Voorgesteld / nog niet geclaimd |
 | Release samenstellen en publiceren | PC1 / coördinator | `main` | Integratie, geteste artefacten, tags | Geblokkeerd op app-/installatietests |
 
+## Herstructurering stap 1 — computer 1 — 2026-10-27
+
+Branch `restructure/one-tree`, volgens
+[het ontwerp](superpowers/specs/2026-10-27-restructuring-design.md) en
+[het plan](superpowers/plans/2026-10-27-restructuring-stage-0-1.md).
+Bestanden: heel `spikes/dynlex-bim-slice`, `.github/workflows`, `CLAUDE.md`,
+`README.md` en `docs/`. Bevriezing: geen andere branch raakt deze bestanden
+totdat de pull request van stap 1 is gemerged. Computer 2: alleen review van
+de workflow- en patchdelen en het draaien van de Windows-workflow; geen
+gelijktijdige bewerkingen.
+
 Command `2360` en tool-id `27` zijn gereserveerd voor Sketch Split. Hergebruik
 die nummers niet voor een andere functie. Leg nieuwe openbare commandocodes
 vooraf vast. Zie [de werkafspraken en startinstructie](TWEE-COMPUTERS.md).
