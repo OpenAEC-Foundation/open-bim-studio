@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 allowed() {
     case "$1" in
         kernel) echo "kernel lib" ;;
-        model) echo "model kernel lib" ;;
+        model) echo "model kernel lib generated" ;;
         formats) echo "formats graphics model kernel lib" ;;
         graphics) echo "graphics formats model kernel lib" ;;
         editor) echo "editor graphics formats model kernel lib app" ;;

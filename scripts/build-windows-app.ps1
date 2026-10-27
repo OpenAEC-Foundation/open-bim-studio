@@ -33,6 +33,8 @@ try {
     $stub = "# Written by scripts/build-windows-app.ps1: the self-test entry of app/main.dl.`n" +
         "function run bim app checks:`n    execute:`n        ignore 0`n"
     [IO.File]::WriteAllText((Join-Path $repoPath 'generated\self_test.dl'), $stub)
+    & python -B (Join-Path $repoPath 'tools\compose_modules.py') --root $repoPath --out (Join-Path $repoPath 'generated') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Composing the modules failed.' }
     # The prebuilt SPIR-V shaders, where the program reads them (build/shaders).
     Copy-Item graphics\shaders\*.spv build\shaders -Force
 

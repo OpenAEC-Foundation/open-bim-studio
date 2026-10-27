@@ -67,9 +67,14 @@ write_self_test_bundle() {
         { if (footer) print "        " $0; else print }
     ' generated/app_checks.dl > generated/self_test.dl
 }
+write_composition() {
+    # The model record and the module dispatchers, from the MODULE manifests.
+    python3 -B tools/compose_modules.py --root . --out generated > /dev/null
+}
 generate() {
     write_platform
     write_self_test_stub
+    write_composition
     mkdir -p build/shaders "$out/shaders"
     cp graphics/shaders/*.spv build/shaders/
     if [ "$out/shaders" != "$here/build/shaders" ]; then cp graphics/shaders/*.spv "$out/shaders/"; fi
@@ -78,7 +83,7 @@ generate
 command=${1:-app}
 shift || true
 if [ "$command" = generate ]; then
-    echo "wrote generated/platform.dl and generated/self_test.dl"
+    echo "wrote generated/platform.dl, generated/self_test.dl, generated/model.dl and generated/compose.dl"
     exit 0
 fi
 
