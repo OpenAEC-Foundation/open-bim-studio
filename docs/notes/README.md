@@ -13,6 +13,7 @@ is in the repository README.
 | `build-times.md` | Measured build times before and after each restructuring stage | new |
 | `layering.md` | The import direction between modules (and the unit layering of stage 1 before it) | new |
 | `dynlex-guide.md` | The language guide: what the compiler docs and the standard library say, the idioms here, the pitfalls, the module rules | new |
+| `connections.md` | The steel connection module: recipes, joints, the editable steel hall (from the connection branch) | `CONNECTIONS.md` (spike root) |
 | `baseplates.md` | Column base plates | `BASEPLATES.md` |
 | `drawing-fidelity.md` | Drawing fidelity notes | `DRAWING-FIDELITY.md` |
 | `plan-performance.md` | The plan performance investigation | `PLAN-PERFORMANCE.md` |
