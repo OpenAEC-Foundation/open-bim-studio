@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    candidates = sorted(path for path in (ROOT / "kernel/tests").glob("*") if path.is_dir())
+    candidates = sorted(path for path in (ROOT / "kernel/tests").glob("*") if (path / "main.dl").is_file())
     filters = args.filters or ["*"]
     for pattern in filters:
         if not any(fnmatch.fnmatchcase(path.name, pattern) for path in candidates):
@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     build_directory.mkdir(parents=True, exist_ok=True)
     output_directory = Path(tempfile.mkdtemp(prefix="run-", dir=build_directory))
     print(f"Compiler: {compiler}\nArtifacts: {output_directory}", flush=True)
-    print(f"Selected {len(fixtures)} fixtures at {', '.join(optimizations)}; full main-crate scope remains 83 source files / 672 upstream tests.", flush=True)
+    print(f"Selected {len(fixtures)} fixtures at {', '.join(optimizations)}; the fixtures are the kernel's test set, not a port coverage claim.", flush=True)
     passed = failed = 0
     started = time.monotonic()
     for fixture in fixtures:

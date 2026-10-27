@@ -1,6 +1,6 @@
 # cadkernel fixture verification
 
-`verify.py` discovers current and future `tests/required/cadkernel_*` fixture directories and tests each `main.dl` with explicit `-O0` and `-O2` compilation. It uses the already-built compiler; it does not build or modify the compiler, edit fixture expectations, or update port coverage.
+`verify.py` discovers the fixture directories under `kernel/tests` and tests each `main.dl` with explicit `-O0` and `-O2` compilation. It uses the already-built compiler; it does not build or modify the compiler, edit fixture expectations, or update port coverage.
 
 The delivery remains one complete main-crate port: 83 upstream source files and 672 upstream tests, including optional modules. A passing selected-fixture run is not evidence that all of those source modules or upstream tests have been ported. The separate constraint-solver crate is outside that delivery. See [coverage](../../docs/cadkernel-coverage.md) and the separate [pinned Rust numerical reference](reference/README.md).
 
@@ -9,11 +9,11 @@ The delivery remains one complete main-crate port: 83 upstream source files and 
 Use Python 3.10 or newer; only the standard library is required. From the repository root:
 
 ```sh
-python -B tests/cadkernel/verify.py
-python -B tests/cadkernel/verify.py --list
-python -B tests/cadkernel/verify.py --filter 'cadkernel_core' --filter 'cadkernel_arena*'
-python -B tests/cadkernel/verify.py --filter '*plane*' --optimization O2 --verbose
-python -B tests/cadkernel/verify.py --compile-timeout 60 --run-timeout 20 --fail-fast
+python3 -B kernel/tests/verify.py
+python3 -B kernel/tests/verify.py --list
+python3 -B kernel/tests/verify.py --filter 'core' --filter 'arena*'
+python3 -B kernel/tests/verify.py --filter '*plane*' --optimization O2 --verbose
+python3 -B kernel/tests/verify.py --compile-timeout 60 --run-timeout 20 --fail-fast
 ```
 
 On Windows, the default compiler is `build/dynlex.exe`; elsewhere it is `build/dynlex`. Override with `--compiler PATH`. Relative compiler paths are resolved against the repository root, and the script can be invoked from another working directory. Select a Python executable installed on your host if `python` is not on PATH.
@@ -56,7 +56,7 @@ The spline timeout/crash above is superseded by the [zero-sized collection alloc
 A separate foundation selection passed **10/10 fixture-mode combinations**, exit 0, in 6.625 seconds:
 
 ```sh
-python -B tests/cadkernel/verify.py --filter cadkernel_core --filter cadkernel_angle --filter cadkernel_frame --filter cadkernel_arena --filter cadkernel_arena_wrong_key
+python3 -B kernel/tests/verify.py --filter cadkernel_core --filter cadkernel_angle --filter cadkernel_frame --filter cadkernel_arena --filter cadkernel_arena_wrong_key
 ```
 
 This selection verifies the current vector, angle, frame, arena and typed-key rejection fixtures at both optimization levels. It does not establish complete arena ownership/API semantics, plane verification, tessellation success, or the 83-file/672-test delivery. Complete module claims belong in the main coverage manifest after their remaining requirements have been verified.
