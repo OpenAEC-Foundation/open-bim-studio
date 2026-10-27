@@ -50,7 +50,8 @@ cp "$here"/shaders/*.spv "$tree/build/shaders/"
 # The fallback font and its licence, which the installer also ships.
 mkdir -p "$tree/tests/games/fonts"
 cp "$root/tests/games/fonts/LiberationMono-Regular.ttf" "$root/tests/games/fonts/LICENSE-LiberationFonts" "$tree/tests/games/fonts/"
-ln -sfn "$root/build/dynlex" "$tree/build/dynlex"
+# An explicit compiler override permits isolated candidate benchmarking.
+ln -sfn "$bim_compiler" "$tree/build/dynlex"
 if [ -f "$root/.cache/bootstrap/env.sh" ]; then
     # shellcheck disable=SC1091
     source "$root/.cache/bootstrap/env.sh" >/dev/null 2>&1 || true

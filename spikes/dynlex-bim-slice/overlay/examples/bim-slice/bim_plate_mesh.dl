@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: MPL-2.0
+# Direct display meshing of rectangular plates with perpendicular through holes.
+# Other cuts retain the general BREP path; parameters and export stay native.
+import examples/bim-slice/bim_network.dl
+import examples/bim-slice/bim_profiles.dl
+import examples/bim-slice/connections.dl
+import lib/fastkernel/prism.dl
+
+class:
+    patterns:
+        [a|] bim plate mesh result record
+    members:
+        valid as a boolean
+        shape as a fast mesh record
+        reason as an integer
+
+function the bim perforated flat plate of {bim linear record:element} typed {bim linear type record:kind} in {bim model record:modelValue} cut by {a pointer to a list:cutters}:
+    execute:
+        set refused to @intrinsic("construct", a bim plate mesh result record, false, an empty fast mesh, 1)
+        if (kind's round or (element's twist != 0.0)) or ((element's taper's x != 1.0) or (element's taper's y != 1.0)):
+            return refused
+        if (the bim profile of linear type kind in modelValue)'s kind != bim no profile:
+            return refused
+        set plateFrame to the bim frame of linear element in modelValue
+        set halfWidth to kind's width * 0.5
+        set halfDepth to kind's depth * 0.5
+        if ((halfWidth <= 1e-9) or (halfDepth <= 1e-9)) or (plateFrame's length <= 1e-9):
+            return refused
+        set centres to a cad topology list of a cad vector2
+        set radii to a cad topology list of a 64 bit floating-point number
+        loop cursor from 0 to the length of cutters:
+            set cutValue to the item at cursor in cutters
+            set fromFirst to the cad difference of cutValue's origin and plateFrame's first
+            set radius to cutValue's diameter * 0.5
+            if (cutValue's kind != 1) or ((radius <= 0.0) or (cutValue's depth <= 0.0)):
+                return refused
+            set startX to the cad dot of fromFirst and plateFrame's widthAxis
+            set startY to the cad dot of fromFirst and plateFrame's depthAxis
+            set startZ to the cad dot of fromFirst and plateFrame's along
+            set finishX to startX + ((the cad dot of cutValue's direction and plateFrame's widthAxis) * cutValue's depth)
+            set finishY to startY + ((the cad dot of cutValue's direction and plateFrame's depthAxis) * cutValue's depth)
+            set finishZ to startZ + ((the cad dot of cutValue's direction and plateFrame's along) * cutValue's depth)
+            # A conservative local cylinder box proves unrelated bolt groups miss.
+            set misses to (((the maximum of startX and finishX) + radius) < (0.0 - halfWidth)) or (((the minimum of startX and finishX) - radius) > halfWidth)
+            set misses to misses or ((((the maximum of startY and finishY) + radius) < (0.0 - halfDepth)) or (((the minimum of startY and finishY) - radius) > halfDepth))
+            set misses to misses or ((((the maximum of startZ and finishZ) + radius) < 0.0) or (((the minimum of startZ and finishZ) - radius) > plateFrame's length))
+            if misses = false:
+                if (the absolute value of (the cad dot of cutValue's direction and plateFrame's along)) < 0.999999999:
+                    return refused
+                if ((the minimum of startZ and finishZ) > 1e-8) or ((the maximum of startZ and finishZ) < (plateFrame's length - 1e-8)):
+                    return refused
+                if (((the absolute value of startX) + radius) >= (halfWidth - 1e-8)) or (((the absolute value of startY) + radius) >= (halfDepth - 1e-8)):
+                    return refused
+                set centreValue to a cad vector2 with x startX and y startY
+                set duplicate to false
+                loop earlier from 0 to the length of (centres's values):
+                    set previousCentre to the item at earlier in (centres's values)
+                    set previousRadius to the item at earlier in (radii's values)
+                    set dx to centreValue's x - previousCentre's x
+                    set dy to centreValue's y - previousCentre's y
+                    set distanceValue to the square root of ((dx * dx) + (dy * dy))
+                    if (distanceValue < 1e-8) and ((the absolute value of (radius - previousRadius)) < 1e-8):
+                        set duplicate to true
+                    else if distanceValue <= ((radius + previousRadius) + 1e-8):
+                        return refused
+                if duplicate = false:
+                    append centreValue to (centres's values)
+                    append radius to (radii's values)
+        set outline to an empty list of a cad vector2
+        append (a cad vector2 with x (0.0 - halfWidth) and y (0.0 - halfDepth)) to outline
+        append (a cad vector2 with x halfWidth and y (0.0 - halfDepth)) to outline
+        append (a cad vector2 with x halfWidth and y halfDepth) to outline
+        append (a cad vector2 with x (0.0 - halfWidth) and y halfDepth) to outline
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        loop cursor from 0 to the length of (centres's values):
+            set centreValue to the item at cursor in (centres's values)
+            set radius to the item at cursor in (radii's values)
+            set ring to an empty list of a cad vector2
+            loop sideIndex from 0 to 12:
+                set theta to (sideIndex as a 64 bit floating-point number) * (6.283185307179586 / 12.0)
+                append (a cad vector2 with x (centreValue's x + (radius * (the cosine of theta))) and y (centreValue's y + (radius * (the sine of theta)))) to ring
+            append ring to rings
+        set built to the fast prism over outline with holes rings from 0.0 rising plateFrame's length within 1e-9
+        free outline
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+        if built's reason != fast prism built:
+            return refused
+        set localShape to an empty fast mesh
+        append fast mesh of built's shape to (the address of localShape)
+        if (the length of (localShape's triangles's values)) = 0:
+            return refused
+        set placed to an empty fast mesh
+        loop cursor from 0 to the length of (localShape's positions's values):
+            set pointValue to the item at cursor in (localShape's positions's values)
+            set facing to the item at cursor in (localShape's normals's values)
+            append (the cad sum of plateFrame's first and (the cad sum of (plateFrame's widthAxis scaled by pointValue's x) and (the cad sum of (plateFrame's depthAxis scaled by pointValue's y) and (plateFrame's along scaled by pointValue's z)))) to (placed's positions's values)
+            append (the cad sum of (plateFrame's widthAxis scaled by facing's x) and (the cad sum of (plateFrame's depthAxis scaled by facing's y) and (plateFrame's along scaled by facing's z))) to (placed's normals's values)
+        loop cursor from 0 to the length of (localShape's triangles's values):
+            append (the item at cursor in (localShape's triangles's values)) to (placed's triangles's values)
+        return @intrinsic("construct", a bim plate mesh result record, true, placed, 0)

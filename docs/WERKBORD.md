@@ -182,3 +182,19 @@ face-component traversal repair and geometric regression checks: direct
 arena-slot membership and adjacency, preserving seed and breadth-first order.
 The compiler checkout is unchanged. Application readiness still requires the
 full steel-hall scene and GUI checks.
+
+## Compiler and drilled display geometry — 2026-10-27
+
+The explicit performance assignment extends this session to an isolated DynLex
+compiler worktree. The connection task also covers `bim_plate_mesh.dl`,
+`bim_swept_perforations.dl`, `overlay/lib/fastkernel/perforation.dl`, their scene
+integration and geometry tests. `bim_profiles.dl` is included for the missing
+rounded-box tangent points exposed by the hollow-brace drilling checks. Product geometry remains DynLex. The fast display
+path accepts closed planar stock and separate through-bores; unsupported
+cuts retain the existing general BREP path. Validation must establish volumes,
+closed meshes, complete hall rendering and actual editor interaction.
+
+`build.sh` and `toolchain.sh` accept an explicit `BIM_DYNLEX_COMPILER` for isolated
+candidate benchmarking. Compiler-binary hashes must be recorded separately from
+the library checkout commit. Compiler regression checks and application GUI
+checks remain separate acceptance conditions. One compiler runs per machine.

@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: MPL-2.0
+# Closed planar stock with circular through-bores, including oblique faces.
+# Edge, intersecting and blind cuts are explicitly left to the general kernel.
+import lib/fastkernel/polyhedron.dl
+
+class:
+    patterns:
+        [a|] fast bore record
+    members:
+        origin as a cad vector3
+        axis as a cad vector3
+        radius as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+class:
+    patterns:
+        [a|] fast perforation result record
+    members:
+        valid as a boolean
+        shape as a fast polyhedron record
+        reason as an integer
+class:
+    patterns:
+        [a|] fast bore crossing record
+    members:
+        distance as a 64 bit floating-point number
+        faceIndex as an integer
+        point as a cad vector3
+        facing as a 64 bit floating-point number
+class:
+    patterns:
+        [a|] fast bore wall record
+    members:
+        first as a cad vector3
+        last as a cad vector3
+        firstRing as the type of (a cad topology list of an integer)
+        lastRing as the type of (a cad topology list of an integer)
+        radius as a 64 bit floating-point number
+
+function the fast segment distance from {cad vector3:firstStart} to {cad vector3:firstFinish} and from {cad vector3:secondStart} to {cad vector3:secondFinish}:
+    execute:
+        set u to the cad difference of firstFinish and firstStart
+        set v to the cad difference of secondFinish and secondStart
+        set w to the cad difference of firstStart and secondStart
+        set aa to the cad dot of u and u
+        set bb to the cad dot of u and v
+        set cc to the cad dot of v and v
+        set dd to the cad dot of u and w
+        set ee to the cad dot of v and w
+        set s to 0.0
+        set t to 0.0
+        if aa <= 1e-24:
+            if cc > 1e-24:
+                set t to (ee / cc) clamped between 0.0 and 1.0
+        else if cc <= 1e-24:
+            set s to ((0.0 - dd) / aa) clamped between 0.0 and 1.0
+        else:
+            set determinant to (aa * cc) - (bb * bb)
+            if determinant > ((1e-12 * aa) * cc):
+                set s to (((bb * ee) - (cc * dd)) / determinant) clamped between 0.0 and 1.0
+            set t to ((bb * s) + ee) / cc
+            if t < 0.0:
+                set t to 0.0
+                set s to ((0.0 - dd) / aa) clamped between 0.0 and 1.0
+            else if t > 1.0:
+                set t to 1.0
+                set s to ((bb - dd) / aa) clamped between 0.0 and 1.0
+        return the cad length of (the cad difference of (the cad sum of w and (u scaled by s)) and (v scaled by t))
+
+local function fast bore point {cad vector3:pointValue} lies in loop {integer:loopId} of {fast polyhedron record:stock} across {cad vector3:across} up {cad vector3:upward}:
+    execute:
+        set inside to false
+        set first to the item at loopId in (stock's loopStarts's values)
+        set past to the item at (loopId + 1) in (stock's loopStarts's values)
+        loop cursor from first to past:
+            set nextCursor to cursor + 1
+            if nextCursor = past:
+                set nextCursor to first
+            set a to the cad difference of (the item at (the item at cursor in (stock's indices's values)) in (stock's positions's values)) and pointValue
+            set b to the cad difference of (the item at (the item at nextCursor in (stock's indices's values)) in (stock's positions's values)) and pointValue
+            set ay to the cad dot of a and upward
+            set by to the cad dot of b and upward
+            if (ay > 0.0) != (by > 0.0):
+                set ax to the cad dot of a and across
+                set bx to the cad dot of b and across
+                set crossing to ax + (((0.0 - ay) * (bx - ax)) / (by - ay))
+                if crossing > 0.0:
+                    set inside to inside = false
+        return inside
+
+local function the fast index loop {integer:loopId} of {fast polyhedron record:stock}:
+    execute:
+        set ring to an empty list of an integer
+        loop cursor from (the item at loopId in (stock's loopStarts's values)) to (the item at (loopId + 1) in (stock's loopStarts's values)):
+            append (the item at cursor in (stock's indices's values)) to ring
+        return ring
+
+function the fast stock {fast polyhedron record:stock} perforated by {a pointer to a list:bores} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set refused to @intrinsic("construct", a fast perforation result record, false, an empty fast polyhedron, 0)
+        if (the fast flaw of stock within tolerance) != 0:
+            set refused's reason to 1
+            return refused
+        set result to an empty fast polyhedron
+        loop cursor from 0 to the length of (stock's positions's values):
+            ignore add fast position (the item at cursor in (stock's positions's values)) to (the address of result)
+        set additions to a cad topology list of the type of (a cad topology list of the type of (a cad topology list of an integer))
+        loop cursor from 0 to the length of (stock's faces's values):
+            append (a cad topology list of the type of (a cad topology list of an integer)) to (additions's values)
+        set walls to a cad topology list of a fast bore wall record
+        loop boreCursor from 0 to the length of bores:
+            set bore to the item at boreCursor in bores
+            set magnitude to the cad length of bore's axis
+            if (((magnitude > 1e-12) and (magnitude < 1e308)) and ((bore's radius > tolerance) and (bore's depth > tolerance))) = false:
+                set refused's reason to 2
+                return refused
+            set axis to bore's axis scaled by (1.0 / magnitude)
+            set ending to the cad sum of bore's origin and (axis scaled by bore's depth)
+            set across to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and axis
+            if (the cad length of across) < 1e-8:
+                set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+            else:
+                set across to across scaled by (1.0 / (the cad length of across))
+            set upward to the cad cross of axis and across
+            set hits to an empty list of a fast bore crossing record
+            loop faceCursor from 0 to the length of (stock's faces's values):
+                set face to the item at faceCursor in (stock's faces's values)
+                # A supported bore never touches a stock edge. This also catches
+                # cylinders that graze a face while their axis misses the stock.
+                loop loopId from face's firstLoop to (face's firstLoop + face's loopCount):
+                    set first to the item at loopId in (stock's loopStarts's values)
+                    set past to the item at (loopId + 1) in (stock's loopStarts's values)
+                    loop cursor from first to past:
+                        set nextCursor to cursor + 1
+                        if nextCursor = past:
+                            set nextCursor to first
+                        set a to the item at (the item at cursor in (stock's indices's values)) in (stock's positions's values)
+                        set b to the item at (the item at nextCursor in (stock's indices's values)) in (stock's positions's values)
+                        if (the fast segment distance from bore's origin to ending and from a to b) <= (bore's radius + tolerance):
+                            free hits
+                            set refused's reason to 3
+                            return refused
+                set denominator to the cad dot of axis and face's normal
+                if (the absolute value of denominator) > 1e-10:
+                    set travel to (face's offset - (the cad dot of face's normal and bore's origin)) / denominator
+                    set pointValue to the cad sum of bore's origin and (axis scaled by travel)
+                    set faceAcross to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and face's normal
+                    if (the cad length of faceAcross) < 1e-8:
+                        set faceAcross to a cad vector3 with x 1.0, y 0.0 and z 0.0
+                    else:
+                        set faceAcross to faceAcross scaled by (1.0 / (the cad length of faceAcross))
+                    set faceUp to the cad cross of face's normal and faceAcross
+                    set contained to fast bore point pointValue lies in loop face's firstLoop of stock across faceAcross up faceUp
+                    loop loopId from (face's firstLoop + 1) to (face's firstLoop + face's loopCount):
+                        if fast bore point pointValue lies in loop loopId of stock across faceAcross up faceUp:
+                            set contained to false
+                    if contained:
+                        append (@intrinsic("construct", a fast bore crossing record, travel, faceCursor, pointValue, denominator)) to hits
+            loop cursor from 1 to the length of hits:
+                set moving to the item at cursor in hits
+                set slot to cursor
+                set shifting to true
+                loop while shifting:
+                    if slot = 0:
+                        set shifting to false
+                    else if (the item at (slot - 1) in hits)'s distance > moving's distance:
+                        replace item at index slot in hits with (the item at (slot - 1) in hits)
+                        set slot to slot - 1
+                    else:
+                        set shifting to false
+                replace item at index slot in hits with moving
+            if (the remainder of (the length of hits) divided by 2) != 0:
+                free hits
+                set refused's reason to 4
+                return refused
+            set pairCursor to 0
+            loop while pairCursor < the length of hits:
+                set entry to the item at pairCursor in hits
+                set exitHit to the item at (pairCursor + 1) in hits
+                if (entry's facing >= 0.0) or (exitHit's facing <= 0.0):
+                    free hits
+                    set refused's reason to 5
+                    return refused
+                if (exitHit's distance > 0.0) and (entry's distance < bore's depth):
+                    if (entry's distance < (0.0 - tolerance)) or (exitHit's distance > (bore's depth + tolerance)):
+                        free hits
+                        set refused's reason to 6
+                        return refused
+                    if ((the absolute value of entry's facing) < 1e-8) or ((the absolute value of exitHit's facing) < 1e-8):
+                        free hits
+                        set refused's reason to 7
+                        return refused
+                    set duplicate to false
+                    loop earlier from 0 to the length of (walls's values):
+                        set wall to the item at earlier in (walls's values)
+                        set sameEnds to ((the cad distance from wall's first to entry's point) < tolerance) and ((the cad distance from wall's last to exitHit's point) < tolerance)
+                        set reversedEnds to ((the cad distance from wall's last to entry's point) < tolerance) and ((the cad distance from wall's first to exitHit's point) < tolerance)
+                        if (sameEnds or reversedEnds) and ((the absolute value of (wall's radius - bore's radius)) < tolerance):
+                            set duplicate to true
+                        else if (the fast segment distance from entry's point to exitHit's point and from wall's first to wall's last) <= ((wall's radius + bore's radius) + tolerance):
+                            free hits
+                            set refused's reason to 8
+                            return refused
+                    if duplicate = false:
+                        set firstRing to a cad topology list of an integer
+                        set lastRing to a cad topology list of an integer
+                        set entryFace to the item at entry's faceIndex in (stock's faces's values)
+                        set exitFace to the item at exitHit's faceIndex in (stock's faces's values)
+                        loop sideIndex from 0 to 12:
+                            set theta to (sideIndex as a 64 bit floating-point number) * (6.283185307179586 / 12.0)
+                            set radial to the cad sum of (across scaled by (bore's radius * (the cosine of theta))) and (upward scaled by (bore's radius * (the sine of theta)))
+                            set entryRadial to the cad difference of radial and (axis scaled by ((the cad dot of entryFace's normal and radial) / entry's facing))
+                            set exitRadial to the cad difference of radial and (axis scaled by ((the cad dot of exitFace's normal and radial) / exitHit's facing))
+                            append (add fast position (the cad sum of entry's point and entryRadial) to (the address of result)) to (firstRing's values)
+                            append (add fast position (the cad sum of exitHit's point and exitRadial) to (the address of result)) to (lastRing's values)
+                        set entryAdditions to the item at entry's faceIndex in (additions's values)
+                        set exitAdditions to the item at exitHit's faceIndex in (additions's values)
+                        append firstRing to (entryAdditions's values)
+                        append lastRing to (exitAdditions's values)
+                        append (@intrinsic("construct", a fast bore wall record, entry's point, exitHit's point, firstRing, lastRing, bore's radius)) to (walls's values)
+                set pairCursor to pairCursor + 2
+            free hits
+        loop faceCursor from 0 to the length of (stock's faces's values):
+            set face to the item at faceCursor in (stock's faces's values)
+            set outer to the fast index loop face's firstLoop of stock
+            set holes to an empty list of the type of (an empty list of an integer)
+            loop loopId from (face's firstLoop + 1) to (face's firstLoop + face's loopCount):
+                append (the fast index loop loopId of stock) to holes
+            set added to the item at faceCursor in (additions's values)
+            loop cursor from 0 to the length of (added's values):
+                set ring to an empty list of an integer
+                set stored to the item at cursor in (added's values)
+                loop index from 0 to the length of (stored's values):
+                    append (the item at index in (stored's values)) to ring
+                append ring to holes
+            add fast face outer with holes holes facing face's normal to (the address of result)
+            free outer
+            loop cursor from 0 to the length of holes:
+                free (the item at cursor in holes)
+            free holes
+        set noHoles to an empty list of the type of (an empty list of an integer)
+        loop cursor from 0 to the length of (walls's values):
+            set wall to the item at cursor in (walls's values)
+            set wallAxis to the cad difference of wall's last and wall's first
+            set wallAxis to wallAxis scaled by (1.0 / (the cad length of wallAxis))
+            loop sideIndex from 0 to 12:
+                set following to the remainder of (sideIndex + 1) divided by 12
+                set a to the item at sideIndex in (wall's firstRing's values)
+                set b to the item at following in (wall's firstRing's values)
+                set middle to (the cad sum of (the item at a in (result's positions's values)) and (the item at b in (result's positions's values))) scaled by 0.5
+                set radial to the cad difference of wall's first and middle
+                set radial to the cad difference of radial and (wallAxis scaled by (the cad dot of radial and wallAxis))
+                set normalValue to radial scaled by (1.0 / (the cad length of radial))
+                set ring to an empty list of an integer
+                append a to ring
+                append (the item at sideIndex in (wall's lastRing's values)) to ring
+                append (the item at following in (wall's lastRing's values)) to ring
+                append b to ring
+                add fast face ring with holes noHoles facing normalValue to (the address of result)
+                free ring
+        free noHoles
+        if (the fast flaw of result within tolerance) != 0:
+            set refused's reason to 9
+            return refused
+        return @intrinsic("construct", a fast perforation result record, true, result, 0)

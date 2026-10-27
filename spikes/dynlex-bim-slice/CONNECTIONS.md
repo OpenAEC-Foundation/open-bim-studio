@@ -91,6 +91,17 @@ and member must produce triangles. Boolean shell grouping uses arena-slot
 membership and direct face adjacency, preserving seed and breadth-first order;
 this avoids repeated whole-body scans while drilling multiple holes.
 
+Rectangular plates use direct prism meshing for separate circular through-holes.
+Drilled straight members use a planar-stock mesh that intersects each cutter
+with the actual profile faces, including slightly oblique rounded-profile
+facets. Rounded rectangular profiles retain both tangent points of each straight
+side; missing arc-start tangencies previously skewed three of the four sides.
+Hole loops project onto their entry and exit planes; bore walls retain
+the cutter axis. Edge cuts, intersecting holes, blind cuts and unsupported stock
+retain the general BREP path. The fast route validates closed topology before
+returning a display mesh. These display paths do not change semantic connection
+parameters or the export representation.
+
 Public commands: 2320–2325 recipes, 2326/2327 fillet/butt weld, 2328 Save type,
 2329 Apply type, 2330 Next type. Property 8998 edits the node name. Global
 setting 2400500 stores the chosen library type id. Existing part properties
