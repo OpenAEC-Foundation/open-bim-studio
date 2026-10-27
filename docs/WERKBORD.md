@@ -28,6 +28,11 @@ de workflow- en patchdelen en het draaien van de Windows-workflow; geen
 gelijktijdige bewerkingen. Status: de verhuizing staat op de branch; de
 bevriezing eindigt bij de merge van de pull request van stap 1.
 
+`origin/feature/connection-module` (25 commits, gepusht tot 2026-10-27 08:16,
+vóór deze claim) raakt verhuisde bestanden en voegt nieuwe modules toe onder
+het oude pad. Na de merge van stap 1 moet die branch op main worden gerebased,
+met de nieuwe bestanden per unit geplaatst; een proefmerge geeft 42 conflicten.
+
 Command `2360` en tool-id `27` zijn gereserveerd voor Sketch Split. Hergebruik
 die nummers niet voor een andere functie. Leg nieuwe openbare commandocodes
 vooraf vast. Zie [de werkafspraken en startinstructie](TWEE-COMPUTERS.md).
