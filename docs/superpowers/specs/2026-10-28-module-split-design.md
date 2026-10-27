@@ -142,7 +142,8 @@ Layer 5, UI on top:
 |---|---|---|---|
 | properties | `ui/properties` | properties panel, pset editor, type manager, type menu, labels | 3,521 |
 | panels | `ui/panels` | main UI, layout, model explorer, 3D panel, plan panel, tabs | 9,868 |
-| shell | `ui/shell` | `main.dl`, app parts, loading, files, window styles, icon, demo pavilion, project settings | 7,216 |
+| projects | `ui/projects` | start screen, project browser, recent projects, templates, project settings, open and save (today `bim_app_files`, `bim_ui_files`, `bim_project_settings`) | 1,225 |
+| shell | `ui/shell` | `main.dl`, app parts, loading, window styles, icon, demo pavilion | 5,991 |
 
 Room for what comes, as empty modules with an owner: `architectural/finishes`,
 `architectural/furniture`, `site/` (terrain, survey, point clouds,
