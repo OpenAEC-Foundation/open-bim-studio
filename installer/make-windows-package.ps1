@@ -51,9 +51,11 @@ if ($libraries.Count -eq 0) {
 foreach ($library in $libraries) { Copy-Item $library.FullName (Join-Path $stage "bin") }
 
 # The SPIR-V shaders.
-$shaders = @(Get-ChildItem -Path $shadersPath -Filter "*.spv" -File)
-if ($shaders.Count -eq 0) { throw "No shaders in $shadersPath." }
-foreach ($shader in $shaders) { Copy-Item $shader.FullName (Join-Path $stage "shaders") }
+# Not $shaders: that is the [string] parameter, and assigning an array to it
+# would flatten the list to one string.
+$shaderFiles = @(Get-ChildItem -Path $shadersPath -Filter "*.spv" -File)
+if ($shaderFiles.Count -eq 0) { throw "No shaders in $shadersPath." }
+foreach ($shader in $shaderFiles) { Copy-Item $shader.FullName (Join-Path $stage "shaders") }
 
 # The fonts with their licences: osifont (drawings), Inter and JetBrains Mono
 # (the interface), Liberation Mono (the fallback).
