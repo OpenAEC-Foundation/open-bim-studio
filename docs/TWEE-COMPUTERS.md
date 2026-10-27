@@ -44,9 +44,10 @@ dezelfde bestanden tegelijk aanpassen niet.
 
 Paden hieronder zijn relatief aan de repositoryroot.
 
-**Computer 1:** `app/`, `editor/`, `model/`, `graphics/`, `formats/`,
-`automation/` en hun tests onder `tests/`. Binnen deze computer zijn de huidige
-Sketch-taken verder verdeeld in [het taakbord](WERKBORD.md).
+**Per module een eigenaar** sinds de modulesplitsing van 2026-10-28: de tabel
+staat in [OWNERS.md](OWNERS.md) en `.github/CODEOWNERS`; een computer claimt daar
+de modules waaraan hij werkt. Het taakbord [WERKBORD.md](WERKBORD.md) houdt de
+lopende claims.
 
 **Computer 2:** `build.sh`, `toolchain.sh`, `scripts/`, `.github/workflows/`,
 `installer/`, `platform/`, `patches/` en `lib/`; daarnaast de compilerbron
@@ -55,7 +56,7 @@ tot platformintegratie. De app blijft DynLex.
 
 **Eerst afstemmen, dan één eigenaar aanwijzen:**
 
-- `kernel/`, `graphics/vulkan/` en `graphics/shaders/`;
+- `kernel/` en `viewer/` (Vulkan en shaders);
 - `.github/workflows/` in de repositoryroot is de enige plek van de workflows;
 - compiler-ABI, openbare module-API's, nieuwe commandocodes, bestandsschema,
   exportsemantiek en migraties;

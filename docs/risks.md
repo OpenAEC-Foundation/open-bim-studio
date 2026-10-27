@@ -393,7 +393,7 @@ per-frame transient arena holds at most 25,890 boxes, against a 10⁵-box target
 
   **The precondition is met, the experiment is not run (2026-10-15).** The DynLex compiler is built
   and runs a Vulkan renderer in [the application](notes/findings.md):
-  its own context (`graphics/vulkan/context.dl`) replaces the fixed per-frame arena with a growing
+  its own context (`viewer/vulkan/context.dl`) replaces the fixed per-frame arena with a growing
   stream buffer, and keeps a persistent indexed mesh whose vertices are stored relative to the
   scene's centre, with the centre-minus-camera shift computed in binary64 on the CPU and passed as
   shader parameters. After this session's changes a camera change uploads no mesh data; that is by

@@ -38,16 +38,16 @@ out=${BIM_BUILD_DIR:-$here/build}
 dynlex="$root/build/dynlex"
 cd "$here"
 
-# The generated imports of app/main.dl: the OS's window style, and the
+# The generated imports of ui/shell/main.dl: the OS's window style, and the
 # self-test entry (a no-op unless dev-test writes the bundled checks).
 write_platform() {
     mkdir -p generated
-    printf 'import graphics/window_style_%s.dl\n' "${BIM_PLATFORM:-linux}" > generated/platform.dl
+    printf 'import ui/shell/window_style_%s.dl\n' "${BIM_PLATFORM:-linux}" > generated/platform.dl
 }
 write_self_test_stub() {
     mkdir -p generated
     cat > generated/self_test.dl <<'STUB'
-# Written by build.sh generate: the self-test entry of app/main.dl. The default does
+# Written by build.sh generate: the self-test entry of ui/shell/main.dl. The default does
 # nothing; dev-test replaces it with the bundled headless checks.
 function run bim app checks:
     execute:
@@ -57,7 +57,7 @@ STUB
 # The bundle of the named tests as the body of `run bim app checks`.
 write_self_test_bundle() {
     mkdir -p generated
-    python3 tools/bundle_tests.py make tests ../generated/app_checks "$@"
+    python3 tools/bundle_tests.py make . generated/app_checks "$@"
     awk '
         /^print \(the string form of "=== / && !footer {
             print "function run bim app checks:"
@@ -76,8 +76,8 @@ generate() {
     write_self_test_stub
     write_composition
     mkdir -p build/shaders "$out/shaders"
-    cp graphics/shaders/*.spv build/shaders/
-    if [ "$out/shaders" != "$here/build/shaders" ]; then cp graphics/shaders/*.spv "$out/shaders/"; fi
+    cp viewer/shaders/*.spv build/shaders/
+    if [ "$out/shaders" != "$here/build/shaders" ]; then cp viewer/shaders/*.spv "$out/shaders/"; fi
 }
 generate
 command=${1:-app}
@@ -104,19 +104,28 @@ cc -std=c11 -O2 -fPIC -c platform/obs_platform.c -o "$out/platform/obs_platform.
 ar rcs "$out/platform/libobs_platform.a" "$out/platform/obs_platform.o"
 export LIBRARY_PATH="$out/platform${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
-# Compiles tests/NAME.dl, runs it and compares with tests/NAME.expected.txt;
+# Tests live in each module's tests/ directory; a name is looked up there.
+test_source() {
+    find . -path ./build -prune -o -path ./kernel -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/$1.dl" -print -quit
+}
+all_test_names() {
+    find . -path ./build -prune -o -path ./kernel -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/*.expected.txt" -print | sed 's#.*/##; s#\.expected\.txt$##' | sort
+}
+# Compiles a test by name, runs it and compares with its expected output;
 # prints one line and writes $out/tests/NAME.result (0 or 1).
 run_one_test() {
     name=$1
     result=1
-    if ! "$dynlex" "tests/$name.dl" -O0 -o "$out/tests/$name" > "$out/tests/$name.diag" 2>&1 || [ -s "$out/tests/$name.diag" ]; then
+    source=$(test_source "$name")
+    if [ -z "$source" ]; then echo "$name MISSING (no */tests/$name.dl)"; echo 1 > "$out/tests/$name.result"; return; fi
+    if ! "$dynlex" "$source" -O0 -o "$out/tests/$name" > "$out/tests/$name.diag" 2>&1 || [ -s "$out/tests/$name.diag" ]; then
         echo "$name DIAG"; head -5 "$out/tests/$name.diag"
     elif ! (ulimit -c 0; stdbuf -oL "$out/tests/$name") > "$out/tests/$name.out" 2>&1; then
         echo "$name RUNTIME FAIL"; head -10 "$out/tests/$name.out"
-    elif diff -q "$out/tests/$name.out" "tests/$name.expected.txt" > /dev/null; then
+    elif diff -q "$out/tests/$name.out" "${source%.dl}.expected.txt" > /dev/null; then
         echo "$name PASS"; result=0
     else
-        echo "$name FAIL"; diff "$out/tests/$name.out" "tests/$name.expected.txt" | head -10 || true
+        echo "$name FAIL"; diff "$out/tests/$name.out" "${source%.dl}.expected.txt" | head -10 || true
     fi
     echo "$result" > "$out/tests/$name.result"
 }
@@ -125,7 +134,7 @@ export dynlex out
 
 case "$command" in
     app)
-        "$dynlex" app/main.dl -O2 -o "$out/open-bim-studio"
+        "$dynlex" ui/shell/main.dl -O2 -o "$out/open-bim-studio"
         echo "built $out/open-bim-studio" ;;
     dev|dev-test)
         dev_opt=${BIM_DEV_OPT_LEVEL:-0}
@@ -141,7 +150,7 @@ case "$command" in
             fi
             mkdir -p "$out/tests"
             write_self_test_bundle "$@"
-            if ! "$dynlex" app/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev" > "$out/tests/app.diag" 2>&1 || [ -s "$out/tests/app.diag" ]; then
+            if ! "$dynlex" ui/shell/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev" > "$out/tests/app.diag" 2>&1 || [ -s "$out/tests/app.diag" ]; then
                 echo 'app DIAG'; head -20 "$out/tests/app.diag"; exit 1
             fi
             if ! (ulimit -c 0; "$out/open-bim-studio-dev" --self-test) > "$out/tests/app_checks.out" 2>&1; then
@@ -149,7 +158,7 @@ case "$command" in
             fi
             python3 tools/bundle_tests.py split "$out/tests/app_checks.out" generated/app_checks.expected.txt "$out/tests/app_checks"
         else
-            "$dynlex" app/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
+            "$dynlex" ui/shell/main.dl "-O$dev_opt" "${debug_flags[@]}" -o "$out/open-bim-studio-dev"
         fi
         echo "built $out/open-bim-studio-dev" ;;
     run)
@@ -161,9 +170,7 @@ case "$command" in
     test)
         names=("$@")
         if [ ${#names[@]} -eq 0 ]; then
-            for expected in tests/*.expected.txt; do
-                names+=("$(basename "$expected" .expected.txt)")
-            done
+            while IFS= read -r found; do names+=("$found"); done < <(all_test_names)
         fi
         mkdir -p "$out/tests"
         rm -f "$out"/tests/*.result
@@ -179,12 +186,10 @@ case "$command" in
         # instead of one per test (tools/bundle_tests.py).
         names=("$@")
         if [ ${#names[@]} -eq 0 ]; then
-            for expected in tests/*.expected.txt; do
-                names+=("$(basename "$expected" .expected.txt)")
-            done
+            while IFS= read -r found; do names+=("$found"); done < <(all_test_names)
         fi
         mkdir -p "$out/tests"
-        python3 tools/bundle_tests.py make tests ../generated/bundle "${names[@]}"
+        python3 tools/bundle_tests.py make . generated/bundle "${names[@]}"
         if ! "$dynlex" generated/bundle.dl -O0 -o "$out/tests/bundle" > "$out/tests/bundle.diag" 2>&1 || [ -s "$out/tests/bundle.diag" ]; then
             echo "bundle DIAG"; head -20 "$out/tests/bundle.diag"; exit 1
         fi

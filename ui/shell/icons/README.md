@@ -37,4 +37,4 @@ The Style Repo itself is a private repository of OpenAEC.
 
 To regenerate after the Style Repo changes:
 
-    python3 tools/make_ui_icons.py ~/Documenten/GitHub/OpenAEC-Style-Repo app/icons/ui-icons.txt
+    python3 tools/make_ui_icons.py ~/Documenten/GitHub/OpenAEC-Style-Repo ui/shell/icons/ui-icons.txt

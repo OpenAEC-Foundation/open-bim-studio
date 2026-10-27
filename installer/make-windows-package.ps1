@@ -5,10 +5,10 @@
 #
 #   make-windows-package.ps1 -Program build\open-bim-studio.exe -Repo <this repository> -Shaders <folder> -Output <folder> [-Version 0.1.1]
 #
-# -Program is the compiled app/main.dl; the DLLs the DynLex
+# -Program is the compiled ui/shell/main.dl; the DLLs the DynLex
 # compiler copied beside it (GLFW, FreeType, the Vulkan loader, the C++ and
-# runtime libraries) go with it. -Repo is this repository (app/fonts,
-# app/icons, formats/import, installer/licenses); -Shaders holds the SPIR-V.
+# runtime libraries) go with it. -Repo is this repository (ui/shell/fonts,
+# ui/shell/icons, exchange/import, installer/licenses); -Shaders holds the SPIR-V.
 # The staged folder holds bin\ (the program and its DLLs), shaders\, fonts\
 # with their licences, icons\ and import\; the program finds them from its
 # own folder. licenses\ holds the notices of installer\licenses (the

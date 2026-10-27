@@ -151,6 +151,10 @@ Anti-goals (this would be failure even if it compiled):
 
 ## 5. Target layout
 
+> Superseded on 2026-10-28 by the module layout of
+> `2026-10-28-module-split-design.md` §4; the layering below describes stage 1
+> and stays as the record of that stage.
+
 ```
 open-bim-studio/
   kernel/

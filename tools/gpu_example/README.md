@@ -8,8 +8,8 @@ the driver are.
 
 | File | Contents |
 | --- | --- |
-| `graphics/vulkan/structs.dl` | The Vulkan structures in use, as DynLex classes with C layout |
-| `graphics/vulkan/renderer.dl` | Window, swapchain, depth buffer, one pipeline, persistent vertex and index buffers, and the shaders' parameters in one storage buffer |
+| `viewer/vulkan/structs.dl` | The Vulkan structures in use, as DynLex classes with C layout |
+| `viewer/vulkan/renderer.dl` | Window, swapchain, depth buffer, one pipeline, persistent vertex and index buffers, and the shaders' parameters in one storage buffer |
 | `gpu_view.dl` | Loads the example house, a BIM-MESH import or the generated tower, and orbits it while reporting the frame time |
 | `solid_vertex.dl`, `solid_fragment.dl` | Shaders for per-face vertices that carry a normal |
 | `shared_vertex.dl`, `shared_fragment.dl` | Shaders for shared corners: the face's normal comes from screen-space derivatives of the position |
@@ -42,7 +42,7 @@ build/gpu/gpu_view --generate 390000 --shared --uncapped --frames 480
 
 The options:
 - `--import FILE.bimmesh` opens a model converted by
-  `formats/import/ifc_to_mesh.py`;
+  `exchange/import/ifc_to_mesh.py`;
 - `--generate N` builds the editor's imaginary tower;
 - `--shared` stores shared corners;
 - `--uncapped` presents without waiting for the display;

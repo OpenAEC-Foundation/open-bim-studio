@@ -27,10 +27,10 @@ if ($env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -ne 'x86_64-w64-mingw32') { throw 'A na
 
 Push-Location $repoPath
 try {
-    # The generated imports of app/main.dl (build.sh generate on Linux).
+    # The generated imports of ui/shell/main.dl (build.sh generate on Linux).
     New-Item -ItemType Directory -Force generated, build\shaders | Out-Null
-    [IO.File]::WriteAllText((Join-Path $repoPath 'generated\platform.dl'), "import graphics/window_style_windows.dl`n")
-    $stub = "# Written by scripts/build-windows-app.ps1: the self-test entry of app/main.dl.`n" +
+    [IO.File]::WriteAllText((Join-Path $repoPath 'generated\platform.dl'), "import ui/shell/window_style_windows.dl`n")
+    $stub = "# Written by scripts/build-windows-app.ps1: the self-test entry of ui/shell/main.dl.`n" +
         "function run bim app checks:`n    execute:`n        ignore 0`n"
     [IO.File]::WriteAllText((Join-Path $repoPath 'generated\self_test.dl'), $stub)
     & python -B (Join-Path $repoPath 'tools\compose_modules.py') --root $repoPath --out (Join-Path $repoPath 'generated') | Out-Null
@@ -58,18 +58,20 @@ try {
 
     foreach ($name in 'ui_layout', 'plan_pan', 'text_glyphs', 'png_library') {
         $program = "$outPath\check-$name.exe"
-        $diagnostics = & $compiler "tests/$name.dl" -O0 -o $program 2>&1
+        $source = Get-ChildItem -Path $repoPath -Recurse -Filter "$name.dl" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]tests[\\/]' -and $_.FullName -notmatch '[\\/](kernel|tools|build|generated)[\\/]' } | Select-Object -First 1
+        if (-not $source) { throw "No */tests/$name.dl in the repository." }
+        $diagnostics = & $compiler $source.FullName -O0 -o $program 2>&1
         $compileCode = $LASTEXITCODE
         $diagnostics | Set-Content "$outPath\$name.diag"
         if ($compileCode -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { throw "Compile diagnostics: $name" }
         $actual = (& $program | Out-String) -replace "`r`n", "`n"
         $runCode = $LASTEXITCODE
         $actual | Set-Content "$outPath\$name.out"
-        $expected = (Get-Content -Raw "tests/$name.expected.txt") -replace "`r`n", "`n"
+        $expected = (Get-Content -Raw ($source.FullName -replace '\.dl$', '.expected.txt')) -replace "`r`n", "`n"
         if ($runCode -ne 0 -or $actual.TrimEnd() -ne $expected.TrimEnd()) { throw "Headless check failed: $name" }
     }
     $app = "$outPath\open-bim-studio.exe"
-    $diagnostics = & $compiler app/main.dl -O2 -o $app 2>&1
+    $diagnostics = & $compiler ui/shell/main.dl -O2 -o $app 2>&1
     $compileCode = $LASTEXITCODE
     $diagnostics | Set-Content "$outPath\app.diag"
     if ($compileCode -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { throw 'Application compilation failed or emitted diagnostics.' }

@@ -4,7 +4,7 @@
 #
 #   installer/make-installer.sh BINARY OUTPUT [release|dev]
 #
-# BINARY is a built app/main.dl; OUTPUT is the installer file
+# BINARY is a built ui/shell/main.dl; OUTPUT is the installer file
 # to write. `release` (the default) installs as `open-bim-studio`; `dev` installs
 # a development build (for instance -O0 -g) side by side as
 # `open-bim-studio-dev`,
@@ -12,7 +12,7 @@
 # so the libraries the binary links against resolve. Every library that does
 # not come from the system (/lib, /usr/lib) is copied into the installer,
 # together with the font and its licence and the SPIR-V shaders compiled from
-# graphics/shaders into build/shaders, so an installed copy does not depend
+# viewer/shaders into build/shaders, so an installed copy does not depend
 # on this repository, its caches or the build machine's temporary files.
 set -euo pipefail
 
@@ -27,15 +27,15 @@ case "$variant" in
     *) echo "unknown variant $variant" >&2; exit 1 ;;
 esac
 root=$(pwd)
-font="$root/app/fonts/LiberationMono-Regular.ttf"
-licence="$root/app/fonts/LICENSE-LiberationFonts"
+font="$root/ui/shell/fonts/LiberationMono-Regular.ttf"
+licence="$root/ui/shell/fonts/LICENSE-LiberationFonts"
 [ -x "$binary" ] || { echo "not an executable: $binary" >&2; exit 1; }
 [ -f "$font" ] && [ -f "$licence" ] || { echo "run from the repository root" >&2; exit 1; }
 shaders="$root/build/shaders"
 # The interface font, Noto Sans (SIL Open Font License), from the system.
 noto=/usr/share/fonts/truetype/noto
 [ -f "$noto/NotoSans-Regular.ttf" ] || { echo "Noto Sans not found in $noto (package fonts-noto-core)" >&2; exit 1; }
-[ -f "$shaders/screen_vertex.spv" ] || { echo "run build.sh generate first (graphics/shaders into build/shaders)" >&2; exit 1; }
+[ -f "$shaders/screen_vertex.spv" ] || { echo "run build.sh generate first (viewer/shaders into build/shaders)" >&2; exit 1; }
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -47,20 +47,20 @@ cp "$font" "$licence" "$stage/payload/fonts/"
 cp "$noto/NotoSans-Regular.ttf" "$noto/NotoSans-Bold.ttf" "$stage/payload/fonts/"
 cp /usr/share/doc/fonts-noto-core/copyright "$stage/payload/fonts/LICENSE-NotoSans"
 # The drawing font, osifont (LGPL-3.0 with the GPL font exception).
-cp "$root/app/fonts/osifont.ttf" "$stage/payload/fonts/"
-cp "$root/app/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
+cp "$root/ui/shell/fonts/osifont.ttf" "$stage/payload/fonts/"
+cp "$root/ui/shell/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
 # The interface fonts of the OpenAEC style, Inter and JetBrains Mono, with
 # their licences (SIL OFL 1.1).
 for style_font in Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf JetBrainsMono-Regular.ttf Inter-OFL.txt JetBrainsMono-OFL.txt; do
-    cp "$root/app/fonts/$style_font" "$stage/payload/fonts/"
+    cp "$root/ui/shell/fonts/$style_font" "$stage/payload/fonts/"
 done
 # The interface's icons (CC BY-SA 4.0, see icons/README.md).
 mkdir -p "$stage/payload/icons"
-cp "$root/app/icons/ui-icons.txt" "$root/app/icons/README.md" "$stage/payload/icons/"
-cp "$root/app/icons/open-bim-studio.svg" "$root/app/icons/open-bim-studio.png" "$root/app/icons/open-bim-studio.rgba" "$stage/payload/icons/"
+cp "$root/ui/shell/icons/ui-icons.txt" "$root/ui/shell/icons/README.md" "$stage/payload/icons/"
+cp "$root/ui/shell/icons/open-bim-studio.svg" "$root/ui/shell/icons/open-bim-studio.png" "$root/ui/shell/icons/open-bim-studio.rgba" "$stage/payload/icons/"
 # The script that reads 2D drawings (DXF, DWG, PDF) for Collaborate > Import.
 mkdir -p "$stage/payload/import"
-cp "$root/formats/import/drawing_to_lines.py" "$stage/payload/import/"
+cp "$root/exchange/import/drawing_to_lines.py" "$stage/payload/import/"
 
 # Bundle every resolved library outside the system directories; refuse when
 # one does not resolve at all.

@@ -11,7 +11,8 @@ is in the repository README.
 | `module-guide.md` | The modules of the application and the test programs, by file | `overlay/examples/bim-slice/README.md` |
 | `findings.md` | The dated findings log of the spike, 2026 | `FINDINGS.md` |
 | `build-times.md` | Measured build times before and after each restructuring stage | new |
-| `layering.md` | The import direction between units, what was repaired and what is left | new |
+| `layering.md` | The import direction between modules (and the unit layering of stage 1 before it) | new |
+| `dynlex-guide.md` | The language guide: what the compiler docs and the standard library say, the idioms here, the pitfalls, the module rules | new |
 | `baseplates.md` | Column base plates | `BASEPLATES.md` |
 | `drawing-fidelity.md` | Drawing fidelity notes | `DRAWING-FIDELITY.md` |
 | `plan-performance.md` | The plan performance investigation | `PLAN-PERFORMANCE.md` |

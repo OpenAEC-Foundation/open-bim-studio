@@ -65,10 +65,15 @@ for its current status.
 
 ## Build from source (Linux)
 
-The application lives in the unit directories at the root: `kernel/`, `model/`,
-`formats/`, `graphics/`, `editor/`, `app/` and `automation/`, with `tests/`,
-`tools/`, `installer/` and `platform/` beside them. `build.sh` builds it from
-the root; `docs/notes/layering.md` gives the import direction between units.
+The application lives in module directories at the root, one per domain in six
+layers: `kernel/`, `bim/`, the services (`viewer/`, `exchange/`, `ifc/`, `views/`,
+`materials/`, `localisation/`, `automation/`, `ui/editor/`), the shape classes
+(`elements/`, `pattern/`), the disciplines (`structural/`, `architectural/`,
+`mep/`) and the UI (`ui/properties/`, `ui/panels/`, `ui/shell/`); each module
+holds its tests in `tests/` and declares itself in a `MODULE` manifest.
+`docs/OWNERS.md` names the owner per module, `scripts/check-layers.sh` guards
+the import direction, and `docs/superpowers/specs/2026-10-28-module-split-design.md`
+is the design.
 
 ### Prerequisites
 
@@ -109,7 +114,7 @@ bash ./build.sh run-dev /absolute/path/to/project.ifcxb
 ```
 
 The development executable is `$BIM_BUILD_DIR/open-bim-studio-dev`.
-`build.sh` compiles from the repository root: imports such as `model/x.dl`
+`build.sh` compiles from the repository root: imports such as `bim/x.dl`
 resolve here, `lib/std.dl` in the compiler checkout, and a file under `lib/`
 here shadows the checkout's (see `lib/README.md`). `build.sh generate` writes
 the two import files of `generated/` (the platform's window style and the
@@ -163,12 +168,20 @@ parametric, editable geometry. Preserve source files when testing round trips.
 
 ```text
 kernel/        CAD kernel: core/, planar/, nurbs/, space/, brep/, acis/, fast/, tests/, reference/, docs/
-model/         Semantic model, evaluation, systems, reinforcement, connections
-formats/       .bim, IFC, IFCX, STEP, DXF reference, PDF, SVG, import helpers
-graphics/      Vulkan layer, shaders, text, canvas, scene, window styles
-editor/        Editing operations, properties, sketch, modify, type manager
-app/           main.dl, UI, panels, sheets, fonts, icons
+bim/           The BIM core: document, element identity, psets, settings, index, undo
+viewer/        Vulkan layer, shaders, scene, instances, section caps, clash, canvas
+exchange/      ifcx (the native binary format), dxf_dwg, step, import (drawings, images, caches)
+ifc/           IFC schema, STEP reading and writing, psets, promote
+views/         common, drawings, sheets, schedules, export (SVG, PDF)
+materials/     Section materials, hatches, library
+localisation/  Country content as data (registry, nl); empty until stage 4
 automation/    The request/response API and the MCP and HTTP adapters
+ui/            editor (the tool framework), properties, panels, shell (main.dl, fonts, icons)
+elements/      linear, connection, planar, object: the shape classes
+pattern/       common, grids (Building System)
+structural/    rebar, steel, results
+architectural/ openings, stairs, spaces
+mep/           common (networks)
 platform/      obs_platform.c, the per-OS C shim
 tests/         Headless tests with expected output, support, fixtures, models
 tools/         Test bundler, probes, icon maker, the GPU example

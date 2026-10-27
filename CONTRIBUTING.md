@@ -1,8 +1,9 @@
 # Contributing
 
 This repository contains the native Open BIM Studio application and its supporting
-research. Application code lives in the unit directories at the root (kernel/,
-model/, formats/, graphics/, editor/, app/, automation/). Read README.md for
+research. Application code lives in module directories at the root (kernel/, bim/,
+viewer/, exchange/, ifc/, views/, materials/, localisation/, automation/, ui/,
+elements/, pattern/, structural/, architectural/, mep/; owners in docs/OWNERS.md). Read README.md for
 setup, docs/WERKBORD.md for ownership and docs/TWEE-COMPUTERS.md for coordination.
 
 ## Application changes

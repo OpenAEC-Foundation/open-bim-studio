@@ -16,7 +16,15 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 | Windows/Linux builds en installers | PC2, na taakacceptatie | `pc2/build-installers` | CI/build/installer; geen modelleringscode | Voorgesteld / nog niet geclaimd |
 | Release samenstellen en publiceren | PC1 / coördinator | `main` | Integratie, geteste artefacten, tags | Geblokkeerd op app-/installatietests |
 
-## Herstructurering stap 1 — computer 1 — 2026-10-27
+## Modulesplitsing — 2026-10-28
+
+Branch `restructure/modules`, volgens [het ontwerp](superpowers/specs/2026-10-28-module-split-design.md)
+en [het plan](superpowers/plans/2026-10-28-module-split-plan.md): elke unit is
+verhuisd naar zijn module, tests staan per module, eigenaren staan in
+[OWNERS.md](OWNERS.md). Claims gaan voortaan per module; de bevriezing van stap 1
+is opgeheven zodra deze branch op `main` staat.
+
+## Herstructurering stap 1 — computer 1 — 2026-10-27 (afgerond; tag `restructure-stage-1` bij de merge)
 
 Branch `restructure/one-tree`, volgens
 [het ontwerp](superpowers/specs/2026-10-27-restructuring-design.md) en

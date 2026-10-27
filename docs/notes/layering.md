@@ -1,4 +1,16 @@
-# Layering: the import direction between units
+# Layering: the import direction between modules
+
+Since the module split of 2026-10-28 (`docs/superpowers/specs/2026-10-28-module-split-design.md`)
+`scripts/check-layers.sh` checks the six module layers: a file may import its own
+module, the kernel, `lib/` and lower layers; programs (`ui/shell`, tests) import
+anything. The edges the tree still carries from before the split are recorded in
+`scripts/layer-baseline.txt` (104 on 2026-10-28, most of them the editor framework
+importing element modules and the viewer importing the model); the check fails on a
+new edge, never on a known one, so the count can only go down. Removing a baseline
+edge is each module owner's work when the module's records and extension points move
+behind the generated composition.
+
+## The unit layering of stage 1 (2026-10-27), superseded
 
 `scripts/check-layers.sh` enforces the direction of the design
 (`docs/superpowers/specs/2026-10-27-restructuring-design.md` §5): kernel →
