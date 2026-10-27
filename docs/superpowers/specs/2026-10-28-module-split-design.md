@@ -56,6 +56,12 @@ Windows worktree compiler on three-file programs:
 So a service can call a generated dispatcher without importing it, and the
 import-direction check stays a check on `import` lines.
 
+A third fact, met in phase B: `local function` makes a function private to
+its file. A module's helpers stay `local`; what it offers other modules and
+the dispatchers is its public patterns. Two helpers of the evaluator that
+every solid-building module needs (`bim element … needs signature … in …`,
+`record bim build … of … signed … in …`) were local and are now public.
+
 ## 4. The catalogue
 
 Lines are today's size of the files that move there; "new" means no code yet.
@@ -153,9 +159,13 @@ DynLex has no function values, so modules cannot register themselves at run
 time. Composition is static and generated, the way `generated/self_test.dl`
 already works:
 
-- Every module has a manifest, `MODULE` (plain text: name, layer, the modules
-  it depends on, the records it stores in the model, the extension points it
-  implements).
+- Every module has a manifest, `MODULE` (plain text, one `key: value` per
+  line): `name`, `layer`, `depends`, `records` (the file that defines its
+  record types), `value` (a scalar the model carries, with its initial
+  value), `store` (a list the snapshot clones), `shared` (a list the snapshot
+  shares, such as the journal) and `point: <name> <file>` for each extension
+  point it implements. Phase B's `bim/MODULE` and `elements/planar/MODULE`
+  are the first two.
 - `build.sh generate` runs `tools/compose_modules.py` (Python until the tooling
   stage ports it to DynLex), which writes two ignored files:
   `generated/model.dl`, the `bim model record` with one list per module store,
