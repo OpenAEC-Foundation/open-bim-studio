@@ -39,8 +39,8 @@ remain active work.
 Reinforcement is displayed as **depth-tested centre lines by default** to reduce
 3D rendering work. The Graphics menu can display bar diameters when needed.
 The model retains its reinforcement parameters independently of this display mode.
-See [reinforcement scope](spikes/dynlex-bim-slice/REINFORCEMENT-SCOPE.md) and the
-[reinforcement library](spikes/dynlex-bim-slice/REINFORCEMENT-LIBRARY.md) for details.
+See [reinforcement scope](docs/notes/reinforcement-scope.md) and the
+[reinforcement library](docs/notes/reinforcement-library.md) for details.
 
 ## Try a packaged preview
 
@@ -59,22 +59,24 @@ must support Vulkan; the current Linux application uses X11/GLFW.
 
 **Windows:** the native port and ZIP/MSI packaging pipeline are in the repository.
 A tested Windows installer is not included in v0.1. Follow the
-[Windows release instructions](spikes/dynlex-bim-slice/ci/WINDOWS-RELEASE.md) and
+[Windows release instructions](docs/notes/windows-release.md) and
 [workflow results](https://github.com/OpenAEC-Foundation/open-bim-studio/actions/workflows/windows-release.yml)
 for its current status.
 
 ## Build from source (Linux)
 
-The active application lives in `spikes/dynlex-bim-slice`. That historical path
-has been retained to keep module imports stable; it is the current modeller,
-not an alternative to another app elsewhere in this repository.
+The application lives in the unit directories at the root: `kernel/`, `model/`,
+`formats/`, `graphics/`, `editor/`, `app/` and `automation/`, with `tests/`,
+`tools/`, `installer/` and `platform/` beside them. `build.sh` builds it from
+the root; `docs/notes/layering.md` gives the import direction between units.
 
 ### Prerequisites
 
-- A **compatible DynLex CAD-kernel checkout** with an executable `build/dynlex`
-  and its matching `lib/` directory. An arbitrary upstream compiler is not a
-  supported substitute. See the [toolchain notes](spikes/dynlex-bim-slice/README.md).
-- Bash, `rsync`, `patch`, a C compiler and `ar` for the small native platform bridge.
+- A **DynLex fork checkout** at the pinned commit (`codex/cadkernel-port` at
+  `c2d32bea` with the patches of `patches/`), built in place at `build/dynlex`;
+  the compiler finds its own `lib/`. An arbitrary upstream compiler is not a
+  supported substitute. See the [toolchain notes](docs/notes/application-and-toolchain.md).
+- Bash, a C compiler and `ar` for the small native platform bridge.
 - Python 3 for existing test-bundling and drawing-import helpers. BIM product
   logic, tools and geometry are written in **DynLex**, not Python.
 - Vulkan/GLFW runtime support and fonts; the DynLex checkout supplies its
@@ -86,7 +88,7 @@ not an alternative to another app elsewhere in this repository.
 
 ```sh
 git clone https://github.com/OpenAEC-Foundation/open-bim-studio.git
-cd open-bim-studio/spikes/dynlex-bim-slice
+cd open-bim-studio
 
 # Use your compatible, already-built DynLex checkout.
 export DYNLEX_ROOT="/absolute/path/to/dynlex-cadkernel"
@@ -107,9 +109,12 @@ bash ./build.sh run-dev /absolute/path/to/project.ifcxb
 ```
 
 The development executable is `$BIM_BUILD_DIR/open-bim-studio-dev`.
-`build.sh` assembles a private tree under `$BIM_BUILD_DIR/tree` from the selected
-compiler's libraries, the application overlay, patches, fixtures and precompiled
-shaders. It does not edit the selected compiler checkout.
+`build.sh` compiles from the repository root: imports such as `model/x.dl`
+resolve here, `lib/std.dl` in the compiler checkout, and a file under `lib/`
+here shadows the checkout's (see `lib/README.md`). `build.sh generate` writes
+the two import files of `generated/` (the platform's window style and the
+self-test entry) and copies the prebuilt shaders into `build/shaders`; every
+build command runs it first. It does not edit the compiler checkout.
 
 Alternatively, save the absolute compiler-checkout path on one line in
 `.dynlex-root.local`. That machine-local file is ignored by Git; an explicit
@@ -157,24 +162,30 @@ parametric, editable geometry. Preserve source files when testing round trips.
 ## Code organisation
 
 ```text
-spikes/dynlex-bim-slice/
-  overlay/examples/bim-slice/   DynLex application, tools, UI and tests
-  overlay/lib/                 CAD kernel, fast geometry and Vulkan extensions
-  examples/                    Generic example models and test fixtures
-  shaders/                     Precompiled SPIR-V shaders
-  platform/                    Platform-specific application modules
-  ci/                          Windows build and packaging scripts
-  patches/                     Compiler/library integration patches
-  build.sh                     Local build, run, test and installer entry point
-docs/                          Architecture, research, coordination and status
-.github/workflows/             Active GitHub Actions workflows
+kernel/        CAD kernel: core/, planar/, nurbs/, space/, brep/, acis/, fast/, tests/, reference/, docs/
+model/         Semantic model, evaluation, systems, reinforcement, connections
+formats/       .bim, IFC, IFCX, STEP, DXF reference, PDF, SVG, import helpers
+graphics/      Vulkan layer, shaders, text, canvas, scene, window styles
+editor/        Editing operations, properties, sketch, modify, type manager
+app/           main.dl, UI, panels, sheets, fonts, icons
+automation/    The request/response API and the MCP and HTTP adapters
+platform/      obs_platform.c, the per-OS C shim
+tests/         Headless tests with expected output, support, fixtures, models
+tools/         Test bundler, probes, icon maker, the GPU example
+installer/     Linux installer and Windows package scripts and licences
+patches/       Compiler patches until they are upstream
+lib/           Overrides of the compiler checkout's library (lib/README.md)
+scripts/       The Windows build script and the layer check
+build.sh       Local build, run, test and installer entry point
+docs/          Architecture, decisions, research, notes, coordination and status
+.github/workflows/   GitHub Actions workflows
 ```
 
 `bim_model.dl` holds semantic objects and transactions; `bim_evaluate.dl` derives
 geometry; drawing and scene modules produce 2D and 3D representations.
 `bim_editor*.dl` implements editing operations, while `bim_ui*.dl` and `main.dl`
 connect them to the native interface. The detailed
-[module guide](spikes/dynlex-bim-slice/overlay/examples/bim-slice/README.md)
+[module guide](docs/notes/module-guide.md)
 provides more context.
 
 The repository began as a research programme. Its

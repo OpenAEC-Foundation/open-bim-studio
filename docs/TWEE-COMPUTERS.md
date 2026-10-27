@@ -5,9 +5,11 @@ wordt in de bestaande Codex-sessie op computer 1 gecoördineerd.
 
 ## Startpunt en status
 
-De native BIM-modeller staat in `spikes/dynlex-bim-slice`. De productlogica en
-geometrie worden in **DynLex** ontwikkeld. De overlay wordt bij het bouwen over
-een afzonderlijke DynLex-checkout gelegd. De bestaande platformbrug en
+De native BIM-modeller staat in de unitmappen in de root (`kernel/`, `model/`,
+`formats/`, `graphics/`, `editor/`, `app/`, `automation/`). De productlogica en
+geometrie worden in **DynLex** ontwikkeld. `build.sh` compileert vanuit de
+repositoryroot met een afzonderlijke DynLex-checkout als compiler; er wordt
+niets meer over die checkout heen gelegd. De bestaande platformbrug en
 buildscripts zijn infrastructuur; voeg geen Python-implementatie van BIM-tools toe.
 
 Gebruik **main** als gezamenlijke ontwikkelbasis, zodra de lokale consolidatie
@@ -40,24 +42,21 @@ dezelfde bestanden tegelijk aanpassen niet.
 
 ## Bestanden en eigenaarschap
 
-Paden hieronder zijn relatief aan `spikes/dynlex-bim-slice`, tenzij anders vermeld.
+Paden hieronder zijn relatief aan de repositoryroot.
 
-**Computer 1:** `overlay/examples/bim-slice/main.dl`, `bim_editor*.dl`,
-`bim_ui*.dl`, `bim_view_panel.dl`, `bim_scene.dl`, `bim_model.dl`, de overige
-BIM-/wapeningsmodules en hun tests. Binnen deze computer zijn de huidige
+**Computer 1:** `app/`, `editor/`, `model/`, `graphics/`, `formats/`,
+`automation/` en hun tests onder `tests/`. Binnen deze computer zijn de huidige
 Sketch-taken verder verdeeld in [het taakbord](WERKBORD.md).
 
-**Computer 2:** `build.sh`, `toolchain.sh`, `ci/`,
-`overlay/examples/bim-slice/installer/` en `platform/`; daarnaast de compilerbron
+**Computer 2:** `build.sh`, `toolchain.sh`, `scripts/`, `.github/workflows/`,
+`installer/`, `platform/`, `patches/` en `lib/`; daarnaast de compilerbron
 in een **afzonderlijke DynLex-repository**. Native platformcode blijft beperkt
 tot platformintegratie. De app blijft DynLex.
 
 **Eerst afstemmen, dan één eigenaar aanwijzen:**
 
-- `patches/`, `overlay/lib/`, `shaders/` en de platformbrug in
-  `overlay/examples/bim-slice/platform/`;
-- `.github/workflows/` in de repositoryroot; houd de actieve workflow en de
-  bijbehorende kopie onder `ci/` gelijk;
+- `kernel/`, `graphics/vulkan/` en `graphics/shaders/`;
+- `.github/workflows/` in de repositoryroot is de enige plek van de workflows;
 - compiler-ABI, openbare module-API's, nieuwe commandocodes, bestandsschema,
   exportsemantiek en migraties;
 - een wijziging die bestanden van beide computers nodig heeft.
@@ -113,7 +112,7 @@ afhankelijkheid van een ongedocumenteerde lokale compilerbinary.
   `ui_layout`-test wegens een ontbrekende standaardimport; die fix staat in de
   startbranch (`34b9fde`, gevolgd door `78e55ab`). App/MSI zijn daarmee nog niet bewezen.
 - Hergebruik beschikbare Actions-artifacts/caches. Lees
-  `spikes/dynlex-bim-slice/ci/WINDOWS-RELEASE.md`. Controleer altijd de actuele
+  `docs/notes/windows-release.md`. Controleer altijd de actuele
   workflow en artifactbeschikbaarheid voordat je een nieuwe run start.
 - Laat buildrapporten de **werkelijk gebouwde commit** noemen. Een groene
   compilerbuild of een nieuwere branch-HEAD bewijst niets over een oudere appbinary.

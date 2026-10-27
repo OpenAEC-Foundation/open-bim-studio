@@ -25,7 +25,8 @@ Bestanden: heel `spikes/dynlex-bim-slice`, `.github/workflows`, `CLAUDE.md`,
 `README.md` en `docs/`. Bevriezing: geen andere branch raakt deze bestanden
 totdat de pull request van stap 1 is gemerged. Computer 2: alleen review van
 de workflow- en patchdelen en het draaien van de Windows-workflow; geen
-gelijktijdige bewerkingen.
+gelijktijdige bewerkingen. Status: de verhuizing staat op de branch; de
+bevriezing eindigt bij de merge van de pull request van stap 1.
 
 Command `2360` en tool-id `27` zijn gereserveerd voor Sketch Split. Hergebruik
 die nummers niet voor een andere functie. Leg nieuwe openbare commandocodes
@@ -41,7 +42,7 @@ Files: `connections.dl`, `bim_connections.dl`, `bim_baseplate.dl`,
 `bim_editor.dl`, `bim_editor_properties.dl`, `bim_ui.dl`, and related tests.
 
 The same PC1 task fixes selection overlay clipping and adds view-tab dragging in
-`main.dl`, `bim_workspace_tabs.dl` and `overlay/lib/vulkan/context.dl`.
+`main.dl`, `bim_workspace_tabs.dl` and `graphics/vulkan/context.dl`.
 The Vulkan change separates overlay scissoring from its full-window projection;
 mesh viewports and the batch record layout are unchanged. PC2 should not edit
 these files concurrently. Full application/interactive validation is pending.
@@ -80,7 +81,7 @@ fastener; distant-view performance has not yet been measured.
 PC1 extends `bim_system_types.dl` with append-only recipe indices 33–42,
 updates `system_types.expected.txt`, and adds the lightweight `window_recipes`
 check. Sources and explicit schematic-geometry limits are in
-`spikes/dynlex-bim-slice/WINDOW-SYSTEMS.md`. No model schema or new command codes.
+`docs/notes/window-systems.md`. No model schema or new command codes.
 Validation: `window_recipes` PASS (seven checks, no compiler diagnostics) in
 `/tmp/obs-window-recipes`. Full gallery and GUI validation remain pending;
 no new application build has been launched.
@@ -110,7 +111,7 @@ branches in `bim_app_parts.dl`, and the grid-head property in
 `OpenBIM_Drawing.CustomFrame=true` supports an independent frame viewport;
 all-hidden template views no longer draw model annotations. View-bound vector
 artwork is now included when recording sheets, as it already is in plan views.
-Details: `spikes/dynlex-bim-slice/DRAWING-FIDELITY.md`.
+Details: `docs/notes/drawing-fidelity.md`.
 
 `paper_units` and existing `dimension_text` PASS in
 `/tmp/obs-paper-units-check`. The full application with `paper_units`, `grid_sheet`, `plan_presentation`
@@ -150,7 +151,7 @@ an isolated compiler regression test before upstream adoption.
 ### PC1 — image references and interactive sheets (26 October 2026)
 
 PC1 owns image-reference import, `bim_images.dl`, `bim_image_data.dl`,
-`overlay/lib/vulkan/images.dl`, the related canvas/context shaders and tests.
+`graphics/vulkan/images.dl`, the related canvas/context shaders and tests.
 Command **2270** is reserved for linked PNG image import. This is in progress,
 not yet a validated application feature. Physical drawing content must still
 come from editable 3D objects; raster references are explicitly 2D underlays.
@@ -167,4 +168,4 @@ metadata uses **2400600–2401599** on the sheet. PC1 also owns
 `bim_sheet_workspace*.dl`, `bim_sheet_renderer.dl`, `bim_workspace_tabs.dl`,
 `bim_app_parts.dl` and their integration in `main.dl`/`bim_ui.dl`.
 The tested render checkpoint **9b0767c** was pushed. Candidate details and explicit
-validation gaps are in `spikes/dynlex-bim-slice/SHEET-WORKSPACE.md`.
+validation gaps are in `docs/notes/sheet-workspace.md`.

@@ -1,3 +1,9 @@
+> Historical note (2026-10-27): this text describes the layout of the spike,
+> `spikes/dynlex-bim-slice` with its overlay over a DynLex checkout. The
+> application now lives in the unit directories at the repository root and
+> `build.sh` compiles from there; see the repository README and
+> `docs/notes/layering.md`. Module names below are unchanged.
+
 # Open BIM Studio — application and toolchain notes
 
 For the current overview and quick start, read the [repository README](../../README.md).
