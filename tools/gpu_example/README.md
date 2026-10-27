@@ -8,8 +8,8 @@ the driver are.
 
 | File | Contents |
 | --- | --- |
-| `../../lib/vulkan/structs.dl` | The Vulkan structures in use, as DynLex classes with C layout |
-| `../../lib/vulkan/renderer.dl` | Window, swapchain, depth buffer, one pipeline, persistent vertex and index buffers, and the shaders' parameters in one storage buffer |
+| `graphics/vulkan/structs.dl` | The Vulkan structures in use, as DynLex classes with C layout |
+| `graphics/vulkan/renderer.dl` | Window, swapchain, depth buffer, one pipeline, persistent vertex and index buffers, and the shaders' parameters in one storage buffer |
 | `gpu_view.dl` | Loads the example house, a BIM-MESH import or the generated tower, and orbits it while reporting the frame time |
 | `solid_vertex.dl`, `solid_fragment.dl` | Shaders for per-face vertices that carry a normal |
 | `shared_vertex.dl`, `shared_fragment.dl` | Shaders for shared corners: the face's normal comes from screen-space derivatives of the position |
@@ -33,16 +33,16 @@ Build a compiler with the patch, then:
 
 ```sh
 for stage in vertex fragment; do
-  dynlex examples/gpu/shared_$stage.dl --emit-spirv --shader-stage=$stage -o build/gpu/shared_$stage.spv
-  dynlex examples/gpu/solid_$stage.dl --emit-spirv --shader-stage=$stage -o build/gpu/solid_$stage.spv
+  dynlex tools/gpu_example/shared_$stage.dl --emit-spirv --shader-stage=$stage -o build/gpu/shared_$stage.spv
+  dynlex tools/gpu_example/solid_$stage.dl --emit-spirv --shader-stage=$stage -o build/gpu/solid_$stage.spv
 done
-build/dynlex examples/gpu/gpu_view.dl -O2 -o build/gpu/gpu_view
+build/dynlex tools/gpu_example/gpu_view.dl -O2 -o build/gpu/gpu_view
 build/gpu/gpu_view --generate 390000 --shared --uncapped --frames 480
 ```
 
 The options:
 - `--import FILE.bimmesh` opens a model converted by
-  `examples/bim-slice/import/ifc_to_mesh.py`;
+  `formats/import/ifc_to_mesh.py`;
 - `--generate N` builds the editor's imaginary tower;
 - `--shared` stores shared corners;
 - `--uncapped` presents without waiting for the display;

@@ -218,9 +218,10 @@ from `examples/bim-slice/x.dl` to `model/x.dl` and from `lib/cadkernel/x.dl` to
 `kernel/<part>/x.dl`; patterns and file names do not change. The move is one
 commit made with `git mv` so history follows the files.
 
-The seed of `kernel/` (author's call): the port at `bc653ad0` plus this
-repository's 27 overlay files, because that pair is what compiles and passes
-the test set today. The `lib/bim` integration fixes are folded in during stage
+The seed of `kernel/` (author's call): the port at `c2d32bea` (whose kernel
+files are those of `bc653ad0`; the later commits touch the compiler only) plus
+this repository's 27 overlay files, because that pair is what compiles and
+passes the test set today. The `lib/bim` integration fixes are folded in during stage
 3, when the kernel first compiles under `master`'s compiler, and the fork commit
 behind the v0.1 snapshot is identified and recorded in stage 1 so that the
 Windows release is known to build the same kernel.

@@ -192,7 +192,7 @@ The repository began as a research programme. Its
 [vision](docs/vision/vision.md), [architecture](docs/architecture/overview.md),
 [ADRs](docs/architecture/decisions/) and [research](docs/research/README.md)
 remain available. Older plans may predate the current implementation.
-`docs/recovery/` contains inactive source recovery material, not app modules.
+The inactive source recovery material that lived under `docs/recovery/` was removed on 2026-10-27; it stays in the history before that date.
 
 ## Contributing and reporting issues
 
