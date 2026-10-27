@@ -103,6 +103,7 @@ Layer 2, services that elements build on:
 | automation | `automation/` | API, MCP, HTTP | 853 |
 | extensions | `extensions/` | extension manager: content packs, locale packs, external tools through the API (author's reading) | new |
 | collaborate | `collaborate/` | IfcGit | new |
+| accounts | `accounts/` | user identity, sign-in, roles: what project invitations and collaboration rest on (author's reading) | new |
 | editor | `ui/editor` | selection, undo, snapping, sketch, point input, modify, the tool base | 12,046 |
 
 Layer 3, shape classes and pattern:
@@ -142,7 +143,7 @@ Layer 5, UI on top:
 |---|---|---|---|
 | properties | `ui/properties` | properties panel, pset editor, type manager, type menu, labels | 3,521 |
 | panels | `ui/panels` | main UI, layout, model explorer, 3D panel, plan panel, tabs | 9,868 |
-| projects | `ui/projects` | start screen, project browser, recent projects, templates, project settings, open and save (today `bim_app_files`, `bim_ui_files`, `bim_project_settings`) | 1,225 |
+| projects | `ui/projects` | start screen, project browser, recent projects, templates, project settings, open and save (today `bim_app_files`, `bim_ui_files`, `bim_project_settings`); members, roles and invitations of other users | 1,225 |
 | shell | `ui/shell` | `main.dl`, app parts, loading, window styles, icon, demo pavilion | 5,991 |
 
 Room for what comes, as empty modules with an owner: `architectural/finishes`,
