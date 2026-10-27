@@ -1,12 +1,8 @@
 # Windows build and package of Open BIM Studio: the DynLex compiler from the
-# v0.1 source snapshot (as windows-compiler.yml), then the BIM slice from
-# this repository's overlay (the Windows port: `platform/obs_platform.c`,
-# the dialogs, the package script), headless checks, and the portable ZIP
-# and the MSI as artifacts. Nothing is published or signed.
-#
-# Kept here, not in .github/workflows, while the repository's rule keeps
-# build tooling under spikes/; GitHub runs it once it is copied to
-# .github/workflows/windows-app.yml on the branch below.
+# v0.1 source snapshot (as windows-compiler.yml), then the application from
+# this repository (compiled from its root, with the Windows platform shim and
+# the generated import files), headless checks, and the portable ZIP and the
+# MSI as artifacts. Nothing is published or signed.
 name: Windows app (v0.1)
 
 on:
@@ -50,10 +46,10 @@ jobs:
             throw "The snapshot has no scripts/install.ps1 at its root."
           }
 
-      - name: Apply the slice's compiler patches (unless already in)
+      - name: Apply the compiler patches (unless already in)
         shell: pwsh
         run: |
-          $patches = "../open-bim-studio/spikes/dynlex-bim-slice/patches"
+          $patches = "../open-bim-studio/patches"
           foreach ($name in "dynlex-compiler-local", "dynlex-pattern-reference-index", "dynlex-pattern-precedence-families", "dynlex-shader-extensions", "dynlex-windows-library-names", "dynlex-windows-compiler-stack") {
             git apply -p1 --whitespace=nowarn --check -R "$patches/$name.patch" 2>$null
             if ($LASTEXITCODE -eq 0) { Write-Host "$name is already in the snapshot"; continue }
@@ -82,54 +78,52 @@ jobs:
 
       - name: Check compiler pattern regressions and scaling
         shell: pwsh
-        run: python ../open-bim-studio/spikes/dynlex-bim-slice/tools/check_compiler_patterns.py --compiler build/dynlex.exe
+        run: python ../open-bim-studio/tools/check_compiler_patterns.py --compiler build/dynlex.exe
 
-      - name: Assemble the slice from this repository
+      - name: Generate the application's import files and shaders
         shell: pwsh
-        # As build.sh does on Linux: the overlay over the tree, the prebuilt
-        # shaders, the review models for the fixture tests.
+        working-directory: open-bim-studio
+        # As build.sh generate does on Linux: the Windows window style, the
+        # no-op self-test entry, and the prebuilt shaders where the program
+        # reads them. lib/json.dl in this repository shadows the snapshot's.
         run: |
-          $spike = (Resolve-Path "../open-bim-studio/spikes/dynlex-bim-slice").Path
-          # robocopy merges into the tree's folders; below 8 it succeeded.
-          robocopy "$spike/overlay" . /E /NFL /NDL /NJH /NJS | Out-Null
-          if ($LASTEXITCODE -ge 8) { throw "Could not copy the overlay." }
-          robocopy "$spike/shaders" build/shaders *.spv /NFL /NDL /NJH /NJS | Out-Null
-          if ($LASTEXITCODE -ge 8) { throw "Could not copy the shaders." }
-          robocopy "$spike/examples" examples/bim-slice/models /E /NFL /NDL /NJH /NJS | Out-Null
-          if ($LASTEXITCODE -ge 8) { throw "Could not copy the review models." }
-          $global:LASTEXITCODE = 0
-          if (-not (Select-String -Quiet -Path lib/json.dl -Pattern "the JSON document parsed from")) {
-            git apply -p1 "$spike/patches/lib-json-public-parse.patch"
-            if ($LASTEXITCODE -ne 0) { throw "The JSON patch does not apply." }
-          }
+          New-Item -ItemType Directory -Force generated, build/shaders | Out-Null
+          [IO.File]::WriteAllText("$PWD/generated/platform.dl", "import graphics/window_style_windows.dl`n")
+          $stub = "# Written by the Windows app workflow: the self-test entry of app/main.dl.`n" +
+            "function run bim app checks:`n    execute:`n        ignore 0`n"
+          [IO.File]::WriteAllText("$PWD/generated/self_test.dl", $stub)
+          Copy-Item graphics/shaders/*.spv build/shaders/
 
       - name: Build the platform shim
         shell: pwsh
-        # The static library the slice links as "obs_platform", where the
+        # The static library the application links as "obs_platform", where the
         # compiler's Windows link looks for libraries.
         run: |
           $tools = Join-Path $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT "bin"
           & (Join-Path $tools "cc.exe") "--target=$env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET" -std=c11 -O2 -Wall -Wextra `
-            -c examples/bim-slice/platform/obs_platform.c -o build/obs_platform.o
+            -c ../open-bim-studio/platform/obs_platform.c -o build/obs_platform.o
           if ($LASTEXITCODE -ne 0) { throw "The platform shim does not compile." }
           & (Join-Path $tools "llvm-ar.exe") rcs build/libobs_platform.a build/obs_platform.o
           if ($LASTEXITCODE -ne 0) { throw "Could not archive the platform shim." }
           Copy-Item -Force build/libobs_platform.a (Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT "lib")
 
-      - name: Headless checks of the slice
+      - name: Headless checks of the application
         shell: pwsh
+        working-directory: open-bim-studio
         # platform: the shim itself; ui_layout: no library; plan_pan: GLFW
         # and the Vulkan loader linked; text_glyphs: FreeType too. None opens
-        # a window.
+        # a window. Compiled from this repository's root.
         run: |
+          $compiler = (Resolve-Path ../dynlex/build/dynlex.exe).Path
+          New-Item -ItemType Directory -Force ../dynlex/build/checks | Out-Null
           $failed = @()
           foreach ($name in "platform", "ui_layout", "plan_pan", "text_glyphs") {
-            $program = "build/check-$name.exe"
-            & build/dynlex.exe "examples/bim-slice/tests/$name.dl" -o $program
+            $program = (Resolve-Path ../dynlex/build/checks).Path + "\check-$name.exe"
+            & $compiler "tests/$name.dl" -o $program
             if ($LASTEXITCODE -ne 0) { $failed += "$name (compile)"; continue }
             $output = (& $program | Out-String) -replace "`r`n", "`n"
             $exitCode = $LASTEXITCODE
-            $expected = (Get-Content -Raw "examples/bim-slice/tests/$name.expected.txt") -replace "`r`n", "`n"
+            $expected = (Get-Content -Raw "tests/$name.expected.txt") -replace "`r`n", "`n"
             if (($exitCode -ne 0) -or ($output.TrimEnd() -ne $expected.TrimEnd())) {
               Write-Host "--- $name (exit $exitCode)"; Write-Host $output
               $failed += $name
@@ -141,11 +135,14 @@ jobs:
 
       - name: Build Open BIM Studio
         shell: pwsh
+        working-directory: open-bim-studio
         run: |
-          New-Item -ItemType Directory -Force build/app | Out-Null
-          & build/dynlex.exe examples/bim-slice/main.dl -O2 -o build/app/open-bim-studio.exe
+          $compiler = (Resolve-Path ../dynlex/build/dynlex.exe).Path
+          New-Item -ItemType Directory -Force ../dynlex/build/app | Out-Null
+          $app = (Resolve-Path ../dynlex/build/app).Path + "\open-bim-studio.exe"
+          & $compiler app/main.dl -O2 -o $app
           if ($LASTEXITCODE -ne 0) { throw "Open BIM Studio does not compile." }
-          Get-ChildItem build/app | Format-Table Name, Length
+          Get-ChildItem ../dynlex/build/app | Format-Table Name, Length
 
       - name: Check the program's PE files
         shell: pwsh
@@ -171,8 +168,9 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          ./examples/bim-slice/installer/make-windows-package.ps1 `
-            -Program build/app/open-bim-studio.exe -Tree . -Output build/package -Version 0.1.0 `
+          ../open-bim-studio/installer/make-windows-package.ps1 `
+            -Program build/app/open-bim-studio.exe -Repo ../open-bim-studio -Shaders ../open-bim-studio/build/shaders `
+            -Output build/package -Version 0.1.0 `
             -DependencyRoot $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT -ToolchainRoot $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT
           if (-not (Test-Path build/package/Open-BIM-Studio-0.1.0-windows-x64.msi)) { throw "No MSI was made." }
 

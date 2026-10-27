@@ -3,12 +3,12 @@
 # WiX Toolset 3 is on PATH (heat.exe, candle.exe, light.exe), an MSI
 # installer from `open-bim-studio.wxs`.
 #
-#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Tree <tree> -Output <folder> [-Version 0.1.1]
+#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Repo <this repository> -Shaders <folder> -Output <folder> [-Version 0.1.1]
 #
-# -Program is the compiled examples/bim-slice/main.dl; the DLLs the DynLex
+# -Program is the compiled app/main.dl; the DLLs the DynLex
 # compiler copied beside it (GLFW, FreeType, the Vulkan loader, the C++ and
-# runtime libraries) go with it. -Tree is the assembled DynLex tree the
-# program was compiled in (examples/bim-slice, build/shaders, tests/games/fonts).
+# runtime libraries) go with it. -Repo is this repository (app/fonts,
+# app/icons, formats/import, installer/licenses); -Shaders holds the SPIR-V.
 # The staged folder holds bin\ (the program and its DLLs), shaders\, fonts\
 # with their licences, icons\ and import\; the program finds them from its
 # own folder. licenses\ holds the notices of installer\licenses (the
@@ -19,7 +19,8 @@
 # $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT). Nothing is signed.
 param(
     [Parameter(Mandatory = $true)] [string] $Program,
-    [Parameter(Mandatory = $true)] [string] $Tree,
+    [Parameter(Mandatory = $true)] [string] $Repo,
+    [Parameter(Mandatory = $true)] [string] $Shaders,
     [Parameter(Mandatory = $true)] [string] $Output,
     [string] $Version = "0.1.1",
     [switch] $RequireMsi,
@@ -29,10 +30,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 $programPath = (Resolve-Path $Program).Path
-$treePath = (Resolve-Path $Tree).Path
+$repoPath = (Resolve-Path $Repo).Path
+$shadersPath = (Resolve-Path $Shaders).Path
 New-Item -ItemType Directory -Force $Output | Out-Null
 $outputPath = (Resolve-Path $Output).Path
-$slice = Join-Path $treePath "examples\bim-slice"
 
 $stageRoot = Join-Path $outputPath "stage"
 if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
@@ -50,25 +51,25 @@ if ($libraries.Count -eq 0) {
 foreach ($library in $libraries) { Copy-Item $library.FullName (Join-Path $stage "bin") }
 
 # The SPIR-V shaders.
-$shaders = @(Get-ChildItem -Path (Join-Path $treePath "build\shaders") -Filter "*.spv" -File)
-if ($shaders.Count -eq 0) { throw "No shaders in $treePath\build\shaders." }
+$shaders = @(Get-ChildItem -Path $shadersPath -Filter "*.spv" -File)
+if ($shaders.Count -eq 0) { throw "No shaders in $shadersPath." }
 foreach ($shader in $shaders) { Copy-Item $shader.FullName (Join-Path $stage "shaders") }
 
 # The fonts with their licences: osifont (drawings), Inter and JetBrains Mono
 # (the interface), Liberation Mono (the fallback).
-$fonts = Join-Path $slice "fonts"
+$fonts = Join-Path $repoPath "app\fonts"
 foreach ($name in "osifont.ttf", "Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf",
                   "JetBrainsMono-Regular.ttf", "Inter-OFL.txt", "JetBrainsMono-OFL.txt") {
     Copy-Item (Join-Path $fonts $name) (Join-Path $stage "fonts")
 }
 Copy-Item (Join-Path $fonts "README.md") (Join-Path $stage "fonts\README-osifont.md")
 foreach ($name in "LiberationMono-Regular.ttf", "LICENSE-LiberationFonts") {
-    Copy-Item (Join-Path $treePath "tests\games\fonts\$name") (Join-Path $stage "fonts")
+    Copy-Item (Join-Path $fonts $name) (Join-Path $stage "fonts")
 }
 
 # The notices: the application's and the bundled libraries' from
 # installer\licenses, every vcpkg package's copyright, llvm-mingw's licence.
-$notices = Join-Path $slice "installer\licenses"
+$notices = Join-Path $repoPath "installer\licenses"
 if (-not (Test-Path (Join-Path $notices "README.txt"))) { throw "No notices in $notices." }
 Copy-Item -Path (Join-Path $notices "*") -Destination (Join-Path $stage "licenses")
 if (-not $DependencyRoot -or -not (Test-Path (Join-Path $DependencyRoot "share"))) {
@@ -87,12 +88,12 @@ $toolchainLicence = Join-Path $ToolchainRoot "LICENSE.TXT"
 Copy-Item $toolchainLicence (Join-Path $stage "licenses\llvm-mingw.txt")
 
 # The interface's icons and the drawing import's script (it needs Python 3).
-Copy-Item (Join-Path $slice "icons\ui-icons.txt") (Join-Path $stage "icons")
-Copy-Item (Join-Path $slice "icons\README.md") (Join-Path $stage "icons")
+Copy-Item (Join-Path $repoPath "app\icons\ui-icons.txt") (Join-Path $stage "icons")
+Copy-Item (Join-Path $repoPath "app\icons\README.md") (Join-Path $stage "icons")
 foreach ($icon in "open-bim-studio.svg", "open-bim-studio.png", "open-bim-studio.ico", "open-bim-studio.rgba") {
-    Copy-Item (Join-Path $slice "icons\$icon") (Join-Path $stage "icons")
+    Copy-Item (Join-Path $repoPath "app\icons\$icon") (Join-Path $stage "icons")
 }
-Copy-Item (Join-Path $slice "import\drawing_to_lines.py") (Join-Path $stage "import")
+Copy-Item (Join-Path $repoPath "formats\import\drawing_to_lines.py") (Join-Path $stage "import")
 
 @"
 Open BIM Studio $Version for Windows (x64)

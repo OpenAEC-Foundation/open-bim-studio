@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: MPL-2.0
-# Run on native Windows after scripts/install.ps1 and the compiler build.
+# Builds and packages Open BIM Studio on native Windows, after the fork's
+# scripts/install.ps1 and a compiler build in the fork checkout.
+#
+#   scripts/build-windows-app.ps1 -CompilerTree <fork checkout> -Repo <this repository> -Output <folder> [-Version 0.1.1]
+#
+# Programs compile from this repository's root, as build.sh does on Linux:
+# the compiler finds lib/ in its own checkout, imports such as model/x.dl
+# here, and lib/json.dl here shadows the checkout's. The two generated import
+# files select the Windows window style and the no-op self-test entry.
 param(
     [Parameter(Mandatory = $true)] [string] $CompilerTree,
-    [Parameter(Mandatory = $true)] [string] $Slice,
+    [Parameter(Mandatory = $true)] [string] $Repo,
     [Parameter(Mandatory = $true)] [string] $Output,
     [string] $Version = '0.1.1'
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'This script requires native Windows, not WSL.' }
 $treePath = (Resolve-Path $CompilerTree).Path
-$slicePath = (Resolve-Path $Slice).Path
+$repoPath = (Resolve-Path $Repo).Path
 New-Item -ItemType Directory -Force $Output | Out-Null
 $outPath = (Resolve-Path $Output).Path
 $compiler = Join-Path $treePath 'build\dynlex.exe'
@@ -17,28 +25,21 @@ if (-not (Test-Path $compiler)) { throw "Missing compiler: $compiler" }
 if (-not $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT) { throw 'Run scripts/install.ps1 first.' }
 if ($env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -ne 'x86_64-w64-mingw32') { throw 'A native x64 llvm-mingw target is required.' }
 
-# Use this checkout's app and library overlay, never the app in the snapshot.
-# Keep the snapshot's CAD library, runtime and fallback font.
-Copy-Item (Join-Path $slicePath 'overlay\*') $treePath -Recurse -Force
-# The canonical overlay uses Linux window decoration APIs. Replace it with
-# the native DWM implementation before parsing/linking anything on Windows.
-$windowStyle = Join-Path $slicePath 'platform\windows\bim_window_style.dl'
-if (-not (Test-Path -PathType Leaf $windowStyle)) { throw 'Missing Windows window-style implementation; refusing Linux X11 fallback.' }
-Copy-Item $windowStyle "$treePath\examples\bim-slice\bim_window_style.dl" -Force
-New-Item -ItemType Directory -Force "$treePath\build\shaders" | Out-Null
-Copy-Item "$slicePath\shaders\*.spv" "$treePath\build\shaders" -Force
-New-Item -ItemType Directory -Force "$treePath\examples\bim-slice\models" | Out-Null
-Copy-Item "$slicePath\examples\*" "$treePath\examples\bim-slice\models" -Recurse -Force
-Push-Location $treePath
+Push-Location $repoPath
 try {
-    if (-not (Select-String -Quiet -SimpleMatch 'the JSON document parsed from' lib/json.dl)) {
-        git apply -p1 --whitespace=nowarn "$slicePath/patches/lib-json-public-parse.patch"
-        if ($LASTEXITCODE -ne 0) { throw 'Public JSON parser patch failed.' }
-    }
+    # The generated imports of app/main.dl (build.sh generate on Linux).
+    New-Item -ItemType Directory -Force generated, build\shaders | Out-Null
+    [IO.File]::WriteAllText((Join-Path $repoPath 'generated\platform.dl'), "import graphics/window_style_windows.dl`n")
+    $stub = "# Written by scripts/build-windows-app.ps1: the self-test entry of app/main.dl.`n" +
+        "function run bim app checks:`n    execute:`n        ignore 0`n"
+    [IO.File]::WriteAllText((Join-Path $repoPath 'generated\self_test.dl'), $stub)
+    # The prebuilt SPIR-V shaders, where the program reads them (build/shaders).
+    Copy-Item graphics\shaders\*.spv build\shaders -Force
+
     # The C ABI bridge is required by the Windows port. Never link a Linux
     # object or a host-MSVC library into the llvm-mingw program.
-    $platformSource = "$treePath\examples\bim-slice\platform\obs_platform.c"
-    if (-not (Test-Path $platformSource)) { throw 'Source ref does not contain the Windows platform port.' }
+    $platformSource = Join-Path $repoPath 'platform\obs_platform.c'
+    if (-not (Test-Path $platformSource)) { throw 'Missing platform/obs_platform.c.' }
     $toolBin = Join-Path $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT 'bin'
     $object = Join-Path $outPath 'obs_platform.o'
     & "$toolBin\clang-$env:DYNLEX_WINDOWS_TOOLCHAIN_LLVM_VERSION.exe" --target=$env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET -std=c11 -O2 -c $platformSource -o $object
@@ -55,18 +56,18 @@ try {
 
     foreach ($name in 'ui_layout', 'plan_pan', 'text_glyphs', 'png_library') {
         $program = "$outPath\check-$name.exe"
-        $diagnostics = & $compiler "examples/bim-slice/tests/$name.dl" -O0 -o $program 2>&1
+        $diagnostics = & $compiler "tests/$name.dl" -O0 -o $program 2>&1
         $compileCode = $LASTEXITCODE
         $diagnostics | Set-Content "$outPath\$name.diag"
         if ($compileCode -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { throw "Compile diagnostics: $name" }
         $actual = (& $program | Out-String) -replace "`r`n", "`n"
         $runCode = $LASTEXITCODE
         $actual | Set-Content "$outPath\$name.out"
-        $expected = (Get-Content -Raw "examples/bim-slice/tests/$name.expected.txt") -replace "`r`n", "`n"
+        $expected = (Get-Content -Raw "tests/$name.expected.txt") -replace "`r`n", "`n"
         if ($runCode -ne 0 -or $actual.TrimEnd() -ne $expected.TrimEnd()) { throw "Headless check failed: $name" }
     }
     $app = "$outPath\open-bim-studio.exe"
-    $diagnostics = & $compiler examples/bim-slice/main.dl -O2 -o $app 2>&1
+    $diagnostics = & $compiler app/main.dl -O2 -o $app 2>&1
     $compileCode = $LASTEXITCODE
     $diagnostics | Set-Content "$outPath\app.diag"
     if ($compileCode -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { throw 'Application compilation failed or emitted diagnostics.' }
@@ -74,7 +75,7 @@ try {
     $peFiles = @(Get-ChildItem -Path $outPath -File | Where-Object { $_.Extension -in '.exe', '.dll' }).FullName
     & "$treePath\scripts\verify-windows-pe-files.ps1" -Files $peFiles -Architecture x64
     if ($LASTEXITCODE -ne 0) { throw 'Windows PE verification failed.' }
-    & "$slicePath\overlay\examples\bim-slice\installer\make-windows-package.ps1" -Program $app -Tree $treePath -Output "$outPath\packages" -Version $Version -RequireMsi
+    & "$repoPath\installer\make-windows-package.ps1" -Program $app -Repo $repoPath -Shaders "$repoPath\build\shaders" -Output "$outPath\packages" -Version $Version -RequireMsi
     if (-not (Test-Path "$outPath\packages\Open-BIM-Studio-$Version-windows-x64.msi")) { throw 'MSI missing.' }
 } finally {
     Pop-Location
