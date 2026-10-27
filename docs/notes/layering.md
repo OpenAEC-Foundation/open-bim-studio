@@ -14,10 +14,16 @@ anything. The script prints every forbidden edge and exits non-zero.
 - `bim_clash` imported the scene, and `bim_schedule` imports clash: both moved
   to `graphics/`.
 - The GPU example imported the editor: moved to `tools/gpu_example/`.
-- `bim_import` imported the scene for the scene mesh record, the category
-  colouring and the id base of imported elements: those moved to
-  `model/bim_mesh.dl`, with the triangulation of a free mesh that the IFC
-  writers also use.
+- The scene mesh record, the category colouring, the id base of imported
+  elements and the triangulation of a free mesh moved from the scene to
+  `model/bim_mesh.dl`, so the importers and the IFC writers no longer depend on
+  the scene for those. `bim_import` keeps importing the scene all the same:
+  the readers built on it (`bim_ifc_read`, `bim_ifcx_read`, `bim_ifc_promote`,
+  `bim_ifc_native`) and their tests use scene helpers such as `the bim metres
+  text of` through that import, and a smaller closure silently removes
+  definitions a pattern call needs (found by the final review). Cutting the
+  edge needs every such call listed first; the compiler is the only tool that
+  finds them.
 - `bim_steel_profiles` imported the `.bim` reader for the real and whole
   number readers: those moved to `model/bim_readings.dl`.
 
