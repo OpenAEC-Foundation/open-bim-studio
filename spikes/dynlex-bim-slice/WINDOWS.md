@@ -71,8 +71,10 @@ every symbol must exist in the CRT or the link fails.
 ## Route
 
 1. In the fork's Windows build, apply the slice's compiler patches
-   (`dynlex-compiler-local.patch`, `dynlex-shader-extensions.patch`,
-   `dynlex-windows-library-names.patch`) and build `dynlex.exe` with
+   (`dynlex-compiler-local.patch`, `dynlex-pattern-reference-index.patch`,
+   `dynlex-pattern-precedence-families.patch`,
+   `dynlex-shader-extensions.patch`, `dynlex-windows-library-names.patch`,
+   `dynlex-windows-compiler-stack.patch`) and build `dynlex.exe` with
    `scripts/install.ps1` and `scripts/build.sh` on `windows-latest`,
    caching `.cache/llvm-toolchain`, `.cache/llvm-mingw`, `.cache/vcpkg` and
    `.cache/vcpkg-installed` as the fork's release workflow does.

@@ -1,0 +1,146 @@
+diff --git a/src/cpp/compiler/patternResolutionExpansion.inl b/src/cpp/compiler/patternResolutionExpansion.inl
+--- a/src/cpp/compiler/patternResolutionExpansion.inl
++++ b/src/cpp/compiler/patternResolutionExpansion.inl
+@@ -167,15 +167,15 @@
+ }
+ 
+ // Recursively record which definition each reference matched (including sub-match definitions)
++using DefinitionReferenceIndex = std::unordered_map<PatternDefinition *, std::unordered_set<PatternReference *>>;
++
+ static void trackMatchDefinitions(
+ 	PatternMatch &match, PatternReference *reference,
+-	std::unordered_map<PatternDefinition *, std::vector<PatternReference *>> &defToRefs
++	DefinitionReferenceIndex &defToRefs
+ ) {
+ 	if (!match.matchingDefinitions.empty()) {
+ 		for (auto *def : match.matchingDefinitions) {
+-			auto &refs = defToRefs[def];
+-			if (std::find(refs.begin(), refs.end(), reference) == refs.end())
+-				refs.push_back(reference);
++			defToRefs[def].insert(reference);
+ 		}
+ 	}
+ 	for (PatternMatch &subMatch : match.subMatches) {
+@@ -186,15 +186,14 @@
+ // Recursively remove a reference from all definition tracking buckets represented in this match tree.
+ static void untrackMatchDefinitions(
+ 	PatternMatch &match, PatternReference *reference,
+-	std::unordered_map<PatternDefinition *, std::vector<PatternReference *>> &defToRefs
++	DefinitionReferenceIndex &defToRefs
+ ) {
+ 	if (!match.matchingDefinitions.empty()) {
+ 		for (auto *def : match.matchingDefinitions) {
+ 			auto it = defToRefs.find(def);
+ 			if (it == defToRefs.end())
+ 				continue;
+-			auto &vec = it->second;
+-			vec.erase(std::remove(vec.begin(), vec.end(), reference), vec.end());
++			it->second.erase(reference);
+ 		}
+ 	}
+ 	for (PatternMatch &subMatch : match.subMatches) {
+diff --git a/src/cpp/compiler/patternResolutionMatching.inl b/src/cpp/compiler/patternResolutionMatching.inl
+--- a/src/cpp/compiler/patternResolutionMatching.inl
++++ b/src/cpp/compiler/patternResolutionMatching.inl
+@@ -79,7 +79,7 @@
+ // Returns the set of definition sections that had their VL classification affected.
+ static std::vector<Section *> unresolveReference(
+ 	ParseContext &context, PatternReference *reference,
+-	std::unordered_map<PatternDefinition *, std::vector<PatternReference *>> &defToRefs, bool revertImplicitPromotions = true
++	DefinitionReferenceIndex &defToRefs, bool revertImplicitPromotions = true
+ ) {
+ 	std::vector<Section *> affectedSections;
+ 	// Remove variable references created from the match
+@@ -206,7 +206,7 @@
+ static bool resolveReferences(
+ 	ParseContext &context, std::list<PatternReference *> &references, bool decrementCounts, bool allowUnmatchedVariables,
+ 	FailedMatchDependencies &failedMatchDependencies,
+-	std::unordered_map<PatternDefinition *, std::vector<PatternReference *>> *defToRefs = nullptr, const char *phase = "body",
++	DefinitionReferenceIndex *defToRefs = nullptr, const char *phase = "body",
+ 	PatternReference **activeReference = nullptr, PatternMatch **activeMatch = nullptr,
+ 	bool *activeReferenceNeedsRematch = nullptr, bool *deferredActiveRematch = nullptr,
+ 	std::vector<Section *> *pendingPromotionCleanupSections = nullptr
+@@ -402,7 +402,7 @@
+ 	});
+ 
+ 	// Phase 1: resolve body references and definitions
+-	std::unordered_map<PatternDefinition *, std::vector<PatternReference *>> definitionToReferences;
++	DefinitionReferenceIndex definitionToReferences;
+ 	FailedMatchDependencies failedBodyMatchDependencies;
+ 	bool staleInvalidationOccurred = false;
+ 	std::vector<Section *> pendingPromotionCleanupSections;
+@@ -477,8 +477,8 @@
+ 			auto it = definitionToReferences.find(lessDef);
+ 			if (it == definitionToReferences.end())
+ 				continue;
+-			// Copy the vector since unresolveReference modifies it
+-			std::vector<PatternReference *> refs = it->second;
++			// Copy before invalidation mutates the index; process in source order.
++			std::vector<PatternReference *> refs(it->second.begin(), it->second.end());
+ 			std::sort(refs.begin(), refs.end(), referenceComesBefore);
+ 			for (PatternReference *ref : refs) {
+ 				if (!ref->resolved)
+@@ -510,7 +510,7 @@
+ 
+ 		auto referencesIt = definitionToReferences.find(&definition);
+ 		if (referencesIt != definitionToReferences.end()) {
+-			std::vector<PatternReference *> oldReferences = referencesIt->second;
++			std::vector<PatternReference *> oldReferences(referencesIt->second.begin(), referencesIt->second.end());
+ 			std::sort(oldReferences.begin(), oldReferences.end(), referenceComesBefore);
+ 			for (PatternReference *reference : oldReferences)
+ 				queueReferenceForRematch(reference);
+diff --git a/tests/required/pattern_reference_tracking/main.dl b/tests/required/pattern_reference_tracking/main.dl
+new file mode 100644
+--- /dev/null
++++ b/tests/required/pattern_reference_tracking/main.dl
+@@ -0,0 +1,39 @@
++function set variable to value:
++    replacement:
++        @intrinsic("store", variable, value)
++
++function emit value:
++    replacement:
++        @intrinsic("call", "libc", "printf", @intrinsic("type", "nothing"), "%lld\n", value)
++
++function the tracked code for item:
++    replacement:
++        @intrinsic("add", item, 1)
++
++function a tracked marker:
++    replacement:
++        7
++
++function exercise tracking:
++    execute:
++        set first to 3
++        set second to the tracked code for first
++        set third to the tracked code for the tracked code for second
++        set a tracked marker to third
++        emit the tracked code for a tracked marker
++        emit the tracked code for the tracked code for a tracked marker
++        emit first
++        emit second
++        emit third
++
++exercise tracking
++
++function set a tracked marker to value:
++    execute:
++        set forwarded to value
++        emit @intrinsic("add", forwarded, 100)
++
++function the tracked code for a tracked marker:
++    execute:
++        set placeholder to 10
++        @intrinsic("return", the tracked code for placeholder)
+diff --git a/tests/required/pattern_reference_tracking/expected.txt b/tests/required/pattern_reference_tracking/expected.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/required/pattern_reference_tracking/expected.txt
+@@ -0,0 +1,6 @@
++106
++11
++12
++3
++4
++6
