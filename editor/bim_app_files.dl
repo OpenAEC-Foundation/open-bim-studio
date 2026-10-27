@@ -1,0 +1,333 @@
+# SPDX-License-Identifier: MPL-2.0
+# The application's files: a new model from a template, opening and saving
+# under a name picked in a dialog, the recently used files, and the
+# application's own settings (theme, workspace, status bar, opening the last
+# project, units), kept in ~/.config/open-bim-studio so that they outlast the
+# window. The window (`main.dl`) runs the File commands (2173 to 2193) and
+# the File menu, start screen and settings (`bim_ui.dl`) draw what is here,
+# after the OpenAEC Style Repo 0.4.
+import editor/bim_editor.dl
+
+# The application's settings: `theme` 0 Light or 1 Dark; `workspace` 0
+# follows the theme, 1 always light, 2 always dark; `statusbar` 0 follows the
+# theme, 1 always dark; `openLast` opens the last file at start in place of
+# the start screen; `units` the length unit of a new model.
+class:
+    patterns:
+        [a|] bim app settings record
+    members:
+        theme as an integer
+        workspace as an integer
+        statusbar as an integer
+        openLast as a boolean
+        units as an integer
+
+# A recently used file: its name, full path and when it was last used
+# ("2026-10-20 14:05", local time).
+class:
+    patterns:
+        [a|] bim recent file record
+    members:
+        name as a string
+        path as a string
+        stamp as a string
+
+# A template a new model starts from.
+class:
+    patterns:
+        [a|] bim model template record
+    members:
+        title as a string
+        description as a string
+
+# How many recent files are kept.
+function the bim recent file limit:
+    replacement:
+        10
+
+# ---------------------------------------------------------------- folder
+
+# %APPDATA%/Open BIM Studio on Windows, ~/.config/open-bim-studio elsewhere
+# (.open-bim-studio in the working folder when neither is set).
+function the bim app folder:
+    execute:
+        if bim app runs on windows:
+            set appDataPointer to @intrinsic("call", "libc", "getenv", a pointer to a byte, "APPDATA")
+            if appDataPointer != (0 as a pointer to a byte):
+                set appDataLength to @intrinsic("call", "libc", "strlen", a word sized unsigned integer, appDataPointer)
+                set appDataText to a new string from appDataPointer containing (appDataLength as an integer) bytes
+                return appDataText + (the string form of "/Open BIM Studio")
+        set homePointer to @intrinsic("call", "libc", "getenv", a pointer to a byte, "HOME")
+        if homePointer = (0 as a pointer to a byte):
+            return the string form of ".open-bim-studio"
+        set homeLength to @intrinsic("call", "libc", "strlen", a word sized unsigned integer, homePointer)
+        set homeText to a new string from homePointer containing (homeLength as an integer) bytes
+        return homeText + (the string form of "/.config/open-bim-studio")
+
+# Makes the folder and its parent (~/.config) when they are not there.
+local function make bim app folder:
+    execute:
+        set folderText to the bim app folder
+        set lastSlash to -1
+        loop charCursor from 0 to the length of folderText:
+            if (the character at charCursor in folderText) = 47:
+                set lastSlash to charCursor
+        if lastSlash > 0:
+            set parentText to the substring of folderText from 0 spanning lastSlash bytes
+            ignore @intrinsic("call", "obs_platform", "obs_platform_make_directory", a 64 bit integer, the data of parentText)
+        ignore @intrinsic("call", "obs_platform", "obs_platform_make_directory", a 64 bit integer, the data of folderText)
+
+# The digit `digitText` stands for (0 to 9), or -1.
+local function the bim app digit of {a string:digitText}:
+    execute:
+        loop digitCursor from 0 to 10:
+            if digitText = (the string form of digitCursor):
+                return digitCursor
+        return -1
+
+# ---------------------------------------------------------------- settings
+
+# Dark, the workspace and status bar following it, the start screen at
+# start, millimetres.
+function the bim default app settings:
+    execute:
+        return @intrinsic("construct", a bim app settings record, 1, 0, 0, false, bim millimetre unit)
+
+# The settings kept in the settings file (the defaults for what it lacks).
+function the bim stored app settings:
+    execute:
+        set chosen to the bim default app settings
+        set reading to the bim file content at ((the bim app folder) + (the string form of "/settings.txt"))
+        if reading's valid = false:
+            return chosen
+        set settingLines to reading's text split at "\n"
+        loop lineCursor from 0 to the length of settingLines:
+            set tokens to (the item at lineCursor in settingLines) split at " "
+            if (the length of tokens) = 2:
+                set settingKey to the item at 0 in tokens
+                set digitValue to the bim app digit of (the item at 1 in tokens)
+                if digitValue >= 0:
+                    if settingKey = (the string form of "theme"):
+                        set chosen's theme to the minimum of digitValue and 1
+                    else if settingKey = (the string form of "workspace"):
+                        set chosen's workspace to the minimum of digitValue and 2
+                    else if settingKey = (the string form of "statusbar"):
+                        set chosen's statusbar to the minimum of digitValue and 1
+                    else if settingKey = (the string form of "openlast"):
+                        set chosen's openLast to (digitValue = 1)
+                    else if settingKey = (the string form of "units"):
+                        set chosen's units to the minimum of digitValue and (bim metre unit)
+            free tokens
+        free settingLines
+        return chosen
+
+# Writes `chosen` to the settings file; false when it cannot be written.
+function keep bim app settings {bim app settings record:chosen}:
+    execute:
+        make bim app folder
+        set openDigit to 0
+        if chosen's openLast:
+            set openDigit to 1
+        set written to ((the string form of "theme ") + (the string form of (chosen's theme))) + (the string form of "\n")
+        set written to written + (((the string form of "workspace ") + (the string form of (chosen's workspace))) + (the string form of "\n"))
+        set written to written + (((the string form of "statusbar ") + (the string form of (chosen's statusbar))) + (the string form of "\n"))
+        set written to written + (((the string form of "openlast ") + (the string form of openDigit)) + (the string form of "\n"))
+        set written to written + (((the string form of "units ") + (the string form of (chosen's units))) + (the string form of "\n"))
+        return write bim text written to file ((the bim app folder) + (the string form of "/settings.txt"))
+
+# ---------------------------------------------------------------- recent files
+
+local function the bim recent list path:
+    execute:
+        return (the bim app folder) + (the string form of "/recent.txt")
+
+# The last part of `fullPath`, after its last slash.
+function the bim base name of {a string:fullPath}:
+    execute:
+        set lastSlash to -1
+        loop charCursor from 0 to the length of fullPath:
+            if (the character at charCursor in fullPath) = 47:
+                set lastSlash to charCursor
+        return the substring of fullPath from (lastSlash + 1) spanning ((the length of fullPath) - (lastSlash + 1)) bytes
+
+# `givenPath` from the root (as it is when it does not exist).
+function the bim absolute path of {a string:givenPath}:
+    execute:
+        # realpath, or _wfullpath on Windows (`platform/obs_platform.c`).
+        set buffer to a new string buffer containing 4096 bytes
+        set resolvedLength to @intrinsic("call", "obs_platform", "obs_platform_absolute_path", a 64 bit integer, the data of givenPath, the data of buffer, 4097 as a 64 bit integer)
+        if resolvedLength < (0 as a 64 bit integer):
+            return givenPath
+        return the substring of buffer from 0 spanning (resolvedLength as an integer) bytes
+
+# Now, in local time, as "2026-10-20 14:05".
+function the bim local stamp:
+    execute:
+        set moment to the bim calendar of (the bim wall seconds) local true
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%04d-%02d-%02d %02d:%02d", moment's year as a 32 bit integer, moment's month as a 32 bit integer, moment's day as a 32 bit integer, moment's hour as a 32 bit integer, moment's minute as a 32 bit integer)
+        return the substring of buffer from 0 spanning written bytes
+
+# The recently used files, the last used first (at most ten). Each line of
+# the list is a stamp of 16 bytes, a space and the full path.
+function the bim recent files:
+    execute:
+        set found to a cad topology list of a bim recent file record
+        set reading to the bim file content at (the bim recent list path)
+        if reading's valid = false:
+            return found
+        set recentLines to reading's text split at "\n"
+        loop lineCursor from 0 to the length of recentLines:
+            set line to (the item at lineCursor in recentLines) with "\r" replaced by ""
+            if ((the length of line) > 17) and ((the length of (found's values)) < (the bim recent file limit)):
+                set recentPath to the substring of line from 17 spanning ((the length of line) - 17) bytes
+                append (@intrinsic("construct", a bim recent file record, the bim base name of recentPath, recentPath, the substring of line from 0 spanning 16 bytes)) to (found's values)
+        free recentLines
+        return found
+
+# `usedPath` used now: first in the recent files, once.
+function note bim recent file {a string:usedPath}:
+    execute:
+        if (the length of usedPath) = 0:
+            return nothing
+        make bim app folder
+        set fullPath to the bim absolute path of usedPath
+        set previous to the bim recent files
+        set written to ((the bim local stamp) + (the string form of " ")) + (fullPath + (the string form of "\n"))
+        set keptCount to 1
+        loop recentCursor from 0 to the length of (previous's values):
+            set entry to the item at recentCursor in (previous's values)
+            if (entry's path != fullPath) and (keptCount < (the bim recent file limit)):
+                set written to written + ((entry's stamp + (the string form of " ")) + (entry's path + (the string form of "\n")))
+                set keptCount to keptCount + 1
+        ignore (write bim text written to file (the bim recent list path))
+
+# The full path of recent file `slot` (0 the last used), or "" when there
+# are fewer.
+function the bim recent path at {integer:slot}:
+    execute:
+        set listed to the bim recent files
+        if (slot < 0) or (slot >= (the length of (listed's values))):
+            return the string form of ""
+        return (the item at slot in (listed's values))'s path
+
+# ---------------------------------------------------------------- templates
+
+function the bim model template count:
+    replacement:
+        2
+
+# The templates a new model starts from: 0 Dutch (millimetres, NL storeys
+# and the Dutch type library), 1 international (metres, basic types).
+function the bim model templates:
+    execute:
+        set found to a cad topology list of a bim model template record
+        append (@intrinsic("construct", a bim model template record, the string form of "Empty model (NL)", the string form of "Millimetres, storeys 00 Begane grond and 01 Eerste verdieping, Dutch wall, window and door types")) to (found's values)
+        append (@intrinsic("construct", a bim model template record, the string form of "Empty model (international)", the string form of "Metres, a ground and a first floor, basic wall, window and door types")) to (found's values)
+        return found
+
+# Template `templateIndex` as the text of a native file.
+function the bim template text of template {integer:templateIndex}:
+    execute:
+        set modelValue to an empty bim model
+        set lowerName to the string form of "00 Begane grond"
+        set upperName to the string form of "01 Eerste verdieping"
+        set unitCode to bim millimetre unit
+        if templateIndex = 1:
+            set lowerName to the string form of "Ground floor"
+            set upperName to the string form of "First floor"
+            set unitCode to bim metre unit
+        ignore (add bim level named lowerName at 0.0 with height 3.0 to (the address of modelValue))
+        ignore (add bim level named upperName at 3.0 with height 3.0 to (the address of modelValue))
+        set layerValues to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, the string form of "brick", 0.1)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "insulation", 0.12)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "concrete", 0.1)) to layerValues
+        ignore (add bim wall type named (the string form of "Cavity wall") with layerValues to (the address of modelValue))
+        free layerValues
+        ignore (add bim opening type named (the string form of "Window 1200") sized 1.2 by 1.5 with sill 0.9 and frame 0.05 to (the address of modelValue))
+        ignore (add bim door type named (the string form of "Door 900") sized 0.9 by 2.1 with frame 0.05 to (the address of modelValue))
+        return ((the bim file text of modelValue) + (the string form of "units ")) + ((the bim name of unit unitCode) + (the string form of "\n"))
+
+# A model just made or opened starts without undo steps (the type library
+# added to it is part of it).
+local function forget bim undo history of {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's documentValue's undoStack to a cad topology list of a bim model record
+        set editor's documentValue's redoStack to a cad topology list of a bim model record
+
+# The editor on a new, unnamed model from template `templateIndex` (the
+# first when there is no such template).
+function make new bim model from template {integer:templateIndex} in {a pointer to a bim editor record:editor}:
+    execute:
+        set chosenIndex to templateIndex
+        if (chosenIndex < 0) or (chosenIndex >= (the bim model template count)):
+            set chosenIndex to 0
+        load bim editor from text (the bim template text of template chosenIndex) named (the string form of "") in editor
+        if chosenIndex = 0:
+            add bim type library to editor
+        forget bim undo history of editor
+        set offered to the bim model templates
+        set editor's message to (the string form of "New model: ") + ((the item at chosenIndex in (offered's values))'s title)
+
+# ---------------------------------------------------------------- open and save
+
+# The model file the person picks to open; "" when cancelled.
+function the bim model file picked:
+    execute:
+        return the bim file picked titled (the string form of "Open model") among (the string form of "Models (IFC5, native)|*.ifcxb *.ifcx *.bim;All files|*") saving false from (the string form of "")
+
+# Whether `path` ends in .bim.
+function bim path {a string:path} is native:
+    execute:
+        set size to the length of path
+        if size < 4:
+            return false
+        return (the substring of path from (size - 4) spanning 4 bytes) = (the string form of ".bim")
+
+# The path the person picks to save to, starting from `suggested`; .ifcxb is
+# added when it names no model file. "" when cancelled.
+function the bim save path picked from {a string:suggested}:
+    execute:
+        set shownName to suggested with "'" replaced by ""
+        if (the length of shownName) = 0:
+            set shownName to the string form of "Untitled.ifcxb"
+        set pickedPath to the bim file picked titled (the string form of "Save model as") among (the string form of "IFC5 model|*.ifcxb;IFC5 JSON|*.ifcx;Native|*.bim") saving true from shownName
+        if (the length of pickedPath) = 0:
+            return pickedPath
+        if (bim path pickedPath is ifcx) or (bim path pickedPath is native):
+            return pickedPath
+        return pickedPath + (the string form of ".ifcxb")
+
+# Opens the model at `chosenPath`; true when it opened (the type library
+# added and the file first in the recent files), false with the reason in the
+# editor's message.
+function open bim model file {a string:chosenPath} in {a pointer to a bim editor record:editor}:
+    execute:
+        set before to editor's documentValue's revision
+        open bim editor from chosenPath in editor
+        if editor's documentValue's revision = before:
+            return false
+        add bim type library to editor
+        forget bim undo history of editor
+        note bim recent file chosenPath
+        set editor's message to (the string form of "Opened ") + chosenPath
+        return true
+
+# Saves the model to `chosenPath`; true when it was saved (and the file is
+# first in the recent files).
+function save bim model file {a string:chosenPath} in {a pointer to a bim editor record:editor}:
+    execute:
+        save bim editor to chosenPath in editor
+        if editor's message != ((the string form of "Saved ") + chosenPath):
+            return false
+        note bim recent file chosenPath
+        return true
+
+# The name the document bar and the window show: the file's name, or
+# "Untitled".
+function the bim document title of {a string:shownPath}:
+    execute:
+        if (the length of shownPath) = 0:
+            return the string form of "Untitled"
+        return the bim base name of shownPath

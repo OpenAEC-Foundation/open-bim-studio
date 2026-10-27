@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: MPL-2.0
+# Measures how the cost of one edit grows with the model: a model of separate
+# rooms, four walls each joined at their corners, is evaluated and its plan cut;
+# then one corner of the first room is moved back and forth, and every move is
+# re-evaluated incrementally and its plan re-cut. Prints, per room count, the
+# walls, the milliseconds of the first full evaluation and plan, the walls
+# examined, rebuilt and re-cut per move, and the median and maximum
+# microseconds of a move's evaluation and of its plan update.
+import editor/bim_editor.dl
+
+function sort bim scale timings {a pointer to a list:values}:
+    execute:
+        loop outer from 1 to the length of values:
+            set moving to the item at outer in values
+            set slot to outer
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if (the item at (slot - 1) in values) > moving:
+                    replace item at index slot in values with (the item at (slot - 1) in values)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in values with moving
+
+function the bim scale summary of {a pointer to a list:values} labelled {a string:label}:
+    execute:
+        sort bim scale timings values
+        set line to (label + (the string form of " median ")) + (the string form of (the item at ((the length of values) / 2) in values))
+        return (line + (the string form of " max ")) + (the string form of (the last item of values))
+
+function the bim scale point {a 64 bit floating-point number:x} {a 64 bit floating-point number:y}:
+    execute:
+        return a cad vector2 with x x and y y
+
+function measure bim scale with {integer:side} rooms each way cutting plans {boolean:cutting}:
+    execute:
+        set modelValue to an empty bim model
+        set storey to add bim level named (the string form of "Ground floor") at 0.0 with height 3.0 to (the address of modelValue)
+        set layerValues to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, the string form of "brick", 0.1)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "insulation", 0.12)) to layerValues
+        append (@intrinsic("construct", a bim layer record, the string form of "concrete", 0.1)) to layerValues
+        set cavity to add bim wall type named (the string form of "Cavity wall") with layerValues to (the address of modelValue)
+        free layerValues
+        set firstWall to the bim refused id
+        loop row from 0 to side:
+            loop column from 0 to side:
+                set left to (column as a 64 bit floating-point number) * 8.0
+                set bottom to (row as a 64 bit floating-point number) * 6.0
+                set southId to add bim wall typed cavity on storey from (the bim scale point left bottom) to (the bim scale point (left + 6.0) bottom) to (the address of modelValue)
+                set eastId to add bim wall typed cavity on storey from (the bim scale point (left + 6.0) bottom) to (the bim scale point (left + 6.0) (bottom + 4.0)) to (the address of modelValue)
+                set northId to add bim wall typed cavity on storey from (the bim scale point (left + 6.0) (bottom + 4.0)) to (the bim scale point left (bottom + 4.0)) to (the address of modelValue)
+                set westId to add bim wall typed cavity on storey from (the bim scale point left (bottom + 4.0)) to (the bim scale point left bottom) to (the address of modelValue)
+                if firstWall = the bim refused id:
+                    set firstWall to southId
+        set began to the bim microseconds now
+        set evaluation to the bim evaluation of modelValue after (an empty bim evaluation)
+        set fullEvaluation to ((the bim microseconds now) - began) / (1000 as a 64 bit integer)
+        set began to the bim microseconds now
+        set plan to an empty bim view
+        if cutting:
+            set plan to the bim plan of evaluation at 0.0 cut at 1.2
+        set fullPlan to ((the bim microseconds now) - began) / (1000 as a 64 bit integer)
+        set evaluations to an empty list of a 64 bit integer
+        set planTimes to an empty list of a 64 bit integer
+        set examinedTotal to 0
+        set rebuiltTotal to 0
+        set recutTotal to 0
+        loop moveCount from 1 to 21:
+            set shift to 0.05 * ((the remainder of moveCount divided by 2) as a 64 bit floating-point number)
+            set found to the bim wall index of firstWall in modelValue
+            set southValue to the item at found's position in (modelValue's walls's values)
+            set corner to the bim scale point (6.0 + shift) 0.0
+            set southMoved to move bim wall firstWall to southValue's start and corner in (the address of modelValue)
+            set eastFound to the bim wall index of (firstWall + (1 as a 64 bit integer)) in modelValue
+            set eastValue to the item at eastFound's position in (modelValue's walls's values)
+            set eastMoved to move bim wall (firstWall + (1 as a 64 bit integer)) to corner and eastValue's finish in (the address of modelValue)
+            if (southMoved and eastMoved) = false:
+                print "a move was refused" as a line
+                @intrinsic("call", "libc", "exit", nothing, 1)
+            set started to the bim microseconds now
+            update bim evaluation (the address of evaluation) to modelValue
+            set evaluated to the bim microseconds now
+            append (evaluated - started) to evaluations
+            set examinedTotal to examinedTotal + evaluation's examined
+            set rebuiltTotal to rebuiltTotal + evaluation's rebuilt
+            if cutting:
+                update bim view (the address of plan) from evaluation
+                append ((the bim microseconds now) - evaluated) to planTimes
+                set recutTotal to recutTotal + plan's recut
+        set line to (the string form of "walls ") + (the string form of (the length of (modelValue's walls's values)))
+        set line to ((line + (the string form of " full evaluation ms ")) + (the string form of fullEvaluation)) + (the string form of " full plan ms ")
+        set line to (line + (the string form of fullPlan))
+        set line to ((line + (the string form of " per move examined ")) + (the string form of (examinedTotal / 20))) + (the string form of " rebuilt ")
+        set line to ((line + (the string form of (rebuiltTotal / 20))) + (the string form of " recut ")) + (the string form of (recutTotal / 20))
+        set line to (line + (the string form of " ")) + (the bim scale summary of evaluations labelled (the string form of "evaluate us"))
+        if cutting:
+            set line to (line + (the string form of " ")) + (the bim scale summary of planTimes labelled (the string form of "plan us"))
+        print line as a line
+        free evaluations
+        free planTimes
+
+measure bim scale with 1 rooms each way cutting plans true
+measure bim scale with 5 rooms each way cutting plans true
+measure bim scale with 10 rooms each way cutting plans true
+measure bim scale with 20 rooms each way cutting plans true
+measure bim scale with 40 rooms each way cutting plans true
+measure bim scale with 158 rooms each way cutting plans true

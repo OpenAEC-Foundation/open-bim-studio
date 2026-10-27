@@ -1,0 +1,578 @@
+# SPDX-License-Identifier: MPL-2.0
+# The boundary sketch: one object for the outline of every planar element, as
+# Revit's sketch mode. A floor, roof or ceiling, a wall's elevation and a
+# building system's face are each bounded by a closed loop of segments, each
+# a line, circular arc or elliptic quarter, drawn on the element's work plane (`bim boundary plane
+# record`): the plan for a plate, the vertical plane along the element for a
+# wall or a building system. Tab on the element opens its sketch; Tab again
+# chains the segments into one loop and gives the element that outline.
+#
+# An element keeps its outline as a polygon, so that everything that reads
+# it (meshing, plans, areas, IFC) stays as it is; an arc becomes straight
+# pieces within half a millimetre. Which corners of the polygon belong to
+# which segment is kept as the element's settings (`bim boundary span
+# setting`): the number of polygon edges each segment spans, one for a line;
+# a negative count identifies an elliptic quarter.
+# Opening the sketch again finds every arc back through its two ends and the
+# polygon's corner at its middle, wherever the element has been moved,
+# turned or mirrored since.
+import model/bim_evaluate.dl
+import model/bim_stair.dl
+
+# A segment of a boundary sketch, in the work plane's coordinates: a line
+# from `start` to `finish`, or, when `bulge` is not 0, the arc over that
+# chord whose middle lies `bulge` metres off the chord's middle to its right
+# (left when negative), as a curved wall's. An elliptic quarter instead uses
+# `centre` and the two endpoint vectors as its affine axes; its bulge is zero.
+class:
+    patterns:
+        [a|] bim boundary segment record
+    members:
+        start as a cad vector2
+        finish as a cad vector2
+        bulge as a 64 bit floating-point number
+        elliptic as a boolean
+        centre as a cad vector2
+
+function the bim boundary line from {cad vector2:fromPoint} to {cad vector2:toPoint}:
+    execute:
+        return @intrinsic("construct", a bim boundary segment record, fromPoint, toPoint, 0.0, false, fromPoint)
+
+function the bim boundary arc from {cad vector2:fromPoint} to {cad vector2:toPoint} bulging {a 64 bit floating-point number:rise}:
+    execute:
+        return @intrinsic("construct", a bim boundary segment record, fromPoint, toPoint, rise, false, fromPoint)
+
+# Move selected endpoints; callers apply this to every incident segment.
+function the bim boundary segment {bim boundary segment record:piece} moving endpoints {cad vector2:firstPoint} and {cad vector2:lastPoint} by {cad vector2:displacement}:
+    execute:
+        set movedPiece to piece
+        if (bim boundary point piece's start meets firstPoint) or (bim boundary point piece's start meets lastPoint):
+            set movedPiece's start to a cad vector2 with x (piece's start's x + displacement's x) and y (piece's start's y + displacement's y)
+        if (bim boundary point piece's finish meets firstPoint) or (bim boundary point piece's finish meets lastPoint):
+            set movedPiece's finish to a cad vector2 with x (piece's finish's x + displacement's x) and y (piece's finish's y + displacement's y)
+        if piece's elliptic:
+            set movedStart to (bim boundary point piece's start meets firstPoint) or (bim boundary point piece's start meets lastPoint)
+            set movedFinish to (bim boundary point piece's finish meets firstPoint) or (bim boundary point piece's finish meets lastPoint)
+            if movedStart and movedFinish:
+                set movedPiece's centre to a cad vector2 with x (piece's centre's x + displacement's x) and y (piece's centre's y + displacement's y)
+        return movedPiece
+
+# The same curve traversed in the opposite direction.
+function the bim boundary segment {bim boundary segment record:piece} reversed:
+    execute:
+        return @intrinsic("construct", a bim boundary segment record, piece's finish, piece's start, 0.0 - piece's bulge, piece's elliptic, piece's centre)
+
+# The arc of a segment (see `the bim arc of` a wall); a line's is not
+# `curved`.
+function the bim arc of boundary segment {bim boundary segment record:piece}:
+    execute:
+        set chordX to piece's finish's x - piece's start's x
+        set chordY to piece's finish's y - piece's start's y
+        set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+        set rise to piece's bulge
+        if ((the absolute value of rise) <= 1e-9) or (chordLength <= 1e-9):
+            return @intrinsic("construct", a bim arc record, false, piece's start, 0.0, 0.0, 0.0)
+        set halfChord to chordLength * 0.5
+        set sweep to 4.0 * @intrinsic("atan2", rise, halfChord)
+        set radius to ((halfChord * halfChord) + (rise * rise)) / (2.0 * (the absolute value of rise))
+        set nx to chordY / chordLength
+        set ny to (0.0 - chordX) / chordLength
+        set side to 1.0
+        if rise < 0.0:
+            set side to -1.0
+        set apexX to ((piece's start's x + piece's finish's x) * 0.5) + (rise * nx)
+        set apexY to ((piece's start's y + piece's finish's y) * 0.5) + (rise * ny)
+        set centre to a cad vector2 with x (apexX - ((side * radius) * nx)) and y (apexY - ((side * radius) * ny))
+        set startAngle to @intrinsic("atan2", piece's start's y - centre's y, piece's start's x - centre's x)
+        return @intrinsic("construct", a bim arc record, true, centre, radius, startAngle, sweep)
+
+# The middle of a segment: its chord's middle moved by its bulge.
+function the bim middle of boundary segment {bim boundary segment record:piece}:
+    execute:
+        if piece's elliptic:
+            return the bim ellipse quarter point of piece at 0.5
+        set chordX to piece's finish's x - piece's start's x
+        set chordY to piece's finish's y - piece's start's y
+        set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+        set middleX to (piece's start's x + piece's finish's x) * 0.5
+        set middleY to (piece's start's y + piece's finish's y) * 0.5
+        if chordLength <= 1e-12:
+            return a cad vector2 with x middleX and y middleY
+        return a cad vector2 with x (middleX + ((piece's bulge * chordY) / chordLength)) and y (middleY - ((piece's bulge * chordX) / chordLength))
+
+# The bulge of the arc from `fromPoint` to `toPoint` through `throughPoint`
+# (Revit's three-point arc); 0 when the three lie on a line.
+function the bim boundary bulge from {cad vector2:fromPoint} to {cad vector2:toPoint} through {cad vector2:throughPoint}:
+    execute:
+        set chordX to toPoint's x - fromPoint's x
+        set chordY to toPoint's y - fromPoint's y
+        set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+        if chordLength <= 1e-9:
+            return 0.0
+        set ux to chordX / chordLength
+        set uy to chordY / chordLength
+        set offsetX to throughPoint's x - ((fromPoint's x + toPoint's x) * 0.5)
+        set offsetY to throughPoint's y - ((fromPoint's y + toPoint's y) * 0.5)
+        # In the chord's frame: `along` it, `across` to its right.
+        set along to (offsetX * ux) + (offsetY * uy)
+        set across to (offsetX * uy) - (offsetY * ux)
+        if (the absolute value of across) <= (chordLength * 1e-9):
+            return 0.0
+        set halfChord to chordLength * 0.5
+        # The centre lies on the chord's bisector, `centreAcross` to its right.
+        set centreAcross to (((along * along) + (across * across)) - (halfChord * halfChord)) / (2.0 * across)
+        set radius to the square root of ((halfChord * halfChord) + (centreAcross * centreAcross))
+        if across > 0.0:
+            return centreAcross + radius
+        return centreAcross - radius
+
+# The number of straight pieces a segment becomes: 1 for a line, an even
+# number for an arc, so that a corner lies at its middle.
+function the bim pieces of boundary segment {bim boundary segment record:piece}:
+    execute:
+        if piece's elliptic:
+            set radius to (the cad distance from piece's start to piece's centre) + (the cad distance from piece's finish to piece's centre)
+            set count to the maximum of 4 and ((@intrinsic("ceil", 1.5707963267948966 * (the square root of (radius / 0.004)))) as an integer)
+            set count to the minimum of 2048 and count
+            if (the remainder of count divided by 2) = 1:
+                set count to count + 1
+            return count
+        set arc to the bim arc of boundary segment piece
+        if arc's curved = false:
+            return 1
+        set count to the bim pieces of arc reaching 0.0
+        if (the remainder of count divided by 2) = 1:
+            set count to count + 1
+        return count
+
+# Appends a segment's corners to `corners`: its start and, for an arc, the
+# corners along it, not its finish (the next segment's start).
+function append bim boundary corners of {bim boundary segment record:piece} into {a pointer to a list:cornerList}:
+    execute:
+        append piece's start to cornerList
+        set count to the bim pieces of boundary segment piece
+        if count < 2:
+            return nothing
+        set arc to the bim arc of boundary segment piece
+        if piece's elliptic:
+            loop step from 1 to count:
+                append (the bim ellipse quarter point of piece at ((step as a 64 bit floating-point number) / (count as a 64 bit floating-point number))) to cornerList
+            return nothing
+        loop step from 1 to count:
+            append (the bim point of arc at ((step as a 64 bit floating-point number) / (count as a 64 bit floating-point number)) offset 0.0) to cornerList
+
+# The points a segment is drawn through, its finish included.
+function the bim drawn points of boundary segment {bim boundary segment record:piece}:
+    execute:
+        set pointList to an empty list of a cad vector2
+        append bim boundary corners of piece into pointList
+        append piece's finish to pointList
+        return pointList
+
+# ---------------------------------------------------------------- one loop
+
+# Segments chained into one closed loop: its polygon (`corners`) and the
+# polygon edges each segment spans (`spans`), or why not (`message`).
+class:
+    patterns:
+        [a|] bim boundary loop record
+    members:
+        valid as a boolean
+        message as a string
+        corners as the type of (a cad topology list of a cad vector2)
+        spans as the type of (a cad topology list of an integer)
+
+function the bim boundary tolerance:
+    replacement:
+        0.001
+
+function bim boundary point {cad vector2:first} meets {cad vector2:second}:
+    execute:
+        return (the cad distance from first to second) <= the bim boundary tolerance
+
+function the bim refused boundary loop because {a string:reason}:
+    execute:
+        return @intrinsic("construct", a bim boundary loop record, false, reason, a cad topology list of a cad vector2, a cad topology list of an integer)
+
+# The segments `pieces` chained end to end, each turned as it must be, into
+# one closed loop. Segments shorter than the tolerance are left out. Refused
+# when they leave a gap, branch, or make more than one loop.
+function the bim boundary loop of {a pointer to a list:pieces}:
+    execute:
+        set kept to an empty list of a bim boundary segment record
+        loop cursor from 0 to the length of pieces:
+            set piece to the item at cursor in pieces
+            if (bim boundary point piece's start meets piece's finish) = false:
+                append piece to kept
+        set count to the length of kept
+        if count < 2:
+            free kept
+            return the bim refused boundary loop because (the string form of "a boundary needs at least two lines or arcs that close")
+        set used to an empty list of a boolean
+        loop cursor from 0 to count:
+            append false to used
+        set ordered to an empty list of a bim boundary segment record
+        append (the item at 0 in kept) to ordered
+        replace item at index 0 in used with true
+        set loopStart to (the item at 0 in kept)'s start
+        set reached to (the item at 0 in kept)'s finish
+        set searching to true
+        loop while searching and ((the length of ordered) < count):
+            set next to -1
+            set turned to false
+            loop cursor from 0 to count:
+                if (next < 0) and ((the item at cursor in used) = false):
+                    set candidate to the item at cursor in kept
+                    if bim boundary point candidate's start meets reached:
+                        set next to cursor
+                    else if bim boundary point candidate's finish meets reached:
+                        set next to cursor
+                        set turned to true
+            if next < 0:
+                set searching to false
+            else:
+                set chosen to the item at next in kept
+                if turned:
+                    set chosen to the bim boundary segment chosen reversed
+                replace item at index next in used with true
+                append chosen to ordered
+                set reached to chosen's finish
+                # Back at the start with segments left: a second loop.
+                if (bim boundary point reached meets loopStart) and ((the length of ordered) < count):
+                    set searching to false
+        set closed to bim boundary point reached meets loopStart
+        set complete to (the length of ordered) = count
+        free used
+        if (closed = false) or (complete = false):
+            set reason to the string form of "the boundary is open: its ends do not meet"
+            if closed:
+                set reason to the string form of "the sketch has lines or arcs besides its one closed loop"
+            else if (the length of ordered) < count:
+                set reason to (the string form of "the boundary is open or branches near ") + ((the string form of reached's x) + ((the string form of ", ") + (the string form of reached's y)))
+            free ordered
+            free kept
+            return the bim refused boundary loop because reason
+        set corners to a cad topology list of a cad vector2
+        set spans to a cad topology list of an integer
+        loop cursor from 0 to count:
+            set piece to the item at cursor in ordered
+            append bim boundary corners of piece into (corners's values)
+            set pieceCount to the bim pieces of boundary segment piece
+            if piece's elliptic:
+                set pieceCount to 0 - pieceCount
+            append pieceCount to (spans's values)
+        free ordered
+        free kept
+        return @intrinsic("construct", a bim boundary loop record, true, the string form of "", corners, spans)
+
+# The segments of a polygon `corners` whose edges segments span as `spans`
+# says (see `the bim boundary loop of`): each arc through its ends and the
+# corner at its middle. Without spans that cover the polygon, one line per
+# edge.
+function the bim boundary segments of {a pointer to a list:corners} spanned {a pointer to a list:spans}:
+    execute:
+        set found to a cad topology list of a bim boundary segment record
+        set count to the length of corners
+        if count < 2:
+            return found
+        set covered to 0
+        set usable to (the length of spans) > 0
+        loop cursor from 0 to the length of spans:
+            set span to the item at cursor in spans
+            if span = 0:
+                set usable to false
+            set covered to covered + (the absolute value of span)
+        if covered != count:
+            set usable to false
+        if usable = false:
+            loop cursor from 0 to count:
+                append (the bim boundary line from (the item at cursor in corners) to (the item at (the remainder of (cursor + 1) divided by count) in corners)) to (found's values)
+            return found
+        set first to 0
+        loop cursor from 0 to the length of spans:
+            set span to the item at cursor in spans
+            set elliptic to span < 0
+            set span to the absolute value of span
+            set fromPoint to the item at first in corners
+            set toPoint to the item at (the remainder of (first + span) divided by count) in corners
+            if elliptic and ((the remainder of span divided by 2) = 0):
+                set middle to the item at (first + (span / 2)) in corners
+                set factor to 0.7071067811865476
+                set centre to a cad vector2 with x ((middle's x - ((fromPoint's x + toPoint's x) * factor)) / (1.0 - (2.0 * factor))) and y ((middle's y - ((fromPoint's y + toPoint's y) * factor)) / (1.0 - (2.0 * factor)))
+                append (the bim boundary ellipse quarter from fromPoint to toPoint around centre) to (found's values)
+            else if span < 2:
+                append (the bim boundary line from fromPoint to toPoint) to (found's values)
+            else:
+                set middle to the item at (first + (span / 2)) in corners
+                append (the bim boundary arc from fromPoint to toPoint bulging (the bim boundary bulge from fromPoint to toPoint through middle)) to (found's values)
+            set first to first + span
+        return found
+
+# ---------------------------------------------------------------- kept with the element
+
+# The settings that keep a boundary's spans: segment `n` at the setting
+# 1400000 plus `n`, its value the polygon edges it spans. An element whose
+# boundary is all lines keeps none.
+function bim boundary span setting:
+    replacement:
+        1400000
+
+function bim boundary span setting limit:
+    replacement:
+        1500000
+
+# The spans element `elementId` keeps, in order; empty when it keeps none.
+function the bim boundary spans of {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        set found to an empty list of an integer
+        set slot to 0
+        set reading to true
+        loop while reading:
+            set stored to the bim setting ((bim boundary span setting) + slot) of elementId in modelValue
+            if stored's found:
+                append (stored's value as an integer) to found
+                set slot to slot + 1
+            else:
+                set reading to false
+        return found
+
+# Element `elementId` keeps `spans` (none when every segment is a line).
+function keep bim boundary spans {a pointer to a list:spanList} of {a 64 bit integer:elementId} in {a pointer to a bim model record:target}:
+    execute:
+        set cursor to (the length of (target's settings's values)) - 1
+        loop while cursor >= 0:
+            set entry to the item at cursor in (target's settings's values)
+            if (entry's elementId = elementId) and ((entry's code >= bim boundary span setting) and (entry's code < bim boundary span setting limit)):
+                remove item cursor from (target's settings's values)
+            set cursor to cursor - 1
+        set curved to false
+        loop cursor from 0 to the length of spanList:
+            if (the absolute value of (the item at cursor in spanList)) > 1:
+                set curved to true
+        if curved and ((the length of spanList) < ((bim boundary span setting limit) - (bim boundary span setting))):
+            loop cursor from 0 to the length of spanList:
+                set bim setting ((bim boundary span setting) + cursor) of elementId to ((the item at cursor in spanList) as a 64 bit integer) keeping true in target
+        note bim change of elementId in target
+
+# The boundary sketch of plate `slabId`: its outline's segments, in the plan.
+function the bim boundary segments of slab {a 64 bit integer:slabId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim slab index of slabId in modelValue
+        if found's valid = false:
+            return a cad topology list of a bim boundary segment record
+        set slabValue to the item at found's position in (modelValue's slabs's values)
+        set spans to the bim boundary spans of slabId in modelValue
+        set sketchSegments to the bim boundary segments of (slabValue's outline's values) spanned spans
+        free spans
+        return sketchSegments
+
+# Plate `slabId` takes the loop of `pieces` as its outline, keeping its
+# arcs. Returns why not, or an empty text.
+function set bim slab {a 64 bit integer:slabId} boundary to {a pointer to a list:pieces} in {a pointer to a bim model record:target}:
+    execute:
+        set chained to the bim boundary loop of pieces
+        if chained's valid = false:
+            return chained's message
+        if (set bim slab slabId outline to (chained's corners's values) in target) = false:
+            return the string form of "the boundary crosses itself"
+        keep bim boundary spans (chained's spans's values) of slabId in target
+        return the string form of ""
+
+# The signed area of polygon `corners`: positive counter-clockwise.
+function the bim signed area of {a pointer to a list:corners}:
+    execute:
+        set twice to 0.0
+        set count to the length of corners
+        loop cursor from 0 to count:
+            set here to the item at cursor in corners
+            set next to the item at (the remainder of (cursor + 1) divided by count) in corners
+            set twice to twice + ((here's x * next's y) - (next's x * here's y))
+        return twice * 0.5
+
+# The loop of `pieces` run anticlockwise.
+function the bim anticlockwise boundary loop of {a pointer to a list:pieces}:
+    execute:
+        set chained to the bim boundary loop of pieces
+        if (chained's valid = false) or ((the bim signed area of (chained's corners's values)) >= 0.0):
+            return chained
+        set turned to an empty list of a bim boundary segment record
+        set cursor to (the length of pieces) - 1
+        loop while cursor >= 0:
+            append (the bim boundary segment (the item at cursor in pieces) reversed) to turned
+            set cursor to cursor - 1
+        set rechained to the bim boundary loop of turned
+        free turned
+        return rechained
+
+# The boundary sketch of building system `curtainId`: its face's outline (its
+# contour, or its rectangle) as segments, in face coordinates (metres along
+# its line, up its face).
+function the bim boundary segments of system {a 64 bit integer:curtainId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim curtain index of curtainId in modelValue
+        if found's valid = false:
+            return a cad topology list of a bim boundary segment record
+        set faceOutline to the bim face outline of (the item at found's position in (modelValue's curtains's values)) in modelValue
+        set spans to the bim boundary spans of curtainId in modelValue
+        set sketchSegments to the bim boundary segments of faceOutline spanned spans
+        free spans
+        free faceOutline
+        return sketchSegments
+
+# Building system `curtainId` takes the loop of `pieces` (in face
+# coordinates) as its contour, keeping its arcs; it rises to the contour's
+# top. A loop that is its rectangle leaves it without a contour. Returns why
+# not, or an empty text.
+function set bim system {a 64 bit integer:curtainId} boundary to {a pointer to a list:pieces} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim curtain index of curtainId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return the string form of "the building system is gone"
+        set chained to the bim anticlockwise boundary loop of pieces
+        if chained's valid = false:
+            return chained's message
+        if (bim outline (chained's corners's values) is simple) = false:
+            return the string form of "the contour crosses itself"
+        set curtainValue to the item at found's position in (target's curtains's values)
+        set wallLength to the bim system length of curtainValue
+        set top to 0.0
+        loop cursor from 0 to the length of (chained's corners's values):
+            set corner to the item at cursor in (chained's corners's values)
+            if ((corner's x < -0.001) or (corner's x > (wallLength + 0.001))) or (corner's y < -0.001):
+                return the string form of "keep the contour between the system's ends and above its foot"
+            set top to the maximum of top and corner's y
+        if top < 0.5:
+            return the string form of "the contour is lower than half a metre"
+        if (the absolute value of (top - curtainValue's height)) > 0.0005:
+            if (set bim curtain wall curtainId height to top in target) = false:
+                return the string form of "the system cannot rise to the contour's top"
+        # Its own rectangle: no contour.
+        set rectangle to (the length of (chained's corners's values)) = 4
+        if rectangle:
+            loop cursor from 0 to 4:
+                set corner to the item at cursor in (chained's corners's values)
+                set onSide to ((the absolute value of corner's x) < 0.001) or ((the absolute value of (corner's x - wallLength)) < 0.001)
+                set onEnd to ((the absolute value of corner's y) < 0.001) or ((the absolute value of (corner's y - top)) < 0.001)
+                if (onSide and onEnd) = false:
+                    set rectangle to false
+        if rectangle:
+            set noCorners to an empty list of a cad vector2
+            set noSpans to an empty list of an integer
+            keep bim face contour noCorners of curtainId in target
+            keep bim boundary spans noSpans of curtainId in target
+            free noCorners
+            free noSpans
+            return the string form of ""
+        keep bim face contour (chained's corners's values) of curtainId in target
+        keep bim boundary spans (chained's spans's values) of curtainId in target
+        return the string form of ""
+
+# The boundary sketch of wall `wallId`: its profile (its contour, or the
+# rectangle of its length from its foot to its top) as segments, in metres
+# along it and up from its storey.
+function the bim boundary segments of wall {a 64 bit integer:wallId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim wall index of wallId in modelValue
+        if found's valid = false:
+            return a cad topology list of a bim boundary segment record
+        set wallValue to the item at found's position in (modelValue's walls's values)
+        set faceOutline to the bim face contour of wallId in modelValue
+        if (the length of faceOutline) < 3:
+            free faceOutline
+            set faceOutline to an empty list of a cad vector2
+            set wallLength to the bim centreline length of wallValue
+            set top to wallValue's baseOffset + wallValue's height
+            append (a cad vector2 with x 0.0 and y wallValue's baseOffset) to faceOutline
+            append (a cad vector2 with x wallLength and y wallValue's baseOffset) to faceOutline
+            append (a cad vector2 with x wallLength and y top) to faceOutline
+            append (a cad vector2 with x 0.0 and y top) to faceOutline
+        set spans to the bim boundary spans of wallId in modelValue
+        set sketchSegments to the bim boundary segments of faceOutline spanned spans
+        free spans
+        free faceOutline
+        return sketchSegments
+
+# Wall `wallId` takes the loop of `pieces` (along it, up from its storey) as
+# its profile, keeping its arcs: its foot and top go to the profile's lowest
+# and highest points, and it is cut to the profile. A loop that is its
+# rectangle leaves it without a contour. A curved, leaning or bowed wall
+# keeps its rectangle. Returns why not, or an empty text.
+function set bim wall {a 64 bit integer:wallId} boundary to {a pointer to a list:pieces} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim wall index of wallId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return the string form of "the wall is gone"
+        set wallValue to the item at found's position in (target's walls's values)
+        if ((wallValue's bulge != 0.0) or (wallValue's lean != 0.0)) or (wallValue's rise != 0.0):
+            return the string form of "a curved, leaning or bowed wall keeps its rectangle"
+        set chained to the bim anticlockwise boundary loop of pieces
+        if chained's valid = false:
+            return chained's message
+        if (bim outline (chained's corners's values) is simple) = false:
+            return the string form of "the profile crosses itself"
+        set wallLength to the bim centreline length of wallValue
+        set low to 1.0 / 0.0
+        set top to 0.0 - (1.0 / 0.0)
+        loop cursor from 0 to the length of (chained's corners's values):
+            set corner to the item at cursor in (chained's corners's values)
+            if (corner's x < -0.001) or (corner's x > (wallLength + 0.001)):
+                return the string form of "keep the profile between the wall's ends"
+            set low to the minimum of low and corner's y
+            set top to the maximum of top and corner's y
+        if (top - low) < 0.1:
+            return the string form of "the profile is lower than 10 cm"
+        if ((the absolute value of (low - wallValue's baseOffset)) > 0.0005) or ((the absolute value of ((top - low) - wallValue's height)) > 0.0005):
+            if (set bim wall wallId base to low and height to (top - low) in target) = false:
+                return the string form of "the wall cannot take the profile's foot and top"
+        set rectangle to (the length of (chained's corners's values)) = 4
+        if rectangle:
+            loop cursor from 0 to 4:
+                set corner to the item at cursor in (chained's corners's values)
+                set onSide to ((the absolute value of corner's x) < 0.001) or ((the absolute value of (corner's x - wallLength)) < 0.001)
+                set onEnd to ((the absolute value of (corner's y - low)) < 0.001) or ((the absolute value of (corner's y - top)) < 0.001)
+                if (onSide and onEnd) = false:
+                    set rectangle to false
+        set noSpans to an empty list of an integer
+        if rectangle:
+            set noCorners to an empty list of a cad vector2
+            keep bim face contour noCorners of wallId in target
+            keep bim boundary spans noSpans of wallId in target
+            free noCorners
+        else:
+            keep bim face contour (chained's corners's values) of wallId in target
+            keep bim boundary spans (chained's spans's values) of wallId in target
+        free noSpans
+        return the string form of ""
+
+# Four analytic quarters retain the ellipse on reopening. A negative span
+# distinguishes an elliptic quarter from a circular arc; old readers still
+# retain the tessellated outline. Its midpoint reconstructs the affine centre
+# after translation, rotation or mirroring without storing world coordinates.
+function the bim boundary ellipse quarter from {cad vector2:firstPoint} to {cad vector2:lastPoint} around {cad vector2:centre}:
+    execute:
+        return @intrinsic("construct", a bim boundary segment record, firstPoint, lastPoint, 0.0, true, centre)
+
+function the bim ellipse quarter point of {bim boundary segment record:piece} at {a 64 bit floating-point number:share}:
+    execute:
+        set turn to share * 1.5707963267948966
+        set c to the cosine of turn
+        set s to the sine of turn
+        return a cad vector2 with x (piece's centre's x + (((piece's start's x - piece's centre's x) * c) + ((piece's finish's x - piece's centre's x) * s))) and y (piece's centre's y + (((piece's start's y - piece's centre's y) * c) + ((piece's finish's y - piece's centre's y) * s)))
+
+function the bim boundary ellipse between {cad vector2:firstPoint} and {cad vector2:lastPoint}:
+    execute:
+        set pieces to a cad topology list of a bim boundary segment record
+        set radiusX to (the absolute value of (lastPoint's x - firstPoint's x)) * 0.5
+        set radiusY to (the absolute value of (lastPoint's y - firstPoint's y)) * 0.5
+        if (radiusX < 0.001) or (radiusY < 0.001):
+            return pieces
+        set centre to a cad vector2 with x ((firstPoint's x + lastPoint's x) * 0.5) and y ((firstPoint's y + lastPoint's y) * 0.5)
+        set east to a cad vector2 with x (centre's x + radiusX) and y centre's y
+        set north to a cad vector2 with x centre's x and y (centre's y + radiusY)
+        set west to a cad vector2 with x (centre's x - radiusX) and y centre's y
+        set south to a cad vector2 with x centre's x and y (centre's y - radiusY)
+        append (the bim boundary ellipse quarter from east to north around centre) to (pieces's values)
+        append (the bim boundary ellipse quarter from north to west around centre) to (pieces's values)
+        append (the bim boundary ellipse quarter from west to south around centre) to (pieces's values)
+        append (the bim boundary ellipse quarter from south to east around centre) to (pieces's values)
+        return pieces

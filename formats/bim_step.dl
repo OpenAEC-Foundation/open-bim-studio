@@ -1,0 +1,690 @@
+# SPDX-License-Identifier: MPL-2.0
+# STEP physical files (ISO 10303-21), the text form of IFC: the file is read
+# once into an index of its instances (`#id` to where the instance's type
+# name starts, and the number of its type), and an instance's arguments are
+# parsed only when they are asked for, into a flat tree of values: numbers,
+# strings, enumerations, references, unset and derived values, typed values
+# (IFCLABEL('x')) and lists, a list's members held in order in one shared
+# array.
+#
+# Made for files of a gigabyte, after IfcOpenShell (an index by id and by
+# type built in one pass, types that are not needed never parsed) and
+# web-ifc (per id only the type and where its text starts; arguments decoded
+# on demand): the pass looks at each instance's number and type name only,
+# and jumps to the `;` that ends it with memchr (strings, which may hold a
+# `;`, are skipped whole); type names are interned in a hash table, so that
+# the instances of a type are found from the numbers alone.
+import formats/bim_file.dl
+import lib/atomic.dl
+
+# How far a long load running on another thread is: its step, and how much
+# of the step is done out of how much. The loading thread writes it, the
+# window's thread reads it, both atomically.
+class:
+    patterns:
+        [a|] bim load progress record
+    members:
+        step as a 64 bit integer
+        done as a 64 bit integer
+        total as a 64 bit integer
+
+# No progress to report to.
+function no bim load progress:
+    execute:
+        return 0 as a pointer to a bim load progress record
+
+# `tracker` at step `stepNumber`, nothing of it done yet.
+function report bim load step {integer:stepNumber} to {a pointer to a bim load progress record:tracker}:
+    execute:
+        if tracker != (0 as a pointer to a bim load progress record):
+            atomically store relaxed (0 as a 64 bit integer) at (the address of (tracker's total))
+            atomically store relaxed (0 as a 64 bit integer) at (the address of (tracker's done))
+            atomically store relaxed (stepNumber as a 64 bit integer) at (the address of (tracker's step))
+
+# `done` out of `total` of the step under way.
+function report bim load count {integer:done} of {integer:total} to {a pointer to a bim load progress record:tracker}:
+    execute:
+        if tracker != (0 as a pointer to a bim load progress record):
+            atomically store relaxed (total as a 64 bit integer) at (the address of (tracker's total))
+            atomically store relaxed (done as a 64 bit integer) at (the address of (tracker's done))
+
+class:
+    patterns:
+        [a|] bim step file record
+    members:
+        valid as a boolean
+        message as a string
+        text as a string
+        # Where the type name of instance `#id` starts, or -1.
+        starts as the type of (an empty list of an integer)
+        # The type of instance `#id` (an index into `typeNames`), or -1.
+        types as the type of (an empty list of an integer)
+        # The type names met, in capitals, in the order they were met.
+        typeNames as the type of (an empty list of a string)
+        # The schema named in the header (IFC2X3, IFC4, IFC4X3_ADD2 ...).
+        schema as a string
+        count as an integer
+
+local function a bim step refusal saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a bim step file record, false, reason, the string form of "", an empty list of an integer, an empty list of an integer, an empty list of a string, the string form of "", 0)
+
+local function the bim step octet at {integer:place} in {a string:content}:
+    execute:
+        if (place < 0) or (place >= (the length of content)):
+            return 0
+        return (((the character at place in content) as a 32 bit integer) bitwise and 255) as an integer
+
+local function bim step octet {integer:octetValue} is a digit:
+    execute:
+        return (octetValue >= 48) and (octetValue <= 57)
+
+local function bim step octet {integer:octetValue} is a letter:
+    execute:
+        return (((octetValue >= 65) and (octetValue <= 90)) or ((octetValue >= 97) and (octetValue <= 122))) or (octetValue = 95)
+
+# The place after the white space and comments from `place` on.
+local function the bim step place after space from {integer:fromPlace} in {a string:content}:
+    execute:
+        set here to fromPlace
+        set size to the length of content
+        loop while here < size:
+            set code to the bim step octet at here in content
+            if (((code = 32) or (code = 10)) or ((code = 13) or (code = 9))):
+                set here to here + 1
+            else if (code = 47) and ((the bim step octet at (here + 1) in content) = 42):
+                set closing to the index of "*/" in (the substring of content from (here + 2) spanning (size - (here + 2)) bytes)
+                if closing < 0:
+                    return size
+                set here to (here + 4) + closing
+            else:
+                return here
+        return here
+
+# The place just after the `;` that ends the instance whose text starts at
+# `place`, strings skipped whole; the length of the text when there is none.
+# memchr finds the next `;` and whether a quote comes before it.
+local function the bim step end of statement from {integer:place} in {a string:content}:
+    execute:
+        set size to the length of content
+        set base to the data of content
+        set here to place
+        loop while here < size:
+            set semicolon to @intrinsic("call", "libc", "memchr", a pointer to a byte, base + here, 59, (size - here) as a word sized integer)
+            if semicolon = (0 as a pointer to a byte):
+                return size
+            set semicolonAt to ((semicolon as a 64 bit integer) - (base as a 64 bit integer)) as an integer
+            set quote to @intrinsic("call", "libc", "memchr", a pointer to a byte, base + here, 39, (semicolonAt - here) as a word sized integer)
+            if quote = (0 as a pointer to a byte):
+                return semicolonAt + 1
+            # A string: on past its closing quote ('' is a quote inside it).
+            set scan to (((quote as a 64 bit integer) - (base as a 64 bit integer)) as an integer) + 1
+            set closed to false
+            loop while (closed = false) and (scan < size):
+                set closing to @intrinsic("call", "libc", "memchr", a pointer to a byte, base + scan, 39, (size - scan) as a word sized integer)
+                if closing = (0 as a pointer to a byte):
+                    set scan to size
+                else:
+                    set closingAt to ((closing as a 64 bit integer) - (base as a 64 bit integer)) as an integer
+                    if (the bim step octet at (closingAt + 1) in content) = 39:
+                        set scan to closingAt + 2
+                    else:
+                        set scan to closingAt + 1
+                        set closed to true
+            set here to scan
+        return size
+
+# The file at `path` read and indexed, or a refusal naming the fault.
+function the bim step file at {a string:path}:
+    execute:
+        set loaded to the bim file content at path
+        if loaded's valid = false:
+            return a bim step refusal saying ((the string form of "could not read ") + path)
+        return the bim step file of loaded's text
+
+# The type number of the name `size` bytes long at `nameAt` in `content`,
+# whose FNV-1a hash is `hash`: found in the table `slots` (type number + 1
+# per slot, 0 when free; its length a power of two), or added to `names`.
+local function the bim step type number of {integer:nameAt} spanning {integer:size} hashed {integer:hash} in {a string:content} among {a pointer to a list:names} slotted {a pointer to a list:slots}:
+    execute:
+        set mask to (the length of slots) - 1
+        set slot to hash bitwise and mask
+        set probing to true
+        loop while probing:
+            set entry to the item at slot in slots
+            if entry = 0:
+                set probing to false
+            else:
+                set known to the item at (entry - 1) in names
+                if (the length of known) = size:
+                    if (@intrinsic("call", "libc", "memcmp", integer, (the data of content) + nameAt, the data of known, size as a word sized integer)) = 0:
+                        return entry - 1
+                set slot to (slot + 1) bitwise and mask
+        append (the substring of content from nameAt spanning size bytes) to names
+        replace item at index slot in slots with (the length of names)
+        return (the length of names) - 1
+
+# The STEP text `content` indexed.
+function the bim step file of {a string:content}:
+    execute:
+        set size to the length of content
+        set headerEnd to the minimum of size and 65536
+        set header to the substring of content from 0 spanning headerEnd bytes
+        if (the index of "ISO-10303-21" in header) < 0:
+            return a bim step refusal saying (the string form of "not a STEP file (no ISO-10303-21 header)")
+        set schemaName to the string form of ""
+        set schemaAt to the index of "FILE_SCHEMA" in header
+        if schemaAt >= 0:
+            set quoteAt to the index of "'" in (the substring of header from schemaAt spanning (the minimum of 200 and (headerEnd - schemaAt)) bytes)
+            if quoteAt >= 0:
+                set nameStart to (schemaAt + quoteAt) + 1
+                set nameEnd to nameStart
+                loop while (nameEnd < size) and ((the bim step octet at nameEnd in content) != 39):
+                    set nameEnd to nameEnd + 1
+                set schemaName to the substring of content from nameStart spanning (nameEnd - nameStart) bytes
+        set dataAt to the index of "DATA;" in header
+        if dataAt < 0:
+            return a bim step refusal saying (the string form of "no DATA section")
+        set starts to an empty list of an integer
+        set types to an empty list of an integer
+        set names to an empty list of a string
+        # 4096 slots hold far more type names than a schema has.
+        set slots to an empty list of an integer
+        loop slot from 0 to 4096:
+            append 0 to slots
+        set here to dataAt + 5
+        set instances to 0
+        loop while here < size:
+            set here to the bim step place after space from here in content
+            if here >= size:
+                return a bim step refusal saying (the string form of "the DATA section does not end")
+            set code to the bim step octet at here in content
+            if code = 35:
+                set idStart to here + 1
+                set idEnd to idStart
+                set digitsValue to 0
+                set digit to the bim step octet at idEnd in content
+                loop while (digit >= 48) and (digit <= 57):
+                    set digitsValue to (digitsValue * 10) + (digit - 48)
+                    set idEnd to idEnd + 1
+                    set digit to the bim step octet at idEnd in content
+                if idEnd = idStart:
+                    return a bim step refusal saying ((the string form of "an instance without a number at byte ") + (the string form of here))
+                set afterId to the bim step place after space from idEnd in content
+                if (the bim step octet at afterId in content) != 61:
+                    return a bim step refusal saying ((the string form of "no = after #") + (the string form of digitsValue))
+                set nameAt to the bim step place after space from (afterId + 1) in content
+                # The type name, hashed as it is read (FNV-1a, 32 bits).
+                set nameEnd to nameAt
+                set hash to 2166136261 as a 64 bit integer
+                set letter to the bim step octet at nameEnd in content
+                loop while bim step octet letter is a letter or digit:
+                    set hash to ((hash bitwise xor (letter as a 64 bit integer)) * (16777619 as a 64 bit integer)) bitwise and (4294967295 as a 64 bit integer)
+                    set nameEnd to nameEnd + 1
+                    set letter to the bim step octet at nameEnd in content
+                set typeNumber to the bim step type number of nameAt spanning (nameEnd - nameAt) hashed (hash as an integer) in content among names slotted slots
+                if (the length of starts) <= digitsValue:
+                    # Grown by half at a time, so that a gigabyte of
+                    # instances grows its index a few dozen times.
+                    set wanted to (digitsValue + 1) + ((the length of starts) / 2)
+                    loop while (the length of starts) < wanted:
+                        append -1 to starts
+                        append -1 to types
+                replace item at index digitsValue in starts with nameAt
+                replace item at index digitsValue in types with typeNumber
+                set instances to instances + 1
+                set here to the bim step end of statement from nameEnd in content
+            else if (the substring of content from here spanning (the minimum of 7 and (size - here)) bytes) = (the string form of "ENDSEC;"):
+                free slots
+                return @intrinsic("construct", a bim step file record, true, the string form of "", content, starts, types, names, schemaName, instances)
+            else:
+                return a bim step refusal saying ((the string form of "unexpected text in the DATA section at byte ") + (the string form of here))
+        return a bim step refusal saying (the string form of "the DATA section does not end")
+
+# Whether instance `#id` exists.
+function bim step file {bim step file record:stepFile} holds {integer:identifier}:
+    execute:
+        if (identifier < 0) or (identifier >= (the length of (stepFile's starts))):
+            return false
+        return (the item at identifier in (stepFile's starts)) >= 0
+
+# The type name of instance `#id` in capitals (IFCWALL), or "" when there is
+# none.
+function the bim step type of {integer:identifier} in {bim step file record:stepFile}:
+    execute:
+        if (bim step file stepFile holds identifier) = false:
+            return the string form of ""
+        return the item at (the item at identifier in (stepFile's types)) in (stepFile's typeNames)
+
+local function bim step octet {integer:octetValue} is a letter or digit:
+    execute:
+        return (bim step octet octetValue is a letter) or (bim step octet octetValue is a digit)
+
+# The type number of `typeName` (in capitals), or -1 when no instance has
+# that type.
+function the bim step type number of {a string:typeName} in {bim step file record:stepFile}:
+    execute:
+        loop cursor from 0 to the length of (stepFile's typeNames):
+            if (the item at cursor in (stepFile's typeNames)) = typeName:
+                return cursor
+        return -1
+
+# Whether the type name of `#id` is `typeName` (in capitals).
+function bim step instance {integer:identifier} is a {a string:typeName} in {bim step file record:stepFile}:
+    execute:
+        if (bim step file stepFile holds identifier) = false:
+            return false
+        return (the item at (the item at identifier in (stepFile's types)) in (stepFile's typeNames)) = typeName
+
+# The numbers of the instances of type `typeName`, in order.
+function the bim step instances of type {a string:typeName} in {bim step file record:stepFile}:
+    execute:
+        set found to an empty list of an integer
+        set wanted to the bim step type number of typeName in stepFile
+        if wanted < 0:
+            return found
+        loop identifier from 0 to the length of (stepFile's types):
+            if (the item at identifier in (stepFile's types)) = wanted:
+                append identifier to found
+        return found
+
+# ---------------------------------------------------------------- values
+
+function bim step unset:
+    replacement:
+        0
+function bim step number:
+    replacement:
+        1
+function bim step whole number:
+    replacement:
+        2
+function bim step text:
+    replacement:
+        3
+function bim step enumeration:
+    replacement:
+        4
+function bim step reference:
+    replacement:
+        5
+function bim step list:
+    replacement:
+        6
+# A typed value (IFCLENGTHMEASURE(2.5)): its name, and its one value as its
+# first member.
+function bim step typed:
+    replacement:
+        7
+function bim step derived:
+    replacement:
+        8
+
+class:
+    patterns:
+        [a|] bim step node record
+    members:
+        kind as an integer
+        number as a 64 bit floating-point number
+        reference as an integer
+        # The text of a string (without its quotes), enumeration (without its
+        # dots) or typed value's name, in the file's text.
+        start as an integer
+        length as an integer
+        # A list's members (or a typed value's one value): `count` entries of
+        # the instance's members array from `first`.
+        first as an integer
+        count as an integer
+
+# An instance's arguments parsed: `root` is the list of its arguments.
+class:
+    patterns:
+        [a|] bim step instance record
+    members:
+        valid as a boolean
+        identifier as an integer
+        typeName as a string
+        nodes as the type of (an empty list of a bim step node record)
+        members as the type of (an empty list of an integer)
+        root as an integer
+        text as a string
+
+class:
+    patterns:
+        [a|] bim step parser record
+    members:
+        text as a string
+        place as an integer
+        fault as a boolean
+        nodes as the type of (an empty list of a bim step node record)
+        members as the type of (an empty list of an integer)
+
+local function add bim step node {integer:nodeKind} in {a pointer to a bim step parser record:parser}:
+    execute:
+        append (@intrinsic("construct", a bim step node record, nodeKind, 0.0, 0, 0, 0, 0, 0)) to (parser's nodes)
+        return (the length of (parser's nodes)) - 1
+
+local function the bim step value parsed by {a pointer to a bim step parser record:parser} at depth {integer:nesting}:
+    execute:
+        set content to parser's text
+        set parser's place to the bim step place after space from (parser's place) in content
+        set code to the bim step octet at (parser's place) in content
+        if nesting > 100:
+            set parser's fault to true
+            return add bim step node (bim step unset) in parser
+        if code = 40:
+            # A list: its members parsed in turn, then stored together.
+            set parser's place to parser's place + 1
+            set gathered to an empty list of an integer
+            set closed to false
+            loop while (parser's fault = false) and (closed = false):
+                set parser's place to the bim step place after space from (parser's place) in content
+                set code to the bim step octet at (parser's place) in content
+                if code = 41:
+                    set parser's place to parser's place + 1
+                    set closed to true
+                else if code = 0:
+                    set parser's fault to true
+                else:
+                    append (the bim step value parsed by parser at depth (nesting + 1)) to gathered
+                    set parser's place to the bim step place after space from (parser's place) in content
+                    if (the bim step octet at (parser's place) in content) = 44:
+                        set parser's place to parser's place + 1
+            set listIndex to add bim step node (bim step list) in parser
+            set listNode to the item at listIndex in (parser's nodes)
+            set listNode's first to the length of (parser's members)
+            set listNode's count to the length of gathered
+            loop cursor from 0 to the length of gathered:
+                append (the item at cursor in gathered) to (parser's members)
+            replace item at index listIndex in (parser's nodes) with listNode
+            free gathered
+            return listIndex
+        if code = 39:
+            set textIndex to add bim step node (bim step text) in parser
+            set textStart to parser's place + 1
+            set here to textStart
+            set size to the length of content
+            set ended to false
+            loop while (here < size) and (ended = false):
+                if (the bim step octet at here in content) = 39:
+                    if (the bim step octet at (here + 1) in content) = 39:
+                        set here to here + 2
+                    else:
+                        set ended to true
+                else:
+                    set here to here + 1
+            set textNode to the item at textIndex in (parser's nodes)
+            set textNode's start to textStart
+            set textNode's length to here - textStart
+            replace item at index textIndex in (parser's nodes) with textNode
+            set parser's place to here + 1
+            return textIndex
+        if code = 35:
+            set referenceIndex to add bim step node (bim step reference) in parser
+            set here to parser's place + 1
+            set digitsValue to 0
+            loop while bim step octet (the bim step octet at here in content) is a digit:
+                set digitsValue to (digitsValue * 10) + ((the bim step octet at here in content) - 48)
+                set here to here + 1
+            set referenceNode to the item at referenceIndex in (parser's nodes)
+            set referenceNode's reference to digitsValue
+            replace item at index referenceIndex in (parser's nodes) with referenceNode
+            set parser's place to here
+            return referenceIndex
+        if code = 46:
+            set enumerationIndex to add bim step node (bim step enumeration) in parser
+            set here to parser's place + 1
+            loop while (here < (the length of content)) and ((the bim step octet at here in content) != 46):
+                set here to here + 1
+            set enumerationNode to the item at enumerationIndex in (parser's nodes)
+            set enumerationNode's start to parser's place + 1
+            set enumerationNode's length to here - (parser's place + 1)
+            replace item at index enumerationIndex in (parser's nodes) with enumerationNode
+            set parser's place to here + 1
+            return enumerationIndex
+        if code = 36:
+            set parser's place to parser's place + 1
+            return add bim step node (bim step unset) in parser
+        if code = 42:
+            set parser's place to parser's place + 1
+            return add bim step node (bim step derived) in parser
+        if ((bim step octet code is a digit) or (code = 45)) or (code = 43):
+            set here to parser's place + 1
+            set integral to true
+            set ended to false
+            loop while ended = false:
+                set following to the bim step octet at here in content
+                if bim step octet following is a digit:
+                    set here to here + 1
+                else if (((following = 46) or (following = 69)) or (following = 101)) or (((following = 45) or (following = 43)) and (here > (parser's place + 1))):
+                    set integral to false
+                    set here to here + 1
+                else:
+                    set ended to true
+            set numberKind to bim step number
+            if integral:
+                set numberKind to bim step whole number
+            set numberIndex to add bim step node numberKind in parser
+            set numberNode to the item at numberIndex in (parser's nodes)
+            set numberNode's number to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, (the data of content) + (parser's place), 0 as a pointer)
+            replace item at index numberIndex in (parser's nodes) with numberNode
+            set parser's place to here
+            return numberIndex
+        if bim step octet code is a letter:
+            # A typed value: its name, then its one value in brackets.
+            set nameStart to parser's place
+            set here to nameStart
+            loop while bim step octet (the bim step octet at here in content) is a letter or digit:
+                set here to here + 1
+            set parser's place to the bim step place after space from here in content
+            if (the bim step octet at (parser's place) in content) != 40:
+                set parser's fault to true
+                return add bim step node (bim step unset) in parser
+            set parser's place to parser's place + 1
+            set innerIndex to the bim step value parsed by parser at depth (nesting + 1)
+            set parser's place to the bim step place after space from (parser's place) in content
+            if (the bim step octet at (parser's place) in content) = 41:
+                set parser's place to parser's place + 1
+            set typedIndex to add bim step node (bim step typed) in parser
+            set typedNode to the item at typedIndex in (parser's nodes)
+            set typedNode's start to nameStart
+            set typedNode's length to here - nameStart
+            set typedNode's first to the length of (parser's members)
+            set typedNode's count to 1
+            replace item at index typedIndex in (parser's nodes) with typedNode
+            append innerIndex to (parser's members)
+            return typedIndex
+        set parser's fault to true
+        return add bim step node (bim step unset) in parser
+
+# Instance `#id` with its arguments parsed; not valid when it does not exist
+# or its text is malformed.
+function the bim step instance {integer:identifier} in {bim step file record:stepFile}:
+    execute:
+        set typeName to the bim step type of identifier in stepFile
+        if (the length of typeName) = 0:
+            return @intrinsic("construct", a bim step instance record, false, identifier, typeName, an empty list of a bim step node record, an empty list of an integer, -1, stepFile's text)
+        set nameAt to the item at identifier in (stepFile's starts)
+        set parser to @intrinsic("construct", a bim step parser record, stepFile's text, nameAt + (the length of typeName), false, an empty list of a bim step node record, an empty list of an integer)
+        set parser's place to the bim step place after space from (parser's place) in (stepFile's text)
+        set rootIndex to -1
+        if (the bim step octet at (parser's place) in (stepFile's text)) = 40:
+            set rootIndex to the bim step value parsed by (the address of parser) at depth 0
+        return @intrinsic("construct", a bim step instance record, (parser's fault = false) and (rootIndex >= 0), identifier, typeName, parser's nodes, parser's members, rootIndex, stepFile's text)
+
+# Frees the parsed arguments of `instanceValue`.
+function free bim step instance {bim step instance record:instanceValue}:
+    execute:
+        free (instanceValue's nodes)
+        free (instanceValue's members)
+
+# ---------------------------------------------------------------- reading values
+
+# How many arguments the instance has.
+function the bim step argument count of {bim step instance record:instanceValue}:
+    execute:
+        if instanceValue's valid = false:
+            return 0
+        return (the item at instanceValue's root in (instanceValue's nodes))'s count
+
+# The node of argument `position` (from 0), or -1 when there is none.
+function the bim step argument {integer:position} of {bim step instance record:instanceValue}:
+    execute:
+        if (position < 0) or (position >= (the bim step argument count of instanceValue)):
+            return -1
+        return the item at ((the item at instanceValue's root in (instanceValue's nodes))'s first + position) in (instanceValue's members)
+
+# The kind of node `nodeIndex` (`bim step unset` for -1); a typed value is
+# seen through to its value.
+function the bim step kind of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        if nodeIndex < 0:
+            return bim step unset
+        return (the item at nodeIndex in (instanceValue's nodes))'s kind
+
+local function the bim step value node of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        # DynLex evaluates both sides of `and`, so the bound is checked first.
+        set current to nodeIndex
+        set seeing to current >= 0
+        loop while seeing:
+            set nodeRecord to the item at current in (instanceValue's nodes)
+            if nodeRecord's kind = bim step typed:
+                set current to the item at nodeRecord's first in (instanceValue's members)
+                set seeing to current >= 0
+            else:
+                set seeing to false
+        return current
+
+# The number of node `nodeIndex` (through a typed value), 0 when it is none.
+function the bim step number of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set current to the bim step value node of nodeIndex in instanceValue
+        if current < 0:
+            return 0.0
+        set node to the item at current in (instanceValue's nodes)
+        if (node's kind = bim step number) or (node's kind = bim step whole number):
+            return node's number
+        return 0.0
+
+# The instance node `nodeIndex` refers to, or -1.
+function the bim step reference of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        if nodeIndex < 0:
+            return -1
+        set node to the item at nodeIndex in (instanceValue's nodes)
+        if node's kind = bim step reference:
+            return node's reference
+        return -1
+
+# The raw text of a string, enumeration or typed value's name.
+function the bim step raw text of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set current to nodeIndex
+        if current < 0:
+            return the string form of ""
+        set node to the item at current in (instanceValue's nodes)
+        if node's kind = bim step typed:
+            set inner to the bim step value node of current in instanceValue
+            if inner >= 0:
+                set node to the item at inner in (instanceValue's nodes)
+        if ((node's kind = bim step text) or (node's kind = bim step enumeration)) or (node's kind = bim step typed):
+            return the substring of (instanceValue's text) from node's start spanning node's length bytes
+        return the string form of ""
+
+# The string of node `nodeIndex` decoded: '' as ', \X\hh as one byte and
+# \X2\hhhh...\X0\ as UTF-8 (byte 92 is the backslash).
+function the bim step string of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set raw to the bim step raw text of nodeIndex in instanceValue
+        set size to the length of raw
+        set plain to true
+        loop cursor from 0 to size:
+            set code to the bim step octet at cursor in raw
+            if (code = 39) or (code = 92):
+                set plain to false
+        if plain:
+            return raw
+        set decoded to an empty list of an integer
+        set here to 0
+        loop while here < size:
+            set code to the bim step octet at here in raw
+            set following to the bim step octet at (here + 1) in raw
+            set third to the bim step octet at (here + 2) in raw
+            set fourth to the bim step octet at (here + 3) in raw
+            if (code = 39) and (following = 39):
+                append 39 to decoded
+                set here to here + 2
+            else if ((code = 92) and (following = 88)) and ((third = 50) and (fourth = 92)):
+                set here to here + 4
+                loop while ((here + 4) <= size) and ((the bim step octet at here in raw) != 92):
+                    append bim step utf8 of (the bim step hex value of (the substring of raw from here spanning 4 bytes)) to decoded
+                    set here to here + 4
+                if (((the bim step octet at here in raw) = 92) and ((the bim step octet at (here + 1) in raw) = 88)) and ((the bim step octet at (here + 2) in raw) = 48):
+                    set here to here + 4
+            else if ((code = 92) and (following = 88)) and ((third = 92) and ((here + 5) <= size)):
+                append bim step utf8 of (the bim step hex value of (the substring of raw from (here + 3) spanning 2 bytes)) to decoded
+                set here to here + 5
+            else:
+                append code to decoded
+                set here to here + 1
+        set result to a new string buffer containing (the length of decoded) bytes
+        loop cursor from 0 to the length of decoded:
+            store ((the item at cursor in decoded) as a byte) into the data of result at cursor
+        free decoded
+        return result
+
+local function the bim step hex value of {a string:digits}:
+    execute:
+        set total to 0
+        loop cursor from 0 to the length of digits:
+            set code to the bim step octet at cursor in digits
+            set total to total * 16
+            if (code >= 48) and (code <= 57):
+                set total to total + (code - 48)
+            else if (code >= 65) and (code <= 70):
+                set total to total + (code - 55)
+            else if (code >= 97) and (code <= 102):
+                set total to total + (code - 87)
+        return total
+
+local function append bim step utf8 of {integer:point} to {a pointer to a list:bytes}:
+    execute:
+        if point < 128:
+            append point to bytes
+        else if point < 2048:
+            append (192 + (point / 64)) to bytes
+            append (128 + (the remainder of point divided by 64)) to bytes
+        else:
+            append (224 + (point / 4096)) to bytes
+            append (128 + (the remainder of (point / 64) divided by 64)) to bytes
+            append (128 + (the remainder of point divided by 64)) to bytes
+
+# The name of typed value node `nodeIndex` (IFCARCINDEX), or "".
+function the bim step type name of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        if nodeIndex < 0:
+            return the string form of ""
+        set typedNode to the item at nodeIndex in (instanceValue's nodes)
+        if typedNode's kind != bim step typed:
+            return the string form of ""
+        return the substring of (instanceValue's text) from typedNode's start spanning typedNode's length bytes
+
+# How many members list node `nodeIndex` has (0 when it is no list).
+function the bim step count of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set current to the bim step value node of nodeIndex in instanceValue
+        if current < 0:
+            return 0
+        set node to the item at current in (instanceValue's nodes)
+        if node's kind != bim step list:
+            return 0
+        return node's count
+
+# Member `position` of list node `nodeIndex`, or -1.
+function the bim step member {integer:position} of {integer:nodeIndex} in {bim step instance record:instanceValue}:
+    execute:
+        set current to the bim step value node of nodeIndex in instanceValue
+        if (position < 0) or (position >= (the bim step count of current in instanceValue)):
+            return -1
+        return the item at ((the item at current in (instanceValue's nodes))'s first + position) in (instanceValue's members)

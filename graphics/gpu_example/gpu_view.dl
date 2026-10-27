@@ -1,0 +1,248 @@
+# SPDX-License-Identifier: MPL-2.0
+# A GPU-resident 3D view in DynLex: the model's meshes are written once into
+# GPU buffers, and each frame only sets the camera's uniforms and issues one
+# draw, so the frame's CPU time does not depend on the model's size. Window,
+# swapchain and pipeline come from `graphics/vulkan/renderer.dl`, which calls
+# libvulkan and GLFW directly; the shaders are DynLex (solid_vertex.dl and
+# solid_fragment.dl, compiled to SPIR-V).
+#
+#     gpu_view [--import FILE.bimmesh | --generate N] [--frames N] [--uncapped]
+#
+# Without a model argument it shows the editor's example house. The view
+# orbits on its own; left-drag orbits by hand, + and - zoom, Escape closes.
+# With --frames it closes after that many frames; --uncapped presents without
+# waiting for the display, to measure what a frame costs.
+import graphics/vulkan/renderer.dl
+import formats/bim_import.dl
+import editor/bim_editor.dl
+import graphics/bim_scene.dl
+
+# A corner of a mesh with its index, sorted by position to find the corners
+# that faces share.
+class:
+    patterns:
+        [a|] gpu corner record
+    members:
+        x as a 64 bit floating-point number
+        y as a 64 bit floating-point number
+        z as a 64 bit floating-point number
+        index as an integer
+
+function gpu corner ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to @intrinsic("dereference", left as a pointer to a gpu corner record)
+        set second to @intrinsic("dereference", right as a pointer to a gpu corner record)
+        if first's x < second's x:
+            return -1
+        if first's x > second's x:
+            return 1
+        if first's y < second's y:
+            return -1
+        if first's y > second's y:
+            return 1
+        if first's z < second's z:
+            return -1
+        if first's z > second's z:
+            return 1
+        return 0
+
+function the gpu microseconds now:
+    execute:
+        return the bim microseconds now
+
+set arguments to the command line arguments
+set meshes to a cad topology list of a bim scene mesh record
+set frameLimit to 0
+set synchronised to true
+set shared to false
+set loadStarted to the gpu microseconds now
+set cursor to 0
+set source to the string form of "example house"
+set editor to a new bim editor
+set useExample to true
+loop while cursor < (the length of arguments):
+    set argument to the argument at cursor in arguments
+    if (argument = (the string form of "--import")) and ((cursor + 1) < (the length of arguments)):
+        set imported to the bim import of (the argument at (cursor + 1) in arguments)
+        if imported's valid = false:
+            print ((the string form of "Import refused: ") + imported's message) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        set meshes to imported's meshes
+        set source to the argument at (cursor + 1) in arguments
+        set useExample to false
+        set cursor to cursor + 1
+    else if (argument = (the string form of "--generate")) and ((cursor + 1) < (the length of arguments)):
+        set wanted to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at (cursor + 1) in arguments))
+        ignore add bim generated tower of wanted walls with 50 rooms a side to (the address of editor)
+        set source to editor's message
+        set useExample to false
+        update bim evaluation (the address of (editor's evaluation)) to editor's documentValue's current
+        set meshes to the bim scene meshes of editor's evaluation after (meshes's values)
+        set cursor to cursor + 1
+    else if argument = (the string form of "--shared"):
+        set shared to true
+    else if argument = (the string form of "--uncapped"):
+        set synchronised to false
+    else if (argument = (the string form of "--frames")) and ((cursor + 1) < (the length of arguments)):
+        set frameLimit to @intrinsic("call", "libc", "atoi", integer, the data of (the argument at (cursor + 1) in arguments))
+        set cursor to cursor + 1
+    set cursor to cursor + 1
+if useExample:
+    add bim example building to (the address of editor)
+    update bim evaluation (the address of (editor's evaluation)) to editor's documentValue's current
+    set meshes to the bim scene meshes of editor's evaluation after (meshes's values)
+# Counts and bounds.
+set vertexCount to 0
+set indexCount to 0
+set infinity to 1.0 / 0.0
+set low to a cad vector3 with x infinity, y infinity and z infinity
+set high to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+loop meshCursor from 0 to the length of (meshes's values):
+    set shape to (the item at meshCursor in (meshes's values))'s shape
+    set vertexCount to vertexCount + (the length of (shape's positions's values))
+    set indexCount to indexCount + (the length of (shape's triangles's values))
+    loop point from 0 to the length of (shape's positions's values):
+        set p to the item at point in (shape's positions's values)
+        set low to a cad vector3 with x (the minimum of low's x and p's x), y (the minimum of low's y and p's y) and z (the minimum of low's z and p's z)
+        set high to a cad vector3 with x (the maximum of high's x and p's x), y (the maximum of high's y and p's y) and z (the maximum of high's z and p's z)
+set centre to (the cad sum of low and high) scaled by 0.5
+set radius to (the cad length of (the cad difference of high and low)) * 0.5
+print ((source + (the string form of ": ")) + (the string form of (indexCount / 3))) + ((the string form of " triangles, ") + ((the string form of vertexCount) + (the string form of " vertices"))) as a line
+print ((the string form of "model built in ") + (the string form of (((the gpu microseconds now) - loadStarted) / (1000 as a 64 bit integer)))) + (the string form of " ms") as a line
+set vertexShader to the string form of "build/gpu/solid_vertex.spv"
+set fragmentShader to the string form of "build/gpu/solid_fragment.spv"
+if shared:
+    set vertexShader to the string form of "build/gpu/shared_vertex.spv"
+    set fragmentShader to the string form of "build/gpu/shared_fragment.spv"
+set renderer to a new vk renderer titled "DynLex GPU view" sized 1280 by 820 with shaders vertexShader and fragmentShader reading 22 uniforms synchronised synchronised
+set uploadStarted to the gpu microseconds now
+prepare vk mesh of vertexCount vertices and indexCount indices in (the address of renderer)
+set base to 0
+set slot to 0
+# Meshes are written from the last to the first: the generated tower's upper
+# storeys come first, so that seen from above the nearest faces are drawn
+# first and the depth test rejects what they hide before shading it.
+set meshCursor to (the length of (meshes's values)) - 1
+loop while meshCursor >= 0:
+    set entry to the item at meshCursor in (meshes's values)
+    set meshCursor to meshCursor - 1
+    set shape to entry's shape
+    set colour to the bim colour of category entry's category
+    if entry's colour's x >= 0.0:
+        set colour to entry's colour
+    if shared:
+        # Each distinct position of the element becomes one vertex.
+        set corners to an empty list of a gpu corner record
+        loop point from 0 to the length of (shape's positions's values):
+            set p to the item at point in (shape's positions's values)
+            append (@intrinsic("construct", a gpu corner record, p's x, p's y, p's z, point)) to corners
+        set comparator to the function named "gpu corner ordering $ and $"
+        sort native array at ((the data of corners) as a pointer) with ((the length of corners) as a word sized unsigned integer) items of ((the size of a gpu corner record) as a word sized unsigned integer) bytes using comparator
+        set remap to an empty list of an integer
+        loop point from 0 to the length of corners:
+            append 0 to remap
+        set distinct to 0
+        loop point from 0 to the length of corners:
+            set here to the item at point in corners
+            set fresh to true
+            if point > 0:
+                set before to the item at (point - 1) in corners
+                set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
+            if fresh:
+                put vk vertex (base + distinct) at ((here's x - centre's x) as a 32 bit floating-point number), ((here's y - centre's y) as a 32 bit floating-point number) and ((here's z - centre's z) as a 32 bit floating-point number) facing (a cad vector3 with x 0.0, y 0.0 and z 0.0) coloured (colour's x as an integer), (colour's y as an integer) and (colour's z as an integer) in renderer
+                set distinct to distinct + 1
+            replace item at index here's index in remap with (base + (distinct - 1))
+        loop corner from 0 to the length of (shape's triangles's values):
+            put vk index slot as (the item at (the item at corner in (shape's triangles's values)) in remap) in renderer
+            set slot to slot + 1
+        set base to base + distinct
+        free corners
+        free remap
+    else:
+        loop point from 0 to the length of (shape's positions's values):
+            set p to the item at point in (shape's positions's values)
+            put vk vertex (base + point) at ((p's x - centre's x) as a 32 bit floating-point number), ((p's y - centre's y) as a 32 bit floating-point number) and ((p's z - centre's z) as a 32 bit floating-point number) facing (the item at point in (shape's normals's values)) coloured (colour's x as an integer), (colour's y as an integer) and (colour's z as an integer) in renderer
+        loop corner from 0 to the length of (shape's triangles's values):
+            put vk index slot as (base + (the item at corner in (shape's triangles's values))) in renderer
+            set slot to slot + 1
+        set base to base + (the length of (shape's positions's values))
+print ((the string form of "vertices on the GPU: ") + (the string form of base)) as a line
+print ((the string form of "uploaded to the GPU in ") + (the string form of (((the gpu microseconds now) - uploadStarted) / (1000 as a 64 bit integer)))) + (the string form of " ms") as a line
+# The sun from the south-west, as in the editor.
+set towardSun to a cad vector3 with x -0.52, y -0.58 and z 0.62
+set towardSun to towardSun scaled by (1.0 / (the cad length of towardSun))
+set yaw to 0.6
+set pitch to 0.9
+set zoom to 1.0
+set frames to 0
+set spentTotal to 0 as a 64 bit integer
+set windowStarted to the gpu microseconds now
+set previousX to 0.0
+set previousY to 0.0
+set running to true
+loop while running:
+    @intrinsic("call", "glfw", "glfwPollEvents", nothing)
+    set frameStarted to the gpu microseconds now
+    set cursorX to 0.0
+    set cursorY to 0.0
+    @intrinsic("call", "glfw", "glfwGetCursorPos", nothing, renderer's window, the address of cursorX, the address of cursorY)
+    if (@intrinsic("call", "glfw", "glfwGetMouseButton", an integer, renderer's window, 0)) = 1:
+        set yaw to yaw + ((cursorX - previousX) * 0.01)
+        set pitch to the maximum of -1.5 and (the minimum of 1.5 and (pitch + ((cursorY - previousY) * 0.01)))
+    else:
+        set yaw to yaw + 0.01
+    set previousX to cursorX
+    set previousY to cursorY
+    if (@intrinsic("call", "glfw", "glfwGetKey", an integer, renderer's window, 61)) = 1:
+        set zoom to zoom * 1.03
+    if (@intrinsic("call", "glfw", "glfwGetKey", an integer, renderer's window, 45)) = 1:
+        set zoom to zoom / 1.03
+    if (@intrinsic("call", "glfw", "glfwGetKey", an integer, renderer's window, 256)) = 1:
+        set running to false
+    # The editor's parallel view: across, up and depth axes from yaw and
+    # pitch; clip space x right, y down, depth 0..1 across the model.
+    set cosYaw to the cosine of yaw
+    set sinYaw to the sine of yaw
+    set cosPitch to the cosine of pitch
+    set sinPitch to the sine of pitch
+    set across to a cad vector3 with x cosYaw, y (0.0 - sinYaw) and z 0.0
+    set up to a cad vector3 with x (sinPitch * sinYaw), y (sinPitch * cosYaw) and z cosPitch
+    set depth to a cad vector3 with x (cosPitch * sinYaw), y (cosPitch * cosYaw) and z (0.0 - sinPitch)
+    set width to renderer's width as a 64 bit floating-point number
+    set height to renderer's height as a 64 bit floating-point number
+    set scale to ((the minimum of width and height) / (2.2 * radius)) * zoom
+    wait for vk frame in renderer
+    set sx to (2.0 * scale) / width
+    set sy to (2.0 * scale) / height
+    set sz to 1.0 / (2.0 * radius)
+    set vk uniform 0 to (across's x * sx) in renderer
+    set vk uniform 1 to (across's y * sx) in renderer
+    set vk uniform 2 to (across's z * sx) in renderer
+    set vk uniform 3 to 0.0 in renderer
+    set vk uniform 4 to (0.0 - (up's x * sy)) in renderer
+    set vk uniform 5 to (0.0 - (up's y * sy)) in renderer
+    set vk uniform 6 to (0.0 - (up's z * sy)) in renderer
+    set vk uniform 7 to 0.0 in renderer
+    set vk uniform 8 to (depth's x * sz) in renderer
+    set vk uniform 9 to (depth's y * sz) in renderer
+    set vk uniform 10 to (depth's z * sz) in renderer
+    set vk uniform 11 to 0.5 in renderer
+    set vk uniform 12 to 0.0 in renderer
+    set vk uniform 13 to 0.0 in renderer
+    set vk uniform 14 to 0.0 in renderer
+    set vk uniform 15 to 1.0 in renderer
+    set vk uniform 16 to towardSun's x in renderer
+    set vk uniform 17 to towardSun's y in renderer
+    set vk uniform 18 to towardSun's z in renderer
+    set vk uniform 19 to (0.0 - depth's x) in renderer
+    set vk uniform 20 to (0.0 - depth's y) in renderer
+    set vk uniform 21 to (0.0 - depth's z) in renderer
+    draw vk frame cleared to 0.9686, 0.9765 and 0.9882 in (the address of renderer)
+    set spentTotal to spentTotal + ((the gpu microseconds now) - frameStarted)
+    set frames to frames + 1
+    if (the remainder of frames divided by 120) = 0:
+        set elapsed to (the gpu microseconds now) - windowStarted
+        print ((the string form of "frames ") + (the string form of frames)) + ((the string form of ", CPU per frame ") + ((the string form of (spentTotal / (frames as a 64 bit integer))) + ((the string form of " us, frames per second ") + (the string form of ((frames as a 64 bit integer) * (1000000 as a 64 bit integer) / elapsed))))) as a line
+    if ((frameLimit > 0) and (frames >= frameLimit)) or (the vk window of renderer should close):
+        set running to false
+finish vk work in renderer

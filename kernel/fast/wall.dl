@@ -1,0 +1,224 @@
+# SPDX-License-Identifier: MPL-2.0
+# Direct construction of a straight wall with rectangular through-openings as
+# a planar polyhedron, without booleans. The footprint is the wall's plan
+# outline with its ends already cut to its joins; its two long sides run
+# parallel to the centreline.
+#
+# Faces: the top cap; the bottom cap, in one piece between each pair of doors;
+# the exterior and interior sides, each with a rectangular hole per window and
+# a notch per door; the two end faces; and the reveals facing into each
+# opening: sill, head and two jambs for a window, head and two jambs for a
+# door. A door is an opening with a sill of exactly 0, standing on the base.
+# The result is exactly the footprint prism minus each opening's box when every
+# opening lies inside both side faces, clear of the ends, the top and the other
+# openings, and every window clear of the base. Anything else is refused with
+# a reason, so that the caller can build it with general booleans instead.
+import kernel/fast/polyhedron.dl
+
+function fast wall built:
+    replacement:
+        0
+function fast wall degenerate footprint:
+    replacement:
+        1
+function fast wall opening outside face:
+    replacement:
+        2
+function fast wall openings overlap:
+    replacement:
+        3
+
+# An opening centred `along` metres from the centreline start; `width` and
+# `height` are its rough (cut) sizes and `sill` its distance above the wall's
+# base.
+class:
+    patterns:
+        [a|] fast opening record
+    members:
+        along as a 64 bit floating-point number
+        width as a 64 bit floating-point number
+        sill as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] fast wall result record
+    members:
+        reason as an integer
+        shape as a fast polyhedron record
+
+local function a refused fast wall for {integer:reasonCode}:
+    execute:
+        return @intrinsic("construct", a fast wall result record, reasonCode, an empty fast polyhedron)
+
+local function the fast flat point {cad vector2:location} at {a 64 bit floating-point number:level}:
+    execute:
+        return a cad vector3 with x location's x, y location's y and z level
+
+local function the fast along of {cad vector2:location} from {cad vector2:origin} toward {cad vector2:direction}:
+    execute:
+        return ((location's x - origin's x) * direction's x) + ((location's y - origin's y) * direction's y)
+
+# The point `along` metres along the side line through `sidePoint`.
+local function the fast side point at {a 64 bit floating-point number:distance} past {cad vector2:sidePoint} from {cad vector2:origin} toward {cad vector2:direction}:
+    execute:
+        set shift to distance - (the fast along of sidePoint from origin toward direction)
+        return a cad vector2 with x (sidePoint's x + (shift * direction's x)) and y (sidePoint's y + (shift * direction's y))
+
+local function the fast quad {integer:first}, {integer:second}, {integer:third} and {integer:fourth}:
+    execute:
+        set ring to an empty list of an integer
+        append first to ring
+        append second to ring
+        append third to ring
+        append fourth to ring
+        return ring
+
+# The outward horizontal normal of the footprint side from `first` to `second`;
+# `turn` is 1 for a counter-clockwise footprint and -1 for a clockwise one.
+local function the fast side normal from {cad vector2:first} to {cad vector2:second} turning {a 64 bit floating-point number:turn}:
+    execute:
+        set dx to second's x - first's x
+        set dy to second's y - first's y
+        set magnitude to the square root of ((dx * dx) + (dy * dy))
+        return a cad vector3 with x ((turn * dy) / magnitude), y ((0.0 - (turn * dx)) / magnitude) and z 0.0
+
+# `corners` lists the footprint as start exterior, finish exterior, finish
+# interior, start interior. `origin` and `direction` (unit) give the centreline,
+# along which openings are placed. `openings` is ordered by `along`.
+function the fast wall on {a pointer to a list:corners} from {a 64 bit floating-point number:elevation} rising {a 64 bit floating-point number:wallHeight} along {cad vector2:origin} toward {cad vector2:direction} with {a pointer to a list:openings} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        if ((the length of corners) != 4) or (wallHeight <= tolerance):
+            return a refused fast wall for fast wall degenerate footprint
+        set startExterior to the item at 0 in corners
+        set finishExterior to the item at 1 in corners
+        set finishInterior to the item at 2 in corners
+        set startInterior to the item at 3 in corners
+        set doubledArea to 0.0
+        loop cursor from 0 to 4:
+            set here to the item at cursor in corners
+            set following to the item at (the remainder of (cursor + 1) divided by 4) in corners
+            set doubledArea to doubledArea + (((here's x - startExterior's x) * (following's y - startExterior's y)) - ((following's x - startExterior's x) * (here's y - startExterior's y)))
+        if (the absolute value of doubledArea) <= (tolerance * tolerance):
+            return a refused fast wall for fast wall degenerate footprint
+        set turn to 1.0
+        if doubledArea < 0.0:
+            set turn to -1.0
+        # Openings must lie inside both side faces, clear of the ends, the base
+        # and the top, and of each other.
+        set faceStart to the maximum of (the fast along of startExterior from origin toward direction) and (the fast along of startInterior from origin toward direction)
+        set faceFinish to the minimum of (the fast along of finishExterior from origin toward direction) and (the fast along of finishInterior from origin toward direction)
+        set previousRight to faceStart
+        loop cursor from 0 to the length of openings:
+            set opening to the item at cursor in openings
+            set left to opening's along - (opening's width * 0.5)
+            set right to opening's along + (opening's width * 0.5)
+            if (left <= (faceStart + tolerance)) or (right >= (faceFinish - tolerance)):
+                return a refused fast wall for fast wall opening outside face
+            # A window must stand clear of the base; a door stands on it.
+            if (opening's sill < 0.0) or ((opening's sill + opening's height) >= (wallHeight - tolerance)):
+                return a refused fast wall for fast wall opening outside face
+            if (opening's sill > 0.0) and (opening's sill <= tolerance):
+                return a refused fast wall for fast wall opening outside face
+            if (opening's width <= tolerance) or (opening's height <= tolerance):
+                return a refused fast wall for fast wall opening outside face
+            if left <= (previousRight + tolerance):
+                if cursor > 0:
+                    return a refused fast wall for fast wall openings overlap
+            set previousRight to right
+        set shape to an empty fast polyhedron
+        set target to the address of shape
+        set top to elevation + wallHeight
+        set bottomIndices to an empty list of an integer
+        set topIndices to an empty list of an integer
+        loop cursor from 0 to 4:
+            append (add fast position (the fast flat point (the item at cursor in corners) at elevation) to target) to bottomIndices
+        loop cursor from 0 to 4:
+            append (add fast position (the fast flat point (the item at cursor in corners) at top) to target) to topIndices
+        set noHoles to an empty list of the type of bottomIndices
+        add fast face topIndices with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z 1.0) to target
+        # The side outlines run along the base from start to finish, notched
+        # by each door, then back along the top. Window holes are added to
+        # both sides; the base is cut into pieces between doors.
+        set exteriorOutline to an empty list of an integer
+        set interiorOutline to an empty list of an integer
+        append (the item at 0 in bottomIndices) to exteriorOutline
+        append (the item at 3 in bottomIndices) to interiorOutline
+        set exteriorHoles to an empty list of the type of bottomIndices
+        set interiorHoles to an empty list of the type of bottomIndices
+        set alongDirection to a cad vector3 with x direction's x, y direction's y and z 0.0
+        set pieceExterior to the item at 0 in bottomIndices
+        set pieceInterior to the item at 3 in bottomIndices
+        loop cursor from 0 to the length of openings:
+            set opening to the item at cursor in openings
+            set left to opening's along - (opening's width * 0.5)
+            set right to opening's along + (opening's width * 0.5)
+            set low to elevation + opening's sill
+            set high to low + opening's height
+            # Corners on the exterior and interior sides: left bottom, right
+            # bottom, right top, left top.
+            set e0 to add fast position (the fast flat point (the fast side point at left past startExterior from origin toward direction) at low) to target
+            set e1 to add fast position (the fast flat point (the fast side point at right past startExterior from origin toward direction) at low) to target
+            set e2 to add fast position (the fast flat point (the fast side point at right past startExterior from origin toward direction) at high) to target
+            set e3 to add fast position (the fast flat point (the fast side point at left past startExterior from origin toward direction) at high) to target
+            set i0 to add fast position (the fast flat point (the fast side point at left past startInterior from origin toward direction) at low) to target
+            set i1 to add fast position (the fast flat point (the fast side point at right past startInterior from origin toward direction) at low) to target
+            set i2 to add fast position (the fast flat point (the fast side point at right past startInterior from origin toward direction) at high) to target
+            set i3 to add fast position (the fast flat point (the fast side point at left past startInterior from origin toward direction) at high) to target
+            if opening's sill = 0.0:
+                append e0 to exteriorOutline
+                append e3 to exteriorOutline
+                append e2 to exteriorOutline
+                append e1 to exteriorOutline
+                append i0 to interiorOutline
+                append i3 to interiorOutline
+                append i2 to interiorOutline
+                append i1 to interiorOutline
+                set piece to the fast quad pieceExterior, e0, i0 and pieceInterior
+                add fast face piece with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z -1.0) to target
+                free piece
+                set pieceExterior to e1
+                set pieceInterior to i1
+            else:
+                append (the fast quad e0, e1, e2 and e3) to exteriorHoles
+                append (the fast quad i0, i1, i2 and i3) to interiorHoles
+                set sillRing to the fast quad e0, e1, i1 and i0
+                add fast face sillRing with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z 1.0) to target
+                free sillRing
+            set headRing to the fast quad e3, e2, i2 and i3
+            add fast face headRing with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z -1.0) to target
+            free headRing
+            set leftRing to the fast quad e0, e3, i3 and i0
+            add fast face leftRing with holes noHoles facing alongDirection to target
+            free leftRing
+            set rightRing to the fast quad e1, e2, i2 and i1
+            add fast face rightRing with holes noHoles facing (alongDirection scaled by -1.0) to target
+            free rightRing
+        set lastPiece to the fast quad pieceExterior, (the item at 1 in bottomIndices), (the item at 2 in bottomIndices) and pieceInterior
+        add fast face lastPiece with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z -1.0) to target
+        free lastPiece
+        append (the item at 1 in bottomIndices) to exteriorOutline
+        append (the item at 1 in topIndices) to exteriorOutline
+        append (the item at 0 in topIndices) to exteriorOutline
+        append (the item at 2 in bottomIndices) to interiorOutline
+        append (the item at 2 in topIndices) to interiorOutline
+        append (the item at 3 in topIndices) to interiorOutline
+        add fast face exteriorOutline with holes exteriorHoles facing (the fast side normal from startExterior to finishExterior turning turn) to target
+        add fast face interiorOutline with holes interiorHoles facing (the fast side normal from finishInterior to startInterior turning turn) to target
+        set finishEnd to the fast quad (the item at 1 in bottomIndices), (the item at 2 in bottomIndices), (the item at 2 in topIndices) and (the item at 1 in topIndices)
+        add fast face finishEnd with holes noHoles facing (the fast side normal from finishExterior to finishInterior turning turn) to target
+        free finishEnd
+        set startEnd to the fast quad (the item at 3 in bottomIndices), (the item at 0 in bottomIndices), (the item at 0 in topIndices) and (the item at 3 in topIndices)
+        add fast face startEnd with holes noHoles facing (the fast side normal from startInterior to startExterior turning turn) to target
+        free startEnd
+        loop cursor from 0 to the length of exteriorHoles:
+            free (the item at cursor in exteriorHoles)
+            free (the item at cursor in interiorHoles)
+        free exteriorHoles
+        free interiorHoles
+        free exteriorOutline
+        free interiorOutline
+        free noHoles
+        free bottomIndices
+        free topIndices
+        return @intrinsic("construct", a fast wall result record, fast wall built, shape)

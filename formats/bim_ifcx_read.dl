@@ -1,0 +1,1018 @@
+# SPDX-License-Identifier: MPL-2.0
+# IFC5 (IfcX, `ifcx_alpha`) import, in DynLex: one or more IfcX files are
+# read as layers, flattened and composed as the buildingSMART IFC5 reference
+# implementation does, and every composed mesh becomes a read-only imported
+# element (as `bim_import.dl` makes them), placed by the `usd::xformop`
+# transforms along its path, coloured by its `diffuseColor` and contained in
+# the `IfcBuildingStorey` it lies under.
+#
+# - Flattening: the nodes of every layer, in order, merge by path; a later
+#   child, inheritance or attribute of the same name wins, and a null child
+#   or inheritance removes it.
+# - Composition of a node: first what each inherited node composes to (its
+#   children and attributes), then its own children, then its own attributes;
+#   then the node at its instance path (`root/child/...`), when there is one,
+#   overrides. A reference with a tail (`uuid/child/child`) descends into the
+#   composed children.
+# - A file may be JSON text or the binary encoding of `bim_ifcx_binary.dl`.
+# - A mesh belongs to the nearest node up its path with a `bsi::ifc::class`,
+#   which gives its category, its label and its pick.
+import formats/bim_import.dl
+import lib/json.dl
+import formats/bim_ifcx_binary.dl
+
+# Whether `value` is present and of JSON kind `kind`; checked in two steps,
+# since `and` evaluates both sides.
+function bim ifcx json {a pointer to a JSON value:value} has kind {integer:kind}:
+    execute:
+        if value = (0 as a pointer to a JSON value):
+            return false
+        return (the kind of value) = kind
+
+# A child or an inheritance: `target` empty when it is removed.
+class:
+    patterns:
+        [a|] bim ifcx link record
+    members:
+        name as a string
+        target as a string
+
+class:
+    patterns:
+        [a|] bim ifcx attribute record
+    members:
+        key as a string
+        value as a pointer to a JSON value
+
+class:
+    patterns:
+        [a|] bim ifcx flat node record
+    members:
+        path as a string
+        children as the type of (a cad topology list of a bim ifcx link record)
+        inherits as the type of (a cad topology list of a bim ifcx link record)
+        attributes as the type of (a cad topology list of a bim ifcx attribute record)
+
+# What a node composes to.
+class:
+    patterns:
+        [a|] bim ifcx composed record
+    members:
+        children as the type of (a cad topology list of a bim ifcx link record)
+        attributes as the type of (a cad topology list of a bim ifcx attribute record)
+
+# The flattened layers: the nodes, and an open-addressing hash index of their
+# paths (slot values are node positions, -1 when empty).
+class:
+    patterns:
+        [a|] bim ifcx layers record
+    members:
+        nodes as the type of (a cad topology list of a bim ifcx flat node record)
+        slots as the type of (a cad topology list of an integer)
+        composed as the type of (a cad topology list of a bim ifcx composed record)
+        ready as the type of (a cad topology list of a boolean)
+
+local function the bim ifcx slot hash of {a string:label}:
+    execute:
+        set digest to 14695981039346656037 as a 64 bit unsigned integer
+        loop cursor from 0 to the length of label:
+            set code to (the character at cursor in label) as a 64 bit unsigned integer
+            set digest to (digest bitwise xor code) * (1099511628211 as a 64 bit unsigned integer)
+        return (digest shifted right by (1 as a 64 bit unsigned integer)) as a 64 bit integer
+
+# The position of the node at `path`, or -1.
+function the bim ifcx place of {a string:path} in {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set capacity to the length of (layers's slots's values)
+        if capacity = 0:
+            return -1
+        set slot to (the remainder of (the bim ifcx slot hash of path) divided by (capacity as a 64 bit integer)) as an integer
+        loop while true:
+            set held to the item at slot in (layers's slots's values)
+            if held < 0:
+                return -1
+            if (the item at held in (layers's nodes's values))'s path = path:
+                return held
+            set slot to the remainder of (slot + 1) divided by capacity
+        return -1
+
+local function index bim ifcx flattened {integer:position} in {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set capacity to the length of (layers's slots's values)
+        set path to (the item at position in (layers's nodes's values))'s path
+        set slot to (the remainder of (the bim ifcx slot hash of path) divided by (capacity as a 64 bit integer)) as an integer
+        loop while (the item at slot in (layers's slots's values)) >= 0:
+            set slot to the remainder of (slot + 1) divided by capacity
+        replace item at index slot in (layers's slots's values) with position
+
+# Doubles the index when it is half full.
+local function grow bim ifcx index of {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        set wanted to 64
+        loop while wanted < ((the length of (layers's nodes's values)) * 2):
+            set wanted to wanted * 2
+        if wanted <= (the length of (layers's slots's values)):
+            return nothing
+        set layers's slots to a cad topology list of an integer
+        loop cursor from 0 to wanted:
+            append -1 to (layers's slots's values)
+        loop cursor from 0 to the length of (layers's nodes's values):
+            index bim ifcx flattened cursor in layers
+
+# `links` with `name` set to `target` (removed when `target` is empty and
+# `removing`): a later opinion of the same name replaces the earlier one.
+local function set bim ifcx link {a string:name} to {a string:target} in {a pointer to a list:links}:
+    execute:
+        loop cursor from 0 to the length of links:
+            if (the item at cursor in links)'s name = name:
+                replace item at index cursor in links with (@intrinsic("construct", a bim ifcx link record, name, target))
+                return nothing
+        append (@intrinsic("construct", a bim ifcx link record, name, target)) to links
+
+local function set bim ifcx attribute {a string:key} to {a pointer to a JSON value:value} in {a pointer to a list:attributes}:
+    execute:
+        loop cursor from 0 to the length of attributes:
+            if (the item at cursor in attributes)'s key = key:
+                replace item at index cursor in attributes with (@intrinsic("construct", a bim ifcx attribute record, key, value))
+                return nothing
+        append (@intrinsic("construct", a bim ifcx attribute record, key, value)) to attributes
+
+# The links of the JSON object `group` (children or inherits), merged into
+# `links`; null removes a child (kept with an empty target, so that it also
+# removes an inherited one) and removes an inheritance outright.
+local function merge bim ifcx links of {a pointer to a JSON value:group} into {a pointer to a list:linkList} removing {boolean:removing}:
+    execute:
+        if ((bim ifcx json group has kind the JSON object kind) = false):
+            return nothing
+        loop cursor from 0 to the length of group:
+            set member to the item at cursor in (group's members)
+            if bim ifcx json member's value has kind the JSON null kind:
+                if removing:
+                    set entry to 0
+                    loop while entry < the length of linkList:
+                        if (the item at entry in linkList)'s name = member's name:
+                            remove item entry from linkList
+                        else:
+                            set entry to entry + 1
+                else:
+                    set bim ifcx link member's name to (the string form of "") in linkList
+            else if (the kind of member's value) = the JSON text kind:
+                set bim ifcx link member's name to (the text of member's value) in linkList
+
+# Merges the layer `document` (a parsed IfcX file) into `layers`; refuses
+# with a reason, or returns the empty string.
+function merge bim ifcx layer {a pointer to a JSON value:document} into {a pointer to a bim ifcx layers record:layers}:
+    execute:
+        if ((bim ifcx json document has kind the JSON object kind) = false):
+            return the string form of "an IfcX file is a JSON object"
+        if (document lacks JSON member named "header") or (document lacks JSON member named "data"):
+            return the string form of "an IfcX file needs a header and data"
+        set header to the JSON member named "header" in document
+        if (bim ifcx json header has kind the JSON object kind) = false:
+            return the string form of "the header is not an object"
+        if header lacks JSON member named "ifcxVersion":
+            return the string form of "the header names no ifcxVersion"
+        set version to the JSON member named "ifcxVersion" in header
+        if ((the kind of version) != the JSON text kind) or ((the text of version) != (the string form of "ifcx_alpha")):
+            return the string form of "only ifcx_alpha files are read"
+        set data to the JSON member named "data" in document
+        if ((bim ifcx json data has kind the JSON array kind) = false):
+            return the string form of "data is not an array"
+        loop cursor from 0 to the length of data:
+            set entry to the JSON value at index cursor in data
+            set usable to false
+            if bim ifcx json entry has kind the JSON object kind:
+                set usable to entry has JSON member named "path"
+            if usable:
+                set pathValue to the JSON member named "path" in entry
+                if (the kind of pathValue) = the JSON text kind:
+                    set path to the text of pathValue
+                    set position to the bim ifcx place of path in layers
+                    if position < 0:
+                        append (@intrinsic("construct", a bim ifcx flat node record, path, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)) to (layers's nodes's values)
+                        append (@intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)) to (layers's composed's values)
+                        append false to (layers's ready's values)
+                        set position to (the length of (layers's nodes's values)) - 1
+                        if ((the length of (layers's nodes's values)) * 2) > (the length of (layers's slots's values)):
+                            grow bim ifcx index of layers
+                        else:
+                            index bim ifcx flattened position in layers
+                    set node to the item at position in (layers's nodes's values)
+                    if entry has JSON member named "children":
+                        merge bim ifcx links of (the JSON member named "children" in entry) into (node's children's values) removing false
+                    if entry has JSON member named "inherits":
+                        merge bim ifcx links of (the JSON member named "inherits" in entry) into (node's inherits's values) removing true
+                    if entry has JSON member named "attributes":
+                        set group to the JSON member named "attributes" in entry
+                        if (bim ifcx json group has kind the JSON object kind):
+                            loop attributeCursor from 0 to the length of group:
+                                set member to the item at attributeCursor in (group's members)
+                                set bim ifcx attribute member's name to member's value in (node's attributes's values)
+        return the string form of ""
+
+# The part of `reference` before its first slash, and the rest.
+local function the bim ifcx head of {a string:reference}:
+    execute:
+        set slash to the index of "/" in reference
+        if slash < 0:
+            return reference
+        return the substring of reference from 0 spanning slash bytes
+
+local function the bim ifcx tail of {a string:reference}:
+    execute:
+        set slash to the index of "/" in reference
+        if slash < 0:
+            return the string form of ""
+        return the substring of reference from (slash + 1) spanning (((the length of reference) - slash) - 1) bytes
+
+# Composes the node at `position` (without instance overrides) into the
+# cache of `layers`, once. `depth` stops a cycle: a node met again while it is
+# being composed composes to nothing.
+function compose bim ifcx flattened {integer:position} in {a pointer to a bim ifcx layers record:layers} at depth {integer:depth}:
+    execute:
+        if (position < 0) or (depth > 64):
+            return nothing
+        if the item at position in (layers's ready's values):
+            return nothing
+        replace item at index position in (layers's ready's values) with true
+        set result to @intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)
+        set node to the item at position in (layers's nodes's values)
+        loop cursor from 0 to the length of (node's inherits's values):
+            set inheritance to the item at cursor in (node's inherits's values)
+            set inherited to the bim ifcx composition along inheritance's target in layers at depth (depth + 1)
+            loop entry from 0 to the length of (inherited's children's values):
+                set child to the item at entry in (inherited's children's values)
+                set bim ifcx link child's name to child's target in (result's children's values)
+            loop entry from 0 to the length of (inherited's attributes's values):
+                set opinion to the item at entry in (inherited's attributes's values)
+                set bim ifcx attribute opinion's key to opinion's value in (result's attributes's values)
+        loop cursor from 0 to the length of (node's children's values):
+            set child to the item at cursor in (node's children's values)
+            set bim ifcx link child's name to child's target in (result's children's values)
+        loop cursor from 0 to the length of (node's attributes's values):
+            set opinion to the item at cursor in (node's attributes's values)
+            set bim ifcx attribute opinion's key to opinion's value in (result's attributes's values)
+        replace item at index position in (layers's composed's values) with result
+
+# What `target` composes to: its head node, then down its tail through the
+# composed children; nothing when a step is missing.
+function the bim ifcx composition along {a string:target} in {a pointer to a bim ifcx layers record:layers} at depth {integer:depth}:
+    execute:
+        set nothingComposed to @intrinsic("construct", a bim ifcx composed record, a cad topology list of a bim ifcx link record, a cad topology list of a bim ifcx attribute record)
+        set position to the bim ifcx place of (the bim ifcx head of target) in layers
+        if (position < 0) or (depth > 64):
+            return nothingComposed
+        compose bim ifcx flattened position in layers at depth depth
+        set current to the item at position in (layers's composed's values)
+        set rest to the bim ifcx tail of target
+        loop while (the length of rest) > 0:
+            set step to the bim ifcx head of rest
+            set rest to the bim ifcx tail of rest
+            set next to the string form of ""
+            loop cursor from 0 to the length of (current's children's values):
+                if (the item at cursor in (current's children's values))'s name = step:
+                    set next to (the item at cursor in (current's children's values))'s target
+            set nextPosition to -1
+            if (the length of next) > 0:
+                set nextPosition to the bim ifcx place of (the bim ifcx head of next) in layers
+            if nextPosition < 0:
+                return nothingComposed
+            compose bim ifcx flattened nextPosition in layers at depth (depth + 1)
+            set current to the item at nextPosition in (layers's composed's values)
+            # A child reference with its own tail descends further.
+            set rest to ((the bim ifcx tail of next) + (the string form of "/")) + rest
+            if (the length of (the bim ifcx tail of next)) = 0:
+                set rest to the substring of rest from 1 spanning ((the length of rest) - 1) bytes
+        return current
+
+function the bim ifcx attribute {a string:key} of {bim ifcx composed record:node}:
+    execute:
+        loop cursor from 0 to the length of (node's attributes's values):
+            set opinion to the item at cursor in (node's attributes's values)
+            if opinion's key = key:
+                return opinion's value
+        return 0 as a pointer to a JSON value
+
+# A number of the JSON array `values` at `position`, read exactly from its text.
+local function the bim ifcx number at {integer:position} in {a pointer to a JSON value:values}:
+    execute:
+        if (bim ifcx json values has kind the JSON array kind) = false:
+            return 0.0
+        if position >= the length of values:
+            return 0.0
+        set entry to the JSON value at index position in values
+        if (the kind of entry) != the JSON number kind:
+            return 0.0
+        set reading to the bim real reading of (the text of entry)
+        return reading's value
+
+# The 4 x 4 matrix (row-major, a point is a row vector, translation in the
+# last row) of `usd::xformop` on `node`, or the identity.
+local function the bim ifcx transform of {bim ifcx composed record:node}:
+    execute:
+        set matrix to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to 16:
+            if (the remainder of cursor divided by 5) = 0:
+                append 1.0 to matrix
+            else:
+                append 0.0 to matrix
+        set operation to the bim ifcx attribute (the string form of "usd::xformop") of node
+        set present to false
+        if bim ifcx json operation has kind the JSON object kind:
+            set present to operation has JSON member named "transform"
+        if present:
+            set rows to the JSON member named "transform" in operation
+            set fourRows to false
+            if bim ifcx json rows has kind the JSON array kind:
+                set fourRows to (the length of rows) = 4
+            if fourRows:
+                loop row from 0 to 4:
+                    set columns to the JSON value at index row in rows
+                    set fourColumns to false
+                    if bim ifcx json columns has kind the JSON array kind:
+                        set fourColumns to (the length of columns) = 4
+                    if fourColumns:
+                        loop column from 0 to 4:
+                            replace item at index ((row * 4) + column) in matrix with (the bim ifcx number at column in columns)
+        return matrix
+
+# `first` then `second`: the row-vector product first x second.
+local function the bim ifcx product of {a pointer to a list:first} and {a pointer to a list:second}:
+    execute:
+        set result to an empty list of a 64 bit floating-point number
+        loop row from 0 to 4:
+            loop column from 0 to 4:
+                set total to 0.0
+                loop inner from 0 to 4:
+                    set total to total + ((the item at ((row * 4) + inner) in first) * (the item at ((inner * 4) + column) in second))
+                append total to result
+        return result
+
+# The category of IFC class `code`.
+function the bim category of ifc class {a string:code}:
+    execute:
+        if ((code = (the string form of "IfcWall")) or (code = (the string form of "IfcWallStandardCase"))) or (code = (the string form of "IfcCurtainWall")):
+            return bim wall category
+        if (code = (the string form of "IfcSlab")) or (code = (the string form of "IfcCovering")):
+            return bim slab category
+        if code = (the string form of "IfcWindow"):
+            return bim window category
+        if code = (the string form of "IfcDoor"):
+            return bim door category
+        if code = (the string form of "IfcSpace"):
+            return bim space category
+        if code = (the string form of "IfcColumn"):
+            return bim column category
+        if code = (the string form of "IfcPile"):
+            return bim pile category
+        if (code = (the string form of "IfcBeam")) or (code = (the string form of "IfcMember")):
+            return bim beam category
+        if code = (the string form of "IfcRoof"):
+            return bim roof category
+        if (code = (the string form of "IfcStair")) or (code = (the string form of "IfcStairFlight")):
+            return bim stair category
+        if code = (the string form of "IfcRailing"):
+            return bim railing category
+        if (code = (the string form of "IfcFurniture")) or (code = (the string form of "IfcFurnishingElement")):
+            return bim furniture category
+        return bim other category
+
+# The walk's state: what is collected and the running extent.
+class:
+    patterns:
+        [a|] bim ifcx gathering record
+    members:
+        meshes as the type of (a cad topology list of a bim scene mesh record)
+        labels as the type of (a cad topology list of a string)
+        triangleCount as an integer
+        low as a cad vector3
+        high as a cad vector3
+        problem as a string
+        curves as the type of (a cad topology list of a cad vector3)
+        storeys as a bim import storeys record
+
+# Adds the mesh `mesh` (a `usd::usdgeom::mesh` value) placed by `matrix`.
+local function gather bim ifcx mesh {a pointer to a JSON value:meshValue} placed by {a pointer to a list:matrix} as {integer:category} coloured {cad vector3:colour} in storey {integer:storeyIndex} labelled {a string:label} into {a pointer to a bim ifcx gathering record:gathering}:
+    execute:
+        if (bim ifcx json meshValue has kind the JSON object kind) = false:
+            return nothing
+        if (meshValue lacks JSON member named "points") or (meshValue lacks JSON member named "faceVertexIndices"):
+            return nothing
+        set pointValues to the JSON member named "points" in meshValue
+        set indexValues to the JSON member named "faceVertexIndices" in meshValue
+        if (((bim ifcx json pointValues has kind the JSON array kind) = false)) or (((bim ifcx json indexValues has kind the JSON array kind) = false)):
+            return nothing
+        set corners to an empty list of a cad vector3
+        loop cursor from 0 to the length of pointValues:
+            set coordinates to the JSON value at index cursor in pointValues
+            set x to the bim ifcx number at 0 in coordinates
+            set y to the bim ifcx number at 1 in coordinates
+            set z to the bim ifcx number at 2 in coordinates
+            set px to (((x * (the item at 0 in matrix)) + (y * (the item at 4 in matrix))) + (z * (the item at 8 in matrix))) + (the item at 12 in matrix)
+            set py to (((x * (the item at 1 in matrix)) + (y * (the item at 5 in matrix))) + (z * (the item at 9 in matrix))) + (the item at 13 in matrix)
+            set pz to (((x * (the item at 2 in matrix)) + (y * (the item at 6 in matrix))) + (z * (the item at 10 in matrix))) + (the item at 14 in matrix)
+            append (a cad vector3 with x px, y py and z pz) to corners
+        set shape to an empty fast mesh
+        set count to the length of corners
+        set corner to 0
+        loop while (corner + 2) < the length of indexValues:
+            set firstIndex to (the bim ifcx number at corner in indexValues) as an integer
+            set secondIndex to (the bim ifcx number at (corner + 1) in indexValues) as an integer
+            set thirdIndex to (the bim ifcx number at (corner + 2) in indexValues) as an integer
+            set corner to corner + 3
+            set inside to ((firstIndex >= 0) and (firstIndex < count)) and (((secondIndex >= 0) and (secondIndex < count)) and ((thirdIndex >= 0) and (thirdIndex < count)))
+            if inside:
+                set first to the item at firstIndex in corners
+                set second to the item at secondIndex in corners
+                set third to the item at thirdIndex in corners
+                set normal to the cad cross of (the cad difference of second and first) and (the cad difference of third and first)
+                set magnitude to the cad length of normal
+                if magnitude > 0.0:
+                    set normal to normal scaled by (1.0 / magnitude)
+                    set base to the length of (shape's positions's values)
+                    append first to (shape's positions's values)
+                    append second to (shape's positions's values)
+                    append third to (shape's positions's values)
+                    loop side from 0 to 3:
+                        append normal to (shape's normals's values)
+                        append (base + side) to (shape's triangles's values)
+                    set gathering's triangleCount to gathering's triangleCount + 1
+        loop cursor from 0 to count:
+            set point to the item at cursor in corners
+            set gathering's low to a cad vector3 with x (the minimum of gathering's low's x and point's x), y (the minimum of gathering's low's y and point's y) and z (the minimum of gathering's low's z and point's z)
+            set gathering's high to a cad vector3 with x (the maximum of gathering's high's x and point's x), y (the maximum of gathering's high's y and point's y) and z (the maximum of gathering's high's z and point's z)
+        free corners
+        set elementId to (the bim imported id base) + ((the length of (gathering's meshes's values)) as a 64 bit integer)
+        append (@intrinsic("construct", a bim scene mesh record, elementId, 0 as a 64 bit integer, shape, category, colour, the string form of "")) to (gathering's meshes's values)
+        append label to (gathering's labels's values)
+        append storeyIndex to (gathering's storeys's ofElements's values)
+
+# Walks the composed node `reference` at instance path `instancePath` under
+# a parent placed by `parentMatrix`, gathering every mesh below it; each in
+# the storey (an IfcBuildingStorey node) it lies under, `ownerStorey` when no
+# storey lies between.
+local function walk bim ifcx {a string:reference} at {a string:instancePath} under {a pointer to a list:parentMatrix} owned by {a string:ownerLabel} as {integer:ownerCategory} coloured {cad vector3:ownerColour} in storey {integer:ownerStorey} in {a pointer to a bim ifcx layers record:layers} into {a pointer to a bim ifcx gathering record:gathering} at depth {integer:depth}:
+    execute:
+        if depth > 64:
+            set gathering's problem to the string form of "the composition is deeper than 64 levels"
+            return nothing
+        set base to the bim ifcx composition along reference in layers at depth 0
+        set node to @intrinsic("construct", a bim ifcx composed record, the cad clone of base's children, the cad clone of base's attributes)
+        # An opinion at the instance path overrides what is composed there.
+        set overrideAt to the bim ifcx place of instancePath in layers
+        if (overrideAt >= 0) and (instancePath != reference):
+            set extra to the item at overrideAt in (layers's nodes's values)
+            loop cursor from 0 to the length of (extra's children's values):
+                set child to the item at cursor in (extra's children's values)
+                set bim ifcx link child's name to child's target in (node's children's values)
+            loop cursor from 0 to the length of (extra's attributes's values):
+                set opinion to the item at cursor in (extra's attributes's values)
+                set bim ifcx attribute opinion's key to opinion's value in (node's attributes's values)
+        set ownMatrix to the bim ifcx transform of node
+        set matrix to the bim ifcx product of ownMatrix and parentMatrix
+        free ownMatrix
+        set ownLabel to ownerLabel
+        set ownCategory to ownerCategory
+        set ownColour to ownerColour
+        set ownStorey to ownerStorey
+        set classValue to the bim ifcx attribute (the string form of "bsi::ifc::class") of node
+        set classified to false
+        if bim ifcx json classValue has kind the JSON object kind:
+            set classified to classValue has JSON member named "code"
+        if classified:
+            set code to the JSON member named "code" in classValue
+            if (the kind of code) = the JSON text kind:
+                set ownCategory to the bim category of ifc class (the text of code)
+                set ownLabel to ((the text of code) + (the string form of " ")) + instancePath
+                set nameValue to the bim ifcx attribute (the string form of "bsi::ifc::prop::Name") of node
+                if bim ifcx json nameValue has kind the JSON text kind:
+                    set ownLabel to ((the text of code) + (the string form of " ")) + (the text of nameValue)
+                # A storey at the height its placement puts it.
+                if (the text of code) = (the string form of "IfcBuildingStorey"):
+                    set ownStorey to the length of (gathering's storeys's names's values)
+                    set storeyName to instancePath
+                    if bim ifcx json nameValue has kind the JSON text kind:
+                        set storeyName to the text of nameValue
+                    append storeyName to (gathering's storeys's names's values)
+                    append (the item at 14 in matrix) to (gathering's storeys's elevations's values)
+        set colourValue to the bim ifcx attribute (the string form of "bsi::ifc::presentation::diffuseColor") of node
+        set hasColour to false
+        if bim ifcx json colourValue has kind the JSON array kind:
+            set hasColour to (the length of colourValue) = 3
+        if hasColour:
+            set ownColour to a cad vector3 with x ((the bim ifcx number at 0 in colourValue) * 255.0), y ((the bim ifcx number at 1 in colourValue) * 255.0) and z ((the bim ifcx number at 2 in colourValue) * 255.0)
+        # A polyline: its points placed, as pairs.
+        set curveValue to the bim ifcx attribute (the string form of "usd::usdgeom::basiscurves") of node
+        if bim ifcx json curveValue has kind the JSON object kind:
+            if curveValue has JSON member named "points":
+                set curvePoints to the JSON member named "points" in curveValue
+                if bim ifcx json curvePoints has kind the JSON array kind:
+                    loop curveCursor from 1 to the length of curvePoints:
+                        loop endIndex from 0 to 2:
+                            set coordinates to the JSON value at index ((curveCursor - 1) + endIndex) in curvePoints
+                            set x to the bim ifcx number at 0 in coordinates
+                            set y to the bim ifcx number at 1 in coordinates
+                            set z to the bim ifcx number at 2 in coordinates
+                            set px to (((x * (the item at 0 in matrix)) + (y * (the item at 4 in matrix))) + (z * (the item at 8 in matrix))) + (the item at 12 in matrix)
+                            set py to (((x * (the item at 1 in matrix)) + (y * (the item at 5 in matrix))) + (z * (the item at 9 in matrix))) + (the item at 13 in matrix)
+                            set pz to (((x * (the item at 2 in matrix)) + (y * (the item at 6 in matrix))) + (z * (the item at 10 in matrix))) + (the item at 14 in matrix)
+                            append (a cad vector3 with x px, y py and z pz) to (gathering's curves's values)
+        set meshValue to the bim ifcx attribute (the string form of "usd::usdgeom::mesh") of node
+        if meshValue != (0 as a pointer to a JSON value):
+            gather bim ifcx mesh meshValue placed by matrix as ownCategory coloured ownColour in storey ownStorey labelled ownLabel into gathering
+        loop cursor from 0 to the length of (node's children's values):
+            set child to the item at cursor in (node's children's values)
+            if (the length of child's target) > 0:
+                walk bim ifcx child's target at ((instancePath + (the string form of "/")) + child's name) under matrix owned by ownLabel as ownCategory coloured ownColour in storey ownStorey in layers into gathering at depth (depth + 1)
+        free matrix
+
+# The elements of the IfcX files at `paths`, read as layers in order, or a
+# refusal naming the fault.
+function the bim ifcx import of files {a pointer to a list:paths}:
+    execute:
+        set layersValue to @intrinsic("construct", a bim ifcx layers record, a cad topology list of a bim ifcx flat node record, a cad topology list of an integer, a cad topology list of a bim ifcx composed record, a cad topology list of a boolean)
+        set layers to the address of layersValue
+        grow bim ifcx index of layers
+        set documents to an empty list of a JSON result
+        set fault to the string form of ""
+        loop cursor from 0 to the length of paths:
+            if (the length of fault) = 0:
+                set loaded to the bim uncompressed content at (the item at cursor in paths)
+                if loaded's valid = false:
+                    set fault to (the string form of "could not read ") + (the item at cursor in paths)
+                else:
+                    set parsed to the bim ifcx document of loaded's text
+                    if parsed failed:
+                        set fault to (the string form of "not IfcX at byte ") + (the string form of (the JSON error position in parsed))
+                    else:
+                        append parsed to documents
+                        set fault to merge bim ifcx layer (the value of parsed) into layers
+        if (the length of fault) > 0:
+            loop cursor from 0 to the length of documents:
+                free (the item at cursor in documents)
+            free documents
+            return a bim ifcx refusal saying fault
+        # The roots: nodes no child or inheritance refers to.
+        set referenced to an empty list of a boolean
+        loop cursor from 0 to the length of (layers's nodes's values):
+            append false to referenced
+        loop cursor from 0 to the length of (layers's nodes's values):
+            set node to the item at cursor in (layers's nodes's values)
+            loop entry from 0 to the length of (node's children's values):
+                set position to the bim ifcx place of (the bim ifcx head of (the item at entry in (node's children's values))'s target) in layers
+                if position >= 0:
+                    replace item at index position in referenced with true
+            loop entry from 0 to the length of (node's inherits's values):
+                set position to the bim ifcx place of (the bim ifcx head of (the item at entry in (node's inherits's values))'s target) in layers
+                if position >= 0:
+                    replace item at index position in referenced with true
+        set infinity to 1.0 / 0.0
+        set gatheringValue to @intrinsic("construct", a bim ifcx gathering record, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, (a cad vector3 with x infinity, y infinity and z infinity), (a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)), the string form of "", a cad topology list of a cad vector3, no bim import storeys)
+        set gathering to the address of gatheringValue
+        set identity to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to 16:
+            if (the remainder of cursor divided by 5) = 0:
+                append 1.0 to identity
+            else:
+                append 0.0 to identity
+        loop cursor from 0 to the length of (layers's nodes's values):
+            if (the item at cursor in referenced) = false:
+                set rootPath to (the item at cursor in (layers's nodes's values))'s path
+                walk bim ifcx rootPath at rootPath under identity owned by (the string form of "IfcX ") + rootPath as bim other category coloured (the bim category colouring) in storey -1 in layers into gathering at depth 0
+        free identity
+        free referenced
+        loop cursor from 0 to the length of documents:
+            free (the item at cursor in documents)
+        free documents
+        if (the length of gatheringValue's problem) > 0:
+            return a bim ifcx refusal saying gatheringValue's problem
+        return @intrinsic("construct", a bim import record, true, the string form of "", gatheringValue's meshes, gatheringValue's labels, gatheringValue's triangleCount, gatheringValue's low, gatheringValue's high, gatheringValue's curves, gatheringValue's storeys, no bim import instancing, a cad topology list of a bim pset entry record)
+
+local function a bim ifcx refusal saying {a string:reason}:
+    execute:
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return @intrinsic("construct", a bim import record, false, reason, a cad topology list of a bim scene mesh record, a cad topology list of a string, 0, origin, origin, a cad topology list of a cad vector3, no bim import storeys, no bim import instancing, a cad topology list of a bim pset entry record)
+
+# The elements of the one IfcX file at `path`.
+function the bim ifcx import of file {a string:path}:
+    execute:
+        set paths to an empty list of a string
+        append path to paths
+        set result to the bim ifcx import of files paths
+        free paths
+        return result
+
+# ---------------------------------------------------------------- the editor's own file
+
+# One line of the native file text, with the id it is ordered by.
+class:
+    patterns:
+        [a|] bim native line record
+    members:
+        id as a 64 bit integer
+        line as a string
+
+class:
+    patterns:
+        [a|] bim native text record
+    members:
+        valid as a boolean
+        text as a string
+        message as a string
+
+# Field `name` of the JSON object `record` as native file text: a number as
+# written (exact), a text with its line breaks made spaces, a boolean as 1 or
+# 0; empty when it is missing.
+local function the bim native field {a string:name} of {a pointer to a JSON value:record}:
+    execute:
+        if (bim ifcx json record has kind the JSON object kind) = false:
+            return the string form of ""
+        if record lacks JSON member named name:
+            return the string form of ""
+        set entry to the JSON member named name in record
+        if bim ifcx json entry has kind the JSON number kind:
+            return the text of entry
+        if bim ifcx json entry has kind the JSON text kind:
+            return ((the text of entry) with "\n" replaced by " ") with "\r" replaced by " "
+        if bim ifcx json entry has kind the JSON boolean kind:
+            if the boolean of entry:
+                return the string form of "1"
+            return the string form of "0"
+        return the string form of ""
+
+# The array field `name` of `record` (an array of [x, y] pairs, or of
+# numbers) as native file text: its count, then the numbers, all separated by
+# spaces.
+local function the bim native points {a string:name} of {a pointer to a JSON value:record}:
+    execute:
+        if (bim ifcx json record has kind the JSON object kind) = false:
+            return the string form of "0"
+        if record lacks JSON member named name:
+            return the string form of "0"
+        set entry to the JSON member named name in record
+        if (bim ifcx json entry has kind the JSON array kind) = false:
+            return the string form of "0"
+        set texts to an empty list of a string
+        append (the string form of (the length of entry)) to texts
+        loop cursor from 0 to the length of entry:
+            set element to the JSON value at index cursor in entry
+            if bim ifcx json element has kind the JSON array kind:
+                loop inner from 0 to the length of element:
+                    append (the text of (the JSON value at index inner in element)) to texts
+            else:
+                append (the text of element) to texts
+        set text to texts joined with " "
+        free texts
+        return text
+
+# The numbers of a short array field (a pair, or a reference), without a count.
+local function the bim native numbers {a string:name} of {a pointer to a JSON value:record}:
+    execute:
+        set counted to the bim native points name of record
+        set space to the index of " " in counted
+        if space < 0:
+            return the string form of ""
+        return the substring of counted from (space + 1) spanning (((the length of counted) - space) - 1) bytes
+
+# Adds `line` to `lines` in the order of `elementId`.
+local function add bim native line {a string:lineText} at {a 64 bit integer:elementId} to {a pointer to a list:lineRecords}:
+    execute:
+        set slot to the bim insertion position of elementId among lineRecords
+        insert (@intrinsic("construct", a bim native line record, elementId, lineText)) into lineRecords at index slot
+
+local function append bim native lines of {a pointer to a list:lineRecords} to {a pointer to a list:texts}:
+    execute:
+        loop cursor from 0 to the length of lineRecords:
+            append (the item at cursor in lineRecords)'s line to texts
+
+# A sketch element's line ("sketch" or "part").
+local function the bim native sketch line labelled {a string:label} of {a pointer to a JSON value:record} on {a string:levelText}:
+    execute:
+        set entryText to (((label + (the string form of " ")) + (the bim native field (the string form of "id") of record)) + (the string form of " ")) + levelText
+        set kindText to the bim native field (the string form of "kind") of record
+        set entryText to (((entryText + (the string form of " ")) + kindText) + (the string form of " ")) + (the bim native field (the string form of "height") of record)
+        set entryText to (entryText + (the string form of " ")) + (the bim native points (the string form of "points") of record)
+        if (kindText = (the string form of "2")) or (kindText = (the string form of "3")):
+            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "text") of record)
+        return entryText
+
+# The native file text (`bim_file.dl`) of the IfcX `content` (JSON text or
+# the binary encoding of `bim_ifcx_binary.dl`), rebuilt
+# from the `openbim::` records its nodes carry, so that it is read and checked
+# as any saved model is. Refused when the text is not IfcX or carries no
+# project record.
+function the bim native text of ifcx {a string:content}:
+    execute:
+        set parsed to the bim ifcx document of content
+        if parsed failed:
+            return @intrinsic("construct", a bim native text record, false, the string form of "", (the string form of "not IfcX at byte ") + (the string form of (the JSON error position in parsed)))
+        set document to the value of parsed
+        set dataFound to false
+        if bim ifcx json document has kind the JSON object kind:
+            set dataFound to document has JSON member named "data"
+        if dataFound = false:
+            free parsed
+            return @intrinsic("construct", a bim native text record, false, the string form of "", the string form of "not an IfcX file")
+        set data to the JSON member named "data" in document
+        set head to an empty list of a string
+        set levels to an empty list of a bim native line record
+        set wallTypes to an empty list of a bim native line record
+        set walls to an empty list of a bim native line record
+        set openingTypes to an empty list of a bim native line record
+        set openings to an empty list of a bim native line record
+        set dimensions to an empty list of a bim native line record
+        set slabs to an empty list of a bim native line record
+        set grids to an empty list of a bim native line record
+        set sketches to an empty list of a bim native line record
+        set components to an empty list of a bim native line record
+        set instances to an empty list of a bim native line record
+        set meshes to an empty list of a bim native line record
+        set linearTypes to an empty list of a bim native line record
+        set linears to an empty list of a bim native line record
+        set spaceObjects to an empty list of a bim native line record
+        set tags to an empty list of a bim native line record
+        set views to an empty list of a bim native line record
+        set viewLinks to an empty list of a bim native line record
+        set drawingTypes to an empty list of a bim native line record
+        set phases to an empty list of a bim native line record
+        set phasings to an empty list of a bim native line record
+        # Property lines, kept in the order read (there may be many).
+        set propertyLines to an empty list of a string
+        set sheets to an empty list of a bim native line record
+        set stairs to an empty list of a bim native line record
+        set railings to an empty list of a bim native line record
+        set curtains to an empty list of a bim native line record
+        set systems to an empty list of a bim native line record
+        set tail to an empty list of a string
+        set projectFound to false
+        loop cursor from 0 to the length of data:
+            set node to the JSON value at index cursor in data
+            set attributesFound to false
+            if bim ifcx json node has kind the JSON object kind:
+                set attributesFound to node has JSON member named "attributes"
+            if attributesFound:
+                set group to the JSON member named "attributes" in node
+                if bim ifcx json group has kind the JSON object kind:
+                    loop member from 0 to the length of group:
+                        set entry to the item at member in (group's members)
+                        set key to entry's name
+                        set record to entry's value
+                        set recordId to (the bim real reading of (the bim native field (the string form of "id") of record))'s value as a 64 bit integer
+                        if key = (the string form of "openbim::project"):
+                            set projectFound to true
+                            if record has JSON member named "connectionsV1":
+                                append (the text of (the JSON member named "connectionsV1" in record)) to tail
+                            if record has JSON member named "reinforcementV1":
+                                append (the text of (the JSON member named "reinforcementV1" in record)) to tail
+                            append ((the string form of "next ") + (the bim native field (the string form of "next") of record)) to head
+                            set unitText to the bim native field (the string form of "units") of record
+                            if (the length of unitText) > 0:
+                                append ((the string form of "units ") + unitText) to tail
+                            if record has JSON member named "viewrules":
+                                set rules to the JSON member named "viewrules" in record
+                                if bim ifcx json rules has kind the JSON array kind:
+                                    loop ruleCursor from 0 to the length of rules:
+                                        set rule to the JSON value at index ruleCursor in rules
+                                        set ruleTexts to an empty list of a string
+                                        append (the string form of "viewrule") to ruleTexts
+                                        loop inner from 0 to the length of rule:
+                                            append (the text of (the JSON value at index inner in rule)) to ruleTexts
+                                        append (ruleTexts joined with " ") to tail
+                                        free ruleTexts
+                        else if key = (the string form of "openbim::level"):
+                            add bim native line ((((the string form of "level ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "elevation") of record))) + (((the string form of " ") + (the bim native field (the string form of "height") of record)) + ((the string form of " ") + (the bim native field (the string form of "name") of record)))) at recordId to levels
+                        else if key = (the string form of "openbim::walltype"):
+                            set entryText to ((the string form of "walltype ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "name") of record))
+                            set roleText to the bim native field (the string form of "role") of record
+                            if (the length of roleText) > 0:
+                                set entryText to (((the string form of "planartype ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + roleText)) + ((the string form of " ") + (the bim native field (the string form of "name") of record))
+                            if record has JSON member named "layers":
+                                set layers to the JSON member named "layers" in record
+                                if bim ifcx json layers has kind the JSON array kind:
+                                    loop layerCursor from 0 to the length of layers:
+                                        set layer to the JSON value at index layerCursor in layers
+                                        if (bim ifcx json layer has kind the JSON array kind) and ((the length of layer) = 2):
+                                            set entryText to (entryText + (the string form of "\nlayer ")) + (((the text of (the JSON value at index 1 in layer)) + (the string form of " ")) + (the text of (the JSON value at index 0 in layer)))
+                            add bim native line entryText at recordId to wallTypes
+                        else if key = (the string form of "openbim::wall"):
+                            set entryText to ((the string form of "wall ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "type") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "start") of record) + (the string form of " ")) + (the bim native numbers (the string form of "finish") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "height") of record) + (the string form of " ")) + (the bim native field (the string form of "bulge") of record))
+                            set leanText to the bim native field (the string form of "lean") of record
+                            if (the length of leanText) > 0:
+                                set entryText to (entryText + (the string form of " ")) + ((leanText + (the string form of " ")) + (the bim native field (the string form of "rise") of record))
+                            set baseText to the bim native field (the string form of "baseOffset") of record
+                            if (the length of baseText) > 0:
+                                set entryText to (entryText + (the string form of "\nwallbase ")) + (((the bim native field (the string form of "id") of record) + (the string form of " ")) + baseText)
+                            set topText to the bim native field (the string form of "topLevel") of record
+                            if (the length of topText) > 0:
+                                set entryText to (entryText + (the string form of "\nwalltop ")) + (((the bim native field (the string form of "id") of record) + (the string form of " ")) + topText)
+                            add bim native line entryText at recordId to walls
+                        else if key = (the string form of "openbim::openingtype"):
+                            set entryText to ((the string form of "openingtype ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "width") of record)) + ((the string form of " ") + (the bim native field (the string form of "height") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "sill") of record) + (the string form of " ")) + (the bim native field (the string form of "frame") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "door") of record) + (the string form of " ")) + (the bim native field (the string form of "name") of record))
+                            add bim native line entryText at recordId to openingTypes
+                        else if key = (the string form of "openbim::opening"):
+                            set entryText to ((the string form of "opening ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "type") of record)) + ((the string form of " ") + (the bim native field (the string form of "host") of record)))
+                            add bim native line ((entryText + (the string form of " ")) + (the bim native field (the string form of "offset") of record)) at recordId to openings
+                        else if key = (the string form of "openbim::dimension"):
+                            set entryText to ((the string form of "dimension ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native numbers (the string form of "first") of record)) + ((the string form of " ") + (the bim native numbers (the string form of "second") of record)))
+                            if record has JSON member named "place":
+                                set entryText to (entryText + (the string form of " ")) + (the bim native numbers (the string form of "place") of record)
+                            add bim native line entryText at recordId to dimensions
+                        else if key = (the string form of "openbim::slab"):
+                            set entryText to ((the string form of "slab ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "level") of record)) + ((the string form of " ") + (the bim native field (the string form of "thickness") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native points (the string form of "outline") of record)
+                            set slabMaterial to the bim native field (the string form of "material") of record
+                            if (the length of slabMaterial) > 0:
+                                set entryText to (entryText + (the string form of " ")) + slabMaterial
+                            # A plate of a planar type.
+                            set plateTypeText to the bim native field (the string form of "type") of record
+                            if (the length of plateTypeText) > 0:
+                                set entryText to (((the string form of "plate ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + plateTypeText)) + ((the string form of " ") + (the bim native field (the string form of "level") of record))
+                                set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "top") of record) + (the string form of " ")) + (((the bim native field (the string form of "pitch") of record) + (the string form of " ")) + (the bim native field (the string form of "heading") of record)))
+                                set entryText to (entryText + (the string form of " ")) + (the bim native points (the string form of "outline") of record)
+                            add bim native line entryText at recordId to slabs
+                        else if key = (the string form of "openbim::spaceObject"):
+                            set entryText to ((the string form of "spaceobject ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "height") of record)
+                            set entryText to (entryText + (the string form of " ")) + (the bim native points (the string form of "outline") of record)
+                            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "name") of record)
+                            set numberText to the bim native field (the string form of "number") of record
+                            if (the length of numberText) > 0:
+                                set entryText to (entryText + (the string form of "\nspacenumber ")) + ((the bim native field (the string form of "id") of record) + ((the string form of " ") + numberText))
+                            add bim native line entryText at recordId to spaceObjects
+                        else if key = (the string form of "openbim::grid"):
+                            set entryText to ((the string form of "grid ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native numbers (the string form of "start") of record)) + ((the string form of " ") + (the bim native numbers (the string form of "finish") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "low") of record) + (the string form of " ")) + (the bim native field (the string form of "high") of record))
+                            add bim native line ((entryText + (the string form of " ")) + (the bim native field (the string form of "name") of record)) at recordId to grids
+                        else if key = (the string form of "openbim::sketch"):
+                            add bim native line (the bim native sketch line labelled (the string form of "sketch") of record on (the bim native field (the string form of "level") of record)) at recordId to sketches
+                        else if key = (the string form of "openbim::component"):
+                            set entryText to ((the string form of "component ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "name") of record))
+                            if record has JSON member named "parts":
+                                set parts to the JSON member named "parts" in record
+                                if bim ifcx json parts has kind the JSON array kind:
+                                    loop partCursor from 0 to the length of parts:
+                                        set entryText to (entryText + (the string form of "\n")) + (the bim native sketch line labelled (the string form of "part") of (the JSON value at index partCursor in parts) on (the string form of "0"))
+                            if record has JSON member named "connectors":
+                                set connectorList to the JSON member named "connectors" in record
+                                if bim ifcx json connectorList has kind the JSON array kind:
+                                    loop connectorCursor from 0 to the length of connectorList:
+                                        set connectorEntry to the JSON value at index connectorCursor in connectorList
+                                        set connectorText to (the string form of "\nconnector ") + (the bim native field (the string form of "role") of record)
+                                        loop numberCursor from 0 to the length of connectorEntry:
+                                            set connectorText to (connectorText + (the string form of " ")) + (the text of (the JSON value at index numberCursor in connectorEntry))
+                                        set entryText to entryText + connectorText
+                            if record has JSON member named "solids":
+                                set solids to the JSON member named "solids" in record
+                                if bim ifcx json solids has kind the JSON array kind:
+                                    loop solidCursor from 0 to the length of solids:
+                                        set solidRecord to the JSON value at index solidCursor in solids
+                                        set solidText to ((the string form of "\nsolid ") + (the bim native field (the string form of "kind") of solidRecord)) + ((the string form of " ") + (the bim native field (the string form of "operation") of solidRecord))
+                                        set solidText to (solidText + (the string form of " ")) + (((the bim native numbers (the string form of "origin") of solidRecord) + (the string form of " ")) + (the bim native numbers (the string form of "size") of solidRecord))
+                                        set solidText to (solidText + (the string form of " ")) + (((the bim native field (the string form of "angle") of solidRecord) + (the string form of " ")) + (the bim native points (the string form of "profile") of solidRecord))
+                                        set solidText to (solidText + (the string form of " ")) + (((the bim native points (the string form of "points") of solidRecord) + (the string form of " ")) + (the bim native points (the string form of "faces") of solidRecord))
+                                        set entryText to entryText + ((solidText + (the string form of " ")) + (the bim native field (the string form of "material") of solidRecord))
+                            add bim native line entryText at recordId to components
+                        else if key = (the string form of "openbim::instance"):
+                            set entryText to ((the string form of "instance ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "component") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "origin") of record) + (the string form of " ")) + (the bim native field (the string form of "angle") of record))
+                            if record has JSON member named "view":
+                                set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "view") of record)
+                            add bim native line entryText at recordId to instances
+                        else if key = (the string form of "openbim::lineartype"):
+                            set entryText to ((the string form of "lineartype ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "role") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "width") of record) + (the string form of " ")) + (the bim native field (the string form of "depth") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "round") of record) + (the string form of " ")) + (the bim native field (the string form of "material") of record))
+                            add bim native line ((entryText + (the string form of " ")) + (the bim native field (the string form of "name") of record)) at recordId to linearTypes
+                        else if key = (the string form of "openbim::system"):
+                            set entryText to ((the string form of "system ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "discipline") of record)) + ((the string form of " ") + (the bim native points (the string form of "members") of record)))
+                            add bim native line ((entryText + (the string form of " ")) + (the bim native field (the string form of "name") of record)) at recordId to systems
+                        else if key = (the string form of "openbim::curtain"):
+                            set entryText to ((the string form of "curtain ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "level") of record)) + ((the string form of " ") + (the bim native numbers (the string form of "start") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "finish") of record) + (the string form of " ")) + (the bim native field (the string form of "height") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "bay") of record) + (the string form of " ")) + ((the bim native field (the string form of "row") of record) + ((the string form of " ") + (the bim native field (the string form of "material") of record))))
+                            if record has JSON member named "bulge":
+                                set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "bulge") of record)
+                            if record has JSON member named "panels":
+                                set entryText to (entryText + (the string form of "\nsystempanels ")) + (((the bim native field (the string form of "id") of record) + (the string form of " ")) + (the bim native points (the string form of "panels") of record))
+                            if record has JSON member named "gridLines":
+                                set entryText to (entryText + (the string form of "\nsystemgrids ")) + (((the bim native field (the string form of "id") of record) + (the string form of " ")) + (the bim native points (the string form of "gridLines") of record))
+                            add bim native line entryText at recordId to curtains
+                        else if key = (the string form of "openbim::railing"):
+                            set entryText to ((the string form of "railing ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "level") of record)) + ((the string form of " ") + (the bim native field (the string form of "host") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "height") of record) + (the string form of " ")) + (the bim native points (the string form of "points") of record))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "material") of record)
+                            add bim native line entryText at recordId to railings
+                        else if key = (the string form of "openbim::stair"):
+                            set entryText to ((the string form of "stair ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "level") of record)) + ((the string form of " ") + (the bim native numbers (the string form of "start") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "finish") of record) + (the string form of " ")) + (the bim native field (the string form of "width") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "risers") of record) + (the string form of " ")) + (the bim native field (the string form of "material") of record))
+                            add bim native line entryText at recordId to stairs
+                        else if key = (the string form of "openbim::sheet"):
+                            set entryText to ((the string form of "sheet ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "paper") of record)) + ((the string form of " ") + (the bim native field (the string form of "landscape") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native points (the string form of "viewports") of record)
+                            set entryText to (entryText + (the string form of " ")) + ((((the bim native field (the string form of "number") of record) with " " replaced by "_") + (the string form of " ")) + (the bim native field (the string form of "name") of record))
+                            add bim native line entryText at recordId to sheets
+                        else if key = (the string form of "openbim::view"):
+                            set entryText to ((the string form of "view ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "kind") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "detail") of record) + (the string form of " ")) + ((the bim native field (the string form of "cut") of record) + ((the string form of " ") + (the bim native field (the string form of "scale") of record))))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "cropped") of record) + (the string form of " ")) + ((the bim native numbers (the string form of "low") of record) + ((the string form of " ") + (the bim native numbers (the string form of "high") of record))))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "from") of record) + (the string form of " ")) + (the bim native numbers (the string form of "to") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "shown") of record) + (the string form of " ")) + ((the bim native field (the string form of "halftone") of record) + ((the string form of " ") + (the bim native field (the string form of "name") of record))))
+                            set displayText to the bim native field (the string form of "display") of record
+                            if (the length of displayText) > 0:
+                                add bim native line (((the string form of "viewdisplay ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + displayText)) at recordId to viewLinks
+                            add bim native line entryText at recordId to views
+                            set linkedType to the bim native field (the string form of "drawingType") of record
+                            if (the length of linkedType) > 0:
+                                set linkText to ((the string form of "viewtype ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + linkedType) + ((the string form of " ") + (the bim native field (the string form of "automatic") of record)))
+                                set linkedPhase to the bim native field (the string form of "phase") of record
+                                if (the length of linkedPhase) > 0:
+                                    set linkText to (linkText + (the string form of " ")) + linkedPhase
+                                add bim native line linkText at recordId to viewLinks
+                        else if key = (the string form of "openbim::phase"):
+                            set entryText to ((the string form of "phase ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "name") of record))
+                            add bim native line entryText at recordId to phases
+                        else if key = (the string form of "openbim::settings"):
+                            set ownerText to the bim native field (the string form of "element") of record
+                            set ownerReading to the bim whole reading of ownerText
+                            if ownerReading's valid:
+                                add bim native line (((the string form of "settings ") + ownerText) + ((the string form of " ") + (the bim native points (the string form of "pairs") of record))) at ownerReading's value to phasings
+                        else if key = (the string form of "openbim::properties"):
+                            if bim ifcx json record has kind the JSON object kind:
+                                if record has JSON member named "lines":
+                                    set propertyArray to the JSON member named "lines" in record
+                                    if bim ifcx json propertyArray has kind the JSON array kind:
+                                        loop propertyCursor from 0 to the length of propertyArray:
+                                            set propertyItem to the JSON value at index propertyCursor in propertyArray
+                                            if bim ifcx json propertyItem has kind the JSON text kind:
+                                                append (the text of propertyItem) to propertyLines
+                        else if key = (the string form of "openbim::phasing"):
+                            set elementText to the bim native field (the string form of "element") of record
+                            set entryText to ((the string form of "phasing ") + elementText) + (((the string form of " ") + (the bim native field (the string form of "created") of record)) + ((the string form of " ") + (the bim native field (the string form of "demolished") of record)))
+                            set phasedReading to the bim whole reading of elementText
+                            if phasedReading's valid:
+                                add bim native line entryText at phasedReading's value to phasings
+                        else if key = (the string form of "openbim::drawingType"):
+                            set entryText to ((the string form of "drawingtype ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "parent") of record)) + ((the string form of " ") + (the bim native field (the string form of "phaseFilter") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "shown") of record) + (the string form of " ")) + ((the bim native field (the string form of "halftone") of record) + ((the string form of " ") + (the bim native field (the string form of "annotations") of record))))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "name") of record)
+                            add bim native line entryText at recordId to drawingTypes
+                        else if key = (the string form of "openbim::tag"):
+                            set entryText to ((the string form of "tag ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "element") of record)) + ((the string form of " ") + (the bim native numbers (the string form of "place") of record)))
+                            add bim native line entryText at recordId to tags
+                        else if key = (the string form of "openbim::linear"):
+                            set entryText to ((the string form of "linear ") + (the bim native field (the string form of "id") of record)) + (((the string form of " ") + (the bim native field (the string form of "type") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record)))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native numbers (the string form of "start") of record) + (the string form of " ")) + (the bim native numbers (the string form of "finish") of record))
+                            set entryText to (entryText + (the string form of " ")) + (the bim native field (the string form of "angle") of record)
+                            if record has JSON member named "twist":
+                                set entryText to (entryText + (the string form of " ")) + (((the bim native field (the string form of "twist") of record) + (the string form of " ")) + (the bim native numbers (the string form of "taper") of record))
+                            add bim native line entryText at recordId to linears
+                        else if key = (the string form of "openbim::mesh"):
+                            set entryText to ((the string form of "mesh ") + (the bim native field (the string form of "id") of record)) + ((the string form of " ") + (the bim native field (the string form of "level") of record))
+                            set entryText to (entryText + (the string form of " ")) + (((the bim native points (the string form of "points") of record) + (the string form of " ")) + (the bim native points (the string form of "faces") of record))
+                            add bim native line entryText at recordId to meshes
+        free parsed
+        if projectFound = false:
+            return @intrinsic("construct", a bim native text record, false, the string form of "", the string form of "this IfcX file carries no Open BIM Studio model (no openbim::project)")
+        set texts to an empty list of a string
+        append (the string form of "BIM-SLICE 1") to texts
+        loop cursor from 0 to the length of head:
+            append (the item at cursor in head) to texts
+        append bim native lines of levels to texts
+        append bim native lines of wallTypes to texts
+        append bim native lines of walls to texts
+        append bim native lines of openingTypes to texts
+        append bim native lines of openings to texts
+        append bim native lines of dimensions to texts
+        append bim native lines of slabs to texts
+        append bim native lines of grids to texts
+        append bim native lines of sketches to texts
+        append bim native lines of components to texts
+        append bim native lines of instances to texts
+        append bim native lines of meshes to texts
+        append bim native lines of linearTypes to texts
+        append bim native lines of linears to texts
+        append bim native lines of stairs to texts
+        append bim native lines of railings to texts
+        append bim native lines of curtains to texts
+        append bim native lines of phases to texts
+        append bim native lines of drawingTypes to texts
+        append bim native lines of views to texts
+        append bim native lines of viewLinks to texts
+        append bim native lines of systems to texts
+        append bim native lines of sheets to texts
+        append bim native lines of phasings to texts
+        loop cursor from 0 to the length of propertyLines:
+            append (the item at cursor in propertyLines) to texts
+        loop cursor from 0 to the length of tail:
+            append (the item at cursor in tail) to texts
+        append bim native lines of spaceObjects to texts
+        append bim native lines of tags to texts
+        append (the string form of "") to texts
+        set joinedText to texts joined with "\n"
+        free texts
+        return @intrinsic("construct", a bim native text record, true, joinedText, the string form of "")

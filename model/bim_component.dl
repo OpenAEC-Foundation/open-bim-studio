@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: MPL-2.0
+# The B-rep of a component: its push/pulled sketch faces and its solid parts
+# (box, cylinder, sphere, extrusion, closed mesh) folded in order with the
+# cadkernel's exact booleans, so that SketchUp-style faces, meshes and CSG
+# parts make one solid.
+#
+# The fold starts from nothing. An added part joins what is there (or starts
+# it); a subtracted part cuts it; an intersected part keeps what both share.
+# A part that cuts or intersects nothing yet is skipped. A push/pulled face
+# (a face sketch with a height) is an added extrusion before the parts.
+import model/bim_model.dl
+import kernel/brep/brep_make.dl
+import kernel/brep/brep_sweep.dl
+import kernel/brep/brep_boolean.dl
+import kernel/brep/brep_mesh.dl
+import kernel/fast/polyhedron.dl
+
+class:
+    patterns:
+        [a|] bim component brep record
+    members:
+        # 0 when the fold made a solid; 1 when the component has no solid
+        # part or face; 2 when a part could not be built; 3 when a boolean
+        # failed.
+        status as an integer
+        solid as the type of (an empty cad body)
+
+local function the bim component plane at height {a 64 bit floating-point number:elevation}:
+    execute:
+        return a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z elevation), x axis (the cad x axis) and y axis (the cad y axis)
+
+# The closed straight profile through `corners`, in order.
+local function the bim component profile through {a pointer to a list:corners}:
+    execute:
+        set pieces to an empty list of the type of (the cad curve2 of (a new cad line2))
+        loop cursor from 0 to the length of corners:
+            set following to the remainder of (cursor + 1) divided by (the length of corners)
+            append (the cad curve2 of (a cad line2 from (the item at cursor in corners) to (the item at following in corners))) to pieces
+        return pieces
+
+# `point` turned `turn` radians anticlockwise about the origin, then moved by
+# `offset`.
+local function the bim component point {cad vector2:planPoint} turned {a 64 bit floating-point number:turn} shifted {cad vector3:offset}:
+    execute:
+        set cosine to the cosine of turn
+        set sine to the sine of turn
+        return a cad vector2 with x (((planPoint's x * cosine) - (planPoint's y * sine)) + offset's x) and y (((planPoint's x * sine) + (planPoint's y * cosine)) + offset's y)
+
+# The prism over `corners` (in the plan, anticlockwise or not) from height
+# `bottom` rising `rise`.
+local function the bim component prism over {a pointer to a list:corners} from {a 64 bit floating-point number:bottom} rising {a 64 bit floating-point number:rise}:
+    execute:
+        set profile to the bim component profile through corners
+        set built to the cad extrusion of profile on (the bim component plane at height bottom) along (a cad vector3 with x 0.0, y 0.0 and z rise)
+        free profile
+        return built
+
+# The body of solid part `solidPart`, in component coordinates.
+function the bim cad solid of part {bim solid part record:solidPart}:
+    execute:
+        set partBase to solidPart's origin
+        set partReach to solidPart's size's x
+        set partRise to solidPart's size's z
+        if solidPart's kind = bim cylinder solid:
+            return the cad cylinder body at partBase with radius partReach and height partRise
+        if solidPart's kind = bim sphere solid:
+            return the cad sphere body at partBase with radius partReach
+        if solidPart's kind = bim mesh solid:
+            set rings to an empty list of the type of (an empty list of an integer)
+            set start to 0
+            loop while start < the length of (solidPart's faces's values):
+                set count to the item at start in (solidPart's faces's values)
+                set ring to an empty list of an integer
+                loop corner from 0 to count:
+                    append (the item at ((start + 1) + corner) in (solidPart's faces's values)) to ring
+                append ring to rings
+                set start to start + (count + 1)
+            return the cad faceted solid with vertices (solidPart's points's values) and faces rings within 1e-9
+        set corners to an empty list of a cad vector2
+        if solidPart's kind = bim box solid:
+            append (the bim component point (a cad vector2 with x 0.0 and y 0.0) turned solidPart's angle shifted solidPart's origin) to corners
+            append (the bim component point (a cad vector2 with x solidPart's size's x and y 0.0) turned solidPart's angle shifted solidPart's origin) to corners
+            append (the bim component point (a cad vector2 with x solidPart's size's x and y solidPart's size's y) turned solidPart's angle shifted solidPart's origin) to corners
+            append (the bim component point (a cad vector2 with x 0.0 and y solidPart's size's y) turned solidPart's angle shifted solidPart's origin) to corners
+        else:
+            loop cursor from 0 to the length of (solidPart's profile's values):
+                append (the bim component point (the item at cursor in (solidPart's profile's values)) turned solidPart's angle shifted solidPart's origin) to corners
+        set built to the bim component prism over corners from solidPart's origin's z rising solidPart's size's z
+        free corners
+        return built
+
+# The solid of component `definition`, folded within `tolerance`.
+function the bim brep of component {bim component record:definition} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set folding to an empty cad body
+        set started to false
+        # Push/pulled faces, added first.
+        loop cursor from 0 to the length of (definition's sketches's values):
+            set element to the item at cursor in (definition's sketches's values)
+            if (element's kind = bim face sketch) and (element's height > 0.0):
+                set built to the bim component prism over (element's points's values) from 0.0 rising element's height
+                if built's valid = false:
+                    return @intrinsic("construct", a bim component brep record, 2, an empty cad body)
+                if started:
+                    set joined to the cad combination of folding and built's value using cad union operation within tolerance
+                    if joined's valid = false:
+                        return @intrinsic("construct", a bim component brep record, 3, an empty cad body)
+                    set folding to joined's value
+                else:
+                    set folding to built's value
+                    set started to true
+        loop cursor from 0 to the length of (definition's solids's values):
+            set member to the item at cursor in (definition's solids's values)
+            set built to the bim cad solid of part member
+            if built's valid = false:
+                return @intrinsic("construct", a bim component brep record, 2, an empty cad body)
+            if started:
+                set booleanKind to cad union operation
+                if member's operation = bim subtract operation:
+                    set booleanKind to cad difference operation
+                if member's operation = bim intersect operation:
+                    set booleanKind to cad intersection operation
+                set combined to the cad combination of folding and built's value using booleanKind within tolerance
+                if combined's valid = false:
+                    return @intrinsic("construct", a bim component brep record, 3, an empty cad body)
+                set folding to combined's value
+            else if member's operation = bim add operation:
+                set folding to built's value
+                set started to true
+        if started = false:
+            return @intrinsic("construct", a bim component brep record, 1, an empty cad body)
+        return @intrinsic("construct", a bim component brep record, 0, folding)
+
+# Whether the component's solid comes from the fold: it has solid parts. A
+# component of sketches only is drawn from its sketches, as before.
+function bim component {bim component record:definition} is folded:
+    execute:
+        return (the length of (definition's solids's values)) > 0
+
+# The triangles of `solid` in component coordinates, smooth enough that a
+# chord leaves a curved face by at most `tolerance`.
+function the bim component mesh of {bim component brep record:folded} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set triangles to an empty fast mesh
+        if folded's status != 0:
+            return triangles
+        set tessellated to the cad mesh of folded's solid with maximum angle 0.3 within tolerance
+        loop cursor from 0 to the length of tessellated's positions:
+            append (the item at cursor in tessellated's positions) to (triangles's positions's values)
+            append (the item at cursor in tessellated's normals) to (triangles's normals's values)
+        loop cursor from 0 to the length of tessellated's triangles:
+            set face to the item at cursor in tessellated's triangles
+            append face's first to (triangles's triangles's values)
+            append face's second to (triangles's triangles's values)
+            append face's third to (triangles's triangles's values)
+        return triangles
+
+# `shape` (in component coordinates) placed by `placement` on a storey at
+# `elevation`.
+function the bim component triangles {fast mesh record:shape} placed by {bim instance record:placement} at {a 64 bit floating-point number:elevation}:
+    execute:
+        set result to an empty fast mesh
+        set cosine to the cosine of placement's angle
+        set sine to the sine of placement's angle
+        loop cursor from 0 to the length of (shape's positions's values):
+            set point to the item at cursor in (shape's positions's values)
+            set normal to the item at cursor in (shape's normals's values)
+            append (a cad vector3 with x (((point's x * cosine) - (point's y * sine)) + placement's origin's x), y (((point's x * sine) + (point's y * cosine)) + placement's origin's y) and z (point's z + elevation)) to (result's positions's values)
+            append (a cad vector3 with x ((normal's x * cosine) - (normal's y * sine)), y ((normal's x * sine) + (normal's y * cosine)) and z normal's z) to (result's normals's values)
+        loop cursor from 0 to the length of (shape's triangles's values):
+            append (the item at cursor in (shape's triangles's values)) to (result's triangles's values)
+        return result
+
+# The volume of the component's solid, in cubic metres; 0 when it has none.
+function the bim volume of component {bim component record:definition}:
+    execute:
+        set folded to the bim brep of component definition within 1e-9
+        if folded's status != 0:
+            return 0.0
+        set shape to the cad mesh of folded's solid with maximum angle 0.05 within 1e-6
+        set properties to the cad mass properties of shape
+        if properties's valid = false:
+            return 0.0
+        return properties's value's volume

@@ -1,0 +1,357 @@
+# SPDX-License-Identifier: MPL-2.0
+# Non-mutating geometry ghosts share the commit transforms and selection wires.
+import editor/bim_editor_core.dl
+import app/bim_plan_panel.dl
+import app/bim_view_panel.dl
+
+class:
+    patterns:
+        [a|] bim modification ghost record
+    members:
+        first as a cad vector2
+        last as a cad vector2
+        gridStyle as a boolean
+
+class:
+    patterns:
+        [a|] bim ghost clip record
+    members:
+        visible as a boolean
+        first as a cad vector2
+        last as a cad vector2
+
+# Screen-space clipping also keeps the stroke's half-width out of chrome.
+function the bim ghost edge from {cad vector2:firstPixel} to {cad vector2:lastPixel} clipped between {cad vector2:lowPixel} and {cad vector2:highPixel}:
+    execute:
+        set emptyClip to @intrinsic("construct", a bim ghost clip record, false, firstPixel, lastPixel)
+        if (((the absolute value of firstPixel's x) <= 1e100) and ((the absolute value of firstPixel's y) <= 1e100)) = false:
+            return emptyClip
+        if (((the absolute value of lastPixel's x) <= 1e100) and ((the absolute value of lastPixel's y) <= 1e100)) = false:
+            return emptyClip
+        if (highPixel's x <= lowPixel's x) or (highPixel's y <= lowPixel's y):
+            return emptyClip
+        set runX to lastPixel's x - firstPixel's x
+        set runY to lastPixel's y - firstPixel's y
+        set keptSpan to a cad vector2 with x 0.0 and y 1.0
+        set keptSpan to the bim clip of firstPixel's x moving runX between lowPixel's x and highPixel's x narrowing keptSpan
+        set keptSpan to the bim clip of firstPixel's y moving runY between lowPixel's y and highPixel's y narrowing keptSpan
+        if keptSpan's x > keptSpan's y:
+            return emptyClip
+        set keptFirst to a cad vector2 with x (firstPixel's x + (runX * keptSpan's x)) and y (firstPixel's y + (runY * keptSpan's x))
+        set keptLast to a cad vector2 with x (firstPixel's x + (runX * keptSpan's y)) and y (firstPixel's y + (runY * keptSpan's y))
+        if (the cad distance from keptFirst to keptLast) <= 1e-6:
+            return emptyClip
+        return @intrinsic("construct", a bim ghost clip record, true, keptFirst, keptLast)
+
+# Stretch uses the same control points and inclusive selection predicate as
+# the setter. Its wire cage retains stationary ends and never copies a model.
+local function append bim ghost edge from {cad vector3:firstSpot} to {cad vector3:lastSpot} in view {boolean:inView} in {bim screen layout record:panelLayout} with {bim camera record:viewCamera} dashed {boolean:dashedStroke} into {a pointer to a list:segmentTarget}:
+    execute:
+        set lowPixel to a cad vector2 with x (panelLayout's planLeft + 1.0) and y (panelLayout's top + 1.0)
+        set highPixel to a cad vector2 with x (panelLayout's planRight - 1.0) and y (panelLayout's bottom - 1.0)
+        set firstPixel to the bim plan pixel of (a cad vector2 with x firstSpot's x and y firstSpot's y) in panelLayout with viewCamera
+        set lastPixel to the bim plan pixel of (a cad vector2 with x lastSpot's x and y lastSpot's y) in panelLayout with viewCamera
+        if inView:
+            set lowPixel's x to panelLayout's planRight + 1.0
+            set highPixel's x to panelLayout's width - 1.0
+            set firstPixel to the bim view point firstSpot's x firstSpot's y firstSpot's z in panelLayout with viewCamera
+            set lastPixel to the bim view point lastSpot's x lastSpot's y lastSpot's z in panelLayout with viewCamera
+        set clippedEdge to the bim ghost edge from firstPixel to lastPixel clipped between lowPixel and highPixel
+        if clippedEdge's visible:
+            append (@intrinsic("construct", a bim modification ghost record, clippedEdge's first, clippedEdge's last, dashedStroke)) to segmentTarget
+
+function the bim stretch preview segments of {bim editor record:editorValue} in view {boolean:inView} in {bim screen layout record:panelLayout} with {bim camera record:viewCamera}:
+    execute:
+        set ghostSegments to an empty list of a bim modification ghost record
+        if editorValue's moveStage < 1:
+            return ghostSegments
+        set modelValue to editorValue's documentValue's current
+        if editorValue's moveStage = 3:
+            set chosenIds to the bim selection members of editorValue
+            set displacement to a cad vector2 with x (editorValue's snap's point's x - editorValue's moveBase's x) and y (editorValue's snap's point's y - editorValue's moveBase's y)
+            loop chosenCursor from 0 to the length of chosenIds:
+                set chosenId to the item at chosenCursor in chosenIds
+                set kindCode to the bim modify kind of chosenId in modelValue
+                set sourcePoints to the bim stretch points of chosenId in modelValue
+                set movedPoints to an empty list of a cad vector3
+                set baseElevation to 0.0
+                if kindCode != bim grid picked:
+                    set baseElevation to the bim elevation of level (the bim level of element chosenId in modelValue) in modelValue
+                loop pointCursor from 0 to the length of (sourcePoints's values):
+                    set controlSpot to the item at pointCursor in (sourcePoints's values)
+                    if bim stretch box of editorValue contains (a cad vector2 with x controlSpot's x and y controlSpot's y):
+                        set controlSpot's x to controlSpot's x + displacement's x
+                        set controlSpot's y to controlSpot's y + displacement's y
+                    set controlSpot's z to controlSpot's z + baseElevation
+                    append controlSpot to movedPoints
+                set meshFound to the bim mesh index of chosenId in modelValue
+                if meshFound's valid:
+                    set meshValue to the item at meshFound's position in (modelValue's meshes's values)
+                    set faceStart to 0
+                    loop while faceStart < (the length of (meshValue's faces's values)):
+                        set faceCount to the item at faceStart in (meshValue's faces's values)
+                        loop cornerCursor from 0 to faceCount:
+                            set firstIndex to the item at ((faceStart + 1) + cornerCursor) in (meshValue's faces's values)
+                            set lastIndex to the item at ((faceStart + 1) + (the remainder of (cornerCursor + 1) divided by faceCount)) in (meshValue's faces's values)
+                            append bim ghost edge from (the item at firstIndex in movedPoints) to (the item at lastIndex in movedPoints) in view inView in panelLayout with viewCamera dashed false into ghostSegments
+                        set faceStart to (faceStart + faceCount) + 1
+                else:
+                    set closeCage to kindCode = bim slab picked
+                    set riseHeight to 0.0
+                    set wallFound to the bim wall index of chosenId in modelValue
+                    if wallFound's valid:
+                        set riseHeight to (the item at wallFound's position in (modelValue's walls's values))'s height
+                    set sketchFound to the bim sketch index of chosenId in modelValue
+                    if sketchFound's valid:
+                        set sketchValue to the item at sketchFound's position in (modelValue's sketches's values)
+                        if sketchValue's kind = bim face sketch:
+                            set closeCage to true
+                            set riseHeight to sketchValue's height
+                    set edgeCount to (the length of movedPoints) - 1
+                    if closeCage:
+                        set edgeCount to the length of movedPoints
+                    loop edgeCursor from 0 to edgeCount:
+                        set firstControl to the item at edgeCursor in movedPoints
+                        set lastControl to the item at (the remainder of (edgeCursor + 1) divided by (the length of movedPoints)) in movedPoints
+                        append bim ghost edge from firstControl to lastControl in view inView in panelLayout with viewCamera dashed (kindCode = bim grid picked) into ghostSegments
+                        if inView and (riseHeight > 0.0):
+                            set firstTop to a cad vector3 with x firstControl's x, y firstControl's y and z (firstControl's z + riseHeight)
+                            set lastTop to a cad vector3 with x lastControl's x, y lastControl's y and z (lastControl's z + riseHeight)
+                            append bim ghost edge from firstTop to lastTop in view inView in panelLayout with viewCamera dashed false into ghostSegments
+                    if inView and (riseHeight > 0.0):
+                        loop pointCursor from 0 to the length of movedPoints:
+                            set controlSpot to the item at pointCursor in movedPoints
+                            append bim ghost edge from controlSpot to (a cad vector3 with x controlSpot's x, y controlSpot's y and z (controlSpot's z + riseHeight)) in view inView in panelLayout with viewCamera dashed false into ghostSegments
+                free movedPoints
+            free chosenIds
+        set guideReach to editorValue's solidReach
+        if editorValue's moveStage = 1:
+            set guideReach to editorValue's snap's point
+        set guideElevation to the bim elevation of level editorValue's levelId in modelValue
+        set guidePoints to an empty list of a cad vector3
+        append (a cad vector3 with x editorValue's solidCorner's x, y editorValue's solidCorner's y and z guideElevation) to guidePoints
+        append (a cad vector3 with x guideReach's x, y editorValue's solidCorner's y and z guideElevation) to guidePoints
+        append (a cad vector3 with x guideReach's x, y guideReach's y and z guideElevation) to guidePoints
+        append (a cad vector3 with x editorValue's solidCorner's x, y guideReach's y and z guideElevation) to guidePoints
+        loop guideCursor from 0 to 4:
+            append bim ghost edge from (the item at guideCursor in guidePoints) to (the item at (the remainder of (guideCursor + 1) divided by 4) in guidePoints) in view inView in panelLayout with viewCamera dashed true into ghostSegments
+        free guidePoints
+        return ghostSegments
+
+# Scaling changes native axes, while their type sizes and heights stay fixed.
+# The wall context owns only a wall list and copied instance settings; every
+# other model list remains a read-only reference. It never invokes setters.
+local function the bim scale preview wall id of {a 64 bit integer:sourceId} copying {boolean:makingCopy} in {bim model record:sourceModel}:
+    execute:
+        set wallFound to the bim wall index of sourceId in sourceModel
+        if makingCopy and wallFound's valid:
+            return sourceModel's nextId + (wallFound's position as a 64 bit integer)
+        return sourceId
+
+local function the bim scale wall context of {bim editor record:editorValue} by {bim transform record:scaleChange} choosing {a pointer to a list:chosenIds}:
+    execute:
+        set sourceModel to editorValue's documentValue's current
+        set contextValue to sourceModel
+        set anyWall to false
+        loop chosenCursor from 0 to the length of chosenIds:
+            if (the bim wall index of (the item at chosenCursor in chosenIds) in sourceModel)'s valid:
+                set anyWall to true
+        if anyWall = false:
+            return contextValue
+        set contextValue's walls to the cad clone of sourceModel's walls
+        loop wallCursor from 0 to the length of (sourceModel's walls's values):
+            set placedWall to the item at wallCursor in (sourceModel's walls's values)
+            if bim element placedWall's id is among chosenIds:
+                set placedWall's id to the bim scale preview wall id of placedWall's id copying editorValue's modify's copyMode in sourceModel
+                set placedWall's start to the bim point placedWall's start under scaleChange
+                set placedWall's finish to the bim point placedWall's finish under scaleChange
+                set placedWall's bulge to the bim bulge (placedWall's bulge * scaleChange's factor) kept between placedWall's start and placedWall's finish
+                if editorValue's modify's copyMode:
+                    append placedWall to (contextValue's walls's values)
+                else:
+                    replace item at index wallCursor in (contextValue's walls's values) with placedWall
+        if editorValue's modify's copyMode:
+            set contextValue's settings to the cad clone of sourceModel's settings
+            loop settingCursor from 0 to the length of (sourceModel's settings's values):
+                set carriedSetting to the item at settingCursor in (sourceModel's settings's values)
+                if (bim element carriedSetting's elementId is among chosenIds) and ((the bim wall index of carriedSetting's elementId in sourceModel)'s valid):
+                    set carriedSetting's elementId to the bim scale preview wall id of carriedSetting's elementId copying true in sourceModel
+                    append carriedSetting to (contextValue's settings's values)
+        return contextValue
+
+function the bim scaled linear preview edges of {bim linear record:sourceLinear} by {bim transform record:scaleChange} in {bim model record:sourceModel}:
+    execute:
+        set placedLinear to sourceLinear
+        set movedStart to the bim point (a cad vector2 with x sourceLinear's start's x and y sourceLinear's start's y) under scaleChange
+        set movedFinish to the bim point (a cad vector2 with x sourceLinear's finish's x and y sourceLinear's finish's y) under scaleChange
+        set placedLinear's start to a cad vector3 with x movedStart's x, y movedStart's y and z sourceLinear's start's z
+        set placedLinear's finish to a cad vector3 with x movedFinish's x, y movedFinish's y and z sourceLinear's finish's z
+        set profileRings to the bim profile rings of placedLinear as (the bim type of linear placedLinear in sourceModel) in sourceModel
+        set ringCount to (the length of profileRings) / 2
+        set placedEdges to a cad topology list of a cad vector3
+        loop cornerCursor from 0 to ringCount:
+            set following to the remainder of (cornerCursor + 1) divided by ringCount
+            append bim edge from (the item at cornerCursor in profileRings) to (the item at following in profileRings) to (placedEdges's values)
+            append bim edge from (the item at (ringCount + cornerCursor) in profileRings) to (the item at (ringCount + following) in profileRings) to (placedEdges's values)
+            append bim edge from (the item at cornerCursor in profileRings) to (the item at (ringCount + cornerCursor) in profileRings) to (placedEdges's values)
+        free profileRings
+        return placedEdges
+
+local function the bim wall preview edges of {bim wall record:placedWall} in {bim model record:contextValue} using {bim join index record:wallIndex}:
+    execute:
+        set placedEdges to a cad topology list of a cad vector3
+        set nativeSolid to the bim solid of placedWall in contextValue using wallIndex preferring fast true
+        if nativeSolid's status != 0:
+            return placedEdges
+        if nativeSolid's fast:
+            set nativeShape to nativeSolid's shape
+            loop ringCursor from 0 to ((the length of (nativeShape's loopStarts's values)) - 1):
+                set firstIndex to the item at ringCursor in (nativeShape's loopStarts's values)
+                set pastIndex to the item at (ringCursor + 1) in (nativeShape's loopStarts's values)
+                loop cornerCursor from firstIndex to pastIndex:
+                    set following to cornerCursor + 1
+                    if following = pastIndex:
+                        set following to firstIndex
+                    append bim edge from (the item at (the item at cornerCursor in (nativeShape's indices's values)) in (nativeShape's positions's values)) to (the item at (the item at following in (nativeShape's indices's values)) in (nativeShape's positions's values)) to (placedEdges's values)
+        else:
+            set nativeWire to the cad wireframe of nativeSolid's solid with tolerance (a cad tessellation tolerance with maximum angle 0.3 within 0.001)
+            loop wireCursor from 0 to the length of nativeWire's edges:
+                set nativeEdge to the item at wireCursor in nativeWire's edges
+                loop cornerCursor from 0 to ((the length of nativeEdge's positions) - 1):
+                    append bim edge from (the item at cornerCursor in nativeEdge's positions) to (the item at (cornerCursor + 1) in nativeEdge's positions) to (placedEdges's values)
+        return placedEdges
+
+# Renderer input is exposed without a window so clipping, transforms and
+# source-model immutability can be verified independently of Vulkan drawing.
+function the bim modification preview segments of {bim editor record:editorValue} in view {boolean:inView} in {bim screen layout record:panelLayout} with {bim camera record:viewCamera}:
+    execute:
+        set ghostSegments to an empty list of a bim modification ghost record
+        if editorValue's tool = bim stretch tool:
+            free ghostSegments
+            return the bim stretch preview segments of editorValue in view inView in panelLayout with viewCamera
+        if editorValue's selectionKind = bim nothing picked:
+            return ghostSegments
+        if (editorValue's tool = bim array tool) and ((editorValue's modify's count < 2) or (editorValue's modify's count > 1000)):
+            return ghostSegments
+        set transformValues to the bim modify preview changes of editorValue
+        if (the length of transformValues) = 0:
+            free transformValues
+            return ghostSegments
+        set chosenIds to the bim selection members of editorValue
+        set sourceOutlines to the bim selection outlines of editorValue in plan (inView = false)
+        # Systems are not part of the general selection-box outline provider.
+        # Carry their actual stored contour, following any curved centreline.
+        loop chosenCursor from 0 to the length of chosenIds:
+            set chosenId to the item at chosenCursor in chosenIds
+            set systemFound to the bim curtain index of chosenId in editorValue's documentValue's current
+            if systemFound's valid:
+                set systemValue to the item at systemFound's position in (editorValue's documentValue's current's curtains's values)
+                if inView or (systemValue's levelId = editorValue's levelId):
+                    set contourValues to the bim face contour of chosenId in editorValue's documentValue's current
+                    if (the length of contourValues) < 3:
+                        clear contourValues
+                        set runLength to the bim system length of systemValue
+                        append (a cad vector2 with x 0.0 and y 0.0) to contourValues
+                        append (a cad vector2 with x runLength and y 0.0) to contourValues
+                        append (a cad vector2 with x runLength and y systemValue's height) to contourValues
+                        append (a cad vector2 with x 0.0 and y systemValue's height) to contourValues
+                    set systemEdges to a cad topology list of a cad vector3
+                    set baseElevation to the bim elevation of level systemValue's levelId in editorValue's documentValue's current
+                    set divisions to 1
+                    if systemValue's bulge != 0.0:
+                        set divisions to 16
+                    loop contourCursor from 0 to the length of contourValues:
+                        set firstLocal to the item at contourCursor in contourValues
+                        set lastLocal to the item at (the remainder of (contourCursor + 1) divided by (the length of contourValues)) in contourValues
+                        loop divisionCursor from 0 to divisions:
+                            set firstShare to (divisionCursor as a 64 bit floating-point number) / (divisions as a 64 bit floating-point number)
+                            set lastShare to ((divisionCursor + 1) as a 64 bit floating-point number) / (divisions as a 64 bit floating-point number)
+                            set firstPlan to the bim point (firstLocal's x + ((lastLocal's x - firstLocal's x) * firstShare)) metres along systemValue
+                            set lastPlan to the bim point (firstLocal's x + ((lastLocal's x - firstLocal's x) * lastShare)) metres along systemValue
+                            append (a cad vector3 with x firstPlan's x, y firstPlan's y and z ((baseElevation + firstLocal's y) + ((lastLocal's y - firstLocal's y) * firstShare))) to (systemEdges's values)
+                            append (a cad vector3 with x lastPlan's x, y lastPlan's y and z ((baseElevation + firstLocal's y) + ((lastLocal's y - firstLocal's y) * lastShare))) to (systemEdges's values)
+                    append (@intrinsic("construct", a bim selection outline record, bim curtain picked, chosenId, systemEdges, a cad topology list of a cad vector2)) to sourceOutlines
+                    free contourValues
+        set lowPixel to a cad vector2 with x (panelLayout's planLeft + 1.0) and y (panelLayout's top + 1.0)
+        set highPixel to a cad vector2 with x (panelLayout's planRight - 1.0) and y (panelLayout's bottom - 1.0)
+        if inView:
+            set lowPixel's x to panelLayout's planRight + 1.0
+            set highPixel's x to panelLayout's width - 1.0
+        loop transformCursor from 0 to the length of transformValues:
+            set changeValue to the item at transformCursor in transformValues
+            set contextValue to editorValue's documentValue's current
+            set wallIndex to an empty bim join index
+            if changeValue's kind = bim scale transform kind:
+                set hasChosenWall to false
+                loop chosenCursor from 0 to the length of chosenIds:
+                    if (the bim wall index of (the item at chosenCursor in chosenIds) in contextValue)'s valid:
+                        set hasChosenWall to true
+                if hasChosenWall:
+                    set contextValue to the bim scale wall context of editorValue by changeValue choosing chosenIds
+                    set wallIndex to the bim join index of contextValue
+            loop outlineCursor from 0 to the length of sourceOutlines:
+                set outlineValue to the item at outlineCursor in sourceOutlines
+                if bim element outlineValue's id is among chosenIds:
+                    set renderedEdges to outlineValue's segments
+                    set alreadyPlaced to false
+                    if changeValue's kind = bim scale transform kind:
+                        set linearFound to the bim linear index of outlineValue's id in editorValue's documentValue's current
+                        if linearFound's valid:
+                            set sourceLinear to the item at linearFound's position in (editorValue's documentValue's current's linears's values)
+                            set renderedEdges to the bim scaled linear preview edges of sourceLinear by changeValue in editorValue's documentValue's current
+                            set alreadyPlaced to true
+                        if outlineValue's kind = bim wall picked:
+                            set sourceOutlineId to outlineValue's id
+                            set scaleCopyMode to editorValue's modify's copyMode
+                            set sourceModel to editorValue's documentValue's current
+                            set previewWallId to the bim scale preview wall id of sourceOutlineId copying scaleCopyMode in sourceModel
+                            set wallFound to the bim wall index of previewWallId in contextValue
+                            if wallFound's valid:
+                                set placedWall to the item at wallFound's position in (contextValue's walls's values)
+                                set renderedEdges to the bim wall preview edges of placedWall in contextValue using wallIndex
+                                set alreadyPlaced to true
+                    set edgeCursor to 0
+                    loop while (edgeCursor + 1) < (the length of (renderedEdges's values)):
+                        set firstSpot to the item at edgeCursor in (renderedEdges's values)
+                        set lastSpot to the item at (edgeCursor + 1) in (renderedEdges's values)
+                        set movedFirst to a cad vector2 with x firstSpot's x and y firstSpot's y
+                        set movedLast to a cad vector2 with x lastSpot's x and y lastSpot's y
+                        if alreadyPlaced = false:
+                            set movedFirst to the bim point movedFirst under changeValue
+                            set movedLast to the bim point movedLast under changeValue
+                        set firstPixel to the bim plan pixel of movedFirst in panelLayout with viewCamera
+                        set lastPixel to the bim plan pixel of movedLast in panelLayout with viewCamera
+                        if inView:
+                            set firstPixel to the bim view point movedFirst's x movedFirst's y firstSpot's z in panelLayout with viewCamera
+                            set lastPixel to the bim view point movedLast's x movedLast's y lastSpot's z in panelLayout with viewCamera
+                        set clippedEdge to the bim ghost edge from firstPixel to lastPixel clipped between lowPixel and highPixel
+                        if clippedEdge's visible:
+                            append (@intrinsic("construct", a bim modification ghost record, clippedEdge's first, clippedEdge's last, outlineValue's kind = bim grid picked)) to ghostSegments
+                        set edgeCursor to edgeCursor + 2
+        free sourceOutlines
+        free chosenIds
+        free transformValues
+        return ghostSegments
+
+function draw bim modification preview of {bim editor record:editorValue} in view {boolean:inView} in {bim screen layout record:panelLayout} with {bim camera record:viewCamera} in {graphics frame:frameValue}:
+    execute:
+        set ghostSegments to the bim modification preview segments of editorValue in view inView in panelLayout with viewCamera
+        if (the length of ghostSegments) = 0:
+            free ghostSegments
+            return nothing
+        start triangles in frameValue
+        use vertex color red 0, green 170 and blue 235 in frameValue
+        loop ghostCursor from 0 to the length of ghostSegments:
+            set ghostValue to the item at ghostCursor in ghostSegments
+            if ghostValue's gridStyle:
+                set dashPairs to an empty list of a cad vector2
+                append bim dash dot from ghostValue's first to ghostValue's last into dashPairs
+                set dashCursor to 0
+                loop while (dashCursor + 1) < (the length of dashPairs):
+                    add bim stroke from (the item at dashCursor in dashPairs) to (the item at (dashCursor + 1) in dashPairs) wide 1.5 in frameValue
+                    set dashCursor to dashCursor + 2
+                free dashPairs
+            else:
+                add bim stroke from ghostValue's first to ghostValue's last wide 1.5 in frameValue
+        finish triangles in frameValue
+        free ghostSegments

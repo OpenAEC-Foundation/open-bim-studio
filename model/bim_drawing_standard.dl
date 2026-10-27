@@ -1,0 +1,217 @@
+# SPDX-License-Identifier: MPL-2.0
+# The project's drawing standard (`the bim drawing standard of`, one model
+# setting) as it shows on the drawings, apart from the hatches
+# (`bim_hatch.dl`): how dimension lines end, how levels are marked and
+# written, how section lines are headed, and whether decimals take a comma.
+#
+#   NEN 47 (NL)         ticks; a half-filled level triangle, "P +3,000";
+#                       section arrows without a circle; decimal comma.
+#   DIN 1356 (DE)       ticks; a filled level triangle, "+3,00" (metres to
+#                       two decimals, "0.00" at datum); section arrows;
+#                       decimal comma.
+#   BS 1192 / ISO 128   dots; an open level triangle, "FFL +3.000"; a
+#                       section head in a circle; decimal point.
+#   US NCS / ANSI       arrows; a level target (a circle with two filled
+#                       quarters), "EL. +3000"; a section head in a circle
+#                       divided across; decimal point.
+#
+# The marks are built as pixel geometry (triangles and stroke pairs), so
+# that a headless test can check them.
+import model/bim_model.dl
+
+# How a dimension line ends.
+function bim tick ends:
+    replacement:
+        0
+function bim arrow ends:
+    replacement:
+        1
+function bim dot ends:
+    replacement:
+        2
+
+function the bim dimension ends under {integer:standardCode}:
+    execute:
+        if standardCode = bim ansi standard:
+            return bim arrow ends
+        if standardCode = bim iso standard:
+            return bim dot ends
+        return bim tick ends
+
+# Whether decimals are written with a comma (NEN, DIN) or a point.
+function bim decimal comma under {integer:standardCode}:
+    execute:
+        return (standardCode = bim nen standard) or (standardCode = bim din standard)
+
+# `numberText` with its decimal point written as the standard writes it.
+function the bim decimal text {a string:numberText} under {integer:standardCode}:
+    execute:
+        if (bim decimal comma under standardCode) = false:
+            return numberText
+        set copy to a new string buffer containing (the length of numberText) bytes
+        loop cursor from 0 to the length of numberText:
+            set code to the character at cursor in numberText
+            if code = 46:
+                set code to 44 as a byte
+            store code into the data of copy at cursor
+        return copy
+
+local function the bim level number {a 64 bit floating-point number:amount} to {integer:places}:
+    execute:
+        set buffer to a new string buffer containing 40 bytes
+        set written to 0
+        if places = 0:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%+.0f", amount)
+        else if places = 2:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%+.2f", amount)
+        else:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%+.3f", amount)
+        return the substring of buffer from 0 spanning written bytes
+
+# The level `elevation` (metres above datum) as a level mark writes it.
+function the bim level text of {a 64 bit floating-point number:elevation} under {integer:standardCode}:
+    execute:
+        # Half a millimetre either side of datum is datum.
+        set atDatum to (the absolute value of elevation) < 0.0005
+        if standardCode = bim din standard:
+            if atDatum:
+                return the bim decimal text (the string form of "0.00") under standardCode
+            return the bim decimal text (the bim level number elevation to 2) under standardCode
+        if standardCode = bim iso standard:
+            if atDatum:
+                return the string form of "FFL 0.000"
+            return (the string form of "FFL ") + (the bim level number elevation to 3)
+        if standardCode = bim ansi standard:
+            if atDatum:
+                return the string form of "EL. 0"
+            return (the string form of "EL. ") + (the bim level number (elevation * 1000.0) to 0)
+        if atDatum:
+            return the string form of "P"
+        return (the string form of "P ") + (the bim decimal text (the bim level number elevation to 3) under standardCode)
+
+# How a level is marked.
+function bim half filled level mark:
+    replacement:
+        0
+function bim filled level mark:
+    replacement:
+        1
+function bim open level mark:
+    replacement:
+        2
+function bim target level mark:
+    replacement:
+        3
+
+function the bim level mark under {integer:standardCode}:
+    execute:
+        if standardCode = bim din standard:
+            return bim filled level mark
+        if standardCode = bim iso standard:
+            return bim open level mark
+        if standardCode = bim ansi standard:
+            return bim target level mark
+        return bim half filled level mark
+
+# Appends a level mark standing on the level line at `spot` (pixels, y down):
+# filled parts as triangles to `triangles`, outlines as stroke pairs to
+# `strokes`. A triangle is 12 pixels wide and 8 high, its point on the line;
+# a target is a circle of radius 6 on the line.
+function append bim level mark at {cad vector2:spot} under {integer:standardCode} into {a pointer to a list:triangles} and {a pointer to a list:strokes}:
+    execute:
+        set markKind to the bim level mark under standardCode
+        if markKind = bim target level mark:
+            loop step from 0 to 24:
+                set fromAngle to (6.283185307179586 * (step as a 64 bit floating-point number)) / 24.0
+                set toAngle to (6.283185307179586 * ((step + 1) as a 64 bit floating-point number)) / 24.0
+                set fromPoint to a cad vector2 with x (spot's x + (6.0 * (the cosine of fromAngle))) and y (spot's y + (6.0 * (the sine of fromAngle)))
+                set toPoint to a cad vector2 with x (spot's x + (6.0 * (the cosine of toAngle))) and y (spot's y + (6.0 * (the sine of toAngle)))
+                append fromPoint to strokes
+                append toPoint to strokes
+                # The upper right and lower left quarters filled (y is down).
+                if ((step >= 18) and (step < 24)) or ((step >= 6) and (step < 12)):
+                    append spot to triangles
+                    append fromPoint to triangles
+                    append toPoint to triangles
+            append (a cad vector2 with x (spot's x - 6.0) and y spot's y) to strokes
+            append (a cad vector2 with x (spot's x + 6.0) and y spot's y) to strokes
+            append (a cad vector2 with x spot's x and y (spot's y - 6.0)) to strokes
+            append (a cad vector2 with x spot's x and y (spot's y + 6.0)) to strokes
+            return nothing
+        set apex to spot
+        set leftTop to a cad vector2 with x (spot's x - 6.0) and y (spot's y - 8.0)
+        set rightTop to a cad vector2 with x (spot's x + 6.0) and y (spot's y - 8.0)
+        append leftTop to strokes
+        append rightTop to strokes
+        append rightTop to strokes
+        append apex to strokes
+        append apex to strokes
+        append leftTop to strokes
+        if markKind = bim filled level mark:
+            append leftTop to triangles
+            append rightTop to triangles
+            append apex to triangles
+        if markKind = bim half filled level mark:
+            append leftTop to triangles
+            append (a cad vector2 with x spot's x and y (spot's y - 8.0)) to triangles
+            append apex to triangles
+
+# How a section line is headed: an arrow alone (NEN, DIN), an arrow on a
+# circle (BS / ISO), or an arrow on a circle divided across for the view's
+# number above and its sheet below (NCS).
+function bim arrow section head:
+    replacement:
+        0
+function bim circle section head:
+    replacement:
+        1
+function bim divided section head:
+    replacement:
+        2
+
+function the bim section head under {integer:standardCode}:
+    execute:
+        if standardCode = bim iso standard:
+            return bim circle section head
+        if standardCode = bim ansi standard:
+            return bim divided section head
+        return bim arrow section head
+
+# The strokes of a dimension's ends at `startPixel` and `finishPixel` (the
+# line's direction `ux`, `uy`) under `standardCode`, as pairs into `ticks`:
+# a 45 degree tick, an open arrow of two strokes back from each end, or a dot
+# (a small ring, drawn thick).
+function append bim dimension ends at {cad vector2:startPixel} and {cad vector2:finishPixel} along {a 64 bit floating-point number:ux} and {a 64 bit floating-point number:uy} under {integer:standardCode} into {a pointer to a list:ticks}:
+    execute:
+        append bim dimension ends at startPixel and finishPixel along ux and uy under standardCode scaled 1.0 into ticks
+
+function append bim dimension ends at {cad vector2:startPixel} and {cad vector2:finishPixel} along {a 64 bit floating-point number:ux} and {a 64 bit floating-point number:uy} under {integer:standardCode} scaled {a 64 bit floating-point number:symbolScale} into {a pointer to a list:ticks}:
+    execute:
+        set endKind to the bim dimension ends under standardCode
+        if endKind = bim arrow ends:
+            loop arrowSide from 0 to 2:
+                set sideSign to 1.0
+                if arrowSide = 1:
+                    set sideSign to -1.0
+                append startPixel to ticks
+                append (a cad vector2 with x ((startPixel's x + (ux * (8.0 * symbolScale))) - ((uy * (3.0 * symbolScale)) * sideSign)) and y ((startPixel's y + (uy * (8.0 * symbolScale))) + ((ux * (3.0 * symbolScale)) * sideSign))) to ticks
+                append finishPixel to ticks
+                append (a cad vector2 with x ((finishPixel's x - (ux * (8.0 * symbolScale))) - ((uy * (3.0 * symbolScale)) * sideSign)) and y ((finishPixel's y - (uy * (8.0 * symbolScale))) + ((ux * (3.0 * symbolScale)) * sideSign))) to ticks
+            return nothing
+        if endKind = bim dot ends:
+            loop endCursor from 0 to 2:
+                set centre to startPixel
+                if endCursor = 1:
+                    set centre to finishPixel
+                loop step from 0 to 8:
+                    set fromAngle to (6.283185307179586 * (step as a 64 bit floating-point number)) / 8.0
+                    set toAngle to (6.283185307179586 * ((step + 1) as a 64 bit floating-point number)) / 8.0
+                    append (a cad vector2 with x (centre's x + ((1.2 * symbolScale) * (the cosine of fromAngle))) and y (centre's y + ((1.2 * symbolScale) * (the sine of fromAngle)))) to ticks
+                    append (a cad vector2 with x (centre's x + ((1.2 * symbolScale) * (the cosine of toAngle))) and y (centre's y + ((1.2 * symbolScale) * (the sine of toAngle)))) to ticks
+            return nothing
+        set tx to (ux - uy) * (2.83 * symbolScale)
+        set ty to (ux + uy) * (2.83 * symbolScale)
+        append (a cad vector2 with x (startPixel's x - tx) and y (startPixel's y - ty)) to ticks
+        append (a cad vector2 with x (startPixel's x + tx) and y (startPixel's y + ty)) to ticks
+        append (a cad vector2 with x (finishPixel's x - tx) and y (finishPixel's y - ty)) to ticks
+        append (a cad vector2 with x (finishPixel's x + tx) and y (finishPixel's y + ty)) to ticks

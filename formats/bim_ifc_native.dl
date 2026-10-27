@@ -1,0 +1,820 @@
+# SPDX-License-Identifier: MPL-2.0
+# IFC elements made native: walls, floors and roofs read from an IFC file
+# become the model's own walls and plates (with storeys, wall types from
+# their material layers, and their openings with door and window types),
+# so that everything works on them as on drawn ones: grips, joins, Tab's
+# boundary sketch, properties, IFC export. What cannot be made native (a
+# curved wall, a wall that is not one straight extrusion, a sloped slab)
+# stays an imported read-only element (`bim_ifc_read.dl`).
+#
+# A wall: the straight line of its Axis representation (or else its
+# footprint's longest side) gives its direction; its body's vertical
+# extrusion gives its footprint, foot and head; the footprint's width
+# across the line its thickness, and the line moved to the footprint's
+# middle its centre line, ended where the axis ends. Its layers come from
+# its IfcMaterialLayerSetUsage (else one layer of its material, as thick as
+# the footprint). Its openings (IfcRelVoidsElement) become openings where
+# their bodies cross it, a door when an IfcDoor fills them.
+# A slab (IfcSlab, also a roof's): the outline of its vertical extrusion at
+# its top, its depth its thickness.
+# A column, beam or pile (IfcColumn, IfcBeam, IfcPile): one straight
+# extrusion of a rectangle, circle or I-shape becomes a linear element from
+# its profile's centre along its sweep, of a linear type of that size and
+# material (an I-shape as its outer rectangle).
+import formats/bim_ifc_read.dl
+import formats/bim_ifc_psets.dl
+
+class:
+    patterns:
+        [a|] bim ifc native opening record
+    members:
+        along as a 64 bit floating-point number
+        width as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+        sillHeight as a 64 bit floating-point number
+        isDoor as a boolean
+
+class:
+    patterns:
+        [a|] bim ifc native wall record
+    members:
+        storey as an integer
+        start as a cad vector2
+        finish as a cad vector2
+        foot as a 64 bit floating-point number
+        head as a 64 bit floating-point number
+        layers as the type of (a cad topology list of a bim layer record)
+        openings as the type of (a cad topology list of a bim ifc native opening record)
+
+class:
+    patterns:
+        [a|] bim ifc native slab record
+    members:
+        storey as an integer
+        outline as the type of (a cad topology list of a cad vector2)
+        top as a 64 bit floating-point number
+        thickness as a 64 bit floating-point number
+        material as a string
+
+class:
+    patterns:
+        [a|] bim ifc native linear record
+    members:
+        storey as an integer
+        start as a cad vector3
+        finish as a cad vector3
+        width as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+        round as a boolean
+        material as a string
+        role as an integer
+        turn as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] bim ifc native set record
+    members:
+        storeyNames as the type of (a cad topology list of a string)
+        storeyElevations as the type of (a cad topology list of a 64 bit floating-point number)
+        walls as the type of (a cad topology list of a bim ifc native wall record)
+        slabs as the type of (a cad topology list of a bim ifc native slab record)
+        linears as the type of (a cad topology list of a bim ifc native linear record)
+        # The instances made native (walls, slabs, the doors and windows in
+        # their openings), for the import to leave out.
+        skipped as the type of (a cad topology list of an integer)
+        # The STEP instance each storey, wall, slab and linear element came
+        # from, and the property sets of those instances (keyed by them).
+        storeySources as the type of (a cad topology list of an integer)
+        wallSources as the type of (a cad topology list of an integer)
+        slabSources as the type of (a cad topology list of an integer)
+        linearSources as the type of (a cad topology list of an integer)
+        psets as the type of (a cad topology list of a bim pset entry record)
+
+# The extrusions of a representation in the world: the corners of each
+# one's profile at its start (`bottoms`) and its sweep (`sweeps`); `found`
+# false when an item is not an extrusion (a boolean's first operand
+# counts).
+class:
+    patterns:
+        [a|] bim ifc extrusion set record
+    members:
+        found as a boolean
+        bottoms as the type of (a cad topology list of a cad vector3)
+        sweeps as the type of (a cad topology list of a cad vector3)
+        # Where each extrusion's corners start in `bottoms`, and the first
+        # one's outer ring alone (for a slab's outline).
+        firstRing as the type of (a cad topology list of a cad vector3)
+
+function the bim ifc extrusions of representation {integer:representationId} through {bim ifc frame record:frame} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set result to @intrinsic("construct", a bim ifc extrusion set record, false, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3)
+        if (bim step file (reader's stepFile) holds representationId) = false:
+            return result
+        set representationValue to the bim step instance representationId in (reader's stepFile)
+        set items to the bim step argument 3 of representationValue
+        set accepted to (the bim step count of items in representationValue) > 0
+        loop cursor from 0 to the bim step count of items in representationValue:
+            set itemId to the bim step reference of (the bim step member cursor of items in representationValue) in representationValue
+            # Through booleans to their first operand.
+            set descending to true
+            set depthGuard to 0
+            loop while descending and (depthGuard < 6):
+                set depthGuard to depthGuard + 1
+                set descending to false
+                if (bim step instance itemId is a "IFCBOOLEANCLIPPINGRESULT" in (reader's stepFile)) or (bim step instance itemId is a "IFCBOOLEANRESULT" in (reader's stepFile)):
+                    set booleanValue to the bim step instance itemId in (reader's stepFile)
+                    set itemId to the bim step reference of (the bim step argument 1 of booleanValue) in booleanValue
+                    free bim step instance booleanValue
+                    set descending to true
+            if accepted and (bim step instance itemId is a "IFCEXTRUDEDAREASOLID" in (reader's stepFile)):
+                set itemValue to the bim step instance itemId in (reader's stepFile)
+                set solidFrame to the bim ifc axes (the bim ifc placement axes (the bim step reference of (the bim step argument 1 of itemValue) in itemValue) in reader) within frame
+                set direction to the bim ifc ratios (the bim step reference of (the bim step argument 2 of itemValue) in itemValue) or (a cad vector3 with x 0.0, y 0.0 and z 1.0) in reader
+                set depth to (the bim step number of (the bim step argument 3 of itemValue) in itemValue) * reader's lengthScale
+                set rings to an empty list of the type of (an empty list of a cad vector2)
+                set outerFlags to an empty list of a boolean
+                append bim ifc profile (the bim step reference of (the bim step argument 0 of itemValue) in itemValue) outlines into rings marking outerFlags through (the bim ifc identity axes) in reader
+                free bim step instance itemValue
+                if (the length of rings) = 0:
+                    set accepted to false
+                else:
+                    set sweep to (the bim ifc turned (the bim ifc unit of direction or (a cad vector3 with x 0.0, y 0.0 and z 1.0)) through solidFrame) scaled by depth
+                    append sweep to (result's sweeps's values)
+                    set ring to the item at 0 in rings
+                    loop corner from 0 to the length of ring:
+                        set flat to the item at corner in ring
+                        set placed to the bim ifc placed (a cad vector3 with x flat's x, y flat's y and z 0.0) through solidFrame
+                        append placed to (result's bottoms's values)
+                        if (the length of (result's sweeps's values)) = 1:
+                            append placed to (result's firstRing's values)
+                loop ringCursor from 0 to the length of rings:
+                    free (the item at ringCursor in rings)
+                free rings
+                free outerFlags
+            else:
+                set accepted to false
+        free bim step instance representationValue
+        set result's found to accepted and ((the length of (result's sweeps's values)) > 0)
+        return result
+
+# The 2D points of the Axis representation of shape `shapeId` through
+# `frame` (two for a straight axis; none when it has none).
+function the bim ifc axis of shape {integer:shapeId} through {bim ifc frame record:frame} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set found to a cad topology list of a cad vector2
+        if (bim step instance shapeId is a "IFCPRODUCTDEFINITIONSHAPE" in (reader's stepFile)) = false:
+            return found
+        set shapeValue to the bim step instance shapeId in (reader's stepFile)
+        set representations to the bim step argument 2 of shapeValue
+        loop cursor from 0 to the bim step count of representations in shapeValue:
+            set representationId to the bim step reference of (the bim step member cursor of representations in shapeValue) in shapeValue
+            set representationValue to the bim step instance representationId in (reader's stepFile)
+            if ((the bim step string of (the bim step argument 1 of representationValue) in representationValue) = (the string form of "Axis")) and ((the length of (found's values)) = 0):
+                set items to the bim step argument 3 of representationValue
+                if (the bim step count of items in representationValue) > 0:
+                    set curveId to the bim step reference of (the bim step member 0 of items in representationValue) in representationValue
+                    if bim step instance curveId is a "IFCPOLYLINE" in (reader's stepFile):
+                        set points to the bim ifc polyline of curveId in reader
+                        if (the length of points) = 2:
+                            loop pointCursor from 0 to 2:
+                                set local to the item at pointCursor in points
+                                set placed to the bim ifc placed local through frame
+                                append (a cad vector2 with x placed's x and y placed's y) to (found's values)
+                        free points
+            free bim step instance representationValue
+        free bim step instance shapeValue
+        return found
+
+# A material named in IFC as one of the slice's (by English and Dutch
+# words), else its own name.
+function the bim native material of {a string:materialName}:
+    execute:
+        set lowered to the lowercase form of materialName
+        if ((lowered contains "brick") or (lowered contains "baksteen")) or ((lowered contains "metsel") or (lowered contains "masonry")):
+            return the string form of "brick"
+        if (lowered contains "kalkzand") or (lowered contains "sand-lime"):
+            return the string form of "sand-lime"
+        if (lowered contains "beton") or (lowered contains "concrete"):
+            return the string form of "concrete"
+        if ((lowered contains "isola") or (lowered contains "insul")) or ((lowered contains "wool") or (lowered contains "pir")):
+            return the string form of "insulation"
+        if (lowered contains "gips") or ((lowered contains "gypsum") or (lowered contains "plaster")):
+            return the string form of "gypsum"
+        if (lowered contains "hout") or ((lowered contains "timber") or (lowered contains "wood")):
+            return the string form of "timber"
+        if (lowered contains "staal") or (lowered contains "steel"):
+            return the string form of "steel"
+        if ((lowered contains "lucht") or (lowered contains "spouw")) or ((lowered contains "air") or (lowered contains "cavity")):
+            return the string form of "air"
+        if (the length of materialName) = 0:
+            return the string form of "concrete"
+        return materialName
+
+# The name of IfcMaterial `materialId` (empty when it is none).
+function the bim ifc material name of {integer:materialId} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        if (bim step instance materialId is a "IFCMATERIAL" in (reader's stepFile)) = false:
+            return the string form of ""
+        set materialValue to the bim step instance materialId in (reader's stepFile)
+        set named to the bim step string of (the bim step argument 0 of materialValue) in materialValue
+        free bim step instance materialValue
+        return named
+
+# The layers of material association `associatedId` (an IfcMaterialLayer-
+# SetUsage, an IfcMaterialLayerSet, an IfcMaterialList or an IfcMaterial):
+# for a single material, one layer `fallbackThickness` thick.
+function the bim ifc layers of material {integer:associatedId} thick {a 64 bit floating-point number:fallbackThickness} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set layerList to a cad topology list of a bim layer record
+        set setId to associatedId
+        if bim step instance associatedId is a "IFCMATERIALLAYERSETUSAGE" in (reader's stepFile):
+            set usageValue to the bim step instance associatedId in (reader's stepFile)
+            set setId to the bim step reference of (the bim step argument 0 of usageValue) in usageValue
+            free bim step instance usageValue
+        if bim step instance setId is a "IFCMATERIALLAYERSET" in (reader's stepFile):
+            set setValue to the bim step instance setId in (reader's stepFile)
+            set layerNodes to the bim step argument 0 of setValue
+            loop cursor from 0 to the bim step count of layerNodes in setValue:
+                set layerId to the bim step reference of (the bim step member cursor of layerNodes in setValue) in setValue
+                set layerValue to the bim step instance layerId in (reader's stepFile)
+                set layerMaterial to the bim ifc material name of (the bim step reference of (the bim step argument 0 of layerValue) in layerValue) in reader
+                set layerThickness to (the bim step number of (the bim step argument 1 of layerValue) in layerValue) * reader's lengthScale
+                free bim step instance layerValue
+                if layerThickness > 0.0005:
+                    append (@intrinsic("construct", a bim layer record, the bim native material of layerMaterial, layerThickness)) to (layerList's values)
+            free bim step instance setValue
+            return layerList
+        set single to the bim ifc material name of associatedId in reader
+        if bim step instance associatedId is a "IFCMATERIALLIST" in (reader's stepFile):
+            set listValue to the bim step instance associatedId in (reader's stepFile)
+            set listed to the bim step argument 0 of listValue
+            if (the bim step count of listed in listValue) > 0:
+                set single to the bim ifc material name of (the bim step reference of (the bim step member 0 of listed in listValue) in listValue) in reader
+            free bim step instance listValue
+        append (@intrinsic("construct", a bim layer record, the bim native material of single, fallbackThickness)) to (layerList's values)
+        return layerList
+
+# The section of a straight member: its profile's size (a rectangle, a
+# circle's diameter, an I-shape's outer rectangle), the centre where its
+# extrusion starts and its sweep in the world, and its profile's x axis;
+# `found` false for anything else (several items, other profiles).
+class:
+    patterns:
+        [a|] bim ifc section record
+    members:
+        found as a boolean
+        width as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+        round as a boolean
+        centre as a cad vector3
+        sweep as a cad vector3
+        xAxis as a cad vector3
+
+function the bim ifc section of representation {integer:representationId} through {bim ifc frame record:frame} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set result to @intrinsic("construct", a bim ifc section record, false, 0.0, 0.0, false, origin, origin, origin)
+        if (bim step file (reader's stepFile) holds representationId) = false:
+            return result
+        set representationValue to the bim step instance representationId in (reader's stepFile)
+        set items to the bim step argument 3 of representationValue
+        set itemId to -1
+        if (the bim step count of items in representationValue) = 1:
+            set itemId to the bim step reference of (the bim step member 0 of items in representationValue) in representationValue
+        free bim step instance representationValue
+        if (itemId < 0) or ((bim step instance itemId is a "IFCEXTRUDEDAREASOLID" in (reader's stepFile)) = false):
+            return result
+        set itemValue to the bim step instance itemId in (reader's stepFile)
+        set solidFrame to the bim ifc axes (the bim ifc placement axes (the bim step reference of (the bim step argument 1 of itemValue) in itemValue) in reader) within frame
+        set direction to the bim ifc ratios (the bim step reference of (the bim step argument 2 of itemValue) in itemValue) or (a cad vector3 with x 0.0, y 0.0 and z 1.0) in reader
+        set depthValue to (the bim step number of (the bim step argument 3 of itemValue) in itemValue) * reader's lengthScale
+        set profileId to the bim step reference of (the bim step argument 0 of itemValue) in itemValue
+        free bim step instance itemValue
+        set profileValue to the bim step instance profileId in (reader's stepFile)
+        set profileType to profileValue's typeName
+        set profileFrame to the bim ifc axes (the bim ifc placement axes (the bim step reference of (the bim step argument 2 of profileValue) in profileValue) in reader) within solidFrame
+        set first to (the bim step number of (the bim step argument 3 of profileValue) in profileValue) * reader's lengthScale
+        set second to (the bim step number of (the bim step argument 4 of profileValue) in profileValue) * reader's lengthScale
+        free bim step instance profileValue
+        set known to true
+        if (profileType = (the string form of "IFCRECTANGLEPROFILEDEF")) or ((profileType = (the string form of "IFCISHAPEPROFILEDEF")) or (profileType = (the string form of "IFCRECTANGLEHOLLOWPROFILEDEF"))):
+            set result's width to first
+            set result's depth to second
+        else if (profileType = (the string form of "IFCCIRCLEPROFILEDEF")) or (profileType = (the string form of "IFCCIRCLEHOLLOWPROFILEDEF")):
+            set result's width to 2.0 * first
+            set result's depth to 2.0 * first
+            set result's round to true
+        else:
+            set known to false
+        if known and ((result's width > 0.001) and (depthValue > 0.01)):
+            set result's found to true
+            set result's centre to profileFrame's origin
+            set result's sweep to (the bim ifc turned (the bim ifc unit of direction or (a cad vector3 with x 0.0, y 0.0 and z 1.0)) through solidFrame) scaled by depthValue
+            set result's xAxis to profileFrame's xAxis
+        return result
+
+# The native walls and slabs of `stepFile` (see the top of this file).
+function the bim ifc natives of {bim step file record:stepFile}:
+    execute:
+        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record)
+        if stepFile's valid = false:
+            return nativeSet
+        set reader to a fresh bim ifc reading of stepFile
+        set r to the address of reader
+        gather bim ifc units for r
+        set instanceCount to the length of (stepFile's starts)
+        # The storeys, and what each instance is in.
+        set storeyAt to an empty list of an integer
+        set containerOf to an empty list of an integer
+        set materialOf to an empty list of an integer
+        set firstOpening to an empty list of an integer
+        set nextOpening to an empty list of an integer
+        set fillerOf to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to storeyAt
+            append -1 to containerOf
+            append -1 to materialOf
+            append -1 to firstOpening
+            append -1 to nextOpening
+            append -1 to fillerOf
+        set storeyIds to the bim step instances of type (the string form of "IFCBUILDINGSTOREY") in stepFile
+        loop storeyCursor from 0 to the length of storeyIds:
+            set storeyId to the item at storeyCursor in storeyIds
+            set storeyValue to the bim step instance storeyId in stepFile
+            set storeyFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of storeyValue) in storeyValue) in r
+            replace item at index storeyId in storeyAt with (the length of (nativeSet's storeyNames's values))
+            append (the bim step string of (the bim step argument 2 of storeyValue) in storeyValue) to (nativeSet's storeyNames's values)
+            append storeyFrame's origin's z to (nativeSet's storeyElevations's values)
+            append storeyId to (nativeSet's storeySources's values)
+            # Its long name and description, which the level has no field
+            # for, kept as properties of a set of their own.
+            set longName to the bim step string of (the bim step argument 7 of storeyValue) in storeyValue
+            if (the length of longName) > 0:
+                append (@intrinsic("construct", a bim pset entry record, storeyId as a 64 bit integer, the string form of "IFC attributes", the string form of "LongName", the string form of "IFCLABEL", longName)) to (nativeSet's psets's values)
+            set storeyNote to the bim step string of (the bim step argument 3 of storeyValue) in storeyValue
+            if (the length of storeyNote) > 0:
+                append (@intrinsic("construct", a bim pset entry record, storeyId as a 64 bit integer, the string form of "IFC attributes", the string form of "Description", the string form of "IFCTEXT", storeyNote)) to (nativeSet's psets's values)
+            free bim step instance storeyValue
+        free storeyIds
+        record bim ifc containers of type (the string form of "IFCRELCONTAINEDINSPATIALSTRUCTURE") holding 4 in 5 in stepFile into containerOf
+        record bim ifc containers of type (the string form of "IFCRELAGGREGATES") holding 5 in 4 in stepFile into containerOf
+        # Materials, openings and their fillings.
+        set relations to the bim step instances of type (the string form of "IFCRELASSOCIATESMATERIAL") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set relatingMaterial to the bim step reference of (the bim step argument 5 of relation) in relation
+            set related to the bim step argument 4 of relation
+            loop memberCursor from 0 to the bim step count of related in relation:
+                set member to the bim step reference of (the bim step member memberCursor of related in relation) in relation
+                if (member >= 0) and (member < instanceCount):
+                    replace item at index member in materialOf with relatingMaterial
+            free bim step instance relation
+        free relations
+        set relations to the bim step instances of type (the string form of "IFCRELVOIDSELEMENT") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set host to the bim step reference of (the bim step argument 4 of relation) in relation
+            set opening to the bim step reference of (the bim step argument 5 of relation) in relation
+            if ((host >= 0) and (host < instanceCount)) and ((opening >= 0) and (opening < instanceCount)):
+                replace item at index opening in nextOpening with (the item at host in firstOpening)
+                replace item at index host in firstOpening with opening
+            free bim step instance relation
+        free relations
+        set relations to the bim step instances of type (the string form of "IFCRELFILLSELEMENT") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set opening to the bim step reference of (the bim step argument 4 of relation) in relation
+            if (opening >= 0) and (opening < instanceCount):
+                replace item at index opening in fillerOf with (the bim step reference of (the bim step argument 5 of relation) in relation)
+            free bim step instance relation
+        free relations
+        # The walls.
+        set wallIds to the bim step instances of type (the string form of "IFCWALL") in stepFile
+        set standardIds to the bim step instances of type (the string form of "IFCWALLSTANDARDCASE") in stepFile
+        loop cursor from 0 to the length of standardIds:
+            append (the item at cursor in standardIds) to wallIds
+        free standardIds
+        loop wallCursor from 0 to the length of wallIds:
+            set wallId to the item at wallCursor in wallIds
+            set wallValue to the bim step instance wallId in stepFile
+            set placementId to the bim step reference of (the bim step argument 5 of wallValue) in wallValue
+            set shapeId to the bim step reference of (the bim step argument 6 of wallValue) in wallValue
+            free bim step instance wallValue
+            set frame to the bim ifc object axes placementId in r
+            set bodyId to the bim ifc body of shape shapeId in stepFile
+            set extrusions to the bim ifc extrusions of representation bodyId through frame in r
+            set made to false
+            if extrusions's found:
+                set vertical to true
+                set foot to 1.0e30
+                set head to -1.0e30
+                loop sweepCursor from 0 to the length of (extrusions's sweeps's values):
+                    set sweep to the item at sweepCursor in (extrusions's sweeps's values)
+                    if (the absolute value of sweep's z) < (0.99 * (the cad length of sweep)):
+                        set vertical to false
+                set firstSweep to the item at 0 in (extrusions's sweeps's values)
+                loop corner from 0 to the length of (extrusions's bottoms's values):
+                    set bottom to the item at corner in (extrusions's bottoms's values)
+                    set foot to the minimum of foot and (the minimum of bottom's z and (bottom's z + firstSweep's z))
+                    set head to the maximum of head and (the maximum of bottom's z and (bottom's z + firstSweep's z))
+                # The line's direction: the axis, else the footprint's
+                # longest side.
+                set axisPoints to the bim ifc axis of shape shapeId through frame in r
+                set ux to 0.0
+                set uy to 0.0
+                if (the length of (axisPoints's values)) = 2:
+                    set ux to (the item at 1 in (axisPoints's values))'s x - (the item at 0 in (axisPoints's values))'s x
+                    set uy to (the item at 1 in (axisPoints's values))'s y - (the item at 0 in (axisPoints's values))'s y
+                else:
+                    set longest to 0.0
+                    set ring to extrusions's firstRing's values
+                    loop corner from 0 to the length of ring:
+                        set here to the item at corner in ring
+                        set following to the item at (the remainder of (corner + 1) divided by (the length of ring)) in ring
+                        set sideLength to the square root of (((following's x - here's x) * (following's x - here's x)) + ((following's y - here's y) * (following's y - here's y)))
+                        if sideLength > longest:
+                            set longest to sideLength
+                            set ux to following's x - here's x
+                            set uy to following's y - here's y
+                set axisLength to the square root of ((ux * ux) + (uy * uy))
+                if vertical and (axisLength > 1e-6):
+                    set ux to ux / axisLength
+                    set uy to uy / axisLength
+                    set nx to 0.0 - uy
+                    set ny to ux
+                    set alongLow to 1.0e30
+                    set alongHigh to -1.0e30
+                    set acrossLow to 1.0e30
+                    set acrossHigh to -1.0e30
+                    loop corner from 0 to the length of (extrusions's bottoms's values):
+                        set bottom to the item at corner in (extrusions's bottoms's values)
+                        set alongValue to (bottom's x * ux) + (bottom's y * uy)
+                        set acrossValue to (bottom's x * nx) + (bottom's y * ny)
+                        set alongLow to the minimum of alongLow and alongValue
+                        set alongHigh to the maximum of alongHigh and alongValue
+                        set acrossLow to the minimum of acrossLow and acrossValue
+                        set acrossHigh to the maximum of acrossHigh and acrossValue
+                    set thickness to acrossHigh - acrossLow
+                    set middle to (acrossLow + acrossHigh) * 0.5
+                    set startAlong to alongLow
+                    set finishAlong to alongHigh
+                    if (the length of (axisPoints's values)) = 2:
+                        set startAlong to ((the item at 0 in (axisPoints's values))'s x * ux) + ((the item at 0 in (axisPoints's values))'s y * uy)
+                        set finishAlong to ((the item at 1 in (axisPoints's values))'s x * ux) + ((the item at 1 in (axisPoints's values))'s y * uy)
+                    # A straight wall's footprint is about its rectangle.
+                    set ringArea to the absolute value of (the bim ifc plan area of (extrusions's firstRing's values))
+                    set rectangleArea to (alongHigh - alongLow) * thickness
+                    set squarish to (ringArea >= (0.75 * rectangleArea)) or ((the length of (extrusions's sweeps's values)) > 1)
+                    if ((thickness >= 0.03) and (thickness <= 1.5)) and (((finishAlong - startAlong) >= 0.1) and squarish):
+                        set startPoint to a cad vector2 with x ((ux * startAlong) + (nx * middle)) and y ((uy * startAlong) + (ny * middle))
+                        set finishPoint to a cad vector2 with x ((ux * finishAlong) + (nx * middle)) and y ((uy * finishAlong) + (ny * middle))
+                        set layerList to the bim ifc layers of material (the item at wallId in materialOf) thick thickness in r
+                        set layerSum to 0.0
+                        loop layerCursor from 0 to the length of (layerList's values):
+                            set layerSum to layerSum + (the item at layerCursor in (layerList's values))'s thickness
+                        if (the absolute value of (layerSum - thickness)) > 0.005:
+                            set layerList to a cad topology list of a bim layer record
+                            append (@intrinsic("construct", a bim layer record, the string form of "concrete", thickness)) to (layerList's values)
+                        set nativeWall to @intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), startPoint, finishPoint, foot, head, layerList, a cad topology list of a bim ifc native opening record)
+                        # Its openings, where their bodies cross it.
+                        set openingAt to the item at wallId in firstOpening
+                        loop while openingAt >= 0:
+                            set openingValue to the bim step instance openingAt in stepFile
+                            set openingFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of openingValue) in openingValue) in r
+                            set openingBody to the bim ifc body of shape (the bim step reference of (the bim step argument 6 of openingValue) in openingValue) in stepFile
+                            free bim step instance openingValue
+                            set openingShape to the bim ifc extrusions of representation openingBody through openingFrame in r
+                            if openingShape's found:
+                                set openingLow to 1.0e30
+                                set openingHigh to -1.0e30
+                                set openingFoot to 1.0e30
+                                set openingHead to -1.0e30
+                                loop sweepCursor from 0 to the length of (openingShape's sweeps's values):
+                                    set openingSweep to the item at sweepCursor in (openingShape's sweeps's values)
+                                    loop corner from 0 to the length of (openingShape's bottoms's values):
+                                        set bottom to the item at corner in (openingShape's bottoms's values)
+                                        loop endCursor from 0 to 2:
+                                            set spot to bottom
+                                            if endCursor = 1:
+                                                set spot to the cad sum of bottom and openingSweep
+                                            set alongValue to ((spot's x * ux) + (spot's y * uy)) - startAlong
+                                            set openingLow to the minimum of openingLow and alongValue
+                                            set openingHigh to the maximum of openingHigh and alongValue
+                                            set openingFoot to the minimum of openingFoot and spot's z
+                                            set openingHead to the maximum of openingHead and spot's z
+                                set filler to the item at openingAt in fillerOf
+                                set fillingDoor to false
+                                if filler >= 0:
+                                    set fillingDoor to bim step instance filler is a "IFCDOOR" in stepFile
+                                set openingWidth to openingHigh - openingLow
+                                if ((openingWidth >= 0.1) and ((openingHead - openingFoot) >= 0.1)) and ((openingLow > -0.001) and (openingHigh < ((finishAlong - startAlong) + 0.001))):
+                                    append (@intrinsic("construct", a bim ifc native opening record, ((openingLow + openingHigh) * 0.5), openingWidth, (openingHead - openingFoot), openingFoot, fillingDoor)) to (nativeWall's openings's values)
+                                    if filler >= 0:
+                                        append filler to (nativeSet's skipped's values)
+                                    append openingAt to (nativeSet's skipped's values)
+                            set openingAt to the item at openingAt in nextOpening
+                        append nativeWall to (nativeSet's walls's values)
+                        append wallId to (nativeSet's wallSources's values)
+                        note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
+                        append wallId to (nativeSet's skipped's values)
+                        set made to true
+        free wallIds
+        # The slabs (a roof's too).
+        set slabIds to the bim step instances of type (the string form of "IFCSLAB") in stepFile
+        set standardSlabs to the bim step instances of type (the string form of "IFCSLABSTANDARDCASE") in stepFile
+        loop cursor from 0 to the length of standardSlabs:
+            append (the item at cursor in standardSlabs) to slabIds
+        free standardSlabs
+        loop slabCursor from 0 to the length of slabIds:
+            set slabId to the item at slabCursor in slabIds
+            set slabValue to the bim step instance slabId in stepFile
+            set placementId to the bim step reference of (the bim step argument 5 of slabValue) in slabValue
+            set shapeId to the bim step reference of (the bim step argument 6 of slabValue) in slabValue
+            free bim step instance slabValue
+            set frame to the bim ifc object axes placementId in r
+            set bodyId to the bim ifc body of shape shapeId in stepFile
+            set extrusions to the bim ifc extrusions of representation bodyId through frame in r
+            if extrusions's found and ((the length of (extrusions's sweeps's values)) = 1):
+                set sweep to the item at 0 in (extrusions's sweeps's values)
+                set ring to extrusions's firstRing's values
+                if ((the absolute value of sweep's z) >= (0.99 * (the cad length of sweep))) and ((the length of ring) >= 3):
+                    set outline to a cad topology list of a cad vector2
+                    set ringFoot to 1.0e30
+                    set ringTop to -1.0e30
+                    loop corner from 0 to the length of ring:
+                        set bottom to the item at corner in ring
+                        append (a cad vector2 with x bottom's x and y bottom's y) to (outline's values)
+                        set ringFoot to the minimum of ringFoot and (the minimum of bottom's z and (bottom's z + sweep's z))
+                        set ringTop to the maximum of ringTop and (the maximum of bottom's z and (bottom's z + sweep's z))
+                    set slabLayers to the bim ifc layers of material (the item at slabId in materialOf) thick (ringTop - ringFoot) in r
+                    set slabMaterial to the string form of "concrete"
+                    if (the length of (slabLayers's values)) > 0:
+                        set slabMaterial to (the item at 0 in (slabLayers's values))'s material
+                    append (@intrinsic("construct", a bim ifc native slab record, (the bim ifc storey of slabId among containerOf and storeyAt), outline, ringTop, (ringTop - ringFoot), slabMaterial)) to (nativeSet's slabs's values)
+                    append slabId to (nativeSet's slabSources's values)
+                    note bim ifc attributes of slabId in stepFile to (nativeSet's psets's values)
+                    append slabId to (nativeSet's skipped's values)
+        free slabIds
+        # Columns, beams and piles.
+        set memberIds to an empty list of an integer
+        set memberRoles to an empty list of an integer
+        loop classCursor from 0 to 3:
+            set className to the string form of "IFCCOLUMN"
+            set roleCode to bim column role
+            if classCursor = 1:
+                set className to the string form of "IFCBEAM"
+                set roleCode to bim beam role
+            if classCursor = 2:
+                set className to the string form of "IFCPILE"
+                set roleCode to bim pile role
+            set classIds to the bim step instances of type className in stepFile
+            loop cursor from 0 to the length of classIds:
+                append (the item at cursor in classIds) to memberIds
+                append roleCode to memberRoles
+            free classIds
+        loop memberCursor from 0 to the length of memberIds:
+            set memberId to the item at memberCursor in memberIds
+            set memberValue to the bim step instance memberId in stepFile
+            set placementId to the bim step reference of (the bim step argument 5 of memberValue) in memberValue
+            set shapeId to the bim step reference of (the bim step argument 6 of memberValue) in memberValue
+            free bim step instance memberValue
+            set frame to the bim ifc object axes placementId in r
+            set section to the bim ifc section of representation (the bim ifc body of shape shapeId in stepFile) through frame in r
+            if section's found:
+                set memberLayers to the bim ifc layers of material (the item at memberId in materialOf) thick section's width in r
+                set memberMaterial to the string form of "concrete"
+                if (the length of (memberLayers's values)) > 0:
+                    set memberMaterial to (the item at 0 in (memberLayers's values))'s material
+                # A standing member turns its profile about its axis.
+                set memberTurn to 0.0
+                if (the absolute value of section's sweep's z) >= (0.99 * (the cad length of section's sweep)):
+                    set memberTurn to @intrinsic("atan2", section's xAxis's y, section's xAxis's x)
+                append (@intrinsic("construct", a bim ifc native linear record, (the bim ifc storey of memberId among containerOf and storeyAt), section's centre, (the cad sum of section's centre and section's sweep), section's width, section's depth, section's round, memberMaterial, (the item at memberCursor in memberRoles), memberTurn)) to (nativeSet's linears's values)
+                append memberId to (nativeSet's linearSources's values)
+                note bim ifc attributes of memberId in stepFile to (nativeSet's psets's values)
+                append memberId to (nativeSet's skipped's values)
+        free memberIds
+        # The property sets of what was made native and of the storeys.
+        set wanted to an empty list of a boolean
+        loop instanceCursor from 0 to instanceCount:
+            append false to wanted
+        mark bim ifc sources (nativeSet's storeySources's values) in wanted
+        mark bim ifc sources (nativeSet's wallSources's values) in wanted
+        mark bim ifc sources (nativeSet's slabSources's values) in wanted
+        mark bim ifc sources (nativeSet's linearSources's values) in wanted
+        set gathered to the bim ifc psets of stepFile wanted wanted scaled reader's lengthScale
+        loop psetCursor from 0 to the length of gathered:
+            append (the item at psetCursor in gathered) to (nativeSet's psets's values)
+        free gathered
+        free wanted
+        free memberRoles
+        free storeyAt
+        free containerOf
+        free materialOf
+        free firstOpening
+        free nextOpening
+        free fillerOf
+        return nativeSet
+
+# The signed area of a ring of points seen from above.
+function the bim ifc plan area of {a pointer to a list:ring}:
+    execute:
+        set doubledArea to 0.0
+        loop corner from 0 to the length of ring:
+            set here to the item at corner in ring
+            set following to the item at (the remainder of (corner + 1) divided by (the length of ring)) in ring
+            set doubledArea to doubledArea + ((here's x * following's y) - (following's x * here's y))
+        return doubledArea * 0.5
+
+# What `add bim ifc natives` made.
+class:
+    patterns:
+        [a|] bim ifc native count record
+    members:
+        levels as an integer
+        walls as an integer
+        openings as an integer
+        slabs as an integer
+        linears as an integer
+
+# The instances in `sources` marked in `wanted`.
+local function mark bim ifc sources {a pointer to a list:sourceList} in {a pointer to a list:wanted}:
+    execute:
+        loop cursor from 0 to the length of sourceList:
+            set sourceId to the item at cursor in sourceList
+            if (sourceId >= 0) and (sourceId < (the length of wanted)):
+                replace item at index sourceId in wanted with true
+
+# The storey (a level of `target`) for the natives' storey `storeyIndex`:
+# an existing level at its elevation, or a new one; the first level when it
+# has none.
+function the bim level for ifc storey {integer:storeyIndex} of {bim ifc native set record:natives} in {a pointer to a bim model record:target} counting {a pointer to a bim ifc native count record:counts}:
+    execute:
+        if (storeyIndex < 0) or (storeyIndex >= (the length of (natives's storeyNames's values))):
+            return (the item at 0 in (target's levels's values))'s id
+        set elevation to the item at storeyIndex in (natives's storeyElevations's values)
+        loop cursor from 0 to the length of (target's levels's values):
+            set levelValue to the item at cursor in (target's levels's values)
+            if (the absolute value of (levelValue's elevation - elevation)) < 0.005:
+                return levelValue's id
+        set storeyHeight to 3.0
+        loop cursor from 0 to the length of (natives's storeyElevations's values):
+            set other to the item at cursor in (natives's storeyElevations's values)
+            if (other > (elevation + 0.5)) and ((other - elevation) < storeyHeight):
+                set storeyHeight to other - elevation
+        set counts's levels to counts's levels + 1
+        return add bim level named (the item at storeyIndex in (natives's storeyNames's values)) at elevation with height storeyHeight to target
+
+# The wall type of `target` with these layers, or a new one (named by the
+# rules).
+function the bim wall type with layers {a pointer to a list:layerList} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of (target's wallTypes's values):
+            set candidate to the item at cursor in (target's wallTypes's values)
+            if (candidate's role = bim wall planar role) and ((the length of (candidate's layers's values)) = (the length of layerList)):
+                set same to true
+                loop layerCursor from 0 to the length of layerList:
+                    set wanted to the item at layerCursor in layerList
+                    set have to the item at layerCursor in (candidate's layers's values)
+                    if (wanted's material != have's material) or ((the absolute value of (wanted's thickness - have's thickness)) > 0.0005):
+                        set same to false
+                if same:
+                    return candidate's id
+        return add bim wall type named (the string form of "IFC") with layerList to target
+
+# The linear type of `target` for a native member: one of its role, size,
+# shape and material, or a new one (named by the rules).
+function the bim linear type for {bim ifc native linear record:nativeLinear} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of (target's linearTypes's values):
+            set candidate to the item at cursor in (target's linearTypes's values)
+            if ((candidate's role = nativeLinear's role) and (candidate's round = nativeLinear's round)) and (candidate's material = nativeLinear's material):
+                if ((the absolute value of (candidate's width - nativeLinear's width)) < 0.0005) and ((the absolute value of (candidate's depth - nativeLinear's depth)) < 0.0005):
+                    return candidate's id
+        return add bim linear type named (the string form of "IFC") as role nativeLinear's role sized nativeLinear's width by nativeLinear's depth round nativeLinear's round of nativeLinear's material to target
+
+# The opening type of `target` of this rough size (a door type standing on
+# the floor when `isDoor`), or a new one.
+function the bim opening type sized {a 64 bit floating-point number:roughWidth} by {a 64 bit floating-point number:roughHeight} on {a 64 bit floating-point number:sillValue} door {boolean:isDoor} in {a pointer to a bim model record:target}:
+    execute:
+        set frameWidth to 0.05
+        loop cursor from 0 to the length of (target's openingTypes's values):
+            set candidate to the item at cursor in (target's openingTypes's values)
+            if (candidate's isDoor = isDoor) and (((the absolute value of ((the bim rough width of candidate) - roughWidth)) < 0.002) and ((the absolute value of ((the bim rough height of candidate) - roughHeight)) < 0.002)):
+                if isDoor or ((the absolute value of (candidate's sill - sillValue)) < 0.002):
+                    return candidate's id
+        if isDoor:
+            return add bim door type named (the string form of "Deur") sized (roughWidth - (2.0 * frameWidth)) by (roughHeight - frameWidth) with frame frameWidth to target
+        return add bim opening type named (the string form of "Raam") sized (roughWidth - (2.0 * frameWidth)) by (roughHeight - frameWidth) with sill sillValue and frame frameWidth to target
+
+# The natives added to `target` (inside a transaction the caller opens):
+# their storeys as levels, walls with their types and openings, slabs.
+function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer to a bim model record:target}:
+    execute:
+        set counts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
+        if (the length of (target's levels's values)) = 0:
+            ignore add bim level named (the string form of "Ground floor") at 0.0 with height 3.0 to target
+        # Every storey a level, with the storey's properties (given again,
+        # not doubled, when the same file is imported twice).
+        loop storeyCursor from 0 to the length of (nativeSet's storeySources's values):
+            set storeyLevelId to the bim level for ifc storey storeyCursor of nativeSet in target counting (the address of counts)
+            set bim ifc psets of (the item at storeyCursor in (nativeSet's storeySources's values)) in (nativeSet's psets's values) on storeyLevelId in target
+        # What an earlier import of the same file made native is left out
+        # (it is in the model already, maybe changed); what is made now is
+        # listed as taken over, by its GlobalId.
+        set takenIds to the bim promoted ids of (@intrinsic("dereference", target))
+        loop wallCursor from 0 to the length of (nativeSet's walls's values):
+            set nativeWall to the item at wallCursor in (nativeSet's walls's values)
+            set wallSource to the item at wallCursor in (nativeSet's wallSources's values)
+            set wallGuid to the bim ifc global id of source wallSource in (nativeSet's psets's values)
+            if (bim guid wallGuid is among takenIds) = false:
+                set levelId to the bim level for ifc storey nativeWall's storey of nativeSet in target counting (the address of counts)
+                set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+                set typeId to the bim wall type with layers (nativeWall's layers's values) in target
+                set fresh to add bim wall typed typeId on levelId from nativeWall's start to nativeWall's finish to target
+                if fresh != the bim refused id:
+                    set counts's walls to counts's walls + 1
+                    give bim ifc psets of wallSource in (nativeSet's psets's values) to fresh in target
+                    note bim guid wallGuid promoted as fresh in target
+                    ignore set bim wall fresh base to (nativeWall's foot - levelElevation) and height to (nativeWall's head - nativeWall's foot) in target
+                    loop openingCursor from 0 to the length of (nativeWall's openings's values):
+                        set nativeOpening to the item at openingCursor in (nativeWall's openings's values)
+                        set openingTypeId to the bim opening type sized nativeOpening's width by nativeOpening's height on (nativeOpening's sillHeight - levelElevation) door nativeOpening's isDoor in target
+                        if openingTypeId != the bim refused id:
+                            if (add bim opening typed openingTypeId in fresh at nativeOpening's along to target) != the bim refused id:
+                                set counts's openings to counts's openings + 1
+        loop slabCursor from 0 to the length of (nativeSet's slabs's values):
+            set nativeSlab to the item at slabCursor in (nativeSet's slabs's values)
+            set slabSource to the item at slabCursor in (nativeSet's slabSources's values)
+            set slabGuid to the bim ifc global id of source slabSource in (nativeSet's psets's values)
+            if (bim guid slabGuid is among takenIds) = false:
+                set levelId to the bim level for ifc storey nativeSlab's storey of nativeSet in target counting (the address of counts)
+                set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+                set fresh to add bim slab on levelId around (nativeSlab's outline's values) thick nativeSlab's thickness to target
+                if fresh != the bim refused id:
+                    set counts's slabs to counts's slabs + 1
+                    give bim ifc psets of slabSource in (nativeSet's psets's values) to fresh in target
+                    note bim guid slabGuid promoted as fresh in target
+                    ignore set bim slab fresh material to nativeSlab's material in target
+                    ignore set bim plate fresh top to (nativeSlab's top - levelElevation) pitch 0.0 heading 0.0 in target
+        loop linearCursor from 0 to the length of (nativeSet's linears's values):
+            set nativeLinear to the item at linearCursor in (nativeSet's linears's values)
+            set linearSource to the item at linearCursor in (nativeSet's linearSources's values)
+            set linearGuid to the bim ifc global id of source linearSource in (nativeSet's psets's values)
+            if (bim guid linearGuid is among takenIds) = false:
+                set levelId to the bim level for ifc storey nativeLinear's storey of nativeSet in target counting (the address of counts)
+                set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+                set typeId to the bim linear type for nativeLinear in target
+                set fromSpot to a cad vector3 with x nativeLinear's start's x, y nativeLinear's start's y and z (nativeLinear's start's z - levelElevation)
+                set toSpot to a cad vector3 with x nativeLinear's finish's x, y nativeLinear's finish's y and z (nativeLinear's finish's z - levelElevation)
+                set freshLinear to add bim linear typed typeId on levelId from fromSpot to toSpot turned nativeLinear's turn to target
+                if freshLinear != the bim refused id:
+                    set counts's linears to counts's linears + 1
+                    give bim ifc psets of linearSource in (nativeSet's psets's values) to freshLinear in target
+                    note bim guid linearGuid promoted as freshLinear in target
+        free takenIds
+        return counts
+
+# The IFC file at `path` imported: its walls and slabs made native elements
+# of `documentValue`'s model (one undoable step, what was made counted in
+# `counts`), the rest as imported read-only elements.
+function the bim ifc import of {a string:path} made native in {a pointer to a bim document record:documentValue} counting {a pointer to a bim ifc native count record:counts}:
+    execute:
+        set stepFile to the bim step file at path
+        set nativeSet to the bim ifc natives of stepFile
+        set madeCounts to the bim ifc natives nativeSet made in documentValue
+        set counts's levels to madeCounts's levels
+        set counts's walls to madeCounts's walls
+        set counts's openings to madeCounts's openings
+        set counts's slabs to madeCounts's slabs
+        set counts's linears to madeCounts's linears
+        return the bim ifc elements of stepFile skipping (nativeSet's skipped's values)
+
+# Adds the walls, slabs and linear elements of `nativeSet` to
+# `documentValue`'s model as one undoable step (none when there are none);
+# what was made, counted.
+function the bim ifc natives {bim ifc native set record:nativeSet} made in {a pointer to a bim document record:documentValue}:
+    execute:
+        set madeCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0)
+        if (((the length of (nativeSet's walls's values)) + (the length of (nativeSet's slabs's values))) + (the length of (nativeSet's linears's values))) > 0:
+            begin bim transaction in documentValue
+            set madeCounts to add bim ifc natives nativeSet to (the address of (documentValue's current))
+            commit bim transaction in documentValue
+        return madeCounts
+
+# No natives (nothing to make native).
+function no bim ifc natives:
+    execute:
+        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record)
+
+# What was made native, for a message: "12 walls, 30 openings, 4 floors
+# made native, 2 storeys added; ".
+function the bim ifc native text of {bim ifc native count record:counts}:
+    execute:
+        if ((counts's walls + counts's slabs) + counts's linears) = 0:
+            return the string form of ""
+        set described to (((the string form of counts's walls) + (the string form of " walls, ")) + ((the string form of counts's openings) + (the string form of " openings, "))) + ((the string form of counts's slabs) + (the string form of " floors, "))
+        set described to (described + (the string form of counts's linears)) + (the string form of " columns and beams made native")
+        if counts's levels > 0:
+            set described to (described + (the string form of ", ")) + ((the string form of counts's levels) + (the string form of " storeys added"))
+        return described + (the string form of "; ")

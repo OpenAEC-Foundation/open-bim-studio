@@ -1,0 +1,307 @@
+# SPDX-License-Identifier: MPL-2.0
+# Spaces derived from the walls around them. The footprint sides of every wall
+# on a level are put into the kernel's 2D arrangement, which returns every
+# bounded region they enclose. A region whose interior lies inside a wall
+# footprint is wall; every other region is a space. A space is identified by
+# the walls that bound it, which stays stable while those walls move.
+#
+# Openings are ignored: a space is bounded by wall bodies, as rooms are drawn
+# and measured. Derivation is not incremental; it visits every wall of the
+# level each time.
+import model/bim_evaluate.dl
+import kernel/planar/arrangement2.dl
+import kernel/planar/triangulate2.dl
+
+# `outline` runs counter-clockwise; `boundingWalls` is ascending.
+class:
+    patterns:
+        [a|] bim space record
+    members:
+        levelId as a 64 bit integer
+        boundingWalls as the type of (a cad topology list of a 64 bit integer)
+        outline as the type of (a cad topology list of a cad vector2)
+        area as a 64 bit floating-point number
+
+function bim ring {a pointer to a list:ring} encloses {cad vector2:location}:
+    execute:
+        set enclosed to false
+        set count to the length of ring
+        loop cursor from 0 to count:
+            set here to the item at cursor in ring
+            set following to the item at (the remainder of (cursor + 1) divided by count) in ring
+            if (here's y > location's y) != (following's y > location's y):
+                set crossingX to here's x + (((location's y - here's y) / (following's y - here's y)) * (following's x - here's x))
+                if location's x < crossingX:
+                    set enclosed to (enclosed = false)
+        return enclosed
+
+# A point strictly inside `ring`: the centroid of the largest triangle of its
+# triangulation.
+function a bim point inside {a pointer to a list:ring}:
+    execute:
+        set holes to an empty list of the type of (an empty list of a cad vector2)
+        set mesh to the cad triangulation of ring with holes holes
+        free holes
+        set best to the item at 0 in ring
+        set bestArea to -1.0
+        loop cursor from 0 to the length of (the triangles of mesh):
+            set face to the item at cursor in (the triangles of mesh)
+            set cornerA to the item at (the first of face) in (the points of mesh)
+            set cornerB to the item at (the second of face) in (the points of mesh)
+            set cornerC to the item at (the third of face) in (the points of mesh)
+            set doubled to the absolute value of (((cornerB's x - cornerA's x) * (cornerC's y - cornerA's y)) - ((cornerB's y - cornerA's y) * (cornerC's x - cornerA's x)))
+            if doubled > bestArea:
+                set bestArea to doubled
+                set best to a cad vector2 with x (((cornerA's x + cornerB's x) + cornerC's x) / 3.0) and y (((cornerA's y + cornerB's y) + cornerC's y) / 3.0)
+        free cad triangulation mesh
+        return best
+
+# The spaces of level `levelId`, in the arrangement's order. `index` must index
+# the walls of `modelValue`.
+function the bim spaces of {bim model record:modelValue} on level {a 64 bit integer:levelId} using {bim join index record:index}:
+    execute:
+        set result to a cad topology list of a bim space record
+        set walls to modelValue's walls's values
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        set tagged to an empty list of a cad tagged line2
+        set widest to 0.0
+        loop cursor from 0 to the length of walls:
+            set wallValue to the item at cursor in walls
+            set ring to an empty list of a cad vector2
+            if wallValue's levelId = levelId:
+                set footprint to the bim footprint of wallValue in modelValue using index
+                if footprint's valid:
+                    free ring
+                    # A curved wall's outline follows its arcs.
+                    set ring to the bim outline of wallValue with footprint wide (the bim wall thickness of wallValue in modelValue)
+                    set widest to the maximum of widest and (the bim wall thickness of wallValue in modelValue)
+                    set sides to the length of ring
+                    loop side from 0 to sides:
+                        set line to a cad line2 from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by sides) in ring)
+                        append (a cad tagged line2 from line with tag (wallValue's id as a 64 bit unsigned integer)) to tagged
+            append ring to rings
+        set regions to the cad bounded face edges of tagged within (a cad tolerance of the bim join tolerance)
+        free tagged
+        # A footprint reaches at most half its thickness beyond its centreline,
+        # so the walls around a point find every footprint that can hold it,
+        # unless a wall is thicker than two cells.
+        set nearbyEnough to (widest * 0.5) < the bim cell size
+        loop regionCursor from 0 to the length of (regions's rings):
+            set edges to the item at regionCursor in (regions's rings)
+            set outline to a cad topology list of a cad vector2
+            set bounding to a cad topology list of a 64 bit integer
+            loop edgeCursor from 0 to the length of edges:
+                set edge to the item at edgeCursor in edges
+                append edge's line's start to (outline's values)
+                append (edge's tag as a 64 bit integer) to (bounding's values)
+            set area to the cad signed area of (outline's values)
+            if area > (the bim join tolerance * the bim join tolerance):
+                set probe to a bim point inside (outline's values)
+                set candidates to an empty list of a 64 bit integer
+                if nearbyEnough:
+                    free candidates
+                    set candidates to the bim walls around probe on level levelId in index
+                else:
+                    loop cursor from 0 to the length of walls:
+                        append (the item at cursor in walls)'s id to candidates
+                set inWall to false
+                loop candidateCursor from 0 to the length of candidates:
+                    set position to (the bim wall index of (the item at candidateCursor in candidates) in modelValue)'s position
+                    set candidateRing to the item at position in rings
+                    if (the length of candidateRing) >= 4:
+                        if bim ring candidateRing encloses probe:
+                            set inWall to true
+                free candidates
+                if inWall = false:
+                    sort and deduplicate bim ids (bounding's values)
+                    append (@intrinsic("construct", a bim space record, levelId, bounding, outline, area)) to (result's values)
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+        return result
+
+# ---------------------------------------------------------------- NEN 2580
+
+# A storey's floor areas after NEN 2580 (metres squared), with the lines that
+# bound them as pixel-free pairs of plan points:
+# - `gross` (BVO, bruto vloeroppervlakte): within the outer faces of the
+#   walls;
+# - `usable` (GO, gebruiksoppervlakte): within the inner faces of the outer
+#   walls, so with the inner walls;
+# - `net` (NVO, netto vloeroppervlakte): the spaces, without any wall;
+# - `lettable` (VVO, verhuurbaar vloeroppervlak): the usable area less the
+#   spaces marked as not lettable; none can be marked yet, so it equals GO.
+# `grossPairs` runs along the outer faces, `usablePairs` along the outer
+# walls' inner faces.
+class:
+    patterns:
+        [a|] bim area measures record
+    members:
+        gross as a 64 bit floating-point number
+        usable as a 64 bit floating-point number
+        net as a 64 bit floating-point number
+        lettable as a 64 bit floating-point number
+        grossPairs as the type of (a cad topology list of a cad vector2)
+        usablePairs as the type of (a cad topology list of a cad vector2)
+
+# The NEN 2580 areas of level `levelId`. The walls' outlines divide the
+# storey into faces, as for the spaces: faces inside a wall are wall, the
+# others are spaces. A face edge no other face shares lies on the outside; a
+# wall face with such an edge belongs to an outer wall.
+function the bim area measures of {bim model record:modelValue} on level {a 64 bit integer:levelId} using {bim join index record:index}:
+    execute:
+        set walls to modelValue's walls's values
+        set rings to an empty list of the type of (an empty list of a cad vector2)
+        set tagged to an empty list of a cad tagged line2
+        loop cursor from 0 to the length of walls:
+            set wallValue to the item at cursor in walls
+            set ring to an empty list of a cad vector2
+            if wallValue's levelId = levelId:
+                set footprint to the bim footprint of wallValue in modelValue using index
+                if footprint's valid:
+                    free ring
+                    set ring to the bim outline of wallValue with footprint wide (the bim wall thickness of wallValue in modelValue)
+                    set sides to the length of ring
+                    loop side from 0 to sides:
+                        set line to a cad line2 from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by sides) in ring)
+                        append (a cad tagged line2 from line with tag (wallValue's id as a 64 bit unsigned integer)) to tagged
+            append ring to rings
+        set regions to the cad bounded face edges of tagged within (a cad tolerance of the bim join tolerance)
+        free tagged
+        # Every face edge, with the face it belongs to.
+        set edgeStarts to an empty list of a cad vector2
+        set edgeEnds to an empty list of a cad vector2
+        set edgeFaces to an empty list of an integer
+        set faceAreas to an empty list of a 64 bit floating-point number
+        set faceInWall to an empty list of a boolean
+        loop regionCursor from 0 to the length of (regions's rings):
+            set edges to the item at regionCursor in (regions's rings)
+            set outline to an empty list of a cad vector2
+            loop edgeCursor from 0 to the length of edges:
+                append (the item at edgeCursor in edges)'s line's start to outline
+            set faceArea to the cad signed area of outline
+            set inWall to false
+            if faceArea > (the bim join tolerance * the bim join tolerance):
+                set probe to a bim point inside outline
+                loop cursor from 0 to the length of walls:
+                    set candidateRing to the item at cursor in rings
+                    if (the length of candidateRing) >= 4:
+                        if bim ring candidateRing encloses probe:
+                            set inWall to true
+                set faceIndex to the length of faceAreas
+                append faceArea to faceAreas
+                append inWall to faceInWall
+                loop edgeCursor from 0 to the length of edges:
+                    set edge to the item at edgeCursor in edges
+                    append edge's line's start to edgeStarts
+                    append edge's line's end to edgeEnds
+                    append faceIndex to edgeFaces
+            free outline
+        # The face across each edge, or -1 on the outside.
+        set joinReach to the bim join tolerance
+        set across to an empty list of an integer
+        loop cursor from 0 to the length of edgeStarts:
+            set neighbour to -1
+            loop other from 0 to the length of edgeStarts:
+                if (neighbour < 0) and ((the item at other in edgeFaces) != (the item at cursor in edgeFaces)):
+                    if ((the cad distance from (the item at other in edgeStarts) to (the item at cursor in edgeEnds)) <= joinReach) and ((the cad distance from (the item at other in edgeEnds) to (the item at cursor in edgeStarts)) <= joinReach):
+                        set neighbour to the item at other in edgeFaces
+            append neighbour to across
+        set outerWall to an empty list of a boolean
+        loop faceCursor from 0 to the length of faceAreas:
+            append false to outerWall
+        loop cursor from 0 to the length of edgeStarts:
+            set face to the item at cursor in edgeFaces
+            if ((the item at cursor in across) < 0) and (the item at face in faceInWall):
+                replace item at index face in outerWall with true
+        set gross to 0.0
+        set net to 0.0
+        set outerWalls to 0.0
+        loop faceCursor from 0 to the length of faceAreas:
+            set gross to gross + (the item at faceCursor in faceAreas)
+            if (the item at faceCursor in faceInWall) = false:
+                set net to net + (the item at faceCursor in faceAreas)
+            if the item at faceCursor in outerWall:
+                set outerWalls to outerWalls + (the item at faceCursor in faceAreas)
+        set grossPairs to a cad topology list of a cad vector2
+        set usablePairs to a cad topology list of a cad vector2
+        loop cursor from 0 to the length of edgeStarts:
+            set face to the item at cursor in edgeFaces
+            set neighbour to the item at cursor in across
+            if neighbour < 0:
+                append (the item at cursor in edgeStarts) to (grossPairs's values)
+                append (the item at cursor in edgeEnds) to (grossPairs's values)
+            else if (the item at face in outerWall) and ((the item at neighbour in outerWall) = false):
+                append (the item at cursor in edgeStarts) to (usablePairs's values)
+                append (the item at cursor in edgeEnds) to (usablePairs's values)
+        free edgeStarts
+        free edgeEnds
+        free edgeFaces
+        free faceAreas
+        free faceInWall
+        free across
+        free outerWall
+        loop cursor from 0 to the length of rings:
+            free (the item at cursor in rings)
+        free rings
+        set usable to gross - outerWalls
+        return @intrinsic("construct", a bim area measures record, gross, usable, net, usable, grossPairs, usablePairs)
+
+# A stable 64-bit identity of a space: FNV-1a over its bounding wall ids.
+function the bim identity of {bim space record:space}:
+    execute:
+        set hash to 14695981039346656037 as a 64 bit unsigned integer
+        loop cursor from 0 to the length of (space's boundingWalls's values):
+            set wallId to (the item at cursor in (space's boundingWalls's values)) as a 64 bit unsigned integer
+            loop byteCursor from 0 to 8:
+                set octet to (wallId shifted right by ((byteCursor * 8) as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)
+                set hash to (hash bitwise xor octet) * (1099511628211 as a 64 bit unsigned integer)
+        return (hash shifted right by (1 as a 64 bit unsigned integer)) as a 64 bit integer
+
+# The same closed contour regardless of its starting vertex or winding.
+# The tolerance is in metres. Vertex counts must agree: a nearby room or
+# one sharing only some edges must never disappear from an export.
+function bim space contours {a pointer to a list:firstRing} and {a pointer to a list:secondRing} match within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set cornerCount to the length of firstRing
+        if (cornerCount < 3) or (cornerCount != (the length of secondRing)):
+            return false
+        loop offset from 0 to cornerCount:
+            set forwardMatch to true
+            set reverseMatch to true
+            loop corner from 0 to cornerCount:
+                set firstPoint to the item at corner in firstRing
+                set forwardIndex to the remainder of (offset + corner) divided by cornerCount
+                set reverseIndex to the remainder of ((offset + cornerCount) - corner) divided by cornerCount
+                if (the cad distance from firstPoint to (the item at forwardIndex in secondRing)) > tolerance:
+                    set forwardMatch to false
+                if (the cad distance from firstPoint to (the item at reverseIndex in secondRing)) > tolerance:
+                    set reverseMatch to false
+            if forwardMatch or reverseMatch:
+                return true
+        return false
+
+# A read-only test shared by export, display and picking. Keeping the
+# derived cache unchanged lets the editor still reference and convert it.
+function bim region {bim space record:regionValue} has an explicit space in {bim model record:modelValue}:
+    execute:
+        loop objectCursor from 0 to the length of (modelValue's spaceObjects's values):
+            set objectValue to the item at objectCursor in (modelValue's spaceObjects's values)
+            if objectValue's levelId = regionValue's levelId:
+                if bim space contours (regionValue's outline's values) and (objectValue's outline's values) match within 0.000001:
+                    return true
+        return false
+
+# Explicit Spaces supersede only their matching automatic wall region on
+# the same storey. Filter once before IFCX writes either children or nodes,
+# so both use exactly the same region order and identities. A micrometre
+# allows harmless floating-point changes without merging adjacent rooms.
+function the bim unsaved regions of {a pointer to a list:derivedSpaces} in {bim model record:modelValue}:
+    execute:
+        set keptRegions to a cad topology list of a bim space record
+        loop regionCursor from 0 to the length of derivedSpaces:
+            set regionValue to the item at regionCursor in derivedSpaces
+            set hasExplicit to bim region regionValue has an explicit space in modelValue
+            if hasExplicit = false:
+                append regionValue to (keptRegions's values)
+        return keptRegions

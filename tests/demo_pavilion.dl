@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: MPL-2.0
+# The demonstration pavilion (bim_demo_pavilion.dl), without an editor:
+# built twice to the same model; what it holds, with every id below the
+# reserved 10000 and the next id at 10000; a column and a beam where they
+# belong; every reinforcement on a host that exists, generating bars that
+# all lie inside that host; and the model through the serializers: the
+# native text, IFC5 JSON (demo-pavilion.ifcx) and IFC5 binary
+# (demo-pavilion.ifcxb), each read back to the same model.
+import graphics/bim_demo_pavilion.dl
+import formats/bim_ifcx.dl
+import formats/bim_ifcx_read.dl
+
+# The concrete a reinforcement sits in: `found` false when its host is
+# missing.
+class:
+    patterns:
+        [a|] pavilion host box record
+    members:
+        found as a boolean
+        low as a cad vector3
+        high as a cad vector3
+
+function show pavilion counts of {bim model record:modelValue} titled {a string:title}:
+    execute:
+        print (title + ((the string form of ": levels ") + ((the string form of (the length of (modelValue's levels's values))) + ((the string form of ", grids ") + (the string form of (the length of (modelValue's grids's values))))))) as a line
+        print ((the string form of "  plates ") + ((the string form of (the length of (modelValue's slabs's values))) + ((the string form of ", linear elements ") + ((the string form of (the length of (modelValue's linears's values))) + ((the string form of ", walls ") + ((the string form of (the length of (modelValue's walls's values))) + ((the string form of ", openings ") + (the string form of (the length of (modelValue's openings's values)))))))))) as a line
+        print ((the string form of "  components ") + ((the string form of (the length of (modelValue's components's values))) + ((the string form of ", instances ") + ((the string form of (the length of (modelValue's instances's values))) + ((the string form of ", reinforcement ") + (the string form of (the length of (modelValue's reinforcements's values)))))))) as a line
+
+function the pavilion metres of {a 64 bit floating-point number:amount}:
+    execute:
+        set buffer to a new string buffer containing 40 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.2f", amount)
+        return the substring of buffer from 0 spanning written bytes
+
+function the pavilion elevation of level {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        set levelFound to the bim level index of levelId in modelValue
+        if levelFound's valid:
+            return (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        return 0.0
+
+# The box of the host of `spec`: a linear element's (its width across a
+# level axis, or along x for an upright one, its depth square to both), a
+# plate's (its outline's extent, from its underside to its top) or a
+# wall's (its axis widened by half its thickness, its height high).
+function the pavilion host box of {reinforcement definition:spec} in {bim model record:modelValue}:
+    execute:
+        set nothingFound to @intrinsic("construct", a pavilion host box record, false, (a cad vector3 with x 0.0, y 0.0 and z 0.0), (a cad vector3 with x 0.0, y 0.0 and z 0.0))
+        set linearFound to the bim linear index of spec's hostId in modelValue
+        if linearFound's valid:
+            set hostValue to the item at linearFound's position in (modelValue's linears's values)
+            set profile to the bim type of linear hostValue in modelValue
+            set base to the pavilion elevation of level (hostValue's levelId) in modelValue
+            set halfX to 0.0
+            set halfY to 0.0
+            set halfZ to 0.0
+            if (the absolute value of (hostValue's finish's z - hostValue's start's z)) > 0.001:
+                set halfX to profile's width * 0.5
+                set halfY to profile's depth * 0.5
+            else if (the absolute value of (hostValue's finish's x - hostValue's start's x)) > 0.001:
+                set halfY to profile's width * 0.5
+                set halfZ to profile's depth * 0.5
+            else:
+                set halfX to profile's width * 0.5
+                set halfZ to profile's depth * 0.5
+            set lowCorner to a cad vector3 with x ((the minimum of (hostValue's start's x) and (hostValue's finish's x)) - halfX), y ((the minimum of (hostValue's start's y) and (hostValue's finish's y)) - halfY) and z ((base + (the minimum of (hostValue's start's z) and (hostValue's finish's z))) - halfZ)
+            set highCorner to a cad vector3 with x ((the maximum of (hostValue's start's x) and (hostValue's finish's x)) + halfX), y ((the maximum of (hostValue's start's y) and (hostValue's finish's y)) + halfY) and z ((base + (the maximum of (hostValue's start's z) and (hostValue's finish's z))) + halfZ)
+            return @intrinsic("construct", a pavilion host box record, true, lowCorner, highCorner)
+        set slabFound to the bim slab index of spec's hostId in modelValue
+        if slabFound's valid:
+            set slabValue to the item at slabFound's position in (modelValue's slabs's values)
+            set topLevel to (the pavilion elevation of level (slabValue's levelId) in modelValue) + slabValue's top
+            set lowX to 1000000.0
+            set lowY to 1000000.0
+            set highX to -1000000.0
+            set highY to -1000000.0
+            loop cornerCursor from 0 to the length of (slabValue's outline's values):
+                set corner to the item at cornerCursor in (slabValue's outline's values)
+                set lowX to the minimum of lowX and corner's x
+                set lowY to the minimum of lowY and corner's y
+                set highX to the maximum of highX and corner's x
+                set highY to the maximum of highY and corner's y
+            set underside to topLevel - (the bim thickness of plate slabValue in modelValue)
+            return @intrinsic("construct", a pavilion host box record, true, (a cad vector3 with x lowX, y lowY and z underside), (a cad vector3 with x highX, y highY and z topLevel))
+        set wallFound to the bim wall index of spec's hostId in modelValue
+        if wallFound's valid:
+            set wallValue to the item at wallFound's position in (modelValue's walls's values)
+            set halfThickness to (the bim wall thickness of wallValue in modelValue) * 0.5
+            set foot to (the pavilion elevation of level (wallValue's levelId) in modelValue) + wallValue's baseOffset
+            set lowCorner to a cad vector3 with x ((the minimum of (wallValue's start's x) and (wallValue's finish's x)) - halfThickness), y ((the minimum of (wallValue's start's y) and (wallValue's finish's y)) - halfThickness) and z foot
+            set highCorner to a cad vector3 with x ((the maximum of (wallValue's start's x) and (wallValue's finish's x)) + halfThickness), y ((the maximum of (wallValue's start's y) and (wallValue's finish's y)) + halfThickness) and z (foot + wallValue's height)
+            return @intrinsic("construct", a pavilion host box record, true, lowCorner, highCorner)
+        return nothingFound
+
+function pavilion point {cad vector3:spot} lies in {pavilion host box record:hostBox}:
+    execute:
+        set slack to 0.000001
+        set insideX to (spot's x >= (hostBox's low's x - slack)) and (spot's x <= (hostBox's high's x + slack))
+        set insideY to (spot's y >= (hostBox's low's y - slack)) and (spot's y <= (hostBox's high's y + slack))
+        set insideZ to (spot's z >= (hostBox's low's z - slack)) and (spot's z <= (hostBox's high's z + slack))
+        return (insideX and insideY) and insideZ
+
+# The pavilion's model through the serializers, back to a model; `title`
+# names the round in the output.
+function show pavilion reading of {a string:nativeText} titled {a string:title} against {a string:original}:
+    execute:
+        set parsed to the bim model parsed from nativeText
+        if parsed's valid = false:
+            print ((title + (the string form of ": not read, ")) + parsed's message) as a line
+            return nothing
+        show pavilion counts of parsed's modelValue titled title
+        print ((the string form of "  same model: ") + (the string form of ((the bim file text of parsed's modelValue) = original))) as a line
+
+set pavilion to the bim demo pavilion
+set modelValue to pavilion's modelValue
+show pavilion counts of modelValue titled (the string form of "built")
+print ((the string form of "kinds: columns ") + ((the string form of pavilion's columnCount) + ((the string form of ", beams ") + ((the string form of pavilion's beamCount) + ((the string form of ", footings ") + ((the string form of pavilion's footingCount) + ((the string form of ", reinforcement ") + (the string form of pavilion's reinforcementCount)))))))) as a line
+set original to the bim file text of modelValue
+print ((the string form of "same model when built again: ") + (the string form of (original = (the bim file text of ((the bim demo pavilion)'s modelValue))))) as a line
+# The reinforcement is made last, so its ids are the highest.
+set highest to 0 as a 64 bit integer
+loop cursor from 0 to the length of (modelValue's reinforcements's values):
+    if (the item at cursor in (modelValue's reinforcements's values))'s id > highest:
+        set highest to (the item at cursor in (modelValue's reinforcements's values))'s id
+print ((the string form of "ids below 10000: ") + ((the string form of (highest < (10000 as a 64 bit integer))) + ((the string form of ", next id ") + (the string form of modelValue's nextId)))) as a line
+
+# Elements where they belong.
+set columnFound to the bim linear index of pavilion's firstColumnId in modelValue
+set firstColumn to the item at columnFound's position in (modelValue's linears's values)
+print ((the string form of "column A1: ") + ((the pavilion metres of firstColumn's start's x) + ((the string form of ", ") + ((the pavilion metres of firstColumn's start's y) + ((the string form of ", z ") + ((the pavilion metres of firstColumn's start's z) + ((the string form of " to ") + (the pavilion metres of firstColumn's finish's z)))))))) as a line
+set beamFound to the bim linear index of pavilion's firstBeamId in modelValue
+set firstBeam to the item at beamFound's position in (modelValue's linears's values)
+print ((the string form of "beam on A: x ") + ((the pavilion metres of firstBeam's start's x) + ((the string form of " to ") + ((the pavilion metres of firstBeam's finish's x) + ((the string form of ", top at ") + (the pavilion metres of (firstBeam's start's z + 0.25))))))) as a line
+
+# Every reinforcement: its host, its bars, and the bars inside the host.
+set hosted to 0
+set generating to 0
+set enclosed to 0
+set outsideMarks to the string form of ""
+loop cursor from 0 to the length of (modelValue's reinforcements's values):
+    set spec to the item at cursor in (modelValue's reinforcements's values)
+    set hostBox to the pavilion host box of spec in modelValue
+    if hostBox's found:
+        set hosted to hosted + 1
+    set generated to the bim reinforcement paths of spec in modelValue
+    if generated's valid and ((the length of (generated's bars's values)) > 0):
+        set generating to generating + 1
+    set allInside to hostBox's found and generated's valid
+    loop barCursor from 0 to the length of (generated's bars's values):
+        set barValue to the item at barCursor in (generated's bars's values)
+        loop pointCursor from 0 to the length of (barValue's points's values):
+            if (pavilion point (the item at pointCursor in (barValue's points's values)) lies in hostBox) = false:
+                set allInside to false
+    if allInside:
+        set enclosed to enclosed + 1
+    else:
+        set outsideMarks to (outsideMarks + (the string form of " ")) + spec's mark
+print ((the string form of "reinforcement on its host: ") + ((the string form of hosted) + ((the string form of ", with bars: ") + ((the string form of generating) + ((the string form of ", bars inside the host: ") + (the string form of enclosed)))))) as a line
+print ((the string form of "outside:") + outsideMarks) as a line
+set firstCage to the item at 0 in (modelValue's reinforcements's values)
+print ((the string form of "first cage: ") + ((firstCage's mark + (the string form of ", ")) + (the reinforcement annotation of firstCage))) as a line
+
+# Through the serializers and back.
+show pavilion reading of original titled (the string form of "native") against original
+set stamp to the string form of "2026-10-20T00:00:00Z"
+set jsonText to the bim ifcx text of modelValue identified as (the string form of "open-bim-studio/demo-pavilion") for project (the string form of "open-bim-studio") by (the string form of "Open BIM Studio") at stamp
+print ((the string form of "written demo-pavilion.ifcx: ") + (the string form of (write bim text jsonText to file (the string form of "demo-pavilion.ifcx")))) as a line
+set encoded to the bim cbor ifcx of jsonText
+set binaryWritten to false
+if encoded's valid:
+    set binaryWritten to write bim compressed text encoded's text to file (the string form of "demo-pavilion.ifcxb")
+print ((the string form of "written demo-pavilion.ifcxb: ") + (the string form of binaryWritten)) as a line
+loop fileCursor from 0 to 2:
+    set savedPath to the string form of "demo-pavilion.ifcx"
+    if fileCursor = 1:
+        set savedPath to the string form of "demo-pavilion.ifcxb"
+    set loaded to the bim uncompressed content at savedPath
+    if loaded's valid:
+        set rebuilt to the bim native text of ifcx loaded's text
+        if rebuilt's valid:
+            show pavilion reading of rebuilt's text titled savedPath against original
+        else:
+            print ((savedPath + (the string form of ": not IfcX, ")) + rebuilt's message) as a line
+    else:
+        print (savedPath + (the string form of ": not read")) as a line

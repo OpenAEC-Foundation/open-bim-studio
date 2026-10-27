@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: MPL-2.0
+import editor/bim_modify_preview.dl
+
+function check scale profile {boolean:accepted} named {a string:captionText}:
+    execute:
+        if accepted = false:
+            print ((the string form of "FAIL: ") + captionText) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        print ((the string form of "PASS: ") + captionText) as a line
+
+function scale preview points {a pointer to a list:previewPoints} match native rings {a pointer to a list:nativeRings}:
+    execute:
+        set cornerCount to (the length of nativeRings) / 2
+        if (cornerCount < 3) or ((the length of previewPoints) != (cornerCount * 6)):
+            return false
+        loop cornerCursor from 0 to cornerCount:
+            set following to the remainder of (cornerCursor + 1) divided by cornerCount
+            loop edgeKind from 0 to 3:
+                set firstIndex to cornerCursor
+                set lastIndex to following
+                if edgeKind = 1:
+                    set firstIndex to cornerCount + cornerCursor
+                    set lastIndex to cornerCount + following
+                if edgeKind = 2:
+                    set lastIndex to cornerCount + cornerCursor
+                set edgeIndex to (cornerCursor * 6) + (edgeKind * 2)
+                set firstSpot to the item at edgeIndex in previewPoints
+                set lastSpot to the item at (edgeIndex + 1) in previewPoints
+                set nativeFirst to the item at firstIndex in nativeRings
+                set nativeLast to the item at lastIndex in nativeRings
+                if ((the cad distance from firstSpot to nativeFirst) > 1e-9) or ((the cad distance from lastSpot to nativeLast) > 1e-9):
+                    return false
+        return true
+
+function run scale profile case {integer:roleCode}:
+    execute:
+        set captionPrefix to the string form of "column: "
+        set firstControl to a cad vector3 with x 1.0, y 0.0 and z 0.0
+        set lastControl to a cad vector3 with x 1.0, y 0.0 and z 3.0
+        set profileDepth to 0.3
+        set expectedWidth to 0.3
+        set expectedHeight to 3.0
+        set expectedCentreZ to 3.5
+        if roleCode = bim beam role:
+            set captionPrefix to the string form of "beam: "
+            set firstControl to a cad vector3 with x 1.0, y 1.0 and z 1.0
+            set lastControl to a cad vector3 with x 3.0, y 1.0 and z 1.0
+            set profileDepth to 0.5
+            set expectedWidth to 4.0
+            set expectedHeight to 0.5
+            set expectedCentreZ to 3.0
+        set documentValue to a new bim document
+        set documentPointer to the address of documentValue
+        set modelPointer to the address of (documentValue's current)
+        begin bim transaction in documentPointer
+        set levelId to add bim level named (the string form of "Profile level") at 2.0 with height 3.0 to modelPointer
+        set typeId to add bim linear type named (the string form of "Preview profile") as role roleCode sized 0.3 by profileDepth round false of (the string form of "generic") to modelPointer
+        set sourceId to add bim linear typed typeId on levelId from firstControl to lastControl turned 0.0 to modelPointer
+        commit bim transaction in documentPointer
+        check scale profile (sourceId > 0) named (captionPrefix + (the string form of "native linear setup succeeds"))
+        begin bim transaction in documentPointer
+        check scale profile (move bim linear sourceId to firstControl and lastControl turned 0.0 in modelPointer) named (captionPrefix + (the string form of "native setter creates an undoable edit"))
+        commit bim transaction in documentPointer
+        check scale profile (undo bim transaction in documentPointer) named (captionPrefix + (the string form of "history has undo and redo entries"))
+        set sourceLinear to the item at 0 in (modelPointer's linears's values)
+        set sourceRevision to documentValue's revision
+        set sourceUndo to the length of (documentValue's undoStack's values)
+        set sourceRedo to the length of (documentValue's redoStack's values)
+        set sourceNextId to modelPointer's nextId
+        set sourceJournal to the length of (modelPointer's journal's values)
+        check scale profile ((sourceUndo = 1) and (sourceRedo = 1)) named (captionPrefix + (the string form of "both history stacks are populated before preview"))
+        set changeValue to the bim scale transform about (a cad vector2 with x 0.0 and y 0.0) by 2.0
+        set previewEdges to the bim scaled linear preview edges of sourceLinear by changeValue in (@intrinsic("dereference", modelPointer))
+        set lowestSpot to a cad vector3 with x 1e100, y 1e100 and z 1e100
+        set highestSpot to a cad vector3 with x -1e100, y -1e100 and z -1e100
+        loop pointCursor from 0 to the length of (previewEdges's values):
+            set edgeSpot to the item at pointCursor in (previewEdges's values)
+            set lowestSpot's x to the minimum of lowestSpot's x and edgeSpot's x
+            set lowestSpot's y to the minimum of lowestSpot's y and edgeSpot's y
+            set lowestSpot's z to the minimum of lowestSpot's z and edgeSpot's z
+            set highestSpot's x to the maximum of highestSpot's x and edgeSpot's x
+            set highestSpot's y to the maximum of highestSpot's y and edgeSpot's y
+            set highestSpot's z to the maximum of highestSpot's z and edgeSpot's z
+        set widthValue to highestSpot's x - lowestSpot's x
+        set depthValue to highestSpot's y - lowestSpot's y
+        set heightValue to highestSpot's z - lowestSpot's z
+        set centreZ to (highestSpot's z + lowestSpot's z) * 0.5
+        set fixedProfile to ((the absolute value of (widthValue - expectedWidth)) < 1e-9) and ((the absolute value of (depthValue - 0.3)) < 1e-9)
+        set fixedProfile to fixedProfile and (((the absolute value of (heightValue - expectedHeight)) < 1e-9) and ((the absolute value of (centreZ - expectedCentreZ)) < 1e-9))
+        check scale profile fixedProfile named (captionPrefix + (the string form of "preview retains native profile dimensions and elevated Z"))
+        set retainedLinear to the item at 0 in (modelPointer's linears's values)
+        set retainedType to the bim type of linear retainedLinear in (@intrinsic("dereference", modelPointer))
+        set unchangedSource to ((the cad distance from retainedLinear's start to firstControl) < 1e-12) and ((the cad distance from retainedLinear's finish to lastControl) < 1e-12)
+        set unchangedSource to unchangedSource and ((retainedType's width = 0.3) and (retainedType's depth = profileDepth))
+        check scale profile unchangedSource named (captionPrefix + (the string form of "preview leaves source axis and profile type unchanged"))
+        set unchangedDocument to (documentValue's revision = sourceRevision) and (modelPointer's nextId = sourceNextId)
+        set unchangedDocument to unchangedDocument and (((the length of (documentValue's undoStack's values)) = sourceUndo) and ((the length of (documentValue's redoStack's values)) = sourceRedo))
+        set unchangedDocument to unchangedDocument and (((the length of (modelPointer's journal's values)) = sourceJournal) and ((the length of (modelPointer's linears's values)) = 1))
+        check scale profile unchangedDocument named (captionPrefix + (the string form of "preview preserves revision ids journal undo and redo"))
+        set movedFirst to a cad vector3 with x (firstControl's x * 2.0), y (firstControl's y * 2.0) and z firstControl's z
+        set movedLast to a cad vector3 with x (lastControl's x * 2.0), y (lastControl's y * 2.0) and z lastControl's z
+        check scale profile (move bim linear sourceId to movedFirst and movedLast turned 0.0 in modelPointer) named (captionPrefix + (the string form of "native setter accepts independently scaled axis"))
+        set committedLinear to the item at 0 in (modelPointer's linears's values)
+        set committedType to the bim type of linear committedLinear in (@intrinsic("dereference", modelPointer))
+        set nativeRings to the bim profile rings of committedLinear as committedType in (@intrinsic("dereference", modelPointer))
+        check scale profile (scale preview points (previewEdges's values) match native rings nativeRings) named (captionPrefix + (the string form of "every preview edge matches native profile geometry after setter"))
+        free nativeRings
+
+run scale profile case bim column role
+run scale profile case bim beam role

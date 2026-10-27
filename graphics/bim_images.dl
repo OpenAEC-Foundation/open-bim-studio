@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MPL-2.0
+# Image reference lifetime is separate from document geometry and camera.
+import formats/bim_image_data.dl
+import editor/bim_editor.dl
+import graphics/vulkan/images.dl
+
+class:
+    patterns:
+        [a|] bim image cache record
+    members:
+        revision as a 64 bit integer
+        attempted as the type of (a cad topology list of a string)
+
+function a new bim image cache:
+    execute:
+        return @intrinsic("construct", a bim image cache record, (-1) as a 64 bit integer, a cad topology list of a string)
+
+function keep bim decoded image {bim decoded image record:decoded} named {a string:path} in {pointer:window}:
+    execute:
+        set existing to the gpu image slot named path in window
+        if existing >= 0:
+            return existing
+        if decoded's valid = false:
+            return -1
+        set slot to upload gpu rgba image sized decoded's width by decoded's height from (the data of decoded's rgba) in window
+        if slot >= 0:
+            set context to the gpu context of window
+            set held to the item at slot in (context's imageSlots)
+            set held's key to path
+            replace item at index slot in (context's imageSlots) with held
+        return slot
+
+function bim image path {a string:path} occurs among {a pointer to a list:paths}:
+    execute:
+        loop cursor from 0 to the length of paths:
+            if (the item at cursor in paths) = path:
+                return true
+        return false
+
+# Called between frames, once per document revision. Neither mouse motion,
+# panning, zoom, nor a view switch reads a file or decodes/uploads pixels.
+# Missing links are negatively cached until removed and imported again.
+function refresh bim images of {bim document record:documentValue} in {a pointer to a bim image cache record:cache} for {pointer:window}:
+    execute:
+        if cache's revision = documentValue's revision:
+            return nothing
+        set wanted to a cad topology list of a string
+        loop instanceCursor from 0 to the length of (documentValue's current's instances's values):
+            set placed to the item at instanceCursor in (documentValue's current's instances's values)
+            set found to the bim component index of placed's componentId in documentValue's current
+            if found's valid:
+                set definition to the item at found's position in (documentValue's current's components's values)
+                loop partCursor from 0 to the length of (definition's sketches's values):
+                    set partValue to the item at partCursor in (definition's sketches's values)
+                    if partValue's kind = bim image sketch:
+                        if (bim image path partValue's content occurs among (wanted's values)) = false:
+                            append partValue's content to (wanted's values)
+        set context to the gpu context of window
+        loop slot from 0 to the length of (context's imageSlots):
+            set held to the item at slot in (context's imageSlots)
+            if ((the length of held's key) > 0) and ((bim image path held's key occurs among (wanted's values)) = false):
+                release gpu image slot slot in window
+        loop cursor from 0 to the length of (wanted's values):
+            set path to the item at cursor in (wanted's values)
+            if ((the gpu image slot named path in window) < 0) and ((bim image path path occurs among (cache's attempted's values)) = false):
+                ignore (keep bim decoded image (the bim decoded png at path) named path in window)
+        set cache's attempted to wanted
+        set cache's revision to documentValue's revision
+
+function import bim png image at {a string:path} centred on {cad vector2:centre} in {a pointer to a bim editor record:editor} for {pointer:window}:
+    execute:
+        set decoded to the bim decoded png at path
+        if decoded's valid = false:
+            set editor's message to the string form of "Image refused: choose a valid PNG, at most 8192 px per side and 16 megapixels"
+            return false
+        set slot to keep bim decoded image decoded named path in window
+        if slot < 0:
+            set editor's message to the string form of "Image refused: the 256 MiB image texture budget is full"
+            return false
+        set imageWidth to 5.0
+        set imageHeight to imageWidth * ((decoded's height as a 64 bit floating-point number) / (decoded's width as a 64 bit floating-point number))
+        set origin to a cad vector2 with x (centre's x - (imageWidth * 0.5)) and y (centre's y - (imageHeight * 0.5))
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim image linked to path on editor's levelId in view editor's planViewId at origin sized imageWidth by imageHeight to (the address of (editor's documentValue's current))
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Image: open a floor plan first"
+            return false
+        commit bim transaction in (the address of (editor's documentValue))
+        select bim editor bim instance picked numbered fresh in editor
+        set editor's viewsDirty to true
+        set editor's message to the string form of "Linked PNG reference placed, 5 m wide; G moves it, properties set its position and rotation"
+        return true
+
+function release bim images in {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        loop slot from 0 to the length of (context's imageSlots):
+            release gpu image slot slot in window

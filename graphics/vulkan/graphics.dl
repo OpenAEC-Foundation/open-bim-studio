@@ -1,0 +1,276 @@
+# SPDX-License-Identifier: MPL-2.0
+# Windows, input and immediate-mode drawing on the DynLex GPU context
+# (`graphics/vulkan/context.dl`), with the patterns of `lib/graphics.dl`: a program
+# written against those can move onto this module, which draws through
+# libvulkan and GLFW directly instead of the C graphics runtime. A window is
+# a pointer to its GPU context. Coordinates are always pixels from the
+# window's top-left corner.
+import graphics/vulkan/context.dl
+
+class:
+    patterns:
+        [a|] cursor position
+    members:
+        x as a floating-point number
+        y as a floating-point number
+
+class:
+    patterns:
+        [a|] mouse button
+    members:
+        number as an integer
+
+class:
+    patterns:
+        [a|] graphics frame
+    members:
+        window as a pointer
+        drawable as a boolean
+
+class:
+    patterns:
+        [a|] graphics texture
+    members:
+        resource as a pointer to a byte
+        width as an integer
+        height as an integer
+
+function the gpu context of {pointer:window}:
+    replacement:
+        (window as a pointer to a gpu context record)
+
+function the left mouse button:
+    execute:
+        return @intrinsic("construct", a mouse button, 0)
+
+function the right mouse button:
+    execute:
+        return @intrinsic("construct", a mouse button, 1)
+
+function the middle mouse button:
+    execute:
+        return @intrinsic("construct", a mouse button, 2)
+
+# GLFW reports the wheel here; the window's context adds it up until it is
+# taken.
+exposed function dynlex gpu scroll for {pointer:glfwWindow} at {a 64 bit floating-point number:horizontal} and {a 64 bit floating-point number:vertical}:
+    execute:
+        ignore horizontal
+        set window to @intrinsic("call", "glfw", "glfwGetWindowUserPointer", a pointer, glfwWindow)
+        if window != (0 as a pointer):
+            set context to the gpu context of window
+            set context's scroll to context's scroll + vertical
+
+# GLFW reports each character typed here; the window's context keeps them
+# until they are taken.
+exposed function dynlex gpu character for {pointer:glfwWindow} as {a 32 bit unsigned integer:codepoint}:
+    execute:
+        set window to @intrinsic("call", "glfw", "glfwGetWindowUserPointer", a pointer, glfwWindow)
+        if window != (0 as a pointer):
+            set context to the gpu context of window
+            # A fixed buffer of 1,024 code points: a callback must not grow a
+            # list.
+            if context's typedCount < 1024:
+                @intrinsic("store at", ((context's typed as a pointer to a byte) + (context's typedCount * 4)) as a pointer to a 32 bit unsigned integer, codepoint)
+                set context's typedCount to context's typedCount + 1
+
+# The characters typed since this was last asked, as Unicode code points.
+function the characters typed into {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set taken to an empty list of an integer
+        loop cursor from 0 to context's typedCount:
+            append ((@intrinsic("dereference", ((context's typed as a pointer to a byte) + (cursor * 4)) as a pointer to a 32 bit unsigned integer)) as an integer) to taken
+        set context's typedCount to 0
+        return taken
+
+# A new window `width` x `height` drawing with the SPIR-V shaders of
+# `graphics/shaders` compiled into the directory `shaderDirectory`.
+function a new window with width {integer:width} and height {integer:height} using shaders in {a string:shaderDirectory}:
+    execute:
+        set made to a new gpu context titled "DynLex" sized width by height with shaders in shaderDirectory
+        set handle to a gpu block of ((the size of a gpu context record) as an integer) bytes
+        @intrinsic("store at", handle as a pointer to a gpu context record, made)
+        @intrinsic("call", "glfw", "glfwSetWindowUserPointer", nothing, made's window, handle)
+        ignore @intrinsic("call", "glfw", "glfwSetScrollCallback", a pointer, made's window, the function named "dynlex gpu scroll for $ at $ and $")
+        ignore @intrinsic("call", "glfw", "glfwSetCharCallback", a pointer, made's window, the function named "dynlex gpu character for $ as $")
+        return handle
+
+function set the title of {pointer:window} to {a string:title}:
+    execute:
+        set context to the gpu context of window
+        @intrinsic("call", "glfw", "glfwSetWindowTitle", nothing, context's window, the data of title)
+
+function close [the|] {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, context's device)
+        @intrinsic("call", "glfw", "glfwDestroyWindow", nothing, context's window)
+        @intrinsic("call", "glfw", "glfwTerminate", nothing)
+
+# The wheel turned since this was last asked, in steps; positive away from
+# the user.
+function the scroll taken from {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set amount to context's scroll
+        set context's scroll to 0.0
+        return amount
+
+function the cursor position of {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set x to 0.0
+        set y to 0.0
+        @intrinsic("call", "glfw", "glfwGetCursorPos", nothing, context's window, the address of x, the address of y)
+        return @intrinsic("construct", a cursor position, x as a floating-point number, y as a floating-point number)
+
+function {mouse button:button} is pressed in {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        return (@intrinsic("call", "glfw", "glfwGetMouseButton", an integer, context's window, button's number)) = 1
+
+# Shows the system pointer as a crosshair (drawing) or as the arrow.
+function set the pointer of {pointer:window} to crosshair {boolean:crossed}:
+    execute:
+        set context to the gpu context of window
+        set shape to 221185
+        if crossed:
+            set shape to 221187
+        set cursor to @intrinsic("call", "glfw", "glfwCreateStandardCursor", a pointer, shape)
+        @intrinsic("call", "glfw", "glfwSetCursor", nothing, context's window, cursor)
+
+# Hides the system pointer over the window (an application draws its own,
+# a crosshair say), or shows it again.
+function set the pointer of {pointer:window} hidden {boolean:hidden}:
+    execute:
+        set context to the gpu context of window
+        set mode to 212993
+        if hidden:
+            set mode to 212994
+        @intrinsic("call", "glfw", "glfwSetInputMode", nothing, context's window, 208897, mode)
+
+function key {integer:number} is down in {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        return (@intrinsic("call", "glfw", "glfwGetKey", an integer, context's window, number)) = 1
+
+function {pointer:window} should close:
+    execute:
+        set context to the gpu context of window
+        return (@intrinsic("call", "glfw", "glfwWindowShouldClose", an integer, context's window)) != 0
+
+function {pointer:window} remains open:
+    execute:
+        set context to the gpu context of window
+        return (@intrinsic("call", "glfw", "glfwWindowShouldClose", an integer, context's window)) = 0
+
+function request that {pointer:window} close:
+    execute:
+        set context to the gpu context of window
+        @intrinsic("call", "glfw", "glfwSetWindowShouldClose", nothing, context's window, 1)
+
+function the framebuffer width of {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set pixelWidth to 0
+        set pixelHeight to 0
+        @intrinsic("call", "glfw", "glfwGetFramebufferSize", nothing, context's window, the address of pixelWidth, the address of pixelHeight)
+        return pixelWidth
+
+function the framebuffer height of {pointer:window}:
+    execute:
+        set context to the gpu context of window
+        set pixelWidth to 0
+        set pixelHeight to 0
+        @intrinsic("call", "glfw", "glfwGetFramebufferSize", nothing, context's window, the address of pixelWidth, the address of pixelHeight)
+        return pixelHeight
+
+function a new graphics frame in {pointer:window} with background red {floating-point number:red}, green {floating-point number:green}, blue {floating-point number:blue} and alpha {floating-point number:alpha}:
+    execute:
+        ignore alpha
+        set drawable to begin gpu frame of (the gpu context of window) cleared to (red as a 64 bit floating-point number), (green as a 64 bit floating-point number) and (blue as a 64 bit floating-point number)
+        return @intrinsic("construct", a graphics frame, window, drawable)
+
+function display {graphics frame:frame}:
+    execute:
+        if frame's drawable:
+            end gpu frame of (the gpu context of frame's window)
+
+function use screen coordinates in {graphics frame:frame}:
+    execute:
+        ignore frame
+
+function enable depth testing in {graphics frame:frame}:
+    execute:
+        set context to the gpu context of frame's window
+        set context's depthTesting to true
+
+function disable depth testing in {graphics frame:frame}:
+    execute:
+        set context to the gpu context of frame's window
+        set context's depthTesting to false
+
+function start triangles in {graphics frame:frame}:
+    execute:
+        set context to the gpu context of frame's window
+        if context's depthTesting:
+            start gpu batch of kind gpu depth batch in context
+        else:
+            start gpu batch of kind gpu flat batch in context
+
+function start triangles using {graphics texture:texture} in {graphics frame:frame}:
+    execute:
+        ignore texture
+        start gpu batch of kind gpu text batch in (the gpu context of frame's window)
+
+function use vertex color red {integer:red}, green {integer:green} and blue {integer:blue} in {graphics frame:frame}:
+    execute:
+        set gpu colour to red, green, blue and 255 in (the gpu context of frame's window)
+
+function use vertex color red {integer:red}, green {integer:green}, blue {integer:blue} and alpha {integer:alpha} in {graphics frame:frame}:
+    execute:
+        set gpu colour to red, green, blue and alpha in (the gpu context of frame's window)
+
+function use texture coordinates x {floating-point number:horizontal} and y {floating-point number:vertical} in {graphics frame:frame}:
+    execute:
+        set gpu texture coordinates to (horizontal as a 64 bit floating-point number) and (vertical as a 64 bit floating-point number) in (the gpu context of frame's window)
+
+function add a vertex at x {a value:horizontal} and y {a value:vertical} to {graphics frame:frame}:
+    execute:
+        add gpu vertex at (horizontal as a 64 bit floating-point number), (vertical as a 64 bit floating-point number) and 0.0 in (the gpu context of frame's window)
+
+function add a vertex at x {a value:horizontal}, y {a value:vertical} and z {a value:depth} to {graphics frame:frame}:
+    execute:
+        add gpu vertex at (horizontal as a 64 bit floating-point number), (vertical as a 64 bit floating-point number) and (depth as a 64 bit floating-point number) in (the gpu context of frame's window)
+
+function finish triangles in {graphics frame:frame}:
+    execute:
+        finish gpu batch in (the gpu context of frame's window)
+
+function draw a rectangle at x {a value:horizontal} and y {a value:vertical} with width {a value:width} and height {a value:height} in color red {integer:red}, green {integer:green} and blue {integer:blue} in {graphics frame:frame}:
+    execute:
+        set context to the gpu context of frame's window
+        set left to horizontal as a 64 bit floating-point number
+        set top to vertical as a 64 bit floating-point number
+        set right to left + (width as a 64 bit floating-point number)
+        set bottom to top + (height as a 64 bit floating-point number)
+        start gpu batch of kind gpu flat batch in context
+        set gpu colour to red, green, blue and 255 in context
+        add gpu vertex at left, top and 0.0 in context
+        add gpu vertex at right, top and 0.0 in context
+        add gpu vertex at right, bottom and 0.0 in context
+        add gpu vertex at left, top and 0.0 in context
+        add gpu vertex at right, bottom and 0.0 in context
+        add gpu vertex at left, bottom and 0.0 in context
+        finish gpu batch in context
+
+# The window's texture: one single-channel image, used by text.
+function a new red texture sized {integer:width} by {integer:height} from {pointer:imageData} for {pointer:window}:
+    execute:
+        set gpu texture of (the gpu context of window) to width by height red pixels imageData
+        return @intrinsic("construct", a graphics texture, window as a pointer to a byte, width, height)
+
+function release {graphics texture:texture}:
+    execute:
+        ignore texture

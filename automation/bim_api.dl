@@ -1,0 +1,853 @@
+# SPDX-License-Identifier: MPL-2.0
+# The automation API: another program (the MCP server in `mcp/`, a script)
+# drives the editor through a folder. It writes a request to `request` in
+# that folder (written as `request.tmp`, then renamed, so that it is never
+# read half written); the window reads it once a frame, removes it, does it
+# and writes the answer to `response` the same way.
+#
+# A request is lines: an id, a verb, then the verb's arguments, one a line.
+# The answer is two lines: the id, then a JSON object with "ok" and what the
+# verb returns (or "error"). The verbs:
+#
+#     ping                          the API's version
+#     state                         tool, selection, message, storey, counts
+#     elements                      the model's elements, by kind
+#     buttons                       every ribbon button: tab, group, label, code
+#     button LABEL                  presses the ribbon button so labelled
+#     key CODE                      a key or command code, as typed
+#     pointer X Y                   the pointer to plan point X, Y (metres)
+#     click X Y                     the pointer there, pressed and released
+#     select ID                     selects element ID (any kind)
+#     properties                    the selection's property rows
+#     property CODE TEXT            types TEXT into property CODE
+#     wall X1 Y1 X2 Y2              a wall of the current type on the storey
+#     slab X1 Y1 X2 Y2              a floor over that rectangle
+#     system X1 Y1 X2 Y2 [TYPE]     a building system, of type index TYPE
+#     systemtypes                   the building system types
+#     grid NAME X1 Y1 X2 Y2 LOW HIGH  a grid, all coordinates in metres
+#     gridrepeat SOURCE PATTERN [UNIT] copies of an id or "selected" grid;
+#                                   spacing unit 0=mm, 1=cm, 2=m, or current
+#     cursor X Y                    places the 3D cursor exactly, in metres
+#     types [TAB]                   type definitions; dimensions in metres
+#     typeadd TAB                   new unused type; tabs 0..8 as IfcTypes
+#     typeduplicate TAB ID          copy definition without an occurrence
+#     typeset TAB ID FIELD VALUE [LAYER]  manager fields 0..6; project units
+#     typeapply TAB ID              compatible selection and drawing default
+#     typedelete TAB ID             unused types only
+#     options                       tool, numeric, ortho, modify and snap state
+#     undo, redo                    one step
+#     fit, tab N                    (the window's: fit the views, ribbon tab)
+import editor/bim_editor.dl
+import app/bim_ui.dl
+import model/bim_grid_pattern.dl
+import editor/bim_type_manager.dl
+
+function the bim api version:
+    execute:
+        return the string form of "open-bim-studio-api 1"
+
+# What the window must do for a request (`fit` or `tab`), and its number.
+class:
+    patterns:
+        [a|] bim api window record
+    members:
+        verb as a string
+        number as an integer
+
+# A quoted JSON string: escape quotes, backslashes and every control byte,
+# while preserving UTF-8 bytes unchanged.
+function the bim json text of {a string:rawText}:
+    execute:
+        set slash to a new string buffer containing 1 bytes
+        store (92 as a byte) into the data of slash at 0
+        set quote to a new string buffer containing 1 bytes
+        store (34 as a byte) into the data of quote at 0
+        set pieces to an empty list of a string
+        set hexadecimal to the string form of "0123456789abcdef"
+        loop cursor from 0 to the length of rawText:
+            set code to (((the character at cursor in rawText) as a 32 bit integer) bitwise and 255) as an integer
+            if (code = 34) or (code = 92):
+                append (slash + (the substring of rawText from cursor spanning 1 bytes)) to pieces
+            else if code < 32:
+                set high to the substring of hexadecimal from (code / 16) spanning 1 bytes
+                set low to the substring of hexadecimal from (the remainder of code divided by 16) spanning 1 bytes
+                append (((slash + (the string form of "u00")) + high) + low) to pieces
+            else:
+                append (the substring of rawText from cursor spanning 1 bytes) to pieces
+        set answer to (quote + (pieces joined with "")) + quote
+        free pieces
+        return answer
+
+local function the bim json boolean of {boolean:flagValue}:
+    execute:
+        if flagValue:
+            return the string form of "true"
+        return the string form of "false"
+
+function the bim json point of {cad vector2:spot}:
+    execute:
+        return ((the string form of "[") + (the bim json number of spot's x)) + (((the string form of ",") + (the bim json number of spot's y)) + (the string form of "]"))
+
+# `key`: `value` as a JSON member.
+function the bim json member {a string:key} as {a string:value}:
+    execute:
+        return ((the bim json text of key) + (the string form of ":")) + value
+
+function the bim json object of {a pointer to a list:members}:
+    execute:
+        return ((the string form of "{") + (members joined with ",")) + (the string form of "}")
+
+function the bim json array of {a pointer to a list:items}:
+    execute:
+        return ((the string form of "[") + (items joined with ",")) + (the string form of "]")
+
+local function the bim api failure saying {a string:reason}:
+    execute:
+        set members to an empty list of a string
+        append (the bim json member (the string form of "ok") as (the string form of "false")) to members
+        append (the bim json member (the string form of "error") as (the bim json text of reason)) to members
+        set answer to the bim json object of members
+        free members
+        return answer
+
+local function the bim api success with {a pointer to a list:members}:
+    execute:
+        set all to an empty list of a string
+        append (the bim json member (the string form of "ok") as (the string form of "true")) to all
+        loop cursor from 0 to the length of members:
+            append (the item at cursor in members) to all
+        set answer to the bim json object of all
+        free all
+        return answer
+
+# The kind (`bim ... picked`) of element `elementId`, or `bim nothing picked`.
+function the bim kind picked for element {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        if (the bim space object index of elementId in modelValue)'s valid:
+            return bim space object picked
+        if (the bim wall index of elementId in modelValue)'s valid:
+            return bim wall picked
+        if (the bim slab index of elementId in modelValue)'s valid:
+            return bim slab picked
+        if (the bim curtain index of elementId in modelValue)'s valid:
+            return bim curtain picked
+        if (the bim opening index of elementId in modelValue)'s valid:
+            return bim opening picked
+        if (the bim linear index of elementId in modelValue)'s valid:
+            return bim linear picked
+        if (the bim grid index of elementId in modelValue)'s valid:
+            return bim grid picked
+        if (the bim sketch index of elementId in modelValue)'s valid:
+            return bim sketch picked
+        if (the bim instance index of elementId in modelValue)'s valid:
+            return bim instance picked
+        if (the bim mesh index of elementId in modelValue)'s valid:
+            return bim mesh picked
+        if (the bim stair index of elementId in modelValue)'s valid:
+            return bim stair picked
+        if (the bim railing index of elementId in modelValue)'s valid:
+            return bim railing picked
+        if (the bim level index of elementId in modelValue)'s valid:
+            return bim level picked
+        return bim nothing picked
+
+local function the bim api state of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set members to an empty list of a string
+        append (the bim json member (the string form of "tool") as (the string form of editor's tool)) to members
+        append (the bim json member (the string form of "selectionKind") as (the string form of editor's selectionKind)) to members
+        append (the bim json member (the string form of "selectionId") as (the string form of editor's selectionId)) to members
+        append (the bim json member (the string form of "part") as (the string form of editor's partCode)) to members
+        append (the bim json member (the string form of "selection") as (the bim json text of (the bim selection description of editor))) to members
+        append (the bim json member (the string form of "message") as (the bim json text of editor's message)) to members
+        append (the bim json member (the string form of "storeyId") as (the string form of editor's levelId)) to members
+        append (the bim json member (the string form of "storey") as (the bim json text of (the bim storey name of editor))) to members
+        append (the bim json member (the string form of "walls") as (the string form of (the length of (modelValue's walls's values)))) to members
+        append (the bim json member (the string form of "slabs") as (the string form of (the length of (modelValue's slabs's values)))) to members
+        append (the bim json member (the string form of "openings") as (the string form of (the length of (modelValue's openings's values)))) to members
+        append (the bim json member (the string form of "systems") as (the string form of (the length of (modelValue's curtains's values)))) to members
+        append (the bim json member (the string form of "linears") as (the string form of (the length of (modelValue's linears's values)))) to members
+        append (the bim json member (the string form of "levels") as (the string form of (the length of (modelValue's levels's values)))) to members
+        append (the bim json member (the string form of "undoSteps") as (the string form of (the length of (editor's documentValue's undoStack's values)))) to members
+        append (the bim json member (the string form of "grids") as (the string form of (the length of (modelValue's grids's values)))) to members
+        set cursorCoordinates to an empty list of a string
+        append (the bim json number of editor's cursorPoint's x) to cursorCoordinates
+        append (the bim json number of editor's cursorPoint's y) to cursorCoordinates
+        append (the bim json number of editor's cursorPoint's z) to cursorCoordinates
+        append (the bim json member (the string form of "cursor3D") as (the bim json array of cursorCoordinates)) to members
+        free cursorCoordinates
+        set answer to the bim api success with members
+        free members
+        return answer
+
+local function the bim api elements of {bim model record:modelValue}:
+    execute:
+        set walls to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of wallValue's id)) to fields
+            append (the bim json member (the string form of "storeyId") as (the string form of wallValue's levelId)) to fields
+            append (the bim json member (the string form of "start") as (the bim json point of wallValue's start)) to fields
+            append (the bim json member (the string form of "end") as (the bim json point of wallValue's finish)) to fields
+            append (the bim json member (the string form of "height") as (the bim json number of wallValue's height)) to fields
+            set typeFound to the bim wall type index of wallValue's typeId in modelValue
+            if typeFound's valid:
+                append (the bim json member (the string form of "type") as (the bim json text of (the item at typeFound's position in (modelValue's wallTypes's values))'s name)) to fields
+            append (the bim json object of fields) to walls
+            free fields
+        set slabs to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            set corners to an empty list of a string
+            loop corner from 0 to the length of (slabValue's outline's values):
+                append (the bim json point of (the item at corner in (slabValue's outline's values))) to corners
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of slabValue's id)) to fields
+            append (the bim json member (the string form of "storeyId") as (the string form of slabValue's levelId)) to fields
+            append (the bim json member (the string form of "outline") as (the bim json array of corners)) to fields
+            append (the bim json member (the string form of "top") as (the bim json number of slabValue's top)) to fields
+            append (the bim json object of fields) to slabs
+            free fields
+            free corners
+        set systems to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's curtains's values):
+            set systemValue to the item at cursor in (modelValue's curtains's values)
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of systemValue's id)) to fields
+            append (the bim json member (the string form of "storeyId") as (the string form of systemValue's levelId)) to fields
+            append (the bim json member (the string form of "start") as (the bim json point of systemValue's start)) to fields
+            append (the bim json member (the string form of "end") as (the bim json point of systemValue's finish)) to fields
+            append (the bim json member (the string form of "height") as (the bim json number of systemValue's height)) to fields
+            append (the bim json member (the string form of "type") as (the bim json text of (the bim system type name of systemValue in modelValue))) to fields
+            append (the bim json object of fields) to systems
+            free fields
+        set openings to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of openingValue's id)) to fields
+            append (the bim json member (the string form of "hostId") as (the string form of openingValue's hostId)) to fields
+            append (the bim json member (the string form of "offset") as (the bim json number of openingValue's offset)) to fields
+            append (the bim json object of fields) to openings
+            free fields
+        set levels to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of levelValue's id)) to fields
+            append (the bim json member (the string form of "name") as (the bim json text of levelValue's name)) to fields
+            append (the bim json member (the string form of "elevation") as (the bim json number of levelValue's elevation)) to fields
+            append (the bim json object of fields) to levels
+            free fields
+        set grids to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of gridValue's id)) to fields
+            append (the bim json member (the string form of "name") as (the bim json text of gridValue's name)) to fields
+            append (the bim json member (the string form of "start") as (the bim json point of gridValue's start)) to fields
+            append (the bim json member (the string form of "end") as (the bim json point of gridValue's finish)) to fields
+            append (the bim json member (the string form of "low") as (the bim json number of gridValue's low)) to fields
+            append (the bim json member (the string form of "high") as (the bim json number of gridValue's high)) to fields
+            append (the bim json object of fields) to grids
+            free fields
+        set members to an empty list of a string
+        append (the bim json member (the string form of "levels") as (the bim json array of levels)) to members
+        append (the bim json member (the string form of "walls") as (the bim json array of walls)) to members
+        append (the bim json member (the string form of "slabs") as (the bim json array of slabs)) to members
+        append (the bim json member (the string form of "systems") as (the bim json array of systems)) to members
+        append (the bim json member (the string form of "openings") as (the bim json array of openings)) to members
+        append (the bim json member (the string form of "grids") as (the bim json array of grids)) to members
+        set answer to the bim api success with members
+        free members
+        free walls
+        free slabs
+        free systems
+        free openings
+        free levels
+        free grids
+        return answer
+
+# Every ribbon button as a JSON object (tab, group, label, key, code), or, with
+# `wanted` not empty, the code of the first whose label starts with it
+# (case aside) as the only item; codes below 0 are tools not there yet.
+local function the bim api buttons matching {a string:wanted}:
+    execute:
+        set found to an empty list of a string
+        set lowered to the lowercase form of wanted
+        set tabNames to the bim ribbon tab names
+        loop tabIndex from 0 to the length of tabNames:
+            set tabGroups to the bim ribbon groups of tab tabIndex
+            loop groupCursor from 0 to the length of tabGroups:
+                set ribbonGroup to the item at groupCursor in tabGroups
+                loop buttonCursor from 0 to the length of (ribbonGroup's buttons):
+                    set ribbonButton to the item at buttonCursor in (ribbonGroup's buttons)
+                    set label to the lowercase form of ribbonButton's label
+                    set isMatch to (the length of wanted) = 0
+                    if isMatch = false:
+                        if (the length of label) >= (the length of lowered):
+                            set isMatch to (the substring of label from 0 spanning (the length of lowered) bytes) = lowered
+                    if isMatch:
+                        set fields to an empty list of a string
+                        append (the bim json member (the string form of "tab") as (the bim json text of (the item at tabIndex in tabNames))) to fields
+                        append (the bim json member (the string form of "group") as (the bim json text of ribbonGroup's title)) to fields
+                        append (the bim json member (the string form of "label") as (the bim json text of ribbonButton's label)) to fields
+                        append (the bim json member (the string form of "key") as (the bim json text of ribbonButton's key)) to fields
+                        append (the bim json member (the string form of "code") as (the string form of ribbonButton's command)) to fields
+                        append (the bim json object of fields) to found
+                        free fields
+            free tabGroups
+        free tabNames
+        return found
+
+# The code of the first ribbon button whose label starts with `wanted`, or
+# -1 (none, or a tool not there yet).
+local function the bim api button code of {a string:wanted}:
+    execute:
+        set lowered to the lowercase form of wanted
+        set chosen to -1
+        set tabNames to the bim ribbon tab names
+        loop tabIndex from 0 to the length of tabNames:
+            set tabGroups to the bim ribbon groups of tab tabIndex
+            loop groupCursor from 0 to the length of tabGroups:
+                set ribbonGroup to the item at groupCursor in tabGroups
+                loop buttonCursor from 0 to the length of (ribbonGroup's buttons):
+                    set ribbonButton to the item at buttonCursor in (ribbonGroup's buttons)
+                    set label to the lowercase form of ribbonButton's label
+                    if (chosen < 0) and ((the length of label) >= (the length of lowered)):
+                        if (the substring of label from 0 spanning (the length of lowered) bytes) = lowered:
+                            set chosen to ribbonButton's command
+            free tabGroups
+        free tabNames
+        return chosen
+
+# Direct model operations validate before opening a document transaction.
+local function the bim api grid from {a pointer to a list:arguments} for {a pointer to a bim editor record:editor}:
+    execute:
+        if (the length of arguments) != 7:
+            return the bim api failure saying (the string form of "give NAME X1 Y1 X2 Y2 LOW HIGH in metres")
+        set nameValue to the bim trimmed grid label of (the item at 0 in arguments)
+        if ((the length of nameValue) = 0) or ((the length of nameValue) > 256):
+            return the bim api failure saying (the string form of "give a nonblank grid name up to 256 bytes without control characters")
+        loop cursor from 0 to the length of (editor's documentValue's current's grids's values):
+            if (the item at cursor in (editor's documentValue's current's grids's values))'s name = nameValue:
+                return the bim api failure saying (the string form of "a grid with that name already exists")
+        set coordinates to an empty list of a 64 bit floating-point number
+        loop cursor from 1 to 7:
+            set reading to the bim real reading of (the item at cursor in arguments)
+            if (reading's valid = false) or ((the absolute value of reading's value) > 1000000000000.0):
+                free coordinates
+                return the bim api failure saying (the string form of "give finite grid coordinates and elevations within 1e12 metres")
+            append reading's value to coordinates
+        set startPoint to a cad vector2 with x (the item at 0 in coordinates) and y (the item at 1 in coordinates)
+        set finishPoint to a cad vector2 with x (the item at 2 in coordinates) and y (the item at 3 in coordinates)
+        set lowValue to the item at 4 in coordinates
+        set highValue to the item at 5 in coordinates
+        free coordinates
+        if ((the cad distance from startPoint to finishPoint) <= 1e-6) or (highValue <= lowValue):
+            return the bim api failure saying (the string form of "grid needs distinct endpoints and HIGH above LOW")
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to add bim grid named nameValue from startPoint to finishPoint reaching lowValue to highValue to (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        refresh bim editor editor
+        set members to an empty list of a string
+        append (the bim json member (the string form of "id") as (the string form of made)) to members
+        set answer to the bim api success with members
+        free members
+        return answer
+
+local function the bim api repeated grid from {a pointer to a list:arguments} for {a pointer to a bim editor record:editor}:
+    execute:
+        if ((the length of arguments) < 2) or ((the length of arguments) > 3):
+            return the bim api failure saying (the string form of "give SOURCE_ID or selected, PATTERN, and optional UNIT (0=mm, 1=cm, 2=m)")
+        set sourceId to the bim refused id
+        set sourceText to the item at 0 in arguments
+        if (the lowercase form of sourceText) = (the string form of "selected"):
+            if editor's selectionKind = bim grid picked:
+                set sourceId to editor's selectionId
+        else:
+            set sourceReading to the bim whole reading of sourceText
+            if sourceReading's valid:
+                set sourceId to sourceReading's value
+        if (the bim grid index of sourceId in editor's documentValue's current)'s valid = false:
+            return the bim api failure saying (the string form of "give an existing source grid id or select a grid")
+        set unitCode to editor's lengthUnit
+        if (the length of arguments) = 3:
+            set unitReading to the bim whole reading of (the item at 2 in arguments)
+            if (unitReading's valid = false) or ((unitReading's value < (0 as a 64 bit integer)) or (unitReading's value > (2 as a 64 bit integer))):
+                return the bim api failure saying (the string form of "spacing UNIT must be 0 (mm), 1 (cm) or 2 (m)")
+            set unitCode to unitReading's value as an integer
+        set patternText to the item at 1 in arguments
+        # Preparation in a snapshot also preserves the redo stack when the
+        # pattern or source geometry is refused. Only a complete batch commits.
+        set prepared to the bim snapshot of editor's documentValue's current
+        set originalCount to the length of (prepared's grids's values)
+        set added to add bim grid copies of sourceId spaced patternText metres per unit (the bim metres per unitCode) in (the address of prepared)
+        if added = 0:
+            return the bim api failure saying (the string form of "invalid spacing pattern or source geometry; use positive distances or NxD, at most 1000 copies")
+        begin bim transaction in (the address of (editor's documentValue))
+        set editor's documentValue's current to prepared
+        commit bim transaction in (the address of (editor's documentValue))
+        refresh bim editor editor
+        set ids to an empty list of a string
+        loop cursor from originalCount to originalCount + added:
+            append (the string form of (the item at cursor in (prepared's grids's values))'s id) to ids
+        set members to an empty list of a string
+        append (the bim json member (the string form of "count") as (the string form of added)) to members
+        append (the bim json member (the string form of "ids") as (the bim json array of ids)) to members
+        set answer to the bim api success with members
+        free members
+        free ids
+        return answer
+
+local function the bim api cursor from {a pointer to a list:arguments} for {a pointer to a bim editor record:editor}:
+    execute:
+        if (the length of arguments) != 2:
+            return the bim api failure saying (the string form of "give cursor X and Y in metres")
+        set xReading to the bim real reading of (the item at 0 in arguments)
+        set yReading to the bim real reading of (the item at 1 in arguments)
+        if ((xReading's valid = false) or (yReading's valid = false)) or (((the absolute value of xReading's value) > 1000000000000.0) or ((the absolute value of yReading's value) > 1000000000000.0)):
+            return the bim api failure saying (the string form of "give finite cursor coordinates within 1e12 metres")
+        place bim editor cursor at (a cad vector2 with x xReading's value and y yReading's value) in editor
+        return the bim api state of (@intrinsic("dereference", editor))
+
+# Type-library results use stable model ids and metre dimensions. Editing lengths
+# uses the project's lengthUnit, matching the manager and property panel.
+local function the bim api encoded type {bim managed type record:row} on tab {integer:tabIndex} for {bim editor record:editor}:
+    execute:
+        set fields to an empty list of a string
+        append (the bim json member (the string form of "id") as (the string form of row's id)) to fields
+        append (the bim json member (the string form of "tab") as (the string form of tabIndex)) to fields
+        append (the bim json member (the string form of "family") as (the string form of row's family)) to fields
+        append (the bim json member (the string form of "role") as (the string form of row's role)) to fields
+        append (the bim json member (the string form of "name") as (the bim json text of row's name)) to fields
+        append (the bim json member (the string form of "ifcClass") as (the bim json text of row's ifcClass)) to fields
+        append (the bim json member (the string form of "material") as (the bim json text of row's material)) to fields
+        append (the bim json member (the string form of "width") as (the bim json number of row's width)) to fields
+        append (the bim json member (the string form of "depth") as (the bim json number of row's depth)) to fields
+        append (the bim json member (the string form of "sill") as (the bim json number of row's sill)) to fields
+        append (the bim json member (the string form of "round") as (the bim json boolean of row's round)) to fields
+        append (the bim json member (the string form of "layerCount") as (the string form of row's layerCount)) to fields
+        append (the bim json member (the string form of "useCount") as (the string form of (the bim managed type use count of row's id in editor's documentValue's current))) to fields
+        append (the bim json member (the string form of "nlsfb") as (the bim json text of (the bim managed field 5 of row layer 0 in editor))) to fields
+        append (the bim json member (the string form of "omniclass") as (the bim json text of (the bim managed field 6 of row layer 0 in editor))) to fields
+        set layers to an empty list of a string
+        if row's family = 0:
+            set found to the bim wall type index of row's id in editor's documentValue's current
+            set planar to the item at found's position in (editor's documentValue's current's wallTypes's values)
+            loop cursor from 0 to the length of (planar's layers's values):
+                set layerValue to the item at cursor in (planar's layers's values)
+                set layerFields to an empty list of a string
+                append (the bim json member (the string form of "material") as (the bim json text of layerValue's material)) to layerFields
+                append (the bim json member (the string form of "thickness") as (the bim json number of layerValue's thickness)) to layerFields
+                append (the bim json object of layerFields) to layers
+                free layerFields
+        append (the bim json member (the string form of "layers") as (the bim json array of layers)) to fields
+        set answer to the bim json object of fields
+        free layers
+        free fields
+        return answer
+
+local function the bim api types on tab {integer:tabIndex} for {bim editor record:editor}:
+    execute:
+        set listed to an empty list of a string
+        loop tabCursor from 0 to 9:
+            if (tabIndex = -1) or (tabIndex = tabCursor):
+                set rows to the bim managed types on tab tabCursor in editor's documentValue's current
+                loop cursor from 0 to the length of rows:
+                    append (the bim api encoded type (the item at cursor in rows) on tab tabCursor for editor) to listed
+                free rows
+        set members to an empty list of a string
+        append (the bim json member (the string form of "types") as (the bim json array of listed)) to members
+        append (the bim json member (the string form of "dimensionUnit") as (the bim json text of (the string form of "metres"))) to members
+        append (the bim json member (the string form of "lengthUnit") as (the string form of editor's lengthUnit)) to members
+        set answer to the bim api success with members
+        free members
+        free listed
+        return answer
+
+# Validate the entire request before a manager operation can begin a transaction.
+local function the bim api type command {a string:verb} from {a pointer to a list:arguments} for {a pointer to a bim editor record:editor}:
+    execute:
+        set countValue to the length of arguments
+        set listing to verb = (the string form of "types")
+        set adding to verb = (the string form of "typeadd")
+        set editing to verb = (the string form of "typeset")
+        if listing and (countValue = 0):
+            return the bim api types on tab -1 for (@intrinsic("dereference", editor))
+        set expected to 2
+        if listing or adding:
+            set expected to 1
+        if editing:
+            set expected to 4
+        if (countValue != expected) and ((editing and (countValue = 5)) = false):
+            return the bim api failure saying (the string form of "invalid type command argument count")
+        set tabReading to the bim whole reading of (the item at 0 in arguments)
+        if (tabReading's valid = false) or ((tabReading's value < (0 as a 64 bit integer)) or (tabReading's value > (8 as a 64 bit integer))):
+            return the bim api failure saying (the string form of "TAB must be an integer from 0 to 8")
+        set tabIndex to tabReading's value as an integer
+        if listing:
+            return the bim api types on tab tabIndex for (@intrinsic("dereference", editor))
+        set typeId to the bim refused id
+        if adding = false:
+            set idReading to the bim whole reading of (the item at 1 in arguments)
+            if (idReading's valid = false) or (idReading's value <= (0 as a 64 bit integer)):
+                return the bim api failure saying (the string form of "ID must be a positive integer")
+            set typeId to idReading's value
+            set row to the bim managed type typeId on tab tabIndex in editor's documentValue's current
+            if row's id = the bim refused id:
+                return the bim api failure saying (the string form of "type ID does not belong to TAB")
+        set fieldCode to -1
+        set layerIndex to 0
+        if editing:
+            set fieldReading to the bim whole reading of (the item at 2 in arguments)
+            if (fieldReading's valid = false) or ((fieldReading's value < (0 as a 64 bit integer)) or (fieldReading's value > (6 as a 64 bit integer))):
+                return the bim api failure saying (the string form of "FIELD must be an integer from 0 to 6")
+            set fieldCode to fieldReading's value as an integer
+            if countValue = 5:
+                set layerReading to the bim whole reading of (the item at 4 in arguments)
+                if (layerReading's valid = false) or ((layerReading's value < (0 as a 64 bit integer)) or (layerReading's value > (1000000 as a 64 bit integer))):
+                    return the bim api failure saying (the string form of "LAYER must be a valid zero-based layer index")
+                set layerIndex to layerReading's value as an integer
+            set row to the bim managed type typeId on tab tabIndex in editor's documentValue's current
+            if ((row's family = 0) and (layerIndex >= row's layerCount)) or ((row's family != 0) and (layerIndex != 0)):
+                return the bim api failure saying (the string form of "LAYER is outside this type")
+            if (((fieldCode = 1) and (row's family = 2)) or ((fieldCode = 3) and (row's family = 0))) or (((fieldCode = 4) and (row's family != 2)) or (((fieldCode = 3) and (row's family = 1)) and row's round)):
+                return the bim api failure saying (the string form of "FIELD is not editable for this type")
+            set textValue to the item at 3 in arguments
+            set hasText to false
+            loop cursor from 0 to the length of textValue:
+                set byteCode to (((the character at cursor in textValue) as a 32 bit integer) bitwise and 255) as an integer
+                if byteCode < 32:
+                    return the bim api failure saying (the string form of "VALUE must be single-line text without control characters")
+                if byteCode != 32:
+                    set hasText to true
+            if (hasText = false) or ((fieldCode = 0) and ((the length of textValue) > 96)):
+                return the bim api failure saying (the string form of "VALUE is blank or name exceeds 96 bytes")
+            if fieldCode >= 2:
+                set numericText to textValue
+                if fieldCode = 6:
+                    set numericText to (numericText with "-" replaced by "") with " " replaced by ""
+                set reading to the bim real reading of numericText
+                if (reading's valid = false) or ((the absolute value of reading's value) > 1000000000000.0):
+                    return the bim api failure saying (the string form of "VALUE must be a finite number within 1e12")
+                if (((fieldCode = 2) or (fieldCode = 3)) and (reading's value <= 0.0)) or ((fieldCode >= 4) and (reading's value < 0.0)):
+                    return the bim api failure saying (the string form of "dimensions must be positive; sill and classification codes cannot be negative")
+        if adding:
+            set typeId to add bim managed type on tab tabIndex in editor
+        else if verb = (the string form of "typeduplicate"):
+            set typeId to duplicate bim managed type typeId on tab tabIndex in editor
+        else if editing:
+            if (set bim managed type typeId on tab tabIndex layer layerIndex field fieldCode to (the item at 3 in arguments) in editor) = false:
+                return the bim api failure saying (the string form of "type field refused")
+        else if verb = (the string form of "typeapply"):
+            if (apply bim managed type typeId on tab tabIndex in editor) = false:
+                return the bim api failure saying (the string form of "type apply refused")
+        else if verb = (the string form of "typedelete"):
+            if (delete bim managed type typeId on tab tabIndex in editor) = false:
+                return the bim api failure saying (the string form of "type is in use and cannot be deleted")
+        if typeId = the bim refused id:
+            return the bim api failure saying (the string form of "type creation refused")
+        set members to an empty list of a string
+        append (the bim json member (the string form of "id") as (the string form of typeId)) to members
+        set answer to the bim api success with members
+        free members
+        return answer
+
+local function the bim api options of {bim editor record:editor}:
+    execute:
+        set members to an empty list of a string
+        append (the bim json member (the string form of "tool") as (the string form of editor's tool)) to members
+        append (the bim json member (the string form of "numeric") as (the bim json text of editor's numeric)) to members
+        append (the bim json member (the string form of "lengthUnit") as (the string form of editor's lengthUnit)) to members
+        append (the bim json member (the string form of "orthoOn") as (the bim json boolean of editor's orthoOn)) to members
+        append (the bim json member (the string form of "orthoHeld") as (the bim json boolean of editor's orthoHeld)) to members
+        set modifyFields to an empty list of a string
+        append (the bim json member (the string form of "count") as (the string form of editor's modify's count)) to modifyFields
+        append (the bim json member (the string form of "radial") as (the bim json boolean of editor's modify's radial)) to modifyFields
+        append (the bim json member (the string form of "sweep") as (the bim json number of editor's modify's sweep)) to modifyFields
+        append (the bim json member (the string form of "copyMode") as (the bim json boolean of editor's modify's copyMode)) to modifyFields
+        append (the bim json member (the string form of "factor") as (the bim json number of editor's modify's factor)) to modifyFields
+        append (the bim json member (the string form of "radius") as (the bim json number of editor's modify's radius)) to modifyFields
+        append (the bim json member (the string form of "chamfer") as (the bim json number of editor's modify's chamfer)) to modifyFields
+        append (the bim json member (the string form of "axis") as (the string form of editor's modify's axis)) to modifyFields
+        append (the bim json member (the string form of "modify") as (the bim json object of modifyFields)) to members
+        free modifyFields
+        set snapFields to an empty list of a string
+        append (the bim json member (the string form of "label") as (the bim json text of editor's snap's label)) to snapFields
+        append (the bim json member (the string form of "point") as (the bim json point of editor's snap's point)) to snapFields
+        append (the bim json member (the string form of "snap") as (the bim json object of snapFields)) to members
+        set answer to the bim api success with members
+        free snapFields
+        free members
+        return answer
+
+# Direct writes, selection and history changes cannot alter a provisional UI
+# transaction. Gesture-driver verbs can still complete or cancel that gesture.
+local function bim api editor has a provisional gesture {bim editor record:editor}:
+    execute:
+        return ((editor's dragging or editor's grabbing) or (editor's pushId != the bim refused id)) or (((editor's tool = bim move tool) and (editor's moveStage = 2)) or ((editor's tool = bim rotate tool) and (editor's moveStage = 3)))
+
+local function bim api verb {a string:verb} needs an idle model:
+    execute:
+        if ((verb = (the string form of "wall")) or (verb = (the string form of "slab"))) or (verb = (the string form of "system")):
+            return true
+        if (verb = (the string form of "property")) or (verb = (the string form of "select")):
+            return true
+        if (verb = (the string form of "undo")) or (verb = (the string form of "redo")):
+            return true
+        if (verb = (the string form of "grid")) or (verb = (the string form of "gridrepeat")):
+            return true
+        return (((verb = (the string form of "typeadd")) or (verb = (the string form of "typeduplicate"))) or (verb = (the string form of "typeset"))) or ((verb = (the string form of "typeapply")) or (verb = (the string form of "typedelete")))
+
+# The answer to request `content` (its lines as above), the editor driven
+# as a person would through keys, the pointer and the ribbon.
+function the bim api answer to {a string:content} for {a pointer to a bim editor record:editor}:
+    execute:
+        set lines to content split at "\n"
+        set verb to the string form of ""
+        if (the length of lines) > 1:
+            set verb to the lowercase form of ((the item at 1 in lines) with "\r" replaced by "")
+        set arguments to an empty list of a string
+        set typeCommand to ((verb = (the string form of "types")) or (verb = (the string form of "typeadd"))) or (((verb = (the string form of "typeduplicate")) or (verb = (the string form of "typeset"))) or ((verb = (the string form of "typeapply")) or (verb = (the string form of "typedelete"))))
+        loop cursor from 2 to the length of lines:
+            set argument to (the item at cursor in lines) with "\r" replaced by ""
+            if ((the length of argument) > 0) or ((typeCommand or (verb = (the string form of "options"))) and (cursor < ((the length of lines) - 1))):
+                append argument to arguments
+        free lines
+        if (bim api verb verb needs an idle model) and (bim api editor has a provisional gesture (@intrinsic("dereference", editor))):
+            free arguments
+            return the bim api failure saying (the string form of "editor has an active provisional gesture; finish or cancel it before model, selection or history changes")
+        set reply to the bim api failure saying ((the string form of "unknown verb: ") + verb)
+        set numbers to an empty list of a 64 bit floating-point number
+        set numeric to true
+        loop cursor from 0 to the length of arguments:
+            set reading to the bim real reading of (the item at cursor in arguments)
+            if reading's valid:
+                append reading's value to numbers
+            else:
+                set numeric to false
+        set modelTarget to the address of (editor's documentValue's current)
+        if verb = (the string form of "ping"):
+            set members to an empty list of a string
+            append (the bim json member (the string form of "version") as (the bim json text of (the bim api version))) to members
+            set reply to the bim api success with members
+            free members
+        if typeCommand:
+            set reply to the bim api type command verb from arguments for editor
+        if verb = (the string form of "options"):
+            if (the length of arguments) = 0:
+                set reply to the bim api options of (@intrinsic("dereference", editor))
+            else:
+                set reply to the bim api failure saying (the string form of "options takes no arguments")
+        if verb = (the string form of "state"):
+            refresh bim editor editor
+            set reply to the bim api state of (@intrinsic("dereference", editor))
+        if verb = (the string form of "elements"):
+            set reply to the bim api elements of editor's documentValue's current
+        if verb = (the string form of "buttons"):
+            set listed to the bim api buttons matching (the string form of "")
+            set members to an empty list of a string
+            append (the bim json member (the string form of "buttons") as (the bim json array of listed)) to members
+            set reply to the bim api success with members
+            free members
+            free listed
+        if (verb = (the string form of "button")) or (verb = (the string form of "key")):
+            set code to -1
+            if (verb = (the string form of "key")) and (numeric and ((the length of numbers) = 1)):
+                set code to (the item at 0 in numbers) as an integer
+            if (verb = (the string form of "button")) and ((the length of arguments) >= 1):
+                set code to the bim api button code of (arguments joined with " ")
+            if code < 0:
+                set reply to the bim api failure saying (the string form of "no such button or key, or a tool not there yet")
+            else:
+                type bim editor key code in editor
+                refresh bim editor editor
+                set reply to the bim api state of (@intrinsic("dereference", editor))
+        if ((verb = (the string form of "pointer")) or (verb = (the string form of "click"))) or ((verb = (the string form of "press")) or (verb = (the string form of "release"))):
+            if (verb = (the string form of "press")) or (verb = (the string form of "release")):
+                if verb = (the string form of "press"):
+                    press bim editor pointer in editor
+                else:
+                    release bim editor pointer in editor
+                refresh bim editor editor
+                set reply to the bim api state of (@intrinsic("dereference", editor))
+            else if numeric and ((the length of numbers) = 2):
+                refresh bim editor editor
+                move bim editor pointer to (a cad vector2 with x (the item at 0 in numbers) and y (the item at 1 in numbers)) within 0.05 in editor
+                if verb = (the string form of "click"):
+                    press bim editor pointer in editor
+                    release bim editor pointer in editor
+                refresh bim editor editor
+                set reply to the bim api state of (@intrinsic("dereference", editor))
+            else:
+                set reply to the bim api failure saying (the string form of "give X and Y in metres")
+        if verb = (the string form of "select"):
+            if numeric and ((the length of numbers) = 1):
+                set wantedId to (the item at 0 in numbers) as a 64 bit integer
+                set kindCode to the bim kind picked for element wantedId in editor's documentValue's current
+                if kindCode = bim nothing picked:
+                    set reply to the bim api failure saying (the string form of "no element with that id")
+                else:
+                    select bim editor kindCode numbered wantedId in editor
+                    set reply to the bim api state of (@intrinsic("dereference", editor))
+            else:
+                set reply to the bim api failure saying (the string form of "give an element id")
+        if verb = (the string form of "grid"):
+            set reply to the bim api grid from arguments for editor
+        if verb = (the string form of "gridrepeat"):
+            set reply to the bim api repeated grid from arguments for editor
+        if verb = (the string form of "cursor"):
+            set reply to the bim api cursor from arguments for editor
+        if verb = (the string form of "properties"):
+            set propertyRows to the bim property rows of (@intrinsic("dereference", editor))
+            set listed to an empty list of a string
+            loop cursor from 0 to the length of propertyRows:
+                set propertyRow to the item at cursor in propertyRows
+                set fields to an empty list of a string
+                append (the bim json member (the string form of "label") as (the bim json text of propertyRow's label)) to fields
+                append (the bim json member (the string form of "value") as (the bim json text of propertyRow's value)) to fields
+                append (the bim json member (the string form of "code") as (the string form of propertyRow's code)) to fields
+                append (the bim json object of fields) to listed
+                free fields
+            set members to an empty list of a string
+            append (the bim json member (the string form of "rows") as (the bim json array of listed)) to members
+            set reply to the bim api success with members
+            free members
+            free listed
+            free propertyRows
+        if verb = (the string form of "property"):
+            if (the length of arguments) >= 1:
+                set codeReading to the bim whole reading of (the item at 0 in arguments)
+                if codeReading's valid:
+                    start bim editor property (codeReading's value as an integer) in editor
+                    if ((the length of arguments) >= 2) and (editor's propertyCode >= 0):
+                        set editor's propertyText to the item at 1 in arguments
+                        apply bim editor property in editor
+                    refresh bim editor editor
+                    set reply to the bim api state of (@intrinsic("dereference", editor))
+                else:
+                    set reply to the bim api failure saying (the string form of "give a property code")
+        if ((verb = (the string form of "wall")) or (verb = (the string form of "slab"))) or (verb = (the string form of "system")):
+            if numeric and ((the length of numbers) >= 4):
+                set first to a cad vector2 with x (the item at 0 in numbers) and y (the item at 1 in numbers)
+                set second to a cad vector2 with x (the item at 2 in numbers) and y (the item at 3 in numbers)
+                set made to the bim refused id
+                begin bim transaction in (the address of (editor's documentValue))
+                if verb = (the string form of "wall"):
+                    set made to add bim wall typed editor's wallTypeId on editor's levelId from first to second to modelTarget
+                if verb = (the string form of "slab"):
+                    set corners to an empty list of a cad vector2
+                    append first to corners
+                    append (a cad vector2 with x second's x and y first's y) to corners
+                    append second to corners
+                    append (a cad vector2 with x first's x and y second's y) to corners
+                    set made to add bim slab on editor's levelId around corners thick 0.25 to modelTarget
+                    free corners
+                if verb = (the string form of "system"):
+                    set storeyHeight to 3.0
+                    set levelFound to the bim level index of editor's levelId in editor's documentValue's current
+                    if levelFound's valid:
+                        set storeyHeight to (the item at levelFound's position in (editor's documentValue's current's levels's values))'s height
+                    set made to add bim curtain wall on editor's levelId from first to second rising storeyHeight in bays of 1.2 by 1.5 of (the string form of "steel") to modelTarget
+                    if (made != the bim refused id) and ((the length of numbers) >= 5):
+                        ignore give bim system made type ((the item at 4 in numbers) as an integer) in modelTarget
+                if made = the bim refused id:
+                    roll back bim transaction in (the address of (editor's documentValue))
+                    set reply to the bim api failure saying (the string form of "refused (too short, or no storey)")
+                else:
+                    commit bim transaction in (the address of (editor's documentValue))
+                    refresh bim editor editor
+                    set members to an empty list of a string
+                    append (the bim json member (the string form of "id") as (the string form of made)) to members
+                    set reply to the bim api success with members
+                    free members
+            else:
+                set reply to the bim api failure saying (the string form of "give X1 Y1 X2 Y2 in metres")
+        if verb = (the string form of "systemtypes"):
+            set library to the bim system types
+            set listed to an empty list of a string
+            loop cursor from 0 to the length of library:
+                set systemType to the item at cursor in library
+                set fields to an empty list of a string
+                append (the bim json member (the string form of "index") as (the string form of cursor)) to fields
+                append (the bim json member (the string form of "name") as (the bim json text of systemType's name)) to fields
+                append (the bim json member (the string form of "group") as (the bim json text of systemType's group)) to fields
+                append (the bim json object of fields) to listed
+                free fields
+            set members to an empty list of a string
+            append (the bim json member (the string form of "types") as (the bim json array of listed)) to members
+            set reply to the bim api success with members
+            free members
+            free listed
+            free library
+        if (verb = (the string form of "undo")) or (verb = (the string form of "redo")):
+            if verb = (the string form of "undo"):
+                type bim editor key 90 in editor
+            else:
+                type bim editor key 89 in editor
+            refresh bim editor editor
+            set reply to the bim api state of (@intrinsic("dereference", editor))
+        if (verb = (the string form of "fit")) or (verb = (the string form of "tab")):
+            # The window's own; it answers once it has done it.
+            set members to an empty list of a string
+            set reply to the bim api success with members
+            free members
+        free numbers
+        free arguments
+        return reply
+
+# What the window does for request `content`: `fit` or `tab` (and its
+# number), or nothing (an empty verb).
+function the bim api window part of {a string:content}:
+    execute:
+        set lines to content split at "\n"
+        set verb to the string form of ""
+        set number to 0
+        if (the length of lines) > 1:
+            set verb to the lowercase form of ((the item at 1 in lines) with "\r" replaced by "")
+        if (the length of lines) > 2:
+            set reading to the bim whole reading of ((the item at 2 in lines) with "\r" replaced by "")
+            if reading's valid:
+                set number to reading's value as an integer
+        free lines
+        if (verb != (the string form of "fit")) and (verb != (the string form of "tab")):
+            set verb to the string form of ""
+        return @intrinsic("construct", a bim api window record, verb, number)
+
+# A completed request wakes the idle window. Only inspect `request`, never
+# the temporary file: clients publish a request by renaming it atomically.
+# Opening and closing here leaves processing to the normal editor loop.
+function bim api has a request in {a string:folder}:
+    execute:
+        set requestPath to folder + (the string form of "/request")
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of requestPath, "rb")
+        if handle = (0 as a pointer to a byte):
+            return false
+        ignore @intrinsic("call", "libc", "fclose", integer, handle)
+        return true
+
+# Serves one waiting request in folder `folder`, if there is one: its
+# answer written to `response`. What the window must do (see `the bim api
+# window part of`); an empty verb when nothing waited.
+function serve bim api in {a string:folder} for {a pointer to a bim editor record:editor}:
+    execute:
+        set requestPath to folder + (the string form of "/request")
+        set reading to the bim file content at requestPath
+        if reading's valid = false:
+            return @intrinsic("construct", a bim api window record, the string form of "", 0)
+        ignore @intrinsic("call", "libc", "remove", integer, the data of requestPath)
+        set content to reading's text
+        set lines to content split at "\n"
+        set requestId to the string form of ""
+        if (the length of lines) > 0:
+            set requestId to (the item at 0 in lines) with "\r" replaced by ""
+        free lines
+        set answer to the bim api answer to content for editor
+        set temporaryPath to folder + (the string form of "/response.tmp")
+        set responsePath to folder + (the string form of "/response")
+        if write bim text ((requestId + (the string form of "\n")) + answer) to file temporaryPath:
+            ignore @intrinsic("call", "libc", "rename", integer, the data of temporaryPath, the data of responsePath)
+        return the bim api window part of content

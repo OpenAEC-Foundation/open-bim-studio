@@ -1,0 +1,1562 @@
+# SPDX-License-Identifier: MPL-2.0
+# A GPU context for an interactive application, written against libvulkan and
+# GLFW directly: a resizable window with a swapchain and a depth buffer; a
+# stream of pixel-space triangles written each frame into one growing buffer
+# and drawn in batches by three pipelines (flat, flat with depth testing, and
+# text through a single-channel texture); and persistent indexed meshes, each
+# in its own slot, drawn in a rectangle of the window with their transform in
+# the vertex shader, with their edges as lines between the same vertices (a
+# second index list), drawn over the faces or through them. A slot's mesh can
+# be drawn once or in instances, each with its own transform.
+#
+# All pipelines share one descriptor set: the shaders' parameters as the
+# floats of a storage buffer (binding 0) and the texture (bindings 30 and 31).
+#
+# A drawing that changes seldom (a plan, say) can be recorded once into a
+# persistent canvas buffer through the same stream calls, and drawn each frame
+# shifted, so that panning it costs nothing on the CPU.
+# The shaders are DynLex, compiled to SPIR-V, in a directory given at start.
+import graphics/vulkan/structs.dl
+import lib/list.dl
+
+# Stream vertices are 24 bytes: position x, y, z as 32-bit floats, texture
+# coordinates u, v as 32-bit floats, and the colour as four bytes.
+function gpu stream vertex size:
+    replacement:
+        24
+
+# Mesh vertices are 24 bytes: the position as three 32-bit floats, the
+# element's ordinal as a 32-bit float, the colour as four bytes and the
+# corner's normal as four signed bytes (none: zero).
+function gpu mesh vertex size:
+    replacement:
+        24
+
+# The parameters: 64 floats for the shaders, then one per element ordinal
+# (`set gpu element … shown …`), for up to 2^20 elements.
+function gpu parameter count:
+    replacement:
+        1048640
+
+function gpu element flags start:
+    replacement:
+        64
+
+# A mesh slot's instances are 64 bytes: their transform as three rows of four
+# 32-bit floats (relative to the mesh's origin), the element's ordinal as a
+# 32-bit float and the colour as four bytes, then 8 bytes unused.
+function gpu instance size:
+    replacement:
+        64
+
+function gpu flat batch:
+    replacement:
+        0
+function gpu depth batch:
+    replacement:
+        1
+function gpu text batch:
+    replacement:
+        2
+function gpu mesh batch:
+    replacement:
+        3
+function gpu canvas flat batch:
+    replacement:
+        4
+function gpu canvas text batch:
+    replacement:
+        5
+# The mesh's edges, hidden where faces cover them, and seen through them.
+function gpu edge batch:
+    replacement:
+        6
+function gpu wire batch:
+    replacement:
+        7
+# The same three for a mesh drawn in instances.
+function gpu instance batch:
+    replacement:
+        8
+function gpu instance edge batch:
+    replacement:
+        9
+function gpu instance wire batch:
+    replacement:
+        10
+
+function gpu image batch:
+    replacement:
+        11
+function gpu canvas image batch:
+    replacement:
+        12
+
+# Whether a batch of kind `batchKind` draws a mesh slot's vertices, indexed.
+function gpu kind {integer:batchKind} draws the mesh:
+    execute:
+        return ((batchKind >= gpu mesh batch) and (batchKind <= gpu instance wire batch)) and ((batchKind != gpu canvas flat batch) and (batchKind != gpu canvas text batch))
+
+# Whether a batch of kind `batchKind` draws a mesh slot in instances.
+function gpu kind {integer:batchKind} draws instances:
+    execute:
+        return (batchKind >= gpu instance batch) and (batchKind <= gpu instance wire batch)
+
+# Whether a batch of kind `batchKind` draws a mesh slot's edges.
+function gpu kind {integer:batchKind} draws edges:
+    execute:
+        return (((batchKind = gpu edge batch) or (batchKind = gpu wire batch)) or (batchKind = gpu instance edge batch)) or (batchKind = gpu instance wire batch)
+
+function check gpu {integer:result} doing {a string:step}:
+    execute:
+        if result != 0:
+            print (((the string form of "Vulkan failed: ") + step) + ((the string form of " (") + ((the string form of result) + (the string form of ")")))) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+
+function the gpu u32 at {integer:offset} in {pointer:base}:
+    execute:
+        return (@intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a 32 bit unsigned integer)) as an integer
+
+function the gpu u64 at {integer:offset} in {pointer:base}:
+    execute:
+        return @intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a 64 bit unsigned integer)
+
+local function the gpu pointer at {integer:offset} in {pointer:base}:
+    execute:
+        return @intrinsic("dereference", ((base as a pointer to a byte) + offset) as a pointer to a pointer)
+
+function a gpu block of {integer:size} bytes:
+    execute:
+        return @intrinsic("call", "libc", "calloc", a pointer, (size as a word sized unsigned integer), 1 as a word sized unsigned integer)
+
+function free gpu block {pointer:block}:
+    execute:
+        @intrinsic("call", "libc", "free", nothing, block)
+
+class:
+    patterns:
+        [a|] gpu buffer record
+    members:
+        handle as a 64 bit unsigned integer
+        memory as a 64 bit unsigned integer
+        mapped as a pointer
+        size as a 64 bit unsigned integer
+
+function an empty gpu buffer:
+    execute:
+        return @intrinsic("construct", a gpu buffer record, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, 0 as a pointer, 0 as a 64 bit unsigned integer)
+
+# One draw of the frame: `count` stream vertices from `first` (or `count`
+# indices of mesh slot `slot`, for `instanceCount` of its instances from
+# `firstInstance` when it is drawn in instances) with the pipeline of
+# `kind`, in the rectangle `x`, `y`, `width`, `height` of the window.
+class:
+    patterns:
+        [a|] gpu batch record
+    members:
+        kind as an integer
+        first as an integer
+        count as an integer
+        x as a 64 bit floating-point number
+        y as a 64 bit floating-point number
+        width as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+        slot as an integer
+        firstInstance as an integer
+        instanceCount as an integer
+        canvasScale as a 64 bit floating-point number
+        canvasX as a 64 bit floating-point number
+        canvasY as a 64 bit floating-point number
+        canvasBuffer as a 64 bit unsigned integer
+
+# A mesh the GPU keeps between frames: its vertices, its triangles' corners
+# (indices into them), its edges as pairs of them, and its instances when it
+# is drawn in instances. Each buffer is kept while what is written fits.
+class:
+    patterns:
+        [a|] gpu mesh slot record
+    members:
+        vertices as a gpu buffer record
+        indices as a gpu buffer record
+        indexCount as an integer
+        edges as a gpu buffer record
+        edgeCount as an integer
+        instances as a gpu buffer record
+        instanceCount as an integer
+
+class:
+    patterns:
+        [a|] gpu canvas slot record
+    members:
+        bufferValue as a gpu buffer record
+        capacity as an integer
+        count as an integer
+        batches as the type of (an empty list of a gpu batch record)
+
+# Independent, immutable RGBA resource. One descriptor set per image shares
+# the context parameter buffer; the glyph atlas is never replaced by an image.
+class:
+    patterns:
+        [a|] gpu image record
+    members:
+        image as a 64 bit unsigned integer
+        memory as a 64 bit unsigned integer
+        view as a 64 bit unsigned integer
+        pool as a 64 bit unsigned integer
+        descriptor as a 64 bit unsigned integer
+        width as an integer
+        height as an integer
+        key as a string
+
+class:
+    patterns:
+        [a|] gpu context record
+    members:
+        window as a pointer
+        instance as a pointer
+        surface as a 64 bit unsigned integer
+        physical as a pointer
+        device as a pointer
+        queue as a pointer
+        family as a 32 bit unsigned integer
+        memoryProperties as a pointer
+        swapchain as a 64 bit unsigned integer
+        format as a 32 bit unsigned integer
+        presentMode as a 32 bit unsigned integer
+        width as a 32 bit unsigned integer
+        height as a 32 bit unsigned integer
+        imageCount as a 32 bit unsigned integer
+        images as a pointer
+        views as a pointer
+        framebuffers as a pointer
+        depthImage as a 64 bit unsigned integer
+        depthMemory as a 64 bit unsigned integer
+        depthView as a 64 bit unsigned integer
+        renderPass as a 64 bit unsigned integer
+        setLayout as a 64 bit unsigned integer
+        pipelineLayout as a 64 bit unsigned integer
+        descriptorPool as a 64 bit unsigned integer
+        descriptorSet as a 64 bit unsigned integer
+        parameters as a gpu buffer record
+        flatPipeline as a 64 bit unsigned integer
+        depthPipeline as a 64 bit unsigned integer
+        textPipeline as a 64 bit unsigned integer
+        meshPipeline as a 64 bit unsigned integer
+        canvasFlatPipeline as a 64 bit unsigned integer
+        canvasTextPipeline as a 64 bit unsigned integer
+        commandPool as a 64 bit unsigned integer
+        commands as a pointer
+        imageReady as a 64 bit unsigned integer
+        renderDone as a 64 bit unsigned integer
+        inFlight as a 64 bit unsigned integer
+        imageIndex as a 32 bit unsigned integer
+        stream as a gpu buffer record
+        streamCapacity as an integer
+        streamCount as an integer
+        batches as the type of (an empty list of a gpu batch record)
+        batchKind as an integer
+        batchStart as an integer
+        colour as a 32 bit unsigned integer
+        u as a 32 bit floating-point number
+        v as a 32 bit floating-point number
+        depthTesting as a boolean
+        textureImage as a 64 bit unsigned integer
+        textureMemory as a 64 bit unsigned integer
+        textureView as a 64 bit unsigned integer
+        sampler as a 64 bit unsigned integer
+        meshSlots as the type of (an empty list of a gpu mesh slot record)
+        clearRed as a 64 bit floating-point number
+        clearGreen as a 64 bit floating-point number
+        clearBlue as a 64 bit floating-point number
+        scroll as a 64 bit floating-point number
+        userState as a pointer
+        drawable as a boolean
+        canvas as a gpu buffer record
+        canvasCapacity as an integer
+        canvasCount as an integer
+        canvasBatches as the type of (an empty list of a gpu batch record)
+        recordingCanvas as a boolean
+        typed as a pointer
+        typedCount as an integer
+        # Multisampling (anti-aliasing): the samples per pixel, and when more
+        # than one, the multisampled colour image resolved into the
+        # swapchain's at the end of each frame.
+        samples as a 32 bit unsigned integer
+        msaaImage as a 64 bit unsigned integer
+        msaaMemory as a 64 bit unsigned integer
+        msaaView as a 64 bit unsigned integer
+        # The line pipelines that draw meshes' edges over the faces (depth
+        # tested) and through them.
+        edgePipeline as a 64 bit unsigned integer
+        wirePipeline as a 64 bit unsigned integer
+        # The pipelines of meshes drawn in instances: faces, edges, wires.
+        instancePipeline as a 64 bit unsigned integer
+        instanceEdgePipeline as a 64 bit unsigned integer
+        instanceWirePipeline as a 64 bit unsigned integer
+        # Whether the section box cuts the meshes (`set gpu section cut`),
+        # and the six mesh pipelines that cut: their fragment shaders drop
+        # fragments, which costs the early depth test, so they draw only
+        # then.
+        sectionCut as a boolean
+        meshCutPipeline as a 64 bit unsigned integer
+        edgeCutPipeline as a 64 bit unsigned integer
+        wireCutPipeline as a 64 bit unsigned integer
+        instanceCutPipeline as a 64 bit unsigned integer
+        instanceEdgeCutPipeline as a 64 bit unsigned integer
+        instanceWireCutPipeline as a 64 bit unsigned integer
+        # How long the GPU took for the last frame drawn: two timestamps
+        # around its commands (`timed` when the queue can write them), in
+        # ticks of `timestampPeriod` nanoseconds.
+        timed as a boolean
+        stamped as a boolean
+        queryPool as a 64 bit unsigned integer
+        timestampPeriod as a 64 bit floating-point number
+        gpuMicroseconds as a 64 bit floating-point number
+        imagePipeline as a 64 bit unsigned integer
+        canvasImagePipeline as a 64 bit unsigned integer
+        imageSlots as the type of (an empty list of a gpu image record)
+        canvasSlots as the type of (an empty list of a gpu canvas slot record)
+        canvasSlot as an integer
+        canvasTransforms as a gpu buffer record
+        canvasTransformCount as an integer
+        nextCanvasSlot as an integer
+
+class:
+    patterns:
+        [a|] gpu query pool create info
+    members:
+        kind as a 32 bit unsigned integer
+        next as a pointer
+        flags as a 32 bit unsigned integer
+        queryType as a 32 bit unsigned integer
+        queryCount as a 32 bit unsigned integer
+        statistics as a 32 bit unsigned integer
+
+# The index of a memory type allowed by `allowedBits` with all of `wanted`.
+# What another thread needs to make buffers: the device and its memory
+# types, plain pointers only, so that copying it touches nothing the
+# window's thread counts references of.
+class:
+    patterns:
+        [a|] gpu device record
+    members:
+        device as a pointer
+        memoryProperties as a pointer
+
+function the gpu device of {gpu context record:context}:
+    execute:
+        return @intrinsic("construct", a gpu device record, context's device, context's memoryProperties)
+
+local function the gpu memory type for {integer:allowedBits} with {integer:wanted} in {gpu context record:context}:
+    execute:
+        return the gpu memory type for allowedBits with wanted on (the gpu device of context)
+
+local function the gpu memory type for {integer:allowedBits} with {integer:wanted} on {gpu device record:hardware}:
+    execute:
+        set count to the gpu u32 at 0 in hardware's memoryProperties
+        loop index from 0 to count:
+            set flags to the gpu u32 at (4 + (index * 8)) in hardware's memoryProperties
+            set allowed to ((allowedBits as a 64 bit integer) shifted right by (index as a 64 bit integer)) bitwise and (1 as a 64 bit integer)
+            if (allowed = (1 as a 64 bit integer)) and ((flags bitwise and wanted) = wanted):
+                return index
+        print "Vulkan failed: no suitable memory type" as a line
+        @intrinsic("call", "libc", "exit", nothing, 1)
+        return 0
+
+# A buffer of `size` bytes for `usage`, in host-visible coherent memory,
+# mapped for writing.
+function a gpu buffer of {a 64 bit unsigned integer:size} for {integer:usage} in {gpu context record:context}:
+    execute:
+        return a gpu buffer of size for usage on (the gpu device of context)
+
+# The same on `hardware`, from any thread (creating Vulkan objects needs no
+# lock).
+function a gpu buffer of {a 64 bit unsigned integer:size} for {integer:usage} on {gpu device record:hardware}:
+    execute:
+        set info to @intrinsic("construct", a vk buffer create info, 12 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, size, usage as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set handle to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateBuffer", an integer, hardware's device, the address of info, 0 as a pointer, the address of handle)) doing "vkCreateBuffer"
+        set requirements to a gpu block of 24 bytes
+        @intrinsic("call", "vulkan", "vkGetBufferMemoryRequirements", nothing, hardware's device, handle, requirements)
+        set typeIndex to the gpu memory type for (the gpu u32 at 16 in requirements) with 6 on hardware
+        set allocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the gpu u64 at 0 in requirements, typeIndex as a 32 bit unsigned integer)
+        free gpu block requirements
+        set memory to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, hardware's device, the address of allocation, 0 as a pointer, the address of memory)) doing "vkAllocateMemory"
+        check gpu (@intrinsic("call", "vulkan", "vkBindBufferMemory", an integer, hardware's device, handle, memory, 0 as a 64 bit unsigned integer)) doing "vkBindBufferMemory"
+        set mapped to 0 as a pointer
+        check gpu (@intrinsic("call", "vulkan", "vkMapMemory", an integer, hardware's device, memory, 0 as a 64 bit unsigned integer, size, 0 as a 32 bit unsigned integer, the address of mapped)) doing "vkMapMemory"
+        return @intrinsic("construct", a gpu buffer record, handle, memory, mapped, size)
+
+function release gpu buffer {gpu buffer record:buffer} in {gpu context record:context}:
+    execute:
+        if buffer's handle = (0 as a 64 bit unsigned integer):
+            return nothing
+        @intrinsic("call", "vulkan", "vkDestroyBuffer", nothing, context's device, buffer's handle, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkFreeMemory", nothing, context's device, buffer's memory, 0 as a pointer)
+
+local function a gpu shader module from {a string:path} in {gpu context record:context}:
+    execute:
+        set handle to @intrinsic("call", "libc", "fopen", a pointer, the data of path, "rb")
+        if handle = (0 as a pointer):
+            print ((the string form of "Vulkan failed: cannot open shader ") + path) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        ignore @intrinsic("call", "libc", "fseek", an integer, handle, 0 as a C long integer, 2)
+        set size to (@intrinsic("call", "libc", "ftell", a C long integer, handle)) as an integer
+        ignore @intrinsic("call", "libc", "fseek", an integer, handle, 0 as a C long integer, 0)
+        set code to a gpu block of size bytes
+        ignore @intrinsic("call", "libc", "fread", a word sized unsigned integer, code, 1 as a word sized unsigned integer, size as a word sized unsigned integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", an integer, handle)
+        set info to @intrinsic("construct", a vk shader module create info, 16 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, size as a word sized unsigned integer, code)
+        set compiled to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateShaderModule", an integer, context's device, the address of info, 0 as a pointer, the address of compiled)) doing "vkCreateShaderModule"
+        free gpu block code
+        return compiled
+
+# The swapchain, its image views, the depth buffer and the framebuffers, for
+# the window's current size. A minimised window leaves the context
+# undrawable.
+local function create gpu swapchain for {a pointer to a gpu context record:context}:
+    execute:
+        set capabilities to a gpu block of 64 bytes
+        check gpu (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", an integer, context's physical, context's surface, capabilities)) doing "surface capabilities"
+        set width to the gpu u32 at 8 in capabilities
+        set height to the gpu u32 at 12 in capabilities
+        if (width < 0) or (width > 16384):
+            set pixelWidth to 0
+            set pixelHeight to 0
+            @intrinsic("call", "glfw", "glfwGetFramebufferSize", nothing, context's window, the address of pixelWidth, the address of pixelHeight)
+            set width to pixelWidth
+            set height to pixelHeight
+        set wanted to (the gpu u32 at 0 in capabilities) + 1
+        set most to the gpu u32 at 4 in capabilities
+        if (most > 0) and (wanted > most):
+            set wanted to most
+        set transform to the gpu u32 at 40 in capabilities
+        free gpu block capabilities
+        set context's width to width as a 32 bit unsigned integer
+        set context's height to height as a 32 bit unsigned integer
+        set context's imageCount to 0 as a 32 bit unsigned integer
+        if (width <= 0) or (height <= 0):
+            set context's drawable to false
+            return nothing
+        set context's drawable to true
+        set info to @intrinsic("construct", a vk swapchain create info, 1000001000 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, context's surface, wanted as a 32 bit unsigned integer, context's format, 0 as a 32 bit unsigned integer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, transform as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, context's presentMode, 1 as a 32 bit unsigned integer, 0 as a 64 bit unsigned integer)
+        set chain to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateSwapchainKHR", an integer, context's device, the address of info, 0 as a pointer, the address of chain)) doing "vkCreateSwapchainKHR"
+        set context's swapchain to chain
+        set count to 0 as a 32 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkGetSwapchainImagesKHR", an integer, context's device, chain, the address of count, 0 as a pointer)) doing "swapchain image count"
+        set context's imageCount to count
+        set context's images to a gpu block of ((count as an integer) * 8) bytes
+        check gpu (@intrinsic("call", "vulkan", "vkGetSwapchainImagesKHR", an integer, context's device, chain, the address of count, context's images)) doing "swapchain images"
+        set imageInfo to @intrinsic("construct", a vk image create info, 14 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, context's samples, 0 as a 32 bit unsigned integer, 32 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer)
+        set depthImage to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateImage", an integer, context's device, the address of imageInfo, 0 as a pointer, the address of depthImage)) doing "depth image"
+        set requirements to a gpu block of 24 bytes
+        @intrinsic("call", "vulkan", "vkGetImageMemoryRequirements", nothing, context's device, depthImage, requirements)
+        set allocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the gpu u64 at 0 in requirements, (the gpu memory type for (the gpu u32 at 16 in requirements) with 1 in (@intrinsic("dereference", context))) as a 32 bit unsigned integer)
+        free gpu block requirements
+        set depthMemory to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, context's device, the address of allocation, 0 as a pointer, the address of depthMemory)) doing "depth memory"
+        check gpu (@intrinsic("call", "vulkan", "vkBindImageMemory", an integer, context's device, depthImage, depthMemory, 0 as a 64 bit unsigned integer)) doing "depth bind"
+        set context's depthImage to depthImage
+        set context's depthMemory to depthMemory
+        set depthViewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, depthImage, 1 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        set depthView to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, context's device, the address of depthViewInfo, 0 as a pointer, the address of depthView)) doing "depth view"
+        set context's depthView to depthView
+        # The multisampled colour image, kept only until it is resolved.
+        if context's samples > (1 as a 32 bit unsigned integer):
+            set msaaInfo to @intrinsic("construct", a vk image create info, 14 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, context's format, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, context's samples, 0 as a 32 bit unsigned integer, 80 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer)
+            set msaaImage to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkCreateImage", an integer, context's device, the address of msaaInfo, 0 as a pointer, the address of msaaImage)) doing "multisampled image"
+            set msaaRequirements to a gpu block of 24 bytes
+            @intrinsic("call", "vulkan", "vkGetImageMemoryRequirements", nothing, context's device, msaaImage, msaaRequirements)
+            set msaaAllocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the gpu u64 at 0 in msaaRequirements, (the gpu memory type for (the gpu u32 at 16 in msaaRequirements) with 1 in (@intrinsic("dereference", context))) as a 32 bit unsigned integer)
+            free gpu block msaaRequirements
+            set msaaMemory to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, context's device, the address of msaaAllocation, 0 as a pointer, the address of msaaMemory)) doing "multisampled memory"
+            check gpu (@intrinsic("call", "vulkan", "vkBindImageMemory", an integer, context's device, msaaImage, msaaMemory, 0 as a 64 bit unsigned integer)) doing "multisampled bind"
+            set msaaViewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, msaaImage, 1 as a 32 bit unsigned integer, context's format, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            set msaaView to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, context's device, the address of msaaViewInfo, 0 as a pointer, the address of msaaView)) doing "multisampled view"
+            set context's msaaImage to msaaImage
+            set context's msaaMemory to msaaMemory
+            set context's msaaView to msaaView
+        set context's views to a gpu block of ((count as an integer) * 8) bytes
+        set context's framebuffers to a gpu block of ((count as an integer) * 8) bytes
+        loop index from 0 to (count as an integer):
+            set viewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, the gpu u64 at (index * 8) in context's images, 1 as a 32 bit unsigned integer, context's format, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            set view to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, context's device, the address of viewInfo, 0 as a pointer, the address of view)) doing "image view"
+            @intrinsic("store at", ((context's views as a pointer to a byte) + (index * 8)) as a pointer to a 64 bit unsigned integer, view)
+            set attachments to an empty list of a 64 bit unsigned integer
+            if context's samples > (1 as a 32 bit unsigned integer):
+                append context's msaaView to attachments
+                append depthView to attachments
+                append view to attachments
+            else:
+                append view to attachments
+                append depthView to attachments
+            set framebufferInfo to @intrinsic("construct", a vk framebuffer create info, 37 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, context's renderPass, (the length of attachments) as a 32 bit unsigned integer, (the data of attachments) as a pointer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+            set framebuffer to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkCreateFramebuffer", an integer, context's device, the address of framebufferInfo, 0 as a pointer, the address of framebuffer)) doing "framebuffer"
+            free attachments
+            @intrinsic("store at", ((context's framebuffers as a pointer to a byte) + (index * 8)) as a pointer to a 64 bit unsigned integer, framebuffer)
+
+local function destroy gpu swapchain of {a pointer to a gpu context record:context}:
+    execute:
+        if context's imageCount = (0 as a 32 bit unsigned integer):
+            return nothing
+        loop index from 0 to (context's imageCount as an integer):
+            @intrinsic("call", "vulkan", "vkDestroyFramebuffer", nothing, context's device, the gpu u64 at (index * 8) in context's framebuffers, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, context's device, the gpu u64 at (index * 8) in context's views, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, context's device, context's depthView, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyImage", nothing, context's device, context's depthImage, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkFreeMemory", nothing, context's device, context's depthMemory, 0 as a pointer)
+        if context's samples > (1 as a 32 bit unsigned integer):
+            @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, context's device, context's msaaView, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkDestroyImage", nothing, context's device, context's msaaImage, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkFreeMemory", nothing, context's device, context's msaaMemory, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroySwapchainKHR", nothing, context's device, context's swapchain, 0 as a pointer)
+        free gpu block context's images
+        free gpu block context's views
+        free gpu block context's framebuffers
+        set context's imageCount to 0 as a 32 bit unsigned integer
+
+# Rebuilds the swapchain after the window changed size.
+function renew gpu swapchain of {a pointer to a gpu context record:context}:
+    execute:
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, context's device)
+        destroy gpu swapchain of context
+        create gpu swapchain for context
+
+# A graphics pipeline from the shaders at `vertexPath` and `fragmentPath`,
+# reading stream vertices (or mesh vertices when `forMesh`) as triangles (or
+# as lines when `asLines`), with depth testing when `depthTested`, the depth
+# of triangles pushed a little away when `pushedBack` (so that lines drawn
+# on their edges lie in front), alpha blending when `blended` and back faces
+# culled when `culled`.
+# A pipeline for mesh slots in instances (`isInstanced`) reads the mesh's
+# positions and normals per vertex (binding 0) and the ordinal (location 1),
+# the colour (2) and the transform's rows (4 to 6) per instance (binding 1).
+local function a gpu pipeline from {a string:vertexPath} and {a string:fragmentPath} for mesh {boolean:forMesh} instanced {boolean:isInstanced} lines {boolean:asLines} depth {boolean:depthTested} pushed back {boolean:pushedBack} blended {boolean:isBlended} culled {boolean:isCulled} in {gpu context record:context}:
+    execute:
+        set zero to 0 as a 32 bit unsigned integer
+        set one to 1 as a 32 bit unsigned integer
+        set vertexModule to a gpu shader module from vertexPath in context
+        set fragmentModule to a gpu shader module from fragmentPath in context
+        set stages to an empty list of a vk pipeline shader stage create info
+        append (@intrinsic("construct", a vk pipeline shader stage create info, 18 as a 32 bit unsigned integer, 0 as a pointer, zero, one, vertexModule, "main", 0 as a pointer)) to stages
+        append (@intrinsic("construct", a vk pipeline shader stage create info, 18 as a 32 bit unsigned integer, 0 as a pointer, zero, 16 as a 32 bit unsigned integer, fragmentModule, "main", 0 as a pointer)) to stages
+        set stride to gpu stream vertex size
+        if forMesh:
+            set stride to gpu mesh vertex size
+        set bindingList to an empty list of a vk vertex input binding description
+        append (@intrinsic("construct", a vk vertex input binding description, zero, stride as a 32 bit unsigned integer, zero)) to bindingList
+        set attributeList to an empty list of a vk vertex input attribute description
+        append (@intrinsic("construct", a vk vertex input attribute description, zero, zero, 106 as a 32 bit unsigned integer, zero)) to attributeList
+        if isInstanced and forMesh:
+            append (@intrinsic("construct", a vk vertex input binding description, one, (gpu instance size) as a 32 bit unsigned integer, one)) to bindingList
+            append (@intrinsic("construct", a vk vertex input attribute description, 3 as a 32 bit unsigned integer, zero, 38 as a 32 bit unsigned integer, 20 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 4 as a 32 bit unsigned integer, one, 109 as a 32 bit unsigned integer, zero)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 5 as a 32 bit unsigned integer, one, 109 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 6 as a 32 bit unsigned integer, one, 109 as a 32 bit unsigned integer, 32 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, one, one, 100 as a 32 bit unsigned integer, 48 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 2 as a 32 bit unsigned integer, one, 37 as a 32 bit unsigned integer, 52 as a 32 bit unsigned integer)) to attributeList
+        else if forMesh:
+            append (@intrinsic("construct", a vk vertex input attribute description, one, zero, 100 as a 32 bit unsigned integer, 12 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 2 as a 32 bit unsigned integer, zero, 37 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 3 as a 32 bit unsigned integer, zero, 38 as a 32 bit unsigned integer, 20 as a 32 bit unsigned integer)) to attributeList
+        else:
+            append (@intrinsic("construct", a vk vertex input attribute description, one, zero, 103 as a 32 bit unsigned integer, 12 as a 32 bit unsigned integer)) to attributeList
+            append (@intrinsic("construct", a vk vertex input attribute description, 2 as a 32 bit unsigned integer, zero, 37 as a 32 bit unsigned integer, 20 as a 32 bit unsigned integer)) to attributeList
+        if isInstanced and (forMesh = false):
+            append (@intrinsic("construct", a vk vertex input binding description, one, 16 as a 32 bit unsigned integer, one)) to bindingList
+            append (@intrinsic("construct", a vk vertex input attribute description, 4 as a 32 bit unsigned integer, one, 109 as a 32 bit unsigned integer, zero)) to attributeList
+        set vertexInput to @intrinsic("construct", a vk pipeline vertex input state create info, 19 as a 32 bit unsigned integer, 0 as a pointer, zero, (the length of bindingList) as a 32 bit unsigned integer, (the data of bindingList) as a pointer, (the length of attributeList) as a 32 bit unsigned integer, (the data of attributeList) as a pointer)
+        # A list of lines (1) or of triangles (3).
+        set topology to 3 as a 32 bit unsigned integer
+        if asLines:
+            set topology to one
+        set assembly to @intrinsic("construct", a vk pipeline input assembly state create info, 20 as a 32 bit unsigned integer, 0 as a pointer, zero, topology, zero)
+        set viewportState to @intrinsic("construct", a vk pipeline viewport state create info, 22 as a 32 bit unsigned integer, 0 as a pointer, zero, one, 0 as a pointer, one, 0 as a pointer)
+        set cullMode to zero
+        if isCulled:
+            set cullMode to 2 as a 32 bit unsigned integer
+        # Pushed back by a constant and by the triangle's slope, so that a
+        # line along an edge wins at any angle the face is seen.
+        set biasing to zero
+        set biasConstant to 0.0
+        set biasSlope to 0.0
+        if pushedBack:
+            set biasing to one
+            set biasConstant to 2.0
+            set biasSlope to 1.5
+        set raster to @intrinsic("construct", a vk pipeline rasterization state create info, 23 as a 32 bit unsigned integer, 0 as a pointer, zero, zero, zero, zero, cullMode, zero, biasing, biasConstant as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, biasSlope as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set multisample to @intrinsic("construct", a vk pipeline multisample state create info, 24 as a 32 bit unsigned integer, 0 as a pointer, zero, context's samples, zero, 0.0 as a 32 bit floating-point number, 0 as a pointer, zero, zero)
+        set testing to zero
+        if depthTested:
+            set testing to one
+        set depthState to @intrinsic("construct", a vk pipeline depth stencil state create info, 25 as a 32 bit unsigned integer, 0 as a pointer, zero, testing, testing, 3 as a 32 bit unsigned integer, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set blending to zero
+        if isBlended:
+            set blending to one
+        # Source alpha over one minus source alpha, for colour and alpha.
+        set blendAttachment to @intrinsic("construct", a vk pipeline color blend attachment state, blending, 6 as a 32 bit unsigned integer, 7 as a 32 bit unsigned integer, zero, one, 7 as a 32 bit unsigned integer, zero, 15 as a 32 bit unsigned integer)
+        set blend to @intrinsic("construct", a vk pipeline color blend state create info, 26 as a 32 bit unsigned integer, 0 as a pointer, zero, zero, zero, one, (the address of blendAttachment) as a pointer, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number)
+        set dynamicList to an empty list of a 32 bit unsigned integer
+        append zero to dynamicList
+        append one to dynamicList
+        set dynamicState to @intrinsic("construct", a vk pipeline dynamic state create info, 27 as a 32 bit unsigned integer, 0 as a pointer, zero, 2 as a 32 bit unsigned integer, (the data of dynamicList) as a pointer)
+        set pipelineInfo to @intrinsic("construct", a vk graphics pipeline create info, 28 as a 32 bit unsigned integer, 0 as a pointer, zero, 2 as a 32 bit unsigned integer, (the data of stages) as a pointer, (the address of vertexInput) as a pointer, (the address of assembly) as a pointer, 0 as a pointer, (the address of viewportState) as a pointer, (the address of raster) as a pointer, (the address of multisample) as a pointer, (the address of depthState) as a pointer, (the address of blend) as a pointer, (the address of dynamicState) as a pointer, context's pipelineLayout, context's renderPass, zero, 0 as a 64 bit unsigned integer, -1)
+        set made to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateGraphicsPipelines", an integer, context's device, 0 as a 64 bit unsigned integer, one, the address of pipelineInfo, 0 as a pointer, the address of made)) doing "vkCreateGraphicsPipelines"
+        free stages
+        free bindingList
+        free attributeList
+        free dynamicList
+        @intrinsic("call", "vulkan", "vkDestroyShaderModule", nothing, context's device, vertexModule, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkDestroyShaderModule", nothing, context's device, fragmentModule, 0 as a pointer)
+        return made
+
+# A context with a new window `width` x `height` titled `title`, drawing with
+# the SPIR-V shaders in the directory `shaderDirectory`.
+# The samples per pixel to draw with: 4 where the device's framebuffers
+# take 4 for both colour and depth, else 2, else 1.
+local function the gpu sample count of {pointer:physical}:
+    execute:
+        set properties to a gpu block of 824 bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceProperties", nothing, physical, properties)
+        set colourCounts to the gpu u32 at 672 in properties
+        set depthCounts to the gpu u32 at 676 in properties
+        free gpu block properties
+        set both to colourCounts & depthCounts
+        if (both & 4) != 0:
+            return 4 as a 32 bit unsigned integer
+        if (both & 2) != 0:
+            return 2 as a 32 bit unsigned integer
+        return 1 as a 32 bit unsigned integer
+
+function a new gpu context titled {a string:title} sized {integer:width} by {integer:height} with shaders in {a string:shaderDirectory}:
+    execute:
+        if (@intrinsic("call", "glfw", "glfwInit", an integer)) = 0:
+            print "GLFW failed to initialise" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        @intrinsic("call", "glfw", "glfwWindowHint", nothing, 139265, 0)
+        set window to @intrinsic("call", "glfw", "glfwCreateWindow", a pointer, width, height, the data of title, 0 as a pointer, 0 as a pointer)
+        if window = (0 as a pointer):
+            print "GLFW failed to open a window" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        set extensionCount to 0 as a 32 bit unsigned integer
+        set extensions to @intrinsic("call", "glfw", "glfwGetRequiredInstanceExtensions", a pointer, the address of extensionCount)
+        set application to @intrinsic("construct", a vk application info, 0 as a 32 bit unsigned integer, 0 as a pointer, "dynlex", 1 as a 32 bit unsigned integer, "dynlex", 1 as a 32 bit unsigned integer, 4202496 as a 32 bit unsigned integer)
+        set instanceInfo to @intrinsic("construct", a vk instance create info, 1 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, (the address of application) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, extensionCount, extensions)
+        set instance to 0 as a pointer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateInstance", an integer, the address of instanceInfo, 0 as a pointer, the address of instance)) doing "vkCreateInstance"
+        set surface to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "glfw", "glfwCreateWindowSurface", an integer, instance, window, 0 as a pointer, the address of surface)) doing "glfwCreateWindowSurface"
+        set deviceCount to 0 as a 32 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkEnumeratePhysicalDevices", an integer, instance, the address of deviceCount, 0 as a pointer)) doing "device count"
+        set devices to a gpu block of ((deviceCount as an integer) * 8) bytes
+        check gpu (@intrinsic("call", "vulkan", "vkEnumeratePhysicalDevices", an integer, instance, the address of deviceCount, devices)) doing "devices"
+        set physical to 0 as a pointer
+        set family to -1
+        loop deviceIndex from 0 to (deviceCount as an integer):
+            if family < 0:
+                set candidate to the gpu pointer at (deviceIndex * 8) in devices
+                set familyCount to 0 as a 32 bit unsigned integer
+                @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, candidate, the address of familyCount, 0 as a pointer)
+                set families to a gpu block of ((familyCount as an integer) * 24) bytes
+                @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, candidate, the address of familyCount, families)
+                loop familyIndex from 0 to (familyCount as an integer):
+                    set supported to 0 as a 32 bit unsigned integer
+                    ignore @intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceSupportKHR", an integer, candidate, familyIndex as a 32 bit unsigned integer, surface, the address of supported)
+                    set graphics to the remainder of (the gpu u32 at (familyIndex * 24) in families) divided by 2
+                    if ((graphics = 1) and (supported != (0 as a 32 bit unsigned integer))) and (family < 0):
+                        set family to familyIndex
+                        set physical to candidate
+                free gpu block families
+        free gpu block devices
+        if family < 0:
+            print "Vulkan failed: no device draws to this window" as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        set priority to 1.0 as a 32 bit floating-point number
+        set queueInfo to @intrinsic("construct", a vk device queue create info, 2 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, family as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of priority) as a pointer)
+        set swapchainName to "VK_KHR_swapchain"
+        set deviceExtensions to an empty list of a C string
+        append swapchainName to deviceExtensions
+        set deviceInfo to @intrinsic("construct", a vk device create info, 3 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of queueInfo) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the data of deviceExtensions) as a pointer, 0 as a pointer)
+        set device to 0 as a pointer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateDevice", an integer, physical, the address of deviceInfo, 0 as a pointer, the address of device)) doing "vkCreateDevice"
+        free deviceExtensions
+        set queue to 0 as a pointer
+        @intrinsic("call", "vulkan", "vkGetDeviceQueue", nothing, device, family as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, the address of queue)
+        set memoryProperties to a gpu block of 1024 bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceMemoryProperties", nothing, physical, memoryProperties)
+        set formatCount to 0 as a 32 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceFormatsKHR", an integer, physical, surface, the address of formatCount, 0 as a pointer)) doing "format count"
+        set formats to a gpu block of ((formatCount as an integer) * 8) bytes
+        check gpu (@intrinsic("call", "vulkan", "vkGetPhysicalDeviceSurfaceFormatsKHR", an integer, physical, surface, the address of formatCount, formats)) doing "formats"
+        set format to the gpu u32 at 0 in formats
+        loop formatIndex from 0 to (formatCount as an integer):
+            if (the gpu u32 at (formatIndex * 8) in formats) = 44:
+                set format to 44
+        free gpu block formats
+        set none to an empty gpu buffer
+        set noSlots to an empty list of a gpu mesh slot record
+        set noBatches to an empty list of a gpu batch record
+        set noCanvasBatches to an empty list of a gpu batch record
+        set zero64 to 0 as a 64 bit unsigned integer
+        set made to @intrinsic("construct", a gpu context record, window, instance, surface, physical, device, queue, family as a 32 bit unsigned integer, memoryProperties, zero64, format as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a pointer, 0 as a pointer, zero64, zero64, zero64, zero64, zero64, zero64, zero64, zero64, none, zero64, zero64, zero64, zero64, zero64, zero64, zero64, 0 as a pointer, zero64, zero64, zero64, 0 as a 32 bit unsigned integer, none, 0, 0, noBatches, 0, 0, 4294967295 as a 32 bit unsigned integer, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, false, zero64, zero64, zero64, zero64, noSlots, 1.0, 1.0, 1.0, 0.0, 0 as a pointer, false, none, 0, 0, noCanvasBatches, false, a gpu block of 4096 bytes, 0, the gpu sample count of physical, zero64, zero64, zero64, zero64, zero64, zero64, zero64, zero64, false, zero64, zero64, zero64, zero64, zero64, zero64, false, false, zero64, 0.0, 0.0, zero64, zero64, an empty list of a gpu image record, an empty list of a gpu canvas slot record, 0, none, 0, 1)
+        # The render pass: clear colour and depth, keep the colour to present.
+        # Multisampled, the colour is drawn into its own image and resolved
+        # into the swapchain's (attachment 2), which alone is kept.
+        set multisampled to made's samples > (1 as a 32 bit unsigned integer)
+        set attachmentList to an empty list of a vk attachment description
+        if multisampled:
+            append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, format as a 32 bit unsigned integer, made's samples, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)) to attachmentList
+        else:
+            append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, format as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1000001002 as a 32 bit unsigned integer)) to attachmentList
+        append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, 126 as a 32 bit unsigned integer, made's samples, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer)) to attachmentList
+        if multisampled:
+            append (@intrinsic("construct", a vk attachment description, 0 as a 32 bit unsigned integer, format as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1000001002 as a 32 bit unsigned integer)) to attachmentList
+        set colourReference to @intrinsic("construct", a vk attachment reference, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)
+        set depthReference to @intrinsic("construct", a vk attachment reference, 1 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer)
+        set resolveReference to @intrinsic("construct", a vk attachment reference, 2 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)
+        set resolving to 0 as a pointer
+        if multisampled:
+            set resolving to (the address of resolveReference) as a pointer
+        set subpass to @intrinsic("construct", a vk subpass description, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of colourReference) as a pointer, resolving, (the address of depthReference) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set dependency to @intrinsic("construct", a vk subpass dependency, 4294967295 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1792 as a 32 bit unsigned integer, 1792 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1280 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set passInfo to @intrinsic("construct", a vk render pass create info, 38 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, (the length of attachmentList) as a 32 bit unsigned integer, (the data of attachmentList) as a pointer, 1 as a 32 bit unsigned integer, (the address of subpass) as a pointer, 1 as a 32 bit unsigned integer, (the address of dependency) as a pointer)
+        set renderPass to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateRenderPass", an integer, device, the address of passInfo, 0 as a pointer, the address of renderPass)) doing "vkCreateRenderPass"
+        free attachmentList
+        set made's renderPass to renderPass
+        create gpu swapchain for (the address of made)
+        # One descriptor set: the parameters (binding 0) and the texture's
+        # image (30) and sampler (31).
+        set bindingList to an empty list of a vk descriptor set layout binding
+        append (@intrinsic("construct", a vk descriptor set layout binding, 0 as a 32 bit unsigned integer, 7 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 17 as a 32 bit unsigned integer, 0 as a pointer)) to bindingList
+        append (@intrinsic("construct", a vk descriptor set layout binding, 30 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer, 0 as a pointer)) to bindingList
+        append (@intrinsic("construct", a vk descriptor set layout binding, 31 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 16 as a 32 bit unsigned integer, 0 as a pointer)) to bindingList
+        set layoutInfo to @intrinsic("construct", a vk descriptor set layout create info, 32 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer, (the data of bindingList) as a pointer)
+        set setLayout to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateDescriptorSetLayout", an integer, device, the address of layoutInfo, 0 as a pointer, the address of setLayout)) doing "descriptor set layout"
+        free bindingList
+        set made's setLayout to setLayout
+        set pipelineLayoutInfo to @intrinsic("construct", a vk pipeline layout create info, 30 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, (the address of setLayout) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set pipelineLayout to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreatePipelineLayout", an integer, device, the address of pipelineLayoutInfo, 0 as a pointer, the address of pipelineLayout)) doing "pipeline layout"
+        set made's pipelineLayout to pipelineLayout
+        set poolSizes to an empty list of a vk descriptor pool size
+        append (@intrinsic("construct", a vk descriptor pool size, 7 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)) to poolSizes
+        append (@intrinsic("construct", a vk descriptor pool size, 2 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)) to poolSizes
+        append (@intrinsic("construct", a vk descriptor pool size, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)) to poolSizes
+        set poolInfo to @intrinsic("construct", a vk descriptor pool create info, 33 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 3 as a 32 bit unsigned integer, (the data of poolSizes) as a pointer)
+        set descriptorPool to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateDescriptorPool", an integer, device, the address of poolInfo, 0 as a pointer, the address of descriptorPool)) doing "descriptor pool"
+        free poolSizes
+        set made's descriptorPool to descriptorPool
+        set allocateInfo to @intrinsic("construct", a vk descriptor set allocate info, 34 as a 32 bit unsigned integer, 0 as a pointer, descriptorPool, 1 as a 32 bit unsigned integer, (the address of setLayout) as a pointer)
+        set descriptorSet to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkAllocateDescriptorSets", an integer, device, the address of allocateInfo, the address of descriptorSet)) doing "descriptor set"
+        set made's descriptorSet to descriptorSet
+        set parameterBytes to (gpu parameter count) * 4
+        set made's parameters to a gpu buffer of (parameterBytes as a 64 bit unsigned integer) for 32 in made
+        # All parameters start at zero: no section box, every element shown.
+        ignore @intrinsic("call", "libc", "memset", a pointer, made's parameters's mapped, 0, parameterBytes as a word sized unsigned integer)
+        set bufferInfo to @intrinsic("construct", a vk descriptor buffer info, made's parameters's handle, 0 as a 64 bit unsigned integer, parameterBytes as a 64 bit unsigned integer)
+        set write to @intrinsic("construct", a vk write descriptor set, 35 as a 32 bit unsigned integer, 0 as a pointer, descriptorSet, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 7 as a 32 bit unsigned integer, 0 as a pointer, (the address of bufferInfo) as a pointer, 0 as a pointer)
+        @intrinsic("call", "vulkan", "vkUpdateDescriptorSets", nothing, device, 1 as a 32 bit unsigned integer, the address of write, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        # The pipelines.
+        set screenShader to shaderDirectory + (the string form of "/screen_vertex.spv")
+        set made's flatPipeline to a gpu pipeline from screenShader and (shaderDirectory + (the string form of "/flat_fragment.spv")) for mesh false instanced false lines false depth false pushed back false blended true culled false in made
+        set made's depthPipeline to a gpu pipeline from screenShader and (shaderDirectory + (the string form of "/flat_fragment.spv")) for mesh false instanced false lines false depth true pushed back false blended false culled false in made
+        set made's textPipeline to a gpu pipeline from screenShader and (shaderDirectory + (the string form of "/text_fragment.spv")) for mesh false instanced false lines false depth false pushed back false blended true culled false in made
+        set made's imagePipeline to a gpu pipeline from screenShader and (shaderDirectory + (the string form of "/image_fragment.spv")) for mesh false instanced false lines false depth false pushed back false blended true culled false in made
+        set canvasShader to shaderDirectory + (the string form of "/canvas_vertex.spv")
+        set made's canvasFlatPipeline to a gpu pipeline from canvasShader and (shaderDirectory + (the string form of "/flat_fragment.spv")) for mesh false instanced true lines false depth false pushed back false blended true culled false in made
+        set made's canvasTextPipeline to a gpu pipeline from canvasShader and (shaderDirectory + (the string form of "/text_fragment.spv")) for mesh false instanced true lines false depth false pushed back false blended true culled false in made
+        set made's canvasImagePipeline to a gpu pipeline from canvasShader and (shaderDirectory + (the string form of "/image_fragment.spv")) for mesh false instanced true lines false depth false pushed back false blended true culled false in made
+        set meshShader to shaderDirectory + (the string form of "/mesh_vertex.spv")
+        set made's meshPipeline to a gpu pipeline from meshShader and (shaderDirectory + (the string form of "/mesh_fragment.spv")) for mesh true instanced false lines false depth true pushed back true blended false culled true in made
+        set edgeShader to shaderDirectory + (the string form of "/edge_fragment.spv")
+        set made's edgePipeline to a gpu pipeline from meshShader and edgeShader for mesh true instanced false lines true depth true pushed back false blended false culled false in made
+        set made's wirePipeline to a gpu pipeline from meshShader and edgeShader for mesh true instanced false lines true depth false pushed back false blended false culled false in made
+        set instanceShader to shaderDirectory + (the string form of "/mesh_instance_vertex.spv")
+        set made's instancePipeline to a gpu pipeline from instanceShader and (shaderDirectory + (the string form of "/mesh_fragment.spv")) for mesh true instanced true lines false depth true pushed back true blended false culled true in made
+        set made's instanceEdgePipeline to a gpu pipeline from instanceShader and edgeShader for mesh true instanced true lines true depth true pushed back false blended false culled false in made
+        set made's instanceWirePipeline to a gpu pipeline from instanceShader and edgeShader for mesh true instanced true lines true depth false pushed back false blended false culled false in made
+        set meshCutShader to shaderDirectory + (the string form of "/mesh_cut_fragment.spv")
+        set edgeCutShader to shaderDirectory + (the string form of "/edge_cut_fragment.spv")
+        set made's meshCutPipeline to a gpu pipeline from meshShader and meshCutShader for mesh true instanced false lines false depth true pushed back true blended false culled true in made
+        set made's edgeCutPipeline to a gpu pipeline from meshShader and edgeCutShader for mesh true instanced false lines true depth true pushed back false blended false culled false in made
+        set made's wireCutPipeline to a gpu pipeline from meshShader and edgeCutShader for mesh true instanced false lines true depth false pushed back false blended false culled false in made
+        set made's instanceCutPipeline to a gpu pipeline from instanceShader and meshCutShader for mesh true instanced true lines false depth true pushed back true blended false culled true in made
+        set made's instanceEdgeCutPipeline to a gpu pipeline from instanceShader and edgeCutShader for mesh true instanced true lines true depth true pushed back false blended false culled false in made
+        set made's instanceWireCutPipeline to a gpu pipeline from instanceShader and edgeCutShader for mesh true instanced true lines true depth false pushed back false blended false culled false in made
+        # Commands and synchronisation, one frame in flight.
+        set commandPoolInfo to @intrinsic("construct", a vk command pool create info, 39 as a 32 bit unsigned integer, 0 as a pointer, 2 as a 32 bit unsigned integer, family as a 32 bit unsigned integer)
+        set commandPool to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateCommandPool", an integer, device, the address of commandPoolInfo, 0 as a pointer, the address of commandPool)) doing "command pool"
+        set made's commandPool to commandPool
+        # The GPU's time per frame, where the queue writes timestamps.
+        set familyCount to 0 as a 32 bit unsigned integer
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, physical, the address of familyCount, 0 as a pointer)
+        set familyBlock to a gpu block of ((familyCount as an integer) * 24) bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceQueueFamilyProperties", nothing, physical, the address of familyCount, familyBlock)
+        set validBits to the gpu u32 at ((family * 24) + 8) in familyBlock
+        free gpu block familyBlock
+        set deviceProperties to a gpu block of 824 bytes
+        @intrinsic("call", "vulkan", "vkGetPhysicalDeviceProperties", nothing, physical, deviceProperties)
+        set made's timestampPeriod to (@intrinsic("dereference", ((deviceProperties as a pointer to a byte) + 720) as a pointer to a 32 bit floating-point number)) as a 64 bit floating-point number
+        free gpu block deviceProperties
+        if validBits > 0:
+            set queryInfo to @intrinsic("construct", a gpu query pool create info, 11 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+            set queryPool to 0 as a 64 bit unsigned integer
+            if (@intrinsic("call", "vulkan", "vkCreateQueryPool", an integer, device, the address of queryInfo, 0 as a pointer, the address of queryPool)) = 0:
+                set made's queryPool to queryPool
+                set made's timed to true
+        set commandInfo to @intrinsic("construct", a vk command buffer allocate info, 40 as a 32 bit unsigned integer, 0 as a pointer, commandPool, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        set commands to 0 as a pointer
+        check gpu (@intrinsic("call", "vulkan", "vkAllocateCommandBuffers", an integer, device, the address of commandInfo, the address of commands)) doing "command buffer"
+        set made's commands to commands
+        set semaphoreInfo to @intrinsic("construct", a vk plain create info, 9 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer)
+        set imageReady to 0 as a 64 bit unsigned integer
+        set renderDone to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateSemaphore", an integer, device, the address of semaphoreInfo, 0 as a pointer, the address of imageReady)) doing "semaphore"
+        check gpu (@intrinsic("call", "vulkan", "vkCreateSemaphore", an integer, device, the address of semaphoreInfo, 0 as a pointer, the address of renderDone)) doing "semaphore"
+        set fenceInfo to @intrinsic("construct", a vk plain create info, 8 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer)
+        set inFlight to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateFence", an integer, device, the address of fenceInfo, 0 as a pointer, the address of inFlight)) doing "fence"
+        set made's imageReady to imageReady
+        set made's renderDone to renderDone
+        set made's inFlight to inFlight
+        set made's streamCapacity to 262144
+        set made's stream to a gpu buffer of ((made's streamCapacity * (gpu stream vertex size)) as a 64 bit unsigned integer) for 128 in made
+        set made's canvasCapacity to 65536
+        set made's canvas to a gpu buffer of ((made's canvasCapacity * (gpu stream vertex size)) as a 64 bit unsigned integer) for 128 in made
+        return made
+
+# ---------------------------------------------------------------- textures
+
+local function record gpu image barrier for {a 64 bit unsigned integer:image} from {integer:oldLayout} to {integer:newLayout} giving up {integer:sourceAccess} for {integer:targetAccess} between stages {integer:sourceStage} and {integer:targetStage} in {pointer:commands}:
+    execute:
+        set transition to @intrinsic("construct", a vk image memory barrier, 45 as a 32 bit unsigned integer, 0 as a pointer, sourceAccess as a 32 bit unsigned integer, targetAccess as a 32 bit unsigned integer, oldLayout as a 32 bit unsigned integer, newLayout as a 32 bit unsigned integer, 4294967295 as a 32 bit unsigned integer, 4294967295 as a 32 bit unsigned integer, image, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        @intrinsic("call", "vulkan", "vkCmdPipelineBarrier", nothing, commands, sourceStage as a 32 bit unsigned integer, targetStage as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, the address of transition)
+
+# Makes the single-channel image `width` x `height` from `pixels` (one byte
+# per pixel, rows top first) the context's texture, sampled linearly by the
+# text pipeline. A previous texture is replaced.
+function a gpu sampled [image] sized {integer:width} by {integer:height} format {integer:formatCode} stride {integer:pixelStride} from {pointer:imageData} in {a pointer to a gpu context record:context}:
+    execute:
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, context's device)
+        set staging to a gpu buffer of (((width * height) * pixelStride) as a 64 bit unsigned integer) for 1 in (@intrinsic("dereference", context))
+        ignore @intrinsic("call", "libc", "memcpy", a pointer, staging's mapped, imageData, ((width * height) * pixelStride) as a word sized unsigned integer)
+        set imageInfo to @intrinsic("construct", a vk image create info, 14 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, formatCode as a 32 bit unsigned integer, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 6 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer)
+        set image to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateImage", an integer, context's device, the address of imageInfo, 0 as a pointer, the address of image)) doing "texture image"
+        set requirements to a gpu block of 24 bytes
+        @intrinsic("call", "vulkan", "vkGetImageMemoryRequirements", nothing, context's device, image, requirements)
+        set allocation to @intrinsic("construct", a vk memory allocate info, 5 as a 32 bit unsigned integer, 0 as a pointer, the gpu u64 at 0 in requirements, (the gpu memory type for (the gpu u32 at 16 in requirements) with 1 in (@intrinsic("dereference", context))) as a 32 bit unsigned integer)
+        free gpu block requirements
+        set memory to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkAllocateMemory", an integer, context's device, the address of allocation, 0 as a pointer, the address of memory)) doing "texture memory"
+        check gpu (@intrinsic("call", "vulkan", "vkBindImageMemory", an integer, context's device, image, memory, 0 as a 64 bit unsigned integer)) doing "texture bind"
+        # Copy the pixels in, then hand the image to the fragment shader.
+        set commands to context's commands
+        ignore @intrinsic("call", "vulkan", "vkResetCommandBuffer", an integer, commands, 0 as a 32 bit unsigned integer)
+        set beginInfo to @intrinsic("construct", a vk command buffer begin info, 42 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, 0 as a pointer)
+        check gpu (@intrinsic("call", "vulkan", "vkBeginCommandBuffer", an integer, commands, the address of beginInfo)) doing "begin upload"
+        record gpu image barrier for image from 0 to 7 giving up 0 for 4096 between stages 1 and 4096 in commands
+        set region to @intrinsic("construct", a vk buffer image copy, 0 as a 64 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0, 0, 0, width as a 32 bit unsigned integer, height as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        @intrinsic("call", "vulkan", "vkCmdCopyBufferToImage", nothing, commands, staging's handle, image, 7 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of region)
+        record gpu image barrier for image from 7 to 5 giving up 4096 for 32 between stages 4096 and 128 in commands
+        check gpu (@intrinsic("call", "vulkan", "vkEndCommandBuffer", an integer, commands)) doing "end upload"
+        set submit to @intrinsic("construct", a vk submit info, 4 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of commands) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        check gpu (@intrinsic("call", "vulkan", "vkQueueSubmit", an integer, context's queue, 1 as a 32 bit unsigned integer, the address of submit, 0 as a 64 bit unsigned integer)) doing "upload submit"
+        ignore @intrinsic("call", "vulkan", "vkQueueWaitIdle", an integer, context's queue)
+        release gpu buffer staging in (@intrinsic("dereference", context))
+        set viewInfo to @intrinsic("construct", a vk image view create info, 15 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, image, 1 as a 32 bit unsigned integer, formatCode as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer)
+        set view to 0 as a 64 bit unsigned integer
+        check gpu (@intrinsic("call", "vulkan", "vkCreateImageView", an integer, context's device, the address of viewInfo, 0 as a pointer, the address of view)) doing "texture view"
+        if context's sampler = (0 as a 64 bit unsigned integer):
+            set samplerInfo to @intrinsic("construct", a vk sampler create info, 31 as a 32 bit unsigned integer, 0 as a pointer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 0.0 as a 32 bit floating-point number, 0 as a 32 bit unsigned integer, 1.0 as a 32 bit floating-point number, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 0 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+            set made to 0 as a 64 bit unsigned integer
+            check gpu (@intrinsic("call", "vulkan", "vkCreateSampler", an integer, context's device, the address of samplerInfo, 0 as a pointer, the address of made)) doing "sampler"
+            set context's sampler to made
+        return @intrinsic("construct", a gpu image record, image, memory, view, 0 as a 64 bit unsigned integer, 0 as a 64 bit unsigned integer, width, height, the string form of "")
+
+function set gpu texture of {a pointer to a gpu context record:context} to {integer:width} by {integer:height} red pixels {pointer:imageData}:
+    execute:
+        set uploaded to a gpu sampled image sized width by height format 9 stride 1 from imageData in context
+        set image to uploaded's image
+        set memory to uploaded's memory
+        set view to uploaded's view
+        if context's textureImage != (0 as a 64 bit unsigned integer):
+            @intrinsic("call", "vulkan", "vkDestroyImageView", nothing, context's device, context's textureView, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkDestroyImage", nothing, context's device, context's textureImage, 0 as a pointer)
+            @intrinsic("call", "vulkan", "vkFreeMemory", nothing, context's device, context's textureMemory, 0 as a pointer)
+        set context's textureImage to image
+        set context's textureMemory to memory
+        set context's textureView to view
+        set imageDescriptor to @intrinsic("construct", a vk descriptor image info, 0 as a 64 bit unsigned integer, view, 5 as a 32 bit unsigned integer)
+        set samplerDescriptor to @intrinsic("construct", a vk descriptor image info, context's sampler, 0 as a 64 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        set writes to an empty list of a vk write descriptor set
+        append (@intrinsic("construct", a vk write descriptor set, 35 as a 32 bit unsigned integer, 0 as a pointer, context's descriptorSet, 30 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, (the address of imageDescriptor) as a pointer, 0 as a pointer, 0 as a pointer)) to writes
+        append (@intrinsic("construct", a vk write descriptor set, 35 as a 32 bit unsigned integer, 0 as a pointer, context's descriptorSet, 31 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer, (the address of samplerDescriptor) as a pointer, 0 as a pointer, 0 as a pointer)) to writes
+        @intrinsic("call", "vulkan", "vkUpdateDescriptorSets", nothing, context's device, 2 as a 32 bit unsigned integer, (the data of writes) as a pointer, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        free writes
+
+# ---------------------------------------------------------------- the frame
+
+function set gpu parameter {integer:index} to {a 64 bit floating-point number:value} in {gpu context record:context}:
+    execute:
+        @intrinsic("store at", ((context's parameters's mapped as a pointer to a byte) + (index * 4)) as a pointer to a 32 bit floating-point number, value as a 32 bit floating-point number)
+
+# Starts a frame: waits for the previous one, acquires the next image and
+# empties the stream. False when the window cannot be drawn to now.
+function begin gpu frame of {a pointer to a gpu context record:context} cleared to {a 64 bit floating-point number:red}, {a 64 bit floating-point number:green} and {a 64 bit floating-point number:blue}:
+    execute:
+        @intrinsic("call", "glfw", "glfwPollEvents", nothing)
+        set fence to context's inFlight
+        ignore @intrinsic("call", "vulkan", "vkWaitForFences", an integer, context's device, 1 as a 32 bit unsigned integer, the address of fence, 1 as a 32 bit unsigned integer, 18446744073709551615 as a 64 bit unsigned integer)
+        if context's stamped:
+            set stamps to a gpu block of 16 bytes
+            if (@intrinsic("call", "vulkan", "vkGetQueryPoolResults", an integer, context's device, context's queryPool, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, 16 as a word sized unsigned integer, stamps, 8 as a 64 bit unsigned integer, 1 as a 32 bit unsigned integer)) = 0:
+                set ticks to (the gpu u64 at 8 in stamps) - (the gpu u64 at 0 in stamps)
+                set context's gpuMicroseconds to ((ticks as a 64 bit floating-point number) * context's timestampPeriod) / 1000.0
+            free gpu block stamps
+            set context's stamped to false
+        set context's canvasTransformCount to 0
+        set context's streamCount to 0
+        clear (context's batches)
+        set context's clearRed to red
+        set context's clearGreen to green
+        set context's clearBlue to blue
+        set context's depthTesting to false
+        set pixelWidth to 0
+        set pixelHeight to 0
+        @intrinsic("call", "glfw", "glfwGetFramebufferSize", nothing, context's window, the address of pixelWidth, the address of pixelHeight)
+        if (pixelWidth <= 0) or (pixelHeight <= 0):
+            set context's drawable to false
+            return false
+        if (context's imageCount = (0 as a 32 bit unsigned integer)) or ((pixelWidth != (context's width as an integer)) or (pixelHeight != (context's height as an integer))):
+            renew gpu swapchain of context
+        if context's drawable = false:
+            return false
+        set imageIndex to 0 as a 32 bit unsigned integer
+        set acquired to @intrinsic("call", "vulkan", "vkAcquireNextImageKHR", an integer, context's device, context's swapchain, 18446744073709551615 as a 64 bit unsigned integer, context's imageReady, 0 as a 64 bit unsigned integer, the address of imageIndex)
+        if acquired = -1000001004:
+            renew gpu swapchain of context
+            set context's drawable to false
+            return false
+        set context's imageIndex to imageIndex
+        set context's drawable to true
+        set gpu parameter 32 to (2.0 / (context's width as a 64 bit floating-point number)) in (@intrinsic("dereference", context))
+        set gpu parameter 33 to (2.0 / (context's height as a 64 bit floating-point number)) in (@intrinsic("dereference", context))
+        set gpu parameter 34 to (1.0 / 64.0) in (@intrinsic("dereference", context))
+        set gpu parameter 35 to 0.0 in (@intrinsic("dereference", context))
+        set gpu parameter 36 to 0.0 in (@intrinsic("dereference", context))
+        return true
+
+# Room for `more` stream vertices: a full stream moves into one twice the
+# size. The previous frame has finished, so the old buffer is free.
+local function make gpu stream room for {integer:more} in {a pointer to a gpu context record:context}:
+    execute:
+        if (context's streamCount + more) <= context's streamCapacity:
+            return nothing
+        set capacity to context's streamCapacity
+        loop while (context's streamCount + more) > capacity:
+            set capacity to capacity * 2
+        set grown to a gpu buffer of ((capacity * (gpu stream vertex size)) as a 64 bit unsigned integer) for 128 in (@intrinsic("dereference", context))
+        ignore @intrinsic("call", "libc", "memcpy", a pointer, grown's mapped, context's stream's mapped, (context's streamCount * (gpu stream vertex size)) as a word sized unsigned integer)
+        release gpu buffer context's stream in (@intrinsic("dereference", context))
+        set context's stream to grown
+        set context's streamCapacity to capacity
+
+# Starts a batch of stream triangles of `kind` (flat, depth or text); while
+# a canvas is being recorded, a batch of the canvas.
+function start gpu batch of kind {integer:kind} in {a pointer to a gpu context record:context}:
+    execute:
+        set context's batchKind to kind
+        set context's batchStart to context's streamCount
+        if context's recordingCanvas:
+            set context's batchStart to context's canvasCount
+
+function set gpu colour to {integer:red}, {integer:green}, {integer:blue} and {integer:alpha} in {a pointer to a gpu context record:context}:
+    execute:
+        set packed to (((red bitwise and 255) + ((green bitwise and 255) * 256)) + ((blue bitwise and 255) * 65536)) as a 64 bit integer
+        set packed to packed + (((alpha bitwise and 255) as a 64 bit integer) * (16777216 as a 64 bit integer))
+        set context's colour to packed as a 32 bit unsigned integer
+
+function set gpu texture coordinates to {a 64 bit floating-point number:u} and {a 64 bit floating-point number:v} in {a pointer to a gpu context record:context}:
+    execute:
+        set context's u to u as a 32 bit floating-point number
+        set context's v to v as a 32 bit floating-point number
+
+# Appends a stream vertex at `x`, `y` (pixels) and depth `z`.
+function add gpu vertex at {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y} and {a 64 bit floating-point number:z} in {a pointer to a gpu context record:context}:
+    execute:
+        if context's recordingCanvas:
+            add gpu canvas vertex at x, y and z in context
+            return nothing
+        make gpu stream room for 1 in context
+        set base to (context's stream's mapped as a pointer to a byte) + (context's streamCount * (gpu stream vertex size))
+        @intrinsic("store at", base as a pointer to a 32 bit floating-point number, x as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 4) as a pointer to a 32 bit floating-point number, y as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 8) as a pointer to a 32 bit floating-point number, z as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 12) as a pointer to a 32 bit floating-point number, context's u)
+        @intrinsic("store at", (base + 16) as a pointer to a 32 bit floating-point number, context's v)
+        @intrinsic("store at", (base + 20) as a pointer to a 32 bit unsigned integer, context's colour)
+        set context's streamCount to context's streamCount + 1
+
+# Ends the current batch; an empty batch is dropped.
+function finish gpu batch in {a pointer to a gpu context record:context}:
+    execute:
+        if context's recordingCanvas:
+            set recorded to context's canvasCount - context's batchStart
+            if recorded > 0:
+                set canvasKind to gpu canvas flat batch
+                if context's batchKind = gpu text batch:
+                    set canvasKind to gpu canvas text batch
+                if context's batchKind = gpu image batch:
+                    set canvasKind to gpu canvas image batch
+                append (@intrinsic("construct", a gpu batch record, canvasKind, context's batchStart, recorded, 0.0, 0.0, context's width as a 64 bit floating-point number, context's height as a 64 bit floating-point number, 0, 0, 0, 1.0, 0.0, 0.0, context's canvas's handle)) to (context's canvasBatches)
+            return nothing
+        set count to context's streamCount - context's batchStart
+        if count <= 0:
+            return nothing
+        append (@intrinsic("construct", a gpu batch record, context's batchKind, context's batchStart, count, 0.0, 0.0, context's width as a 64 bit floating-point number, context's height as a 64 bit floating-point number, 0, 0, 0, 1.0, 0.0, 0.0, 0 as a 64 bit unsigned integer)) to (context's batches)
+
+# Pixel-space overlays keep the full-window projection, but their scissor
+# follows the owning pane. Mesh batches already carry their own viewport.
+function the gpu overlay batch {gpu batch record:original} clipped within {a 64 bit floating-point number:left}, {a 64 bit floating-point number:top}, {a 64 bit floating-point number:right} and {a 64 bit floating-point number:bottom}:
+    execute:
+        set batchValue to original
+        if gpu kind batchValue's kind draws the mesh:
+            return batchValue
+        set lowX to the maximum of batchValue's x and left
+        set lowY to the maximum of batchValue's y and top
+        set highX to the minimum of (batchValue's x + batchValue's width) and right
+        set highY to the minimum of (batchValue's y + batchValue's height) and bottom
+        set batchValue's x to lowX
+        set batchValue's y to lowY
+        set batchValue's width to the maximum of 0.0 and (highX - lowX)
+        set batchValue's height to the maximum of 0.0 and (highY - lowY)
+        return batchValue
+
+function clip gpu overlays since {integer:firstBatch} within {a 64 bit floating-point number:left}, {a 64 bit floating-point number:top}, {a 64 bit floating-point number:right} and {a 64 bit floating-point number:bottom} in {a pointer to a gpu context record:context}:
+    execute:
+        set lowX to the minimum of (context's width as a 64 bit floating-point number) and (the maximum of 0.0 and left)
+        set lowY to the minimum of (context's height as a 64 bit floating-point number) and (the maximum of 0.0 and top)
+        set highX to the minimum of (context's width as a 64 bit floating-point number) and right
+        set highY to the minimum of (context's height as a 64 bit floating-point number) and bottom
+        loop cursor from firstBatch to the length of (context's batches):
+            set batchValue to the item at cursor in (context's batches)
+            replace item at index cursor in (context's batches) with (the gpu overlay batch batchValue clipped within lowX, lowY, highX and highY)
+
+# ---------------------------------------------------------------- the canvas
+
+local function add gpu canvas vertex at {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y} and {a 64 bit floating-point number:z} in {a pointer to a gpu context record:context}:
+    execute:
+        if context's canvasCount >= context's canvasCapacity:
+            set capacity to context's canvasCapacity * 2
+            set grown to a gpu buffer of ((capacity * (gpu stream vertex size)) as a 64 bit unsigned integer) for 128 in (@intrinsic("dereference", context))
+            ignore @intrinsic("call", "libc", "memcpy", a pointer, grown's mapped, context's canvas's mapped, (context's canvasCount * (gpu stream vertex size)) as a word sized unsigned integer)
+            release gpu buffer context's canvas in (@intrinsic("dereference", context))
+            set context's canvas to grown
+            set context's canvasCapacity to capacity
+        set base to (context's canvas's mapped as a pointer to a byte) + (context's canvasCount * (gpu stream vertex size))
+        @intrinsic("store at", base as a pointer to a 32 bit floating-point number, x as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 4) as a pointer to a 32 bit floating-point number, y as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 8) as a pointer to a 32 bit floating-point number, z as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 12) as a pointer to a 32 bit floating-point number, context's u)
+        @intrinsic("store at", (base + 16) as a pointer to a 32 bit floating-point number, context's v)
+        @intrinsic("store at", (base + 20) as a pointer to a 32 bit unsigned integer, context's colour)
+        set context's canvasCount to context's canvasCount + 1
+
+# From now until `end gpu canvas recording`, triangles drawn go into the
+# canvas, which is emptied first, instead of this frame. Call it within a
+# frame: the previous frame has then finished with the canvas.
+function begin gpu canvas recording in {a pointer to a gpu context record:context}:
+    execute:
+        set context's canvasCount to 0
+        clear (context's canvasBatches)
+        set context's recordingCanvas to true
+
+function end gpu canvas recording in {a pointer to a gpu context record:context}:
+    execute:
+        # Recording may grow and replace the buffer after earlier batches.
+        # All recorded ranges refer to the final, complete buffer.
+        loop cursor from 0 to the length of (context's canvasBatches):
+            set held to the item at cursor in (context's canvasBatches)
+            set held's canvasBuffer to context's canvas's handle
+            replace item at index cursor in (context's canvasBatches) with held
+        set context's recordingCanvas to false
+
+# One allocator for all resident panes (slot zero belongs to the plan).
+function reserve gpu canvas slots {integer:count} in {a pointer to a gpu context record:context}:
+    execute:
+        set firstSlot to context's nextCanvasSlot
+        set context's nextCanvasSlot to firstSlot + (the maximum of count and 1)
+        return firstSlot
+
+# Switch retained canvases without overwriting another pane's vertex buffer.
+# A queued batch holds its actual buffer handle, independent of the active slot.
+function select gpu canvas slot {integer:slot} in {a pointer to a gpu context record:context}:
+    execute:
+        if slot >= context's nextCanvasSlot:
+            set context's nextCanvasSlot to slot + 1
+        if (slot < 0) or (slot = context's canvasSlot):
+            return nothing
+        loop while (the length of (context's canvasSlots)) <= (the maximum of slot and context's canvasSlot):
+            append (@intrinsic("construct", a gpu canvas slot record, an empty gpu buffer, 0, 0, an empty list of a gpu batch record)) to (context's canvasSlots)
+        set previous to @intrinsic("construct", a gpu canvas slot record, context's canvas, context's canvasCapacity, context's canvasCount, context's canvasBatches)
+        replace item at index context's canvasSlot in (context's canvasSlots) with previous
+        set held to the item at slot in (context's canvasSlots)
+        if held's capacity = 0:
+            set held's capacity to 65536
+            set held's bufferValue to a gpu buffer of ((held's capacity * (gpu stream vertex size)) as a 64 bit unsigned integer) for 128 in (@intrinsic("dereference", context))
+        set context's canvas to held's bufferValue
+        set context's canvasCapacity to held's capacity
+        set context's canvasCount to held's count
+        set context's canvasBatches to held's batches
+        set context's canvasSlot to slot
+
+function draw gpu canvas shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} in {a pointer to a gpu context record:context}:
+    execute:
+        draw gpu canvas scaled by 1.0 shifted by dx and dy in context
+
+# Pan/zoom is one 16-byte instance transform per canvas draw. It leaves the
+# drawing vertices resident and supports independent cameras at any zoom.
+function draw gpu canvas scaled by {a 64 bit floating-point number:scale} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} in {a pointer to a gpu context record:context}:
+    execute:
+        set gpu parameter 37 to 0.0 in (@intrinsic("dereference", context))
+        set gpu parameter 38 to 0.0 in (@intrinsic("dereference", context))
+        set transformIndex to context's canvasTransformCount
+        # Growth must preserve transforms already queued in this frame.
+        # Mesh upload buffers replace all their contents, whereas this stream
+        # appends one camera at a time and is bound only at frame submission.
+        if ((transformIndex + 1) * 16) > (context's canvasTransforms's size as an integer):
+            set room to the maximum of 256 and ((transformIndex + 1) * 32)
+            set grown to a gpu buffer of (room as a 64 bit unsigned integer) for 128 in (@intrinsic("dereference", context))
+            if transformIndex > 0:
+                ignore @intrinsic("call", "libc", "memcpy", a pointer, grown's mapped, context's canvasTransforms's mapped, (transformIndex * 16) as a word sized unsigned integer)
+            release gpu buffer context's canvasTransforms in (@intrinsic("dereference", context))
+            set context's canvasTransforms to grown
+        set transformBase to (context's canvasTransforms's mapped as a pointer to a byte) + (transformIndex * 16)
+        @intrinsic("store at", transformBase as a pointer to a 32 bit floating-point number, scale as a 32 bit floating-point number)
+        @intrinsic("store at", (transformBase + 4) as a pointer to a 32 bit floating-point number, dx as a 32 bit floating-point number)
+        @intrinsic("store at", (transformBase + 8) as a pointer to a 32 bit floating-point number, dy as a 32 bit floating-point number)
+        @intrinsic("store at", (transformBase + 12) as a pointer to a 32 bit floating-point number, 0.0 as a 32 bit floating-point number)
+        set context's canvasTransformCount to transformIndex + 1
+        loop cursor from 0 to the length of (context's canvasBatches):
+            set placed to the item at cursor in (context's canvasBatches)
+            set placed's firstInstance to transformIndex
+            set placed's canvasScale to scale
+            set placed's canvasX to dx
+            set placed's canvasY to dy
+            # Clip against the current framebuffer rather than an old recording.
+            set placed's x to 0.0
+            set placed's y to 0.0
+            set placed's width to context's width as a 64 bit floating-point number
+            set placed's height to context's height as a 64 bit floating-point number
+            append placed to (context's batches)
+
+# ---------------------------------------------------------------- mesh slots
+
+# `held` when it has room for `wanted` bytes, else a buffer for `usage` with
+# room for at least twice what `held` had, `held` released.
+local function the gpu buffer {gpu buffer record:held} with room for {integer:wanted} bytes for {integer:usage} in {a pointer to a gpu context record:context}:
+    execute:
+        if ((held's size as an integer) >= wanted) and (held's handle != (0 as a 64 bit unsigned integer)):
+            return held
+        set roomBytes to the maximum of (the maximum of wanted and ((held's size as an integer) * 2)) and 256
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, context's device)
+        release gpu buffer held in (@intrinsic("dereference", context))
+        return a gpu buffer of (roomBytes as a 64 bit unsigned integer) for usage in (@intrinsic("dereference", context))
+
+local function ensure gpu mesh slot {integer:slotIndex} in {a pointer to a gpu context record:context}:
+    execute:
+        set none to an empty gpu buffer
+        loop while (the length of (context's meshSlots)) <= slotIndex:
+            append (@intrinsic("construct", a gpu mesh slot record, none, none, 0, none, 0, none, 0)) to (context's meshSlots)
+
+# The mesh held in slot `slotIndex`, to write with `put gpu mesh vertex`,
+# `put gpu mesh index` and `put gpu instance` after preparing it.
+function the gpu mesh held in slot {integer:slotIndex} of {a pointer to a gpu context record:context}:
+    execute:
+        ensure gpu mesh slot slotIndex in context
+        return the item at slotIndex in (context's meshSlots)
+
+# A mesh slot that holds nothing.
+function an empty gpu mesh slot:
+    execute:
+        set none to an empty gpu buffer
+        return @intrinsic("construct", a gpu mesh slot record, none, none, 0, none, 0, none, 0)
+
+# A mesh slot of its own, not yet one of a context's: room for `vertexCount`
+# vertices and `indexCount` indices on `hardware`, made from any thread (the
+# import's), written with `put gpu mesh vertex` and `put gpu mesh index`, and
+# drawn once `install gpu mesh slot` has made it a context's.
+function a gpu mesh slot of {integer:vertexCount} vertices and {integer:indexCount} indices on {gpu device record:hardware}:
+    execute:
+        set vertexBuffer to a gpu buffer of (((the maximum of vertexCount and 1) * (gpu mesh vertex size)) as a 64 bit unsigned integer) for 128 on hardware
+        set indexBuffer to a gpu buffer of (((the maximum of indexCount and 1) * 4) as a 64 bit unsigned integer) for 64 on hardware
+        set none to an empty gpu buffer
+        return @intrinsic("construct", a gpu mesh slot record, vertexBuffer, indexBuffer, indexCount, none, 0, none, 0)
+
+# Gives the mesh slot `target` the edges `vertexPairs`, on `hardware`.
+function set gpu edges of {a pointer to a gpu mesh slot record:target} to {a pointer to a list:vertexPairs} on {gpu device record:hardware}:
+    execute:
+        set pairCount to the length of vertexPairs
+        set target's edges to a gpu buffer of (((the maximum of pairCount and 1) * 4) as a 64 bit unsigned integer) for 64 on hardware
+        loop cursor from 0 to pairCount:
+            @intrinsic("store at", ((target's edges's mapped as a pointer to a byte) + (cursor * 4)) as a pointer to a 32 bit unsigned integer, (the item at cursor in vertexPairs) as a 32 bit unsigned integer)
+        set target's edgeCount to pairCount
+
+# Gives the mesh slot `target` room for `count` instances, on `hardware`.
+function make room for {integer:count} gpu instances in {a pointer to a gpu mesh slot record:target} on {gpu device record:hardware}:
+    execute:
+        set target's instances to a gpu buffer of (((the maximum of count and 1) * (gpu instance size)) as a 64 bit unsigned integer) for 128 on hardware
+        set target's instanceCount to count
+
+# Makes `made` (`a gpu mesh slot of …`) slot `slotIndex` of the context, in
+# place of what it held, whose buffers are let go once the GPU is idle.
+function install gpu mesh slot {integer:slotIndex} from {gpu mesh slot record:made} in {a pointer to a gpu context record:context}:
+    execute:
+        ensure gpu mesh slot slotIndex in context
+        set held to the item at slotIndex in (context's meshSlots)
+        ignore @intrinsic("call", "vulkan", "vkDeviceWaitIdle", an integer, context's device)
+        set holder to @intrinsic("dereference", context)
+        release gpu buffer held's vertices in holder
+        release gpu buffer held's indices in holder
+        release gpu buffer held's edges in holder
+        release gpu buffer held's instances in holder
+        replace item at index slotIndex in (context's meshSlots) with made
+
+# Gives slot `slotIndex` room for `vertexCount` vertices and `indexCount`
+# indices, written afterwards with `put gpu mesh vertex` and `put gpu mesh
+# index`; it has no edges until `set gpu mesh slot … edges` and no
+# instances until `prepare gpu mesh slot … instances`. The frame before has
+# finished, so what the slot held may be written over.
+function prepare gpu mesh slot {integer:slotIndex} of {integer:vertexCount} vertices and {integer:indexCount} indices in {a pointer to a gpu context record:context}:
+    execute:
+        ensure gpu mesh slot slotIndex in context
+        set held to the item at slotIndex in (context's meshSlots)
+        set held's vertices to the gpu buffer held's vertices with room for ((the maximum of vertexCount and 1) * (gpu mesh vertex size)) bytes for 128 in context
+        set held's indices to the gpu buffer held's indices with room for ((the maximum of indexCount and 1) * 4) bytes for 64 in context
+        set held's indexCount to indexCount
+        set held's edgeCount to 0
+        set held's instanceCount to 0
+        replace item at index slotIndex in (context's meshSlots) with held
+
+# Gives slot `slotIndex` the edges `vertexPairs`: pairs of its vertices, each
+# pair one line.
+function set gpu mesh slot {integer:slotIndex} edges to {a pointer to a list:vertexPairs} in {a pointer to a gpu context record:context}:
+    execute:
+        ensure gpu mesh slot slotIndex in context
+        set held to the item at slotIndex in (context's meshSlots)
+        set pairCount to the length of vertexPairs
+        set held's edges to the gpu buffer held's edges with room for ((the maximum of pairCount and 1) * 4) bytes for 64 in context
+        loop cursor from 0 to pairCount:
+            @intrinsic("store at", ((held's edges's mapped as a pointer to a byte) + (cursor * 4)) as a pointer to a 32 bit unsigned integer, (the item at cursor in vertexPairs) as a 32 bit unsigned integer)
+        set held's edgeCount to pairCount
+        replace item at index slotIndex in (context's meshSlots) with held
+
+# Gives slot `slotIndex` room for `count` instances, written afterwards with
+# `put gpu instance`.
+function prepare gpu mesh slot {integer:slotIndex} instances {integer:count} in {a pointer to a gpu context record:context}:
+    execute:
+        ensure gpu mesh slot slotIndex in context
+        set held to the item at slotIndex in (context's meshSlots)
+        set held's instances to the gpu buffer held's instances with room for ((the maximum of count and 1) * (gpu instance size)) bytes for 128 in context
+        set held's instanceCount to count
+        replace item at index slotIndex in (context's meshSlots) with held
+
+function put gpu mesh vertex {integer:index} at {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y} and {a 64 bit floating-point number:z} of element {integer:ordinal} coloured {integer:red}, {integer:green} and {integer:blue} in {gpu mesh slot record:target}:
+    execute:
+        put gpu mesh vertex index at x, y and z of element ordinal coloured red, green and blue facing 0.0, 0.0 and 0.0 in target
+
+local function the gpu packed colour {integer:red}, {integer:green} and {integer:blue}:
+    execute:
+        set bytes to (((red bitwise and 255) + ((green bitwise and 255) * 256)) + ((blue bitwise and 255) * 65536)) as a 64 bit integer
+        set bytes to bytes + (255 as a 64 bit integer) * (16777216 as a 64 bit integer)
+        return bytes as a 32 bit unsigned integer
+
+# The same with the corner's unit normal `nx`, `ny`, `nz`, which the shader
+# interpolates for smooth shading.
+function put gpu mesh vertex {integer:index} at {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y} and {a 64 bit floating-point number:z} of element {integer:ordinal} coloured {integer:red}, {integer:green} and {integer:blue} facing {a 64 bit floating-point number:nx}, {a 64 bit floating-point number:ny} and {a 64 bit floating-point number:nz} in {gpu mesh slot record:target}:
+    execute:
+        set base to (target's vertices's mapped as a pointer to a byte) + (index * (gpu mesh vertex size))
+        @intrinsic("store at", base as a pointer to a 32 bit floating-point number, x as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 4) as a pointer to a 32 bit floating-point number, y as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 8) as a pointer to a 32 bit floating-point number, z as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 12) as a pointer to a 32 bit floating-point number, (ordinal as a 64 bit floating-point number) as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 16) as a pointer to a 32 bit unsigned integer, (the gpu packed colour red, green and blue))
+        set qx to ((@intrinsic("call", "libc", "round", a 64 bit floating-point number, nx * 127.0)) as an integer) bitwise and 255
+        set qy to ((@intrinsic("call", "libc", "round", a 64 bit floating-point number, ny * 127.0)) as an integer) bitwise and 255
+        set qz to ((@intrinsic("call", "libc", "round", a 64 bit floating-point number, nz * 127.0)) as an integer) bitwise and 255
+        set normalPacked to ((qx + (qy * 256)) + (qz * 65536)) as a 64 bit integer
+        @intrinsic("store at", (base + 20) as a pointer to a 32 bit unsigned integer, normalPacked as a 32 bit unsigned integer)
+
+function put gpu mesh index {integer:position} as {integer:vertexIndex} in {gpu mesh slot record:target}:
+    execute:
+        @intrinsic("store at", ((target's indices's mapped as a pointer to a byte) + (position * 4)) as a pointer to a 32 bit unsigned integer, vertexIndex as a 32 bit unsigned integer)
+
+# Instance `index` of the slot's mesh: for element `ordinal`, in `red`,
+# `green` and `blue`, placed by `rows`, twelve numbers: three rows of the
+# x, y and z axes' parts and the shift.
+function put gpu instance {integer:index} of element {integer:ordinal} coloured {integer:red}, {integer:green} and {integer:blue} through {a pointer to a list:rows} in {gpu mesh slot record:target}:
+    execute:
+        set base to (target's instances's mapped as a pointer to a byte) + (index * (gpu instance size))
+        loop part from 0 to 12:
+            @intrinsic("store at", (base + (part * 4)) as a pointer to a 32 bit floating-point number, (the item at part in rows) as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 48) as a pointer to a 32 bit floating-point number, (ordinal as a 64 bit floating-point number) as a 32 bit floating-point number)
+        @intrinsic("store at", (base + 52) as a pointer to a 32 bit unsigned integer, (the gpu packed colour red, green and blue))
+
+# Whether the meshes are drawn cut by the section box of parameters 43 to 48
+# (the box shows), for the frames from now on.
+function set gpu section cut to {boolean:cutting} in {a pointer to a gpu context record:context}:
+    execute:
+        set context's sectionCut to cutting
+
+# Whether element `ordinal` shows (parameter 49 set): the mesh shaders clip
+# away the corners of an element that does not, and its shadow's.
+function set gpu element {integer:ordinal} shown {boolean:isShown} in {gpu context record:context}:
+    execute:
+        set gpu element ordinal shown isShown faint false in context
+
+# The same, an element that shows `faint` drawn halftone (its colour halfway
+# to white): the flag is 0 hidden, 1 shown, 2 shown faint.
+function set gpu element {integer:ordinal} shown {boolean:isShown} faint {boolean:isFaint} in {gpu context record:context}:
+    execute:
+        if (ordinal < 0) or (ordinal >= ((gpu parameter count) - (gpu element flags start))):
+            return nothing
+        set flag to 0.0
+        if isShown:
+            set flag to 1.0
+            if isFaint:
+                set flag to 2.0
+        set gpu parameter ((gpu element flags start) + ordinal) to flag in context
+
+# Draws the `count` triangle corners of slot `slotIndex` from index `first`,
+# at this point of the frame, in the rectangle `x`, `y`, `width`, `height`
+# of the window (pixels). The transform and lighting are parameters 0 to 21.
+function draw gpu mesh slot {integer:slotIndex} indices from {integer:first} counting {integer:count} within {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y}, {a 64 bit floating-point number:width} and {a 64 bit floating-point number:height} in {a pointer to a gpu context record:context}:
+    execute:
+        if (slotIndex < 0) or (slotIndex >= (the length of (context's meshSlots))):
+            return nothing
+        set wanted to the minimum of count and ((the item at slotIndex in (context's meshSlots))'s indexCount - first)
+        if (first < 0) or (wanted <= 0):
+            return nothing
+        append (@intrinsic("construct", a gpu batch record, gpu mesh batch, first, wanted, x, y, width, height, slotIndex, 0, 0, 1.0, 0.0, 0.0, 0 as a 64 bit unsigned integer)) to (context's batches)
+
+# The same for `instanceCount` of the slot's instances from `firstInstance`,
+# each placing the corners anew.
+function draw gpu mesh slot {integer:slotIndex} indices from {integer:first} counting {integer:count} as instances from {integer:firstInstance} counting {integer:instanceCount} within {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y}, {a 64 bit floating-point number:width} and {a 64 bit floating-point number:height} in {a pointer to a gpu context record:context}:
+    execute:
+        if (slotIndex < 0) or (slotIndex >= (the length of (context's meshSlots))):
+            return nothing
+        set held to the item at slotIndex in (context's meshSlots)
+        set wanted to the minimum of count and (held's indexCount - first)
+        set placed to the minimum of instanceCount and (held's instanceCount - firstInstance)
+        if ((first < 0) or (wanted <= 0)) or ((firstInstance < 0) or (placed <= 0)):
+            return nothing
+        append (@intrinsic("construct", a gpu batch record, gpu instance batch, first, wanted, x, y, width, height, slotIndex, firstInstance, placed, 1.0, 0.0, 0.0, 0 as a 64 bit unsigned integer)) to (context's batches)
+
+# Draws the `count` edge ends of slot `slotIndex` from `first` (all its
+# edges: from 0 counting its edge count) as lines in the rectangle `x`, `y`,
+# `width`, `height`, through the mesh's transform, in `red`, `green` and
+# `blue` (0..255): where `hidden`, only where no face drawn earlier this
+# frame lies in front; otherwise through the faces. The colour is a
+# parameter, so it holds for all edges drawn in the frame.
+function draw gpu mesh slot {integer:slotIndex} edges from {integer:first} counting {integer:count} within {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y}, {a 64 bit floating-point number:width} and {a 64 bit floating-point number:height} coloured {integer:red}, {integer:green} and {integer:blue} hidden {boolean:isHidden} in {a pointer to a gpu context record:context}:
+    execute:
+        draw gpu mesh slot slotIndex edges from first counting count as instances from (-1) counting 0 within x, y, width and height coloured red, green and blue hidden isHidden in context
+
+# The same for `instanceCount` of the slot's instances from `firstInstance`
+# (-1: the mesh drawn once, not in instances).
+function draw gpu mesh slot {integer:slotIndex} edges from {integer:first} counting {integer:count} as instances from {integer:firstInstance} counting {integer:instanceCount} within {a 64 bit floating-point number:x}, {a 64 bit floating-point number:y}, {a 64 bit floating-point number:width} and {a 64 bit floating-point number:height} coloured {integer:red}, {integer:green} and {integer:blue} hidden {boolean:isHidden} in {a pointer to a gpu context record:context}:
+    execute:
+        if (slotIndex < 0) or (slotIndex >= (the length of (context's meshSlots))):
+            return nothing
+        set held to the item at slotIndex in (context's meshSlots)
+        set wanted to the minimum of count and (held's edgeCount - first)
+        if (first < 0) or (wanted <= 0):
+            return nothing
+        set kind to gpu wire batch
+        if isHidden:
+            set kind to gpu edge batch
+        set placed to 0
+        if firstInstance >= 0:
+            set placed to the minimum of instanceCount and (held's instanceCount - firstInstance)
+            if placed <= 0:
+                return nothing
+            set kind to gpu instance wire batch
+            if isHidden:
+                set kind to gpu instance edge batch
+        set gpu parameter 39 to ((red as a 64 bit floating-point number) / 255.0) in (@intrinsic("dereference", context))
+        set gpu parameter 40 to ((green as a 64 bit floating-point number) / 255.0) in (@intrinsic("dereference", context))
+        set gpu parameter 41 to ((blue as a 64 bit floating-point number) / 255.0) in (@intrinsic("dereference", context))
+        append (@intrinsic("construct", a gpu batch record, kind, first, wanted, x, y, width, height, slotIndex, the maximum of firstInstance and 0, placed, 1.0, 0.0, 0.0, 0 as a 64 bit unsigned integer)) to (context's batches)
+
+# Records the frame's batches, submits them and presents.
+function end gpu frame of {a pointer to a gpu context record:context}:
+    execute:
+        if context's drawable = false:
+            return nothing
+        set commands to context's commands
+        set fence to context's inFlight
+        ignore @intrinsic("call", "vulkan", "vkResetFences", an integer, context's device, 1 as a 32 bit unsigned integer, the address of fence)
+        ignore @intrinsic("call", "vulkan", "vkResetCommandBuffer", an integer, commands, 0 as a 32 bit unsigned integer)
+        set beginInfo to @intrinsic("construct", a vk command buffer begin info, 42 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, 0 as a pointer)
+        check gpu (@intrinsic("call", "vulkan", "vkBeginCommandBuffer", an integer, commands, the address of beginInfo)) doing "begin commands"
+        if context's timed:
+            @intrinsic("call", "vulkan", "vkCmdResetQueryPool", nothing, commands, context's queryPool, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer)
+            @intrinsic("call", "vulkan", "vkCmdWriteTimestamp", nothing, commands, 1 as a 32 bit unsigned integer, context's queryPool, 0 as a 32 bit unsigned integer)
+        set clears to a gpu block of 32 bytes
+        @intrinsic("store at", clears as a pointer to a 32 bit floating-point number, context's clearRed as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 4) as a pointer to a 32 bit floating-point number, context's clearGreen as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 8) as a pointer to a 32 bit floating-point number, context's clearBlue as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 12) as a pointer to a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        @intrinsic("store at", ((clears as a pointer to a byte) + 16) as a pointer to a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+        set passBegin to @intrinsic("construct", a vk render pass begin info, 43 as a 32 bit unsigned integer, 0 as a pointer, context's renderPass, the gpu u64 at ((context's imageIndex as an integer) * 8) in context's framebuffers, 0, 0, context's width, context's height, 2 as a 32 bit unsigned integer, clears)
+        @intrinsic("call", "vulkan", "vkCmdBeginRenderPass", nothing, commands, the address of passBegin, 0 as a 32 bit unsigned integer)
+        set descriptorSet to context's descriptorSet
+        @intrinsic("call", "vulkan", "vkCmdBindDescriptorSets", nothing, commands, 0 as a 32 bit unsigned integer, context's pipelineLayout, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of descriptorSet, 0 as a 32 bit unsigned integer, 0 as a pointer)
+        set boundImage to -1
+        set boundKind to -1
+        set boundSlot to -1
+        set boundCanvas to 0 as a 64 bit unsigned integer
+        # The vertex buffers bound for instances: the mesh's and its instances'.
+        set boundBuffers to a gpu block of 16 bytes
+        set boundOffsets to a gpu block of 16 bytes
+        @intrinsic("store at", boundOffsets as a pointer to a 64 bit unsigned integer, 0 as a 64 bit unsigned integer)
+        @intrinsic("store at", ((boundOffsets as a pointer to a byte) + 8) as a pointer to a 64 bit unsigned integer, 0 as a 64 bit unsigned integer)
+        loop batchIndex from 0 to the length of (context's batches):
+            set batch to the item at batchIndex in (context's batches)
+            if ((batch's kind != boundKind) or (batch's canvasBuffer != boundCanvas)) or ((gpu kind (batch's kind) draws the mesh) and (batch's slot != boundSlot)):
+                set pipeline to context's flatPipeline
+                if batch's kind = gpu depth batch:
+                    set pipeline to context's depthPipeline
+                if batch's kind = gpu text batch:
+                    set pipeline to context's textPipeline
+                if batch's kind = gpu image batch:
+                    set pipeline to context's imagePipeline
+                if batch's kind = gpu canvas image batch:
+                    set pipeline to context's canvasImagePipeline
+                if batch's kind = gpu mesh batch:
+                    set pipeline to context's meshPipeline
+                if batch's kind = gpu canvas flat batch:
+                    set pipeline to context's canvasFlatPipeline
+                if batch's kind = gpu canvas text batch:
+                    set pipeline to context's canvasTextPipeline
+                if batch's kind = gpu edge batch:
+                    set pipeline to context's edgePipeline
+                if batch's kind = gpu wire batch:
+                    set pipeline to context's wirePipeline
+                if batch's kind = gpu instance batch:
+                    set pipeline to context's instancePipeline
+                if batch's kind = gpu instance edge batch:
+                    set pipeline to context's instanceEdgePipeline
+                if batch's kind = gpu instance wire batch:
+                    set pipeline to context's instanceWirePipeline
+                if context's sectionCut:
+                    if batch's kind = gpu mesh batch:
+                        set pipeline to context's meshCutPipeline
+                    if batch's kind = gpu edge batch:
+                        set pipeline to context's edgeCutPipeline
+                    if batch's kind = gpu wire batch:
+                        set pipeline to context's wireCutPipeline
+                    if batch's kind = gpu instance batch:
+                        set pipeline to context's instanceCutPipeline
+                    if batch's kind = gpu instance edge batch:
+                        set pipeline to context's instanceEdgeCutPipeline
+                    if batch's kind = gpu instance wire batch:
+                        set pipeline to context's instanceWireCutPipeline
+                @intrinsic("call", "vulkan", "vkCmdBindPipeline", nothing, commands, 0 as a 32 bit unsigned integer, pipeline)
+                if gpu kind (batch's kind) draws the mesh:
+                    # The slot's vertices (and its instances), through its
+                    # triangles or its edges.
+                    set held to the item at batch's slot in (context's meshSlots)
+                    @intrinsic("store at", boundBuffers as a pointer to a 64 bit unsigned integer, held's vertices's handle)
+                    @intrinsic("store at", ((boundBuffers as a pointer to a byte) + 8) as a pointer to a 64 bit unsigned integer, held's instances's handle)
+                    set bufferCount to 1
+                    if gpu kind (batch's kind) draws instances:
+                        set bufferCount to 2
+                    @intrinsic("call", "vulkan", "vkCmdBindVertexBuffers", nothing, commands, 0 as a 32 bit unsigned integer, bufferCount as a 32 bit unsigned integer, boundBuffers, boundOffsets)
+                    set indexBuffer to held's indices's handle
+                    if gpu kind (batch's kind) draws edges:
+                        set indexBuffer to held's edges's handle
+                    @intrinsic("call", "vulkan", "vkCmdBindIndexBuffer", nothing, commands, indexBuffer, 0 as a 64 bit unsigned integer, 1 as a 32 bit unsigned integer)
+                    set boundSlot to batch's slot
+                else if ((batch's kind = gpu canvas flat batch) or (batch's kind = gpu canvas text batch)) or (batch's kind = gpu canvas image batch):
+                    @intrinsic("store at", boundBuffers as a pointer to a 64 bit unsigned integer, batch's canvasBuffer)
+                    @intrinsic("store at", ((boundBuffers as a pointer to a byte) + 8) as a pointer to a 64 bit unsigned integer, context's canvasTransforms's handle)
+                    @intrinsic("call", "vulkan", "vkCmdBindVertexBuffers", nothing, commands, 0 as a 32 bit unsigned integer, 2 as a 32 bit unsigned integer, boundBuffers, boundOffsets)
+                else:
+                    set streamBuffer to context's stream's handle
+                    set streamOffset to 0 as a 64 bit unsigned integer
+                    @intrinsic("call", "vulkan", "vkCmdBindVertexBuffers", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of streamBuffer, the address of streamOffset)
+                set boundKind to batch's kind
+                set boundCanvas to batch's canvasBuffer
+            # Binding changes are per draw, not writes to one shared descriptor.
+            # Earlier image batches must keep their own image through submission.
+            set wantedImage to -1
+            set descriptorSet to context's descriptorSet
+            if (batch's kind = gpu image batch) or (batch's kind = gpu canvas image batch):
+                set wantedImage to batch's slot
+                set descriptorSet to (the item at wantedImage in (context's imageSlots))'s descriptor
+            if wantedImage != boundImage:
+                @intrinsic("call", "vulkan", "vkCmdBindDescriptorSets", nothing, commands, 0 as a 32 bit unsigned integer, context's pipelineLayout, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of descriptorSet, 0 as a 32 bit unsigned integer, 0 as a pointer)
+                set boundImage to wantedImage
+            set viewport to @intrinsic("construct", a vk viewport, batch's x as a 32 bit floating-point number, batch's y as a 32 bit floating-point number, batch's width as a 32 bit floating-point number, batch's height as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+            if (gpu kind batch's kind draws the mesh) = false:
+                set viewport to @intrinsic("construct", a vk viewport, 0.0 as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, context's width as a 32 bit floating-point number, context's height as a 32 bit floating-point number, 0.0 as a 32 bit floating-point number, 1.0 as a 32 bit floating-point number)
+            @intrinsic("call", "vulkan", "vkCmdSetViewport", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of viewport)
+            set scissor to @intrinsic("construct", a vk rectangle, (the maximum of 0.0 and batch's x) as an integer, (the maximum of 0.0 and batch's y) as an integer, batch's width as a 32 bit unsigned integer, batch's height as a 32 bit unsigned integer)
+            @intrinsic("call", "vulkan", "vkCmdSetScissor", nothing, commands, 0 as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, the address of scissor)
+            if gpu kind (batch's kind) draws instances:
+                @intrinsic("call", "vulkan", "vkCmdDrawIndexed", nothing, commands, batch's count as a 32 bit unsigned integer, batch's instanceCount as a 32 bit unsigned integer, batch's first as a 32 bit unsigned integer, 0, batch's firstInstance as a 32 bit unsigned integer)
+            else if gpu kind (batch's kind) draws the mesh:
+                @intrinsic("call", "vulkan", "vkCmdDrawIndexed", nothing, commands, batch's count as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, batch's first as a 32 bit unsigned integer, 0, 0 as a 32 bit unsigned integer)
+            else if batch's canvasBuffer != (0 as a 64 bit unsigned integer):
+                @intrinsic("call", "vulkan", "vkCmdDraw", nothing, commands, batch's count as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, batch's first as a 32 bit unsigned integer, batch's firstInstance as a 32 bit unsigned integer)
+            else:
+                @intrinsic("call", "vulkan", "vkCmdDraw", nothing, commands, batch's count as a 32 bit unsigned integer, 1 as a 32 bit unsigned integer, batch's first as a 32 bit unsigned integer, 0 as a 32 bit unsigned integer)
+        @intrinsic("call", "vulkan", "vkCmdEndRenderPass", nothing, commands)
+        if context's timed:
+            @intrinsic("call", "vulkan", "vkCmdWriteTimestamp", nothing, commands, 8192 as a 32 bit unsigned integer, context's queryPool, 1 as a 32 bit unsigned integer)
+            set context's stamped to true
+        check gpu (@intrinsic("call", "vulkan", "vkEndCommandBuffer", an integer, commands)) doing "end commands"
+        free gpu block clears
+        free gpu block boundBuffers
+        free gpu block boundOffsets
+        set waitStage to 1024 as a 32 bit unsigned integer
+        set imageReady to context's imageReady
+        set renderDone to context's renderDone
+        set submit to @intrinsic("construct", a vk submit info, 4 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of imageReady) as a pointer, (the address of waitStage) as a pointer, 1 as a 32 bit unsigned integer, (the address of commands) as a pointer, 1 as a 32 bit unsigned integer, (the address of renderDone) as a pointer)
+        check gpu (@intrinsic("call", "vulkan", "vkQueueSubmit", an integer, context's queue, 1 as a 32 bit unsigned integer, the address of submit, fence)) doing "vkQueueSubmit"
+        set chain to context's swapchain
+        set imageIndex to context's imageIndex
+        set present to @intrinsic("construct", a vk present info, 1000001001 as a 32 bit unsigned integer, 0 as a pointer, 1 as a 32 bit unsigned integer, (the address of renderDone) as a pointer, 1 as a 32 bit unsigned integer, (the address of chain) as a pointer, (the address of imageIndex) as a pointer, 0 as a pointer)
+        set presented to @intrinsic("call", "vulkan", "vkQueuePresentKHR", an integer, context's queue, the address of present)
+        if (presented = -1000001004) or (presented = 1000001003):
+            renew gpu swapchain of context
+
+# How long the GPU took for the last frame it finished, in microseconds (0
+# where the queue writes no timestamps).
+function the gpu frame microseconds of {a pointer to a gpu context record:context}:
+    execute:
+        return context's gpuMicroseconds
+
+# Waits for the window's next event (input, a resize) for at most `seconds`:
+# with nothing to draw, the loop sleeps here instead of drawing frames.
+function wait for gpu window events up to {a 64 bit floating-point number:seconds}:
+    execute:
+        @intrinsic("call", "glfw", "glfwWaitEventsTimeout", nothing, seconds)

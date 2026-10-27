@@ -1,0 +1,259 @@
+# SPDX-License-Identifier: MPL-2.0
+# Spatial index of the walls of a model, used to find the walls that can join
+# a wall without visiting every wall. The plan is divided into square cells;
+# every wall is registered in each cell its centreline, widened by the join
+# tolerance, can touch. A point therefore finds every wall that ends at it or
+# runs through it among the walls registered in its own cell. Cells are per
+# storey: a wall is registered under its level, and a lookup names the level,
+# so storeys stacked over the same plan do not share cells.
+#
+# Cells live in a chained hash table held in parallel lists. Removing a wall
+# marks its entries dead; the table is rebuilt from its live entries when dead
+# entries outnumber live ones, and doubles its buckets when it fills up.
+import model/bim_model.dl
+import lib/sort.dl
+
+function the bim join tolerance:
+    replacement:
+        1e-6
+
+function the bim cell size:
+    replacement:
+        1.0
+
+class:
+    patterns:
+        [a|] bim join index record
+    members:
+        buckets as the type of (a cad topology list of a 64 bit integer)
+        cellXs as the type of (a cad topology list of a 64 bit integer)
+        cellYs as the type of (a cad topology list of a 64 bit integer)
+        wallIds as the type of (a cad topology list of a 64 bit integer)
+        levelIds as the type of (a cad topology list of a 64 bit integer)
+        nexts as the type of (a cad topology list of a 64 bit integer)
+        live as an integer
+        dead as an integer
+
+local function a bim join index with {integer:bucketCount} buckets:
+    execute:
+        set heads to a cad topology list of a 64 bit integer
+        ensure enough capacity in (heads's values) for bucketCount items
+        loop cursor from 0 to bucketCount:
+            append ((-1) as a 64 bit integer) to (heads's values)
+        return @intrinsic("construct", a bim join index record, heads, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, a cad topology list of a 64 bit integer, 0, 0)
+
+function an empty bim join index:
+    execute:
+        return a bim join index with 64 buckets
+
+# An index shares no list with `source`, so `source` stays valid.
+function the bim copy of {bim join index record:source}:
+    execute:
+        return @intrinsic("construct", a bim join index record, the cad clone of source's buckets, the cad clone of source's cellXs, the cad clone of source's cellYs, the cad clone of source's wallIds, the cad clone of source's levelIds, the cad clone of source's nexts, source's live, source's dead)
+
+function the bim cell of {a 64 bit floating-point number:coordinate}:
+    execute:
+        return (the floor of (coordinate / the bim cell size)) as a 64 bit integer
+
+local function the bim bucket of {a 64 bit integer:cellX} and {a 64 bit integer:cellY} on {a 64 bit integer:levelId} among {integer:bucketCount}:
+    execute:
+        set mixed to ((cellX * (73856093 as a 64 bit integer)) + (cellY * (19349663 as a 64 bit integer))) + (levelId * (83492791 as a 64 bit integer))
+        set slot to the remainder of mixed divided by (bucketCount as a 64 bit integer)
+        if slot < (0 as a 64 bit integer):
+            set slot to slot + (bucketCount as a 64 bit integer)
+        return slot as an integer
+
+local function link bim entry {integer:entry} in {a pointer to a bim join index record:target}:
+    execute:
+        set slot to the bim bucket of (the item at entry in (target's cellXs's values)) and (the item at entry in (target's cellYs's values)) on (the item at entry in (target's levelIds's values)) among (the length of (target's buckets's values))
+        replace item at index entry in (target's nexts's values) with (the item at slot in (target's buckets's values))
+        replace item at index slot in (target's buckets's values) with (entry as a 64 bit integer)
+
+# Rebuilds the table from its live entries with `bucketCount` buckets.
+local function rebuild bim join index {a pointer to a bim join index record:target} with {integer:bucketCount} buckets:
+    execute:
+        set rebuilt to a bim join index with bucketCount buckets
+        loop entry from 0 to the length of (target's wallIds's values):
+            if (the item at entry in (target's wallIds's values)) != the bim refused id:
+                append (the item at entry in (target's cellXs's values)) to (rebuilt's cellXs's values)
+                append (the item at entry in (target's cellYs's values)) to (rebuilt's cellYs's values)
+                append (the item at entry in (target's wallIds's values)) to (rebuilt's wallIds's values)
+                append (the item at entry in (target's levelIds's values)) to (rebuilt's levelIds's values)
+                append ((-1) as a 64 bit integer) to (rebuilt's nexts's values)
+        set rebuilt's live to the length of (rebuilt's wallIds's values)
+        loop entry from 0 to the length of (rebuilt's wallIds's values):
+            link bim entry entry in (the address of rebuilt)
+        set target's buckets to rebuilt's buckets
+        set target's cellXs to rebuilt's cellXs
+        set target's cellYs to rebuilt's cellYs
+        set target's wallIds to rebuilt's wallIds
+        set target's levelIds to rebuilt's levelIds
+        set target's nexts to rebuilt's nexts
+        set target's live to rebuilt's live
+        set target's dead to 0
+
+class:
+    patterns:
+        [a|] bim cell span record
+    members:
+        lowX as a 64 bit integer
+        lowY as a 64 bit integer
+        highX as a 64 bit integer
+        highY as a 64 bit integer
+
+# The cells the centreline of `wallValue`, widened by the join tolerance, can
+# touch.
+function the bim cells of {bim wall record:wallValue}:
+    execute:
+        # A curved wall's arc lies within its chord's box grown by its bulge.
+        set tolerance to (the bim join tolerance) + (the absolute value of wallValue's bulge)
+        set lowX to the bim cell of ((the minimum of wallValue's start's x and wallValue's finish's x) - tolerance)
+        set lowY to the bim cell of ((the minimum of wallValue's start's y and wallValue's finish's y) - tolerance)
+        set highX to the bim cell of ((the maximum of wallValue's start's x and wallValue's finish's x) + tolerance)
+        set highY to the bim cell of ((the maximum of wallValue's start's y and wallValue's finish's y) + tolerance)
+        return @intrinsic("construct", a bim cell span record, lowX, lowY, highX, highY)
+
+function add bim wall {bim wall record:wallValue} to {a pointer to a bim join index record:target}:
+    execute:
+        set span to the bim cells of wallValue
+        set cellX to span's lowX
+        loop while cellX <= span's highX:
+            set cellY to span's lowY
+            loop while cellY <= span's highY:
+                append cellX to (target's cellXs's values)
+                append cellY to (target's cellYs's values)
+                append wallValue's id to (target's wallIds's values)
+                append wallValue's levelId to (target's levelIds's values)
+                append ((-1) as a 64 bit integer) to (target's nexts's values)
+                set target's live to target's live + 1
+                if ((the length of (target's wallIds's values)) * 2) > (the length of (target's buckets's values)):
+                    rebuild bim join index target with ((the length of (target's buckets's values)) * 2) buckets
+                else:
+                    link bim entry ((the length of (target's wallIds's values)) - 1) in target
+                set cellY to cellY + (1 as a 64 bit integer)
+            set cellX to cellX + (1 as a 64 bit integer)
+
+# `wallValue` is the wall as it was registered.
+function remove bim wall {bim wall record:wallValue} from {a pointer to a bim join index record:target}:
+    execute:
+        set span to the bim cells of wallValue
+        set cellX to span's lowX
+        loop while cellX <= span's highX:
+            set cellY to span's lowY
+            loop while cellY <= span's highY:
+                set entry to the item at (the bim bucket of cellX and cellY on wallValue's levelId among (the length of (target's buckets's values))) in (target's buckets's values)
+                loop while entry >= (0 as a 64 bit integer):
+                    set position to entry as an integer
+                    if ((the item at position in (target's wallIds's values)) = wallValue's id) and (((the item at position in (target's cellXs's values)) = cellX) and ((the item at position in (target's cellYs's values)) = cellY)):
+                        replace item at index position in (target's wallIds's values) with the bim refused id
+                        set target's live to target's live - 1
+                        set target's dead to target's dead + 1
+                    set entry to the item at position in (target's nexts's values)
+                set cellY to cellY + (1 as a 64 bit integer)
+            set cellX to cellX + (1 as a 64 bit integer)
+        if target's dead > target's live:
+            rebuild bim join index target with (the length of (target's buckets's values)) buckets
+
+function the bim join index of {bim model record:modelValue}:
+    execute:
+        set result to an empty bim join index
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            add bim wall (the item at cursor in (modelValue's walls's values)) to (the address of result)
+        return result
+
+local function append bim walls in cell {a 64 bit integer:cellX} and {a 64 bit integer:cellY} on {a 64 bit integer:levelId} of {bim join index record:source} to {a pointer to a list:found}:
+    execute:
+        set entry to the item at (the bim bucket of cellX and cellY on levelId among (the length of (source's buckets's values))) in (source's buckets's values)
+        loop while entry >= (0 as a 64 bit integer):
+            set position to entry as an integer
+            set wallId to the item at position in (source's wallIds's values)
+            set sameCell to ((the item at position in (source's cellXs's values)) = cellX) and ((the item at position in (source's cellYs's values)) = cellY)
+            if ((wallId != the bim refused id) and sameCell) and ((the item at position in (source's levelIds's values)) = levelId):
+                append wallId to found
+            set entry to the item at position in (source's nexts's values)
+
+local function bim id ordering {pointer:left} and {pointer:right}:
+    execute:
+        set first to the value at (left as a pointer to a 64 bit integer)
+        set second to the value at (right as a pointer to a 64 bit integer)
+        if first < second:
+            return -1
+        if first > second:
+            return 1
+        return 0
+
+# Sorts a list of 64-bit ids ascending and drops repeats, in place.
+function sort and deduplicate bim ids {a pointer to a list:ids}:
+    execute:
+        set comparator to the function named "bim id ordering $ and $"
+        sort native array at ((the data of ids) as a pointer) with ((the length of ids) as a word sized unsigned integer) items of ((the size of a 64 bit integer) as a word sized unsigned integer) bytes using comparator
+        set kept to 0
+        loop cursor from 0 to the length of ids:
+            set fresh to true
+            if kept > 0:
+                set fresh to (the item at cursor in ids) != (the item at (kept - 1) in ids)
+            if fresh:
+                replace item at index kept in ids with (the item at cursor in ids)
+                set kept to kept + 1
+        loop while (the length of ids) > kept:
+            remove the last item from ids
+
+# The ids, ascending, of the walls on level `levelId` registered in the cell of
+# `location`: every such wall that ends at `location` or runs through it is
+# among them.
+function the bim walls near {cad vector2:location} on level {a 64 bit integer:levelId} in {bim join index record:source}:
+    execute:
+        set found to an empty list of a 64 bit integer
+        append bim walls in cell (the bim cell of location's x) and (the bim cell of location's y) on levelId of source to found
+        sort and deduplicate bim ids found
+        return found
+
+# The ids, ascending, of the walls registered in any cell of `wallValue`:
+# every wall that ends on or runs through its centreline is among them.
+function the bim walls along {bim wall record:wallValue} in {bim join index record:source}:
+    execute:
+        set found to an empty list of a 64 bit integer
+        set span to the bim cells of wallValue
+        set cellX to span's lowX
+        loop while cellX <= span's highX:
+            set cellY to span's lowY
+            loop while cellY <= span's highY:
+                append bim walls in cell cellX and cellY on wallValue's levelId of source to found
+                set cellY to cellY + (1 as a 64 bit integer)
+            set cellX to cellX + (1 as a 64 bit integer)
+        sort and deduplicate bim ids found
+        return found
+
+# The ids, ascending, of the walls registered in the cell of `location` and
+# its eight neighbours: every wall whose centreline passes within one cell
+# size of `location` is among them.
+function the bim walls around {cad vector2:location} on level {a 64 bit integer:levelId} in {bim join index record:source}:
+    execute:
+        set found to an empty list of a 64 bit integer
+        set centreX to the bim cell of location's x
+        set centreY to the bim cell of location's y
+        loop offsetX from -1 to 2:
+            loop offsetY from -1 to 2:
+                append bim walls in cell (centreX + (offsetX as a 64 bit integer)) and (centreY + (offsetY as a 64 bit integer)) on levelId of source to found
+        sort and deduplicate bim ids found
+        return found
+
+# The ids, ascending, of the walls on level `levelId` registered in any cell
+# within `radius` of `location`: every such wall whose centreline passes within
+# `radius` of `location` is among them.
+function the bim walls within {a 64 bit floating-point number:radius} of {cad vector2:location} on level {a 64 bit integer:levelId} in {bim join index record:source}:
+    execute:
+        set found to an empty list of a 64 bit integer
+        set reach to radius + (the bim join tolerance)
+        set lowY to the bim cell of (location's y - reach)
+        set highX to the bim cell of (location's x + reach)
+        set highY to the bim cell of (location's y + reach)
+        set cellX to the bim cell of (location's x - reach)
+        loop while cellX <= highX:
+            set cellY to lowY
+            loop while cellY <= highY:
+                append bim walls in cell cellX and cellY on levelId of source to found
+                set cellY to cellY + (1 as a 64 bit integer)
+            set cellX to cellX + (1 as a 64 bit integer)
+        sort and deduplicate bim ids found
+        return found
