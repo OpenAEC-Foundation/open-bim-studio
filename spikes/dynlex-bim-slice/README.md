@@ -42,6 +42,60 @@ multiple levels, IFC import, GPU instancing, component libraries, reinforcement,
 connections and drawing sheets. Large-model acceptance criteria (R-12, R-20)
 remain separate work; their presence in the editor does not establish scale.
 
+### Canvas editing
+
+**Home > Modify** exposes Move, Copy, Rotate, Mirror, Array and Scale.
+**Home > Edit** contains Trim, Extend, Offset, Fillet, Chamfer, Stretch,
+Split, Align, Join, Lengthen and component Explode. The Modify tab provides
+the same commands. The active tool's options appear over the canvas;
+Escape cancels the current operation.
+
+Move and Copy use a base point and destination. Rotate uses a pivot,
+reference direction and destination direction. Mirror uses two axis points.
+Component instances cannot be mirrored; explode them first to edit their
+geometry independently. A refused operation leaves the complete selection
+and transaction history unchanged.
+The Copy option keeps the source when rotating, mirroring or scaling.
+Linear arrays distribute the total count, including the original, between
+the base and destination; radial arrays use the selected sweep angle.
+Scale changes the XY footprint while preserving storey elevations and type
+dimensions. Shared component definitions and constrained host geometry are
+refused when an operation cannot preserve their meaning.
+
+Point entry uses the current displayed length unit:
+
+| Input | Meaning |
+|---|---|
+| `2500,1000` or `#2500,1000` | Absolute X and Y |
+| `@2500,-1000` | Offset from the current base point |
+| `@2500<30` | Distance and angle in degrees |
+| `2500` | Distance along the pointer direction |
+| `=2*(1200+300)/3` | Calculated distance |
+
+Enter or Tab confirms valid input. Incomplete expressions and division by
+zero remain editable. X/Y constrain point entry to an axis; holding Shift
+temporarily enables ortho, and F8 toggles its latched setting. Canceling a
+preview preserves both undo and redo history.
+
+The world origin has a permanent screen marker. Grid placement snaps to the
+3D cursor, and grid bubbles keep their screen size when zooming. Select one
+grid and click its plus control to add parallel grids using current-unit
+spacing, for example `5000 3000 3x5400`. The entire batch is one undo step.
+
+### Type library
+
+**Home > IfcTypes** and **Manage > IfcTypes** open the native type library
+without requiring an instance selection. Its tabs cover walls, floors,
+roofs, ceilings, columns, beams, piles, openings and profiles. Add and
+Duplicate create real type definitions; fields edit names, dimensions,
+materials, layers and classification. Apply changes a compatible selected
+element or the corresponding drawing default. Types in use cannot be
+deleted. Custom names survive subsequent dimension and layer edits.
+
+The classic IFC exporter writes role-correct type objects and groups their
+occurrence relationships by type across storeys. The automation adapters
+are documented in [MCP and HTTP API](overlay/examples/bim-slice/mcp/README.md).
+
 ### Reinforcement display
 
 The 3D view defaults to reinforcement centre lines. Bars, stirrups, cages and
@@ -98,7 +152,22 @@ checkout as DynLex's own README describes, after:
 ```
 git -C $DYNLEX_ROOT checkout bc653ad
 git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-compiler-local.patch
+git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-pattern-reference-index.patch
+git -C $DYNLEX_ROOT apply $PWD/patches/dynlex-pattern-precedence-families.patch
 ```
+
+The reference-index patch removes repeated linear searches when pattern
+definitions invalidate earlier matches. Reference processing remains sorted by
+source position. It includes a standalone regression for late specializations
+and repeated nested matches. The Windows workflows apply it to the verified
+compiler source archive before building the toolchain.
+
+The precedence-family patch visits shared pattern endpoints once and reuses
+connected families while resolving precedence. It removes repeated component
+pairs before expanding the same precedence graph, preserving cycle detection.
+Windows builds run `tools/check_compiler_patterns.py` against the compiled
+toolchain: three functional regressions and a standalone 600-class check with
+a 30-second budget. This check opens no application window.
 
 `patches/dynlex-shader-extensions.patch` is needed only to rebuild the shaders.
 

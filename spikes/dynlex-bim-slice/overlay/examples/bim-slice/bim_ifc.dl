@@ -210,6 +210,26 @@ local function relate bim single {string:relation} named {integer:kind} from {in
         set body to (((body + (the string form of ",$,$,$,")) + (the bim reference text of relating)) + (the string form of ",")) + (the bim reference text of relatedOne)
         ignore write bim entity (body + (the string form of ")")) to writer
 
+# Type identity is shared by every occurrence, independent of its storey.
+local function the bim ifc occurrence type of {a 64 bit integer:ownerId} in {bim model record:modelValue}:
+    execute:
+        set wallFound to the bim wall index of ownerId in modelValue
+        if wallFound's valid:
+            return (the item at wallFound's position in (modelValue's walls's values))'s typeId
+        set plateFound to the bim slab index of ownerId in modelValue
+        if plateFound's valid:
+            set plateValue to the item at plateFound's position in (modelValue's slabs's values)
+            if (the bim type index of plate plateValue in modelValue)'s valid:
+                return plateValue's typeId
+            return plateValue's id
+        set linearFound to the bim linear index of ownerId in modelValue
+        if linearFound's valid:
+            return (the item at linearFound's position in (modelValue's linears's values))'s typeId
+        set openingFound to the bim opening index of ownerId in modelValue
+        if openingFound's valid:
+            return (the item at openingFound's position in (modelValue's openings's values))'s typeId
+        return the bim refused id
+
 # Whether IFC class `className` has the nine attributes a free mesh is
 # written with (GlobalId, OwnerHistory, Name, Description, ObjectType,
 # ObjectPlacement, Representation, Tag, PredefinedType).
@@ -415,6 +435,7 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
         # codes as classification references (each classification written
         # once, when a type first uses it).
         set typeNumbers to an empty list of an integer
+        set exportTypeIds to an empty list of a 64 bit integer
         set layerSetNumbers to an empty list of an integer
         set sfbSource to 0
         set omniSource to 0
@@ -428,8 +449,10 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
                 append (write bim entity ((layerBody + (the bim real text of layerValue's thickness)) + (the string form of ",$,$,$,$,$)")) to w) to layerNumbers
             set layerSet to write bim entity ((((the string form of "IFCMATERIALLAYERSET(") + (the bim ifc list of layerNumbers)) + (the string form of ",")) + ((the bim label text of wallType's name) + (the string form of ",$)"))) to w
             free layerNumbers
-            set typeBody to ((the string form of "IFCWALLTYPE(") + (the bim global id for kind 5 of wallType's id)) + (the string form of ",$,")
-            set typeNumber to write bim entity ((typeBody + (the bim label text of wallType's name)) + (the string form of ",$,$,$,$,$,$,.STANDARD.)")) to w
+            set typeClass to (the uppercase form of (the bim ifc class of planar role wallType's role)) + (the string form of "TYPE(")
+            set typeBody to (typeClass + (the bim global id for kind 5 of wallType's id)) + (the string form of ",$,")
+            set predefined to the bim ifc predefined type of planar role wallType's role
+            set typeNumber to write bim entity ((typeBody + (the bim label text of wallType's name)) + ((the string form of ",$,$,$,$,$,$,.") + (predefined + (the string form of ".)")))) to w
             set typeList to an empty list of an integer
             append typeNumber to typeList
             relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 23 from layerSet to typeList first false in w
@@ -447,7 +470,37 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
                 relate bim (the string form of "IFCRELASSOCIATESCLASSIFICATION") named 41 from omniReference to typeList first false in w
             free typeList
             append typeNumber to typeNumbers
+            append wallType's id to exportTypeIds
             append layerSet to layerSetNumbers
+
+        # Linear and opening types use their actual IFC subtype. Door/window
+        # types have four subtype attributes after IfcElementType's nine.
+        loop cursor from 0 to the length of (modelValue's linearTypes's values):
+            set linearType to the item at cursor in (modelValue's linearTypes's values)
+            set typeClass to (the uppercase form of (the bim ifc class of linear role linearType's role)) + (the string form of "TYPE(")
+            set typeBody to (typeClass + (the bim global id for kind 5 of linearType's id)) + (the string form of ",$,")
+            append (write bim entity ((typeBody + (the bim label text of linearType's name)) + (the string form of ",$,$,$,$,$,$,.NOTDEFINED.)")) to w) to typeNumbers
+            append linearType's id to exportTypeIds
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            set openingType to the item at cursor in (modelValue's openingTypes's values)
+            set typeClass to the string form of "IFCWINDOWTYPE("
+            set typeTail to the string form of ",$,$,$,$,$,$,.WINDOW.,.NOTDEFINED.,.F.,$)"
+            if openingType's isDoor:
+                set typeClass to the string form of "IFCDOORTYPE("
+                set typeTail to the string form of ",$,$,$,$,$,$,.DOOR.,.NOTDEFINED.,.F.,$)"
+            set typeBody to (typeClass + (the bim global id for kind 5 of openingType's id)) + (the string form of ",$,")
+            append (write bim entity ((typeBody + (the bim label text of openingType's name)) + typeTail) to w) to typeNumbers
+            append openingType's id to exportTypeIds
+
+        # Older untyped slabs still receive an exchange type. Its export-only
+        # identity uses the slab's globally unique model id, without changing it.
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set plateValue to the item at cursor in (modelValue's slabs's values)
+            if (the bim type index of plate plateValue in modelValue)'s valid = false:
+                set typeBody to ((the string form of "IFCSLABTYPE(") + (the bim global id for kind 5 of plateValue's id)) + (the string form of ",$,")
+                set typeName to (the string form of "Floor ") + (the bim millimetre text of plateValue's thickness)
+                append (write bim entity ((typeBody + (the bim label text of typeName)) + (the string form of ",$,$,$,$,$,$,.FLOOR.)")) to w) to typeNumbers
+                append plateValue's id to exportTypeIds
 
         # Walls, their openings and the windows filling them.
         # Every contained element with the position of its storey.
@@ -757,12 +810,10 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
         # occurrence of the type, including walls on different storeys.
         loop typeCursor from 0 to the length of typeNumbers:
             set typedWalls to an empty list of an integer
-            set typeId to (the item at typeCursor in (modelValue's wallTypes's values))'s id
+            set typeId to the item at typeCursor in exportTypeIds
             loop ownerCursor from 0 to the length of containedOwners:
-                set ownerWall to the bim wall index of (the item at ownerCursor in containedOwners) in modelValue
-                if ownerWall's valid:
-                    if (the item at ownerWall's position in (modelValue's walls's values))'s typeId = typeId:
-                        append (the item at ownerCursor in containedNumbers) to typedWalls
+                if (the bim ifc occurrence type of (the item at ownerCursor in containedOwners) in modelValue) = typeId:
+                    append (the item at ownerCursor in containedNumbers) to typedWalls
             relate bim (the string form of "IFCRELDEFINESBYTYPE") named 25 from (the item at typeCursor in typeNumbers) to typedWalls first false in w
             free typedWalls
         free containedNumbers
@@ -771,6 +822,7 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
         free storeyNumbers
         free storeyPlacements
         free typeNumbers
+        free exportTypeIds
         free layerSetNumbers
         set header to the string form of "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');\n"
         set schemaName to the string form of "IFC4"
