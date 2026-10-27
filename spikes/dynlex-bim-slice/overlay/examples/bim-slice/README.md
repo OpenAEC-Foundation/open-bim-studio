@@ -315,3 +315,10 @@ Build these at `-O2`; they print medians and maxima in microseconds.
   the pinned Rust crate; mode 2 times the planar section, in DynLex only. Build the Rust side against a `cadkernel` library compiled at the same
   optimisation level, as `tests/cadkernel/performance/` does, and run both
   with `<mode> <iterations>`; their face counts must agree.
+
+A wall with an edited boundary currently renders its evaluated whole-wall solid
+at fine detail as well. The rectangular layer builder is bypassed for these
+walls, so it cannot cover the edited outline or protrude through a roof. The
+outside material colour is retained; individual material layers on a profiled
+wall still need profile-aware clipping. `wall_profile_layers` checks the gable
+volume and the actual fine-detail scene vertices.
