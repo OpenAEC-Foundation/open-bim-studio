@@ -192,3 +192,26 @@ DISPLAY=:0 BIM_BUILD_DIR=/tmp/obs-type-menu bash build.sh run-probe type_menu_pr
 The probe needs a Vulkan-capable display when run. `type_menu_probe` uses the
 production properties renderer and checks actual menu hit targets. Full-editor
 integration still needs its own app build. Keep the one-compiler memory rule.
+
+### Curved native roofs
+
+Select a typed native roof and use **Round roof (click)** in Properties to
+create a barrel profile as one undoable edit. The advanced fields accept
+semicolon-separated point pairs (2–64 points, metres): **Section points (m)**
+are offset,height; **Path points (m)** are plan x,y; **Hip points (m)** are
+distance-along-path,height. Section/hip offsets must increase; path segments
+must have length. Clearing the section restores a flat roof; clearing the hip
+removes its cap. MCP uses the same `set_property` actions: 2213 for the preset,
+2210–2212 for section/path/hip text. The outline remains editable with Tab.
+
+The native evaluator applies the form to both picking geometry and material
+layers. Straight, untrimmed convex roof sections use an indexed grid at the actual
+profile stations, coincident layer interfaces and thickness along the surface
+normal. Curved paths and trimmed/holed footprints retain the general warped
+prism path. Profile settings participate in geometry cache invalidation and
+native persistence. This is a sampled profile model; rafters, flashing and
+fine edge details are separate work.
+
+`roof_forms` (15 checks), `roof_offset` (6 checks), `roof_editor` (13 checks)
+and the existing `plate_openings` regression (24 checks) cover geometry,
+layer miters, transactions, persistence and the existing opening behaviour.

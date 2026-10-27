@@ -5,6 +5,7 @@
 # over plan: overhanging/re-entrant sections are deliberately refused.
 import examples/bim-slice/bim_model.dl
 import lib/fastkernel/prism.dl
+import examples/bim-slice/bim_roof_grid.dl
 
 function bim roof form setting:
     replacement:
@@ -132,11 +133,49 @@ function the bim roof warped point {cad vector3:spot} using {a pointer to a list
         set riseValue to the bim roof rise at (a cad vector2 with x spot's x and y spot's y) using profilePoints along pathPoints
         return a cad vector3 with x spot's x, y spot's y and z (spot's z + riseValue)
 
-function append bim roof triangle from {cad vector3:first} via {cad vector3:second} to {cad vector3:third} using {a pointer to a list:profilePoints} along {a pointer to a list:pathPoints} into {a pointer to a fast polyhedron record:target}:
+# An optional longitudinal profile caps the cross-section, for a rounded hip.
+function the bim roof end height at {cad vector2:location} along {a pointer to a list:pathPoints} limited by {a pointer to a list:endProfile}:
+    execute:
+        if (the length of endProfile) < 2:
+            return 1e30
+        set nearestGap to 1e30
+        set reached to 0.0
+        set station to 0.0
+        loop cursor from 1 to the length of pathPoints:
+            set first to the item at (cursor - 1) in pathPoints
+            set last to the item at cursor in pathPoints
+            set dx to last's x - first's x
+            set dy to last's y - first's y
+            set squared to (dx * dx) + (dy * dy)
+            if squared > 1e-12:
+                set run to the square root of squared
+                set fraction to (((location's x - first's x) * dx) + ((location's y - first's y) * dy)) / squared
+                set fraction to the maximum of 0.0 and (the minimum of 1.0 and fraction)
+                set foot to a cad vector2 with x (first's x + (fraction * dx)) and y (first's y + (fraction * dy))
+                set gap to the cad distance from location to foot
+                if gap < nearestGap:
+                    set nearestGap to gap
+                    set station to reached + (fraction * run)
+                set reached to reached + run
+        set before to the item at 0 in endProfile
+        if station <= before's x:
+            return before's y
+        loop cursor from 1 to the length of endProfile:
+            set after to the item at cursor in endProfile
+            if station <= after's x:
+                set fraction to (station - before's x) / (after's x - before's x)
+                return before's y + (fraction * (after's y - before's y))
+            set before to after
+        return before's y
+
+function append bim roof triangle from {cad vector3:first} via {cad vector3:second} to {cad vector3:third} using {a pointer to a list:profilePoints} along {a pointer to a list:pathPoints} limited by {a pointer to a list:endProfile} into {a pointer to a fast polyhedron record:target}:
     execute:
         set a to the bim roof warped point first using profilePoints along pathPoints
         set b to the bim roof warped point second using profilePoints along pathPoints
         set c to the bim roof warped point third using profilePoints along pathPoints
+        set a's z to first's z + (the minimum of (a's z - first's z) and (the bim roof end height at (a cad vector2 with x first's x and y first's y) along pathPoints limited by endProfile))
+        set b's z to second's z + (the minimum of (b's z - second's z) and (the bim roof end height at (a cad vector2 with x second's x and y second's y) along pathPoints limited by endProfile))
+        set c's z to third's z + (the minimum of (c's z - third's z) and (the bim roof end height at (a cad vector2 with x third's x and y third's y) along pathPoints limited by endProfile))
         set normal to the cad cross of (the cad difference of b and a) and (the cad difference of c and a)
         set ring to an empty list of an integer
         append (add fast position a to target) to ring
@@ -149,7 +188,7 @@ function append bim roof triangle from {cad vector3:first} via {cad vector3:seco
 
 # Uniform barycentric subdivision shares the same edge samples on every
 # adjacent face. XY never changes: openings stay vertical through all layers.
-function the bim roof shaped {fast polyhedron record:shape} using {a pointer to a list:profilePoints} along {a pointer to a list:pathPoints}:
+function the bim roof shaped {fast polyhedron record:shape} using {a pointer to a list:profilePoints} along {a pointer to a list:pathPoints} limited by {a pointer to a list:endProfile}:
     execute:
         set result to an empty fast polyhedron
         set meshValue to an empty fast mesh
@@ -168,10 +207,10 @@ function the bim roof shaped {fast polyhedron record:shape} using {a pointer to 
                     set a to the cad sum of first and (the cad sum of (u scaled by row) and (v scaled by column))
                     set b to the cad sum of a and u
                     set c to the cad sum of a and v
-                    append bim roof triangle from a via b to c using profilePoints along pathPoints into (the address of result)
+                    append bim roof triangle from a via b to c using profilePoints along pathPoints limited by endProfile into (the address of result)
                     if (row + column) < (divisions - 1):
                         set d to the cad sum of b and v
-                        append bim roof triangle from b via d to c using profilePoints along pathPoints into (the address of result)
+                        append bim roof triangle from b via d to c using profilePoints along pathPoints limited by endProfile into (the address of result)
             set triangleIndex to triangleIndex + 3
         return result
 
@@ -183,7 +222,22 @@ function the bim curved roof form of {fast polyhedron record:shape} for {bim sla
             free profilePoints
             free pathPoints
             return shape
-        set result to the bim roof shaped shape using profilePoints along pathPoints
+        set endProfile to the bim roof points of plateValue's id starting at ((bim roof form setting) + 400) in modelValue
+        if (the length of endProfile) >= 2:
+            if (bim roof profile endProfile and path pathPoints are valid) = false:
+                free profilePoints
+                free pathPoints
+                free endProfile
+                return shape
+        set result to an empty fast polyhedron
+        if plateValue's pitch = 0.0:
+            set levelFound to the bim level index of plateValue's levelId in modelValue
+            if levelFound's valid:
+                set baseHeight to (the item at levelFound's position in (modelValue's levels's values))'s elevation + plateValue's top
+                set result to the bim roof grid of shape using profilePoints along pathPoints limited by endProfile above baseHeight
+        if (the length of (result's faces's values)) = 0:
+            set result to the bim roof shaped shape using profilePoints along pathPoints limited by endProfile
         free profilePoints
         free pathPoints
+        free endProfile
         return result
