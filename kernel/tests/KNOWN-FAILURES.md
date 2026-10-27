@@ -1,13 +1,27 @@
 # Known fixture failures
 
-Run of 2026-10-27 with `verify.py --optimization O0` and the compiler of the
-fork's `codex/cadkernel-port` at `c2d32bea` with the six patches of `patches/`:
-205 of 214 fixtures pass. The nine below fail for reasons that predate the
-restructuring: the fixtures came from the fork's port of the kernel, while the
-kernel compiled here is the application's overlay of it (21 files rewritten,
-6 added; ADR-0007), under a compiler with the pattern patches applied. They
-are findings for the kernel owner, not regressions of the move, and are left
-as they are: changing their expectations would hide the divergence.
+The fixtures under `kernel/tests` are the kernel's test set; `verify.py` runs
+them against the compiler named by `.dynlex-root.local` or `DYNLEX_ROOT`. The
+authoritative result is a Linux run with the pinned compiler (the fork's
+`codex/cadkernel-port` at `c2d32bea` with the six patches of `patches/`); a
+Windows run with another compiler differs in diagnostics and timing.
+
+## State on 2026-10-27
+
+Until the final review of the restructuring, 130 of the 214 fixtures still
+imported `tests/cadkernel/…`, a path that exists only in the fork checkout, and
+so compiled the fork's stale kernel copy instead of `kernel/`. Those imports
+now point at `kernel/reference/…`. The first authoritative run of the whole
+set against `kernel/` is pending on the Linux machine (issue 11); its counts
+and failure names replace this section when they are in.
+
+The nine fixtures below failed in the earlier run among the 84 that already
+compiled `kernel/`. Their causes predate the restructuring: the fixtures came
+from the fork's port of the kernel, while the kernel compiled here is the
+application's overlay of it (21 files rewritten, 6 added; ADR-0007), under a
+compiler with the pattern patches applied. They are findings for the kernel
+owner, not regressions of the move, and their expectations were left alone so
+that the divergence stays visible.
 
 | Fixture | Failure | Reason seen |
 |---|---|---|

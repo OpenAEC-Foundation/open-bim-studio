@@ -233,8 +233,9 @@ def verify_fixture(
         raise FixtureFailure(f"compiler terminated abnormally (exit {status})\n{output}".rstrip())
     # The compiler's own library lives in its checkout, outside this repository;
     # the expectations name those files as `lib/...`, as the fork's did.
-    checkout_prefix = compiler.resolve().parents[1].as_posix() + "/"
-    actual_diagnostics = normalize_diagnostics(output.replace(checkout_prefix, ""), ROOT)
+    checkout = compiler.resolve().parents[1]
+    stripped = output.replace(checkout.as_posix() + "/", "").replace(str(checkout) + "\\", "").replace(str(checkout) + "/", "")
+    actual_diagnostics = normalize_diagnostics(stripped, ROOT)
     compare("compiler diagnostics", expected_diagnostics, actual_diagnostics)
     if compile_failure:
         if status == 0 or binary.exists():
