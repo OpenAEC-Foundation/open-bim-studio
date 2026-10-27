@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
 import unittest
-from check_dynlex_locals import collisions
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the tool lives one level up
+from check_dynlex_locals import collisions  # noqa: E402
 
 
 class PatternLocalTests(unittest.TestCase):
