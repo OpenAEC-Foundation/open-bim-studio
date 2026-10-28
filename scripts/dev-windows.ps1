@@ -73,7 +73,7 @@ function Find-Test([string] $name) {
 
 $names = @()
 if ($Tests) { $names += ($Tests -split '[ ,]+') }
-if ($Kernel) { $names += 'link', 'mesh_round_trip' }
+if ($Kernel) { $names += 'link', 'mesh_round_trip', 'body_round_trip' }
 $failed = @()
 foreach ($name in $names) {
     $source = Find-Test $name
