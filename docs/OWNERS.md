@@ -32,7 +32,7 @@ computer and the person.
 | 2 | automation | `automation/` | Elize, computer 1 (Linux) |
 | 2 | editor framework | `ui/editor` | Elize, computer 1 (Linux) |
 | 3 | linear | `elements/linear` | Elize, computer 1 (Linux) |
-| 3 | connection | `elements/connection` | Elize, computer 1 (Linux) |
+| 3 | connection | `elements/connection` | stagiairopenaec1, Linux (aia08; Codex) |
 | 3 | planar | `elements/planar` | Elize, computer 1 (Linux) |
 | 3 | object | `elements/object` | Elize, computer 1 (Linux) |
 | 3 | pattern | `pattern/common`, `pattern/grids`, `pattern/facade` | Elize, computer 1 (Linux) |
