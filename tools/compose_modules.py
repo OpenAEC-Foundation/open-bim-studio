@@ -27,6 +27,11 @@ SKIPPED_DIRS = {".git", "build", "generated", "tests", "node_modules", "__pycach
 
 # Each point: the dispatcher's header line and how one module's call reads.
 POINTS = {
+    "scene": {
+        "header": "function append bim module scene meshes of {bim model record:modelValue} within {a 64 bit floating-point number:tolerance} reusing {a pointer to a list:previous} keyed {a pointer to a list:keys} refreshing {a pointer to a list:remadeIds} with reinforcement detail {boolean:rebarDetail} into {a pointer to a list:result}:",
+        "call": "append bim scene meshes of modelValue within tolerance reusing previous keyed keys refreshing remadeIds with reinforcement detail rebarDetail into result with {module} elements",
+        "style": "each",
+    },
     "candidates": {
         "header": "function collect bim module candidates of {bim model record:modelValue} into {a pointer to a list:candidates}:",
         "call": "collect bim candidates of modelValue with {module} elements into candidates",
