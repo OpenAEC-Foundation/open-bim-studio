@@ -16,31 +16,31 @@ computer and the person.
 | 0 | kernel-nurbs | `kernel/nurbs`, `kernel/space` | unassigned |
 | 0 | kernel-brep | `kernel/brep`, `kernel/acis` | unassigned |
 | 1 | bim | `bim/` | maintainer |
-| 2 | viewer | `viewer/` | unassigned |
-| 2 | native format (IFCX) | `exchange/ifcx` | unassigned |
-| 2 | ifc | `ifc/` | unassigned |
-| 2 | dxf and dwg | `exchange/dxf_dwg` | unassigned |
-| 2 | step | `exchange/step` | unassigned |
-| 2 | import | `exchange/import` | unassigned |
-| 2 | views | `views/common` | unassigned |
-| 2 | drawings | `views/drawings` | unassigned |
-| 2 | sheets | `views/sheets` | unassigned |
-| 2 | schedules | `views/schedules` | unassigned |
-| 2 | export | `views/export` | unassigned |
-| 2 | materials | `materials/` | unassigned |
-| 2 | localisation | `localisation/` | unassigned |
-| 2 | automation | `automation/` | unassigned |
-| 2 | editor framework | `ui/editor` | unassigned |
-| 3 | linear | `elements/linear` | unassigned |
-| 3 | connection | `elements/connection` | unassigned |
-| 3 | planar | `elements/planar` | unassigned |
-| 3 | object | `elements/object` | unassigned |
-| 3 | pattern | `pattern/common`, `pattern/grids`, `pattern/facade` | unassigned |
-| 4 | structural | `structural/rebar`, `structural/steel`, `structural/results` | unassigned |
-| 4 | architectural | `architectural/openings`, `architectural/stairs`, `architectural/spaces` | unassigned |
-| 4 | mep | `mep/common` | unassigned |
-| 5 | properties | `ui/properties` | unassigned |
-| 6 | panels | `ui/panels` | unassigned |
+| 2 | viewer | `viewer/` | Elize, computer 1 (Linux) |
+| 2 | native format (IFCX) | `exchange/ifcx` | Elize, computer 1 (Linux) |
+| 2 | ifc | `ifc/` | Elize, computer 1 (Linux) |
+| 2 | dxf and dwg | `exchange/dxf_dwg` | Elize, computer 1 (Linux) |
+| 2 | step | `exchange/step` | Elize, computer 1 (Linux) |
+| 2 | import | `exchange/import` | Elize, computer 1 (Linux) |
+| 2 | views | `views/common` | Elize, computer 1 (Linux) |
+| 2 | drawings | `views/drawings` | Elize, computer 1 (Linux) |
+| 2 | sheets | `views/sheets` | Elize, computer 1 (Linux) |
+| 2 | schedules | `views/schedules` | Elize, computer 1 (Linux) |
+| 2 | export | `views/export` | Elize, computer 1 (Linux) |
+| 2 | materials | `materials/` | Elize, computer 1 (Linux) |
+| 2 | localisation | `localisation/` | Elize, computer 1 (Linux) |
+| 2 | automation | `automation/` | Elize, computer 1 (Linux) |
+| 2 | editor framework | `ui/editor` | Elize, computer 1 (Linux) |
+| 3 | linear | `elements/linear` | Elize, computer 1 (Linux) |
+| 3 | connection | `elements/connection` | Elize, computer 1 (Linux) |
+| 3 | planar | `elements/planar` | Elize, computer 1 (Linux) |
+| 3 | object | `elements/object` | Elize, computer 1 (Linux) |
+| 3 | pattern | `pattern/common`, `pattern/grids`, `pattern/facade` | Elize, computer 1 (Linux) |
+| 4 | structural | `structural/rebar`, `structural/steel`, `structural/results` | Elize, computer 1 (Linux) |
+| 4 | architectural | `architectural/openings`, `architectural/stairs`, `architectural/spaces` | Elize, computer 1 (Linux) |
+| 4 | mep | `mep/common` | Elize, computer 1 (Linux) |
+| 5 | properties | `ui/properties` | Elize, computer 1 (Linux) |
+| 6 | panels | `ui/panels` | Elize, computer 1 (Linux) |
 | 7 | shell | `ui/shell` | maintainer |
 | – | build, CI, installers, platform shim, tools | `build.sh`, `scripts/`, `.github/`, `installer/`, `platform/`, `tools/` | maintainer |
 
