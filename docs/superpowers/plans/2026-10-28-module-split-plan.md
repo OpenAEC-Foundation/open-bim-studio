@@ -52,6 +52,16 @@ kernel groups.
 
 ## Phase E in steps: the kernel seam
 
+Status 2026-10-28, late: steps 1 to 4 are on `main`. The library exposes what
+the application uses: extrusion of a curve chain, the boolean combination,
+the mesh and the mass properties of a mesh, the sphere, the cylinder, the
+faceted solid (flat face encoding) and the visible edges as a wire set; bodies
+cross as handles with retain and release; `tools/kernel_client.py` writes the
+client; five round-trip tests under `kernel/api/tests` compare every result
+with the shared source. Face keys, bounds, slice, section and node pointers
+are used by tests only and stay unexposed until a module needs them. Step 5,
+the application side, is the modules' owner's pull request.
+
 The library is `kernel/brep` with `kernel/acis` (31,754 lines); `kernel/core`,
 `kernel/fast`, `kernel/planar` and `kernel/nurbs` stay shared source, imported
 by the library and by every program. The compiler: the pinned `c2d32bea` with
