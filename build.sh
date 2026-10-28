@@ -72,10 +72,16 @@ write_composition() {
     # The model record and the module dispatchers, from the MODULE manifests.
     python3 -B tools/compose_modules.py --root . --out generated > /dev/null
 }
+write_kernel_client() {
+    # The kernel library's client, from its exposed functions (kernel/api/client.dl
+    # is committed; this keeps it current, and git shows when it changed).
+    python3 -B tools/kernel_client.py --exposed kernel/api/exposed.dl --out kernel/api/client.dl > /dev/null
+}
 generate() {
     write_platform
     write_self_test_stub
     write_composition
+    write_kernel_client
     mkdir -p build/shaders "$out/shaders"
     cp viewer/shaders/*.spv build/shaders/
     if [ "$out/shaders" != "$here/build/shaders" ]; then cp viewer/shaders/*.spv "$out/shaders/"; fi

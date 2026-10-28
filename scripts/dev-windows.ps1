@@ -40,6 +40,8 @@ if (-not (Test-Path 'generated\self_test.dl')) {
 }
 & python -B tools\compose_modules.py --root $repo --out (Join-Path $repo 'generated') | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Composing the modules failed.' }
+& python -B tools\kernel_client.py --exposed kernel/api/exposed.dl --out kernel/api/client.dl | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Writing the kernel client failed.' }
 Copy-Item viewer\shaders\*.spv build\shaders -Force
 
 # The platform shim and the kernel library, linked as obs_platform and obskernel.
