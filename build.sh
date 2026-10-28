@@ -7,6 +7,7 @@
 #   ./build.sh dev-test NAME [NAME...]       editor and up to 3 headless checks in one compile
 #   ./build.sh run-dev [ARGS...]             run the development build
 #   ./build.sh run [ARGS...]                 run the editor (--example, FILE, --import ...)
+#   ./build.sh kernel                        the kernel library build/kernel/libobskernel.a (also run by every other command)
 #   ./build.sh test [NAME...]                headless tests (all when no name), BIM_JOBS at a time
 #   ./build.sh bundle [NAME...]              the same tests compiled once as one program
 #   ./build.sh probe NAME                    compile one manual tools/probes/ probe
@@ -104,12 +105,28 @@ cc -std=c11 -O2 -fPIC -c platform/obs_platform.c -o "$out/platform/obs_platform.
 ar rcs "$out/platform/libobs_platform.a" "$out/platform/obs_platform.o"
 export LIBRARY_PATH="$out/platform${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
+# The kernel library (module split plan, phase E): kernel/api/exposed.dl
+# compiled as a definition-only object into build/kernel/libobskernel.a,
+# rebuilt when any kernel source is newer than the archive. Every program
+# links it by the name "obskernel" through LIBRARY_PATH.
+build_kernel_library() {
+    mkdir -p "$out/kernel"
+    archive="$out/kernel/libobskernel.a"
+    if [ ! -f "$archive" ] || [ -n "$(find kernel -name '*.dl' -newer "$archive" -print -quit)" ]; then
+        if ! "$dynlex" kernel/api/exposed.dl --emit-object --no-main -O2 -o "$out/kernel/obskernel.o" > "$out/kernel/obskernel.diag" 2>&1 || [ -s "$out/kernel/obskernel.diag" ]; then
+            echo 'kernel library DIAG'; head -20 "$out/kernel/obskernel.diag"; exit 1
+        fi
+        ar rcs "$archive" "$out/kernel/obskernel.o"
+        echo "kernel library: $archive"
+    fi
+    export LIBRARY_PATH="$out/kernel${LIBRARY_PATH:+:$LIBRARY_PATH}"
+}
 # Tests live in each module's tests/ directory; a name is looked up there.
 test_source() {
-    find . -path ./build -prune -o -path ./kernel -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/$1.dl" -print -quit
+    find . -path ./build -prune -o -path ./kernel/tests -prune -o -path ./kernel/reference -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/$1.dl" -print -quit
 }
 all_test_names() {
-    find . -path ./build -prune -o -path ./kernel -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/*.expected.txt" -print | sed 's#.*/##; s#\.expected\.txt$##' | sort
+    find . -path ./build -prune -o -path ./kernel/tests -prune -o -path ./kernel/reference -prune -o -path ./tools -prune -o -path ./generated -prune -o         -type f -path "*/tests/*.expected.txt" -print | sed 's#.*/##; s#\.expected\.txt$##' | sort
 }
 # Compiles a test by name, runs it and compares with its expected output;
 # prints one line and writes $out/tests/NAME.result (0 or 1).
@@ -132,6 +149,7 @@ run_one_test() {
 export -f run_one_test test_source
 export dynlex out
 
+if [ "$command" != kernel ]; then build_kernel_library; fi
 case "$command" in
     app)
         "$dynlex" ui/shell/main.dl -O2 -o "$out/open-bim-studio"
@@ -200,6 +218,9 @@ case "$command" in
         fi
         python3 tools/bundle_tests.py split "$out/tests/bundle.out" generated/bundle.expected.txt "$out/tests/bundled"
         exit "$runtime_status" ;;
+    kernel)
+        build_kernel_library
+        ;;
     probe|run-probe)
         probe_name=${1:-}
         case "$probe_name" in

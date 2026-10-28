@@ -27,8 +27,11 @@ imported, matched, typed and generated), `docs/subject_and_chaining.md`,
   import defines, as long as some file in the program imports the definition
   (measured 2026-10-28). Import cycles compile. Still import what you use, for
   readers and for `scripts/check-layers.sh`.
-- `the string form of "text"` and the other string patterns need
-  `import lib/string.dl`; JSON needs `lib/json.dl`. When the compiler says
+- `return`, `set`, `ignore`, `print … as a line` and the list patterns come from
+  `lib/std.dl`; a file that uses them imports it (a definition-only library
+  file compiled on its own found this out: without the import, `return 1` is
+  "This pattern couldn't be resolved"). `the string form of "text"` and the
+  other string patterns need `import lib/string.dl`; JSON needs `lib/json.dl`. When the compiler says
   "This pattern couldn't be resolved", check the imports and the closure before
   the spelling: the message is the same for a missing import, a typo and a
   type that matches no overload.

@@ -54,12 +54,19 @@ try {
     $dependencyLib = Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT 'lib'
     if (-not (Test-Path "$dependencyLib\z.lib")) { throw "Missing zlib import library: $dependencyLib\z.lib" }
     if (-not (Test-Path "$dependencyLib\libpng16.lib")) { throw "Missing PNG import library: $dependencyLib\libpng16.lib" }
+    # The kernel library (phase E of the module split): kernel/api/exposed.dl
+    # as a definition-only object, archived as libobskernel.a beside the shim.
+    $kernelObject = Join-Path $outPath 'obskernel.o'
+    $diagnostics = & $compiler kernel/api/exposed.dl --emit-object --no-main -O2 -o $kernelObject 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { $diagnostics | Write-Output; throw 'Kernel library compilation failed or emitted diagnostics.' }
+    & "$toolBin\llvm-ar.exe" rcs "$outPath\libobskernel.a" $kernelObject
+    if ($LASTEXITCODE -ne 0) { throw 'Kernel library archive failed.' }
     $env:LIBRARY_PATH = "$outPath;$dependencyLib;$env:LIBRARY_PATH"
     $env:LIB = "$outPath;$dependencyLib;$env:LIB"
 
-    foreach ($name in 'ui_layout', 'plan_pan', 'text_glyphs', 'png_library') {
+    foreach ($name in 'link', 'ui_layout', 'plan_pan', 'text_glyphs', 'png_library') {
         $program = "$outPath\check-$name.exe"
-        $source = Get-ChildItem -Path $repoPath -Recurse -Filter "$name.dl" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]tests[\\/]' -and $_.FullName -notmatch '[\\/](kernel|tools|build|generated)[\\/]' } | Select-Object -First 1
+        $source = Get-ChildItem -Path $repoPath -Recurse -Filter "$name.dl" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]tests[\\/]' -and $_.FullName -notmatch '[\\/](tools|build|generated)[\\/]' -and $_.FullName -notmatch '[\\/]kernel[\\/](tests|reference)[\\/]' } | Select-Object -First 1
         if (-not $source) { throw "No */tests/$name.dl in the repository." }
         $diagnostics = & $compiler $source.FullName -O0 -o $program 2>&1
         $compileCode = $LASTEXITCODE

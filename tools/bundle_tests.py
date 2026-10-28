@@ -21,7 +21,8 @@ from pathlib import Path
 def find_test(root, name):
     """The test's source, <module>/tests/<name>.dl, outside the kernel and the tools."""
     for candidate in sorted(root.glob(f"*/tests/{name}.dl")) + sorted(root.glob(f"*/*/tests/{name}.dl")):
-        if candidate.relative_to(root).parts[0] not in ("kernel", "tools", "build", "generated"):
+        parts = candidate.relative_to(root).parts
+        if parts[0] not in ("tools", "build", "generated") and parts[:2] not in (("kernel", "tests"), ("kernel", "reference")):
             return candidate
     sys.exit(f"{name}: no */tests/{name}.dl under {root}")
 
