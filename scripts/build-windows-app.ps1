@@ -15,7 +15,8 @@ param(
     [string] $Version = '0.1.1'
 )
 $ErrorActionPreference = 'Stop'
-if (-not $IsWindows) { throw 'This script requires native Windows, not WSL.' }
+# $IsWindows exists from PowerShell 6 on; Windows PowerShell 5.1 only runs on Windows.
+if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) { throw 'This script requires native Windows, not WSL.' }
 $treePath = (Resolve-Path $CompilerTree).Path
 $repoPath = (Resolve-Path $Repo).Path
 New-Item -ItemType Directory -Force $Output | Out-Null
