@@ -4,7 +4,7 @@
 ceilings, roofs, floors, frames and finishes, including their manufacture and material use?
 
 **Status:** proposed implementation contract, 29 October 2026. This is a design, not a claim
-that the native application already implements every operation. The [delivery matrix](#delivery)
+that the native application already implements every operation. The [delivery matrix](#15-delivery)
 distinguishes the existing application, this change and subsequent implementation work.
 The [Dutch library](../../localisation/nl/building-systems/README.md) supplies versioned
 authoring data and evidence. No structural, fire, acoustic or moisture performance is inferred
