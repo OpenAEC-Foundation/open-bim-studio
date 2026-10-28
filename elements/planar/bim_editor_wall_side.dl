@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MPL-2.0
+# Which side of a wall is its exterior, and which line the wall tool draws
+# on. Flip (command 2206, in the ribbon's Build group) runs the selected
+# wall the other way, so that its exterior side, where its first layer
+# faces, changes side: its openings keep their places, its arc keeps its
+# bend, its lean and rise their direction, its contour its place along it,
+# and its masonry module stays counted from the same corner. Line (2207)
+# moves the wall tool's line on: centreline, exterior face, interior face
+# (`the bim editor wall line shift`, `bim_editor_core.dl`).
+import ui/editor/bim_editor_core.dl
+
+# The name of wall line `lineCode`.
+function the bim wall line name of {integer:lineCode}:
+    execute:
+        if lineCode = bim wall exterior line:
+            return the string form of "exterior face"
+        if lineCode = bim wall interior line:
+            return the string form of "interior face"
+        return the string form of "centreline"
+
+# The wall tool draws on the next line: centreline, exterior face, interior face.
+function cycle bim editor wall line in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's wallLine to the remainder of (editor's wallLine + 1) divided by 3
+        set editor's message to (the string form of "Wall line: ") + (the bim wall line name of editor's wallLine)
+
+# The contour of wall `wallId` turned round after the wall came to run the
+# other way: each corner as far from the new start as it was from the old
+# one, from the same first corner backwards, so that its arcs' spans come in
+# reverse (as a building system's, `turn bim face contour of … round`).
+function turn bim wall face contour of {a 64 bit integer:wallId} round over {a 64 bit floating-point number:run} in {a pointer to a bim model record:target}:
+    execute:
+        set contourList to the bim face contour of wallId in (@intrinsic("dereference", target))
+        if (the length of contourList) >= 3:
+            set turnedRound to an empty list of a cad vector2
+            set firstCorner to the item at 0 in contourList
+            append (a cad vector2 with x (run - firstCorner's x) and y firstCorner's y) to turnedRound
+            set contourCursor to (the length of contourList) - 1
+            loop while contourCursor >= 1:
+                set corner to the item at contourCursor in contourList
+                append (a cad vector2 with x (run - corner's x) and y corner's y) to turnedRound
+                set contourCursor to contourCursor - 1
+            set spanList to the bim boundary spans of wallId in (@intrinsic("dereference", target))
+            set reversedSpans to an empty list of an integer
+            set spanCursor to (the length of spanList) - 1
+            loop while spanCursor >= 0:
+                append (the item at spanCursor in spanList) to reversedSpans
+                set spanCursor to spanCursor - 1
+            keep bim face contour turnedRound of wallId in target
+            keep bim boundary spans reversedSpans of wallId in target
+            free turnedRound
+            free reversedSpans
+            free spanList
+        free contourList
+
+# The selected wall runs the other way: its exterior side changes side. One
+# transaction, one undo.
+function flip bim editor selected wall in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind != bim wall picked:
+            set editor's message to the string form of "Flip: select a wall first"
+            return nothing
+        set target to the address of (editor's documentValue's current)
+        set wallFound to the bim wall index of editor's selectionId in (@intrinsic("dereference", target))
+        if wallFound's valid = false:
+            set editor's message to the string form of "Flip: select a wall first"
+            return nothing
+        set wallId to editor's selectionId
+        set wallValue to the item at wallFound's position in (target's walls's values)
+        set run to the bim centreline length of wallValue
+        set moduleReading to the bim setting (bim masonry module setting) of wallId in (@intrinsic("dereference", target))
+        set endReading to the bim setting (bim masonry end setting) of wallId in (@intrinsic("dereference", target))
+        begin bim transaction in (the address of (editor's documentValue))
+        set swapped to move bim wall wallId to (wallValue's finish) and (wallValue's start) in target
+        if swapped = false:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Flip: refused"
+            return nothing
+        # The arc, the lean and the rise keep their place in the world: their
+        # sign is toward the exterior, which is now the other side.
+        ignore bend bim wall wallId by (0.0 - wallValue's bulge) in target
+        ignore set bim wall wallId lean to (0.0 - wallValue's lean) and rise to (0.0 - wallValue's rise) in target
+        loop openingCursor from 0 to the length of (target's openings's values):
+            set openingValue to the item at openingCursor in (target's openings's values)
+            if openingValue's hostId = wallId:
+                ignore move bim opening (openingValue's id) to (run - openingValue's offset) in target
+        turn bim wall face contour of wallId round over run in target
+        # A masonry module counted from the start is now counted from the
+        # finish, and the other way round: the same corner of the building.
+        if moduleReading's found and (moduleReading's value > (0 as a 64 bit integer)):
+            if endReading's found and (endReading's value = (1 as a 64 bit integer)):
+                set bim setting (bim masonry end setting) of wallId to (0 as a 64 bit integer) keeping false in target
+            else:
+                set bim setting (bim masonry end setting) of wallId to (1 as a 64 bit integer) keeping true in target
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to (the string form of "Wall ") + ((the string form of wallId) + (the string form of " flipped: its exterior side is on the other side"))

@@ -1,0 +1,192 @@
+# Windows build and package of Open BIM Studio: the DynLex compiler from the
+# v0.1 source snapshot (as windows-compiler.yml), then the application from
+# this repository (compiled from its root, with the Windows platform shim and
+# the generated import files), headless checks, and the portable ZIP and the
+# MSI as artifacts. Nothing is published or signed.
+name: Windows app (v0.1)
+
+on:
+  push:
+    branches: ['restructure/**']
+  workflow_dispatch:
+
+# One run per branch: a new push cancels the run of the previous commit.
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # A draft release's assets may need `contents: write` to be listed; the
+  # download step says so when it cannot find the asset.
+  contents: read
+
+jobs:
+  app:
+    runs-on: windows-latest
+    # The pinned LLVM fork is built from source on the first run.
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: dynlex
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: open-bim-studio
+
+      - name: Download the v0.1 source snapshot
+        working-directory: .
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1 --repo "${{ github.repository }}" `
+            --pattern "Open-BIM-Studio-0.1-source.tar.gz" --dir snapshot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the v0.1 source asset; a draft release may need contents: write."
+          }
+          New-Item -ItemType Directory -Force dynlex | Out-Null
+          tar -xzf snapshot/Open-BIM-Studio-0.1-source.tar.gz -C dynlex
+          if ($LASTEXITCODE -ne 0) { throw "Could not unpack the source snapshot." }
+          if (-not (Test-Path dynlex/scripts/install.ps1)) {
+            throw "The snapshot has no scripts/install.ps1 at its root."
+          }
+
+      - name: Apply the compiler patches (unless already in)
+        shell: pwsh
+        run: |
+          $patches = "../open-bim-studio/patches"
+          foreach ($name in "dynlex-compiler-local", "dynlex-pattern-reference-index", "dynlex-pattern-precedence-families", "dynlex-shader-extensions", "dynlex-windows-library-names", "dynlex-windows-compiler-stack") {
+            git apply -p1 --whitespace=nowarn --check -R "$patches/$name.patch" 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "$name is already in the snapshot"; continue }
+            git apply -p1 --whitespace=nowarn "$patches/$name.patch"
+            if ($LASTEXITCODE -ne 0) { throw "Patch $name does not apply to the snapshot." }
+            Write-Host "applied $name"
+          }
+
+      - name: Restore the pinned toolchains
+        uses: actions/cache@v6
+        with:
+          path: |
+            dynlex/.cache/llvm-toolchain
+            dynlex/.cache/llvm-mingw
+            dynlex/.cache/vcpkg
+            dynlex/.cache/vcpkg-installed
+          key: obs-windows-toolchains-${{ runner.arch }}-${{ hashFiles('dynlex/metadata/LLVM_TOOLCHAIN', 'dynlex/metadata/LLVM_MINGW_TOOLCHAIN', 'dynlex/metadata/VCPKG_TOOLCHAIN', 'dynlex/vcpkg.json', 'dynlex/cmake/vcpkg-triplets/*.cmake', 'dynlex/scripts/llvm_toolchain.sh', 'dynlex/scripts/llvm-mingw-toolchain.ps1') }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: ./scripts/install.ps1
+
+      - name: Build the compiler (Release)
+        shell: bash
+        run: ./scripts/build.sh --release
+
+      - name: Check compiler pattern regressions and scaling
+        shell: pwsh
+        run: python ../open-bim-studio/tools/check_compiler_patterns.py --compiler build/dynlex.exe
+
+      - name: Generate the application's import files and shaders
+        shell: pwsh
+        working-directory: open-bim-studio
+        # As build.sh generate does on Linux: the Windows window style, the
+        # no-op self-test entry, and the prebuilt shaders where the program
+        # reads them. lib/json.dl in this repository shadows the snapshot's.
+        run: |
+          New-Item -ItemType Directory -Force generated, build/shaders | Out-Null
+          [IO.File]::WriteAllText("$PWD/generated/platform.dl", "import ui/shell/window_style_windows.dl`n")
+          $stub = "# Written by the Windows app workflow: the self-test entry of ui/shell/main.dl.`n" +
+            "function run bim app checks:`n    execute:`n        ignore 0`n"
+          [IO.File]::WriteAllText("$PWD/generated/self_test.dl", $stub)
+          python -B tools/compose_modules.py --root . --out generated
+          Copy-Item viewer/shaders/*.spv build/shaders/
+
+      - name: Build the platform shim
+        shell: pwsh
+        # The static library the application links as "obs_platform", where the
+        # compiler's Windows link looks for libraries.
+        run: |
+          $tools = Join-Path $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT "bin"
+          & (Join-Path $tools "cc.exe") "--target=$env:DYNLEX_WINDOWS_TOOLCHAIN_TARGET" -std=c11 -O2 -Wall -Wextra `
+            -c ../open-bim-studio/platform/obs_platform.c -o build/obs_platform.o
+          if ($LASTEXITCODE -ne 0) { throw "The platform shim does not compile." }
+          & (Join-Path $tools "llvm-ar.exe") rcs build/libobs_platform.a build/obs_platform.o
+          if ($LASTEXITCODE -ne 0) { throw "Could not archive the platform shim." }
+          Copy-Item -Force build/libobs_platform.a (Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT "lib")
+
+      - name: Headless checks of the application
+        shell: pwsh
+        working-directory: open-bim-studio
+        # platform: the shim itself; ui_layout: no library; plan_pan: GLFW
+        # and the Vulkan loader linked; text_glyphs: FreeType too. None opens
+        # a window. Compiled from this repository's root.
+        run: |
+          $compiler = (Resolve-Path ../dynlex/build/dynlex.exe).Path
+          New-Item -ItemType Directory -Force ../dynlex/build/checks | Out-Null
+          $failed = @()
+          foreach ($name in "platform", "ui_layout", "plan_pan", "text_glyphs") {
+            $program = (Resolve-Path ../dynlex/build/checks).Path + "\check-$name.exe"
+            $source = Get-ChildItem -Path . -Recurse -Filter "$name.dl" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]tests[\\/]' -and $_.FullName -notmatch '[\\/](kernel|tools|build|generated)[\\/]' } | Select-Object -First 1
+            if (-not $source) { throw "No */tests/$name.dl in the repository." }
+            & $compiler $source.FullName -o $program
+            if ($LASTEXITCODE -ne 0) { $failed += "$name (compile)"; continue }
+            $output = (& $program | Out-String) -replace "`r`n", "`n"
+            $exitCode = $LASTEXITCODE
+            $expected = (Get-Content -Raw ($source.FullName -replace '\.dl$', '.expected.txt')) -replace "`r`n", "`n"
+            if (($exitCode -ne 0) -or ($output.TrimEnd() -ne $expected.TrimEnd())) {
+              Write-Host "--- $name (exit $exitCode)"; Write-Host $output
+              $failed += $name
+            } else {
+              Write-Host "PASS $name"
+            }
+          }
+          if ($failed.Count -gt 0) { throw "Failed: $($failed -join ', ')" }
+
+      - name: Build Open BIM Studio
+        shell: pwsh
+        working-directory: open-bim-studio
+        run: |
+          $compiler = (Resolve-Path ../dynlex/build/dynlex.exe).Path
+          New-Item -ItemType Directory -Force ../dynlex/build/app | Out-Null
+          $app = (Resolve-Path ../dynlex/build/app).Path + "\open-bim-studio.exe"
+          & $compiler ui/shell/main.dl -O2 -o $app
+          if ($LASTEXITCODE -ne 0) { throw "Open BIM Studio does not compile." }
+          Get-ChildItem ../dynlex/build/app | Format-Table Name, Length
+
+      - name: Check the program's PE files
+        shell: pwsh
+        # The fork's checks: x64 executables, and only DLLs that are shipped
+        # beside the program or come with Windows.
+        run: |
+          $files = @(Get-ChildItem -Path build/app -Recurse -File -Include *.exe, *.dll).FullName
+          ./scripts/verify-windows-pe-files.ps1 -Files $files -Architecture x64
+
+      - name: Install the WiX Toolset 3
+        shell: pwsh
+        run: |
+          choco install wixtoolset -y --no-progress
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            $wixBin = Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.14\bin"
+            if (-not (Test-Path (Join-Path $wixBin "candle.exe"))) {
+              $wixBin = (Get-ChildItem "${env:ProgramFiles(x86)}" -Directory -Filter "WiX Toolset v3*" | Select-Object -First 1).FullName + "\bin"
+            }
+            if (-not (Test-Path (Join-Path $wixBin "candle.exe"))) { throw "WiX was installed but candle.exe could not be found." }
+            Add-Content -Path $env:GITHUB_PATH -Value $wixBin
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          ../open-bim-studio/installer/make-windows-package.ps1 `
+            -Program build/app/open-bim-studio.exe -Repo ../open-bim-studio -Shaders ../open-bim-studio/build/shaders `
+            -Output build/package -Version 0.1.0 `
+            -DependencyRoot $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT -ToolchainRoot $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT
+          if (-not (Test-Path build/package/Open-BIM-Studio-0.1.0-windows-x64.msi)) { throw "No MSI was made." }
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: open-bim-studio-windows-x64-0.1.0
+          path: |
+            dynlex/build/package/*.zip
+            dynlex/build/package/*.msi
+          if-no-files-found: error

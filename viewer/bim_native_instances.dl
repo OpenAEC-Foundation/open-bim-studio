@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: MPL-2.0
+# Native render geometry grouped independently of object IDs and materials.
+# A rigid frame preserves scale, handedness, openings and triangle winding.
+import viewer/bim_scene.dl
+
+class:
+    patterns:
+        [a|] bim native placement record
+    members:
+        origin as a cad vector3
+        u as a cad vector3
+        v as a cad vector3
+        w as a cad vector3
+
+class:
+    patterns:
+        [a|] bim native instances record
+    members:
+        prototypes as the type of (a cad topology list of a fast mesh record)
+        placements as the type of (a cad topology list of a bim native placement record)
+        prototypeOf as the type of (a cad topology list of an integer)
+        counts as the type of (a cad topology list of an integer)
+
+function the bim native placement of {fast mesh record:sourceShape}:
+    execute:
+        set anchor to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set uAxis to a cad vector3 with x 1.0, y 0.0 and z 0.0
+        set vAxis to a cad vector3 with x 0.0, y 1.0 and z 0.0
+        set wAxis to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        if (the length of (sourceShape's positions's values)) > 0:
+            set anchor to the item at 0 in (sourceShape's positions's values)
+        set cornerCursor to 0
+        set oriented to false
+        loop while ((cornerCursor + 2) < (the length of (sourceShape's triangles's values))) and (oriented = false):
+            set firstSpot to the item at (the item at cornerCursor in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+            set secondSpot to the item at (the item at (cornerCursor + 1) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+            set thirdSpot to the item at (the item at (cornerCursor + 2) in (sourceShape's triangles's values)) in (sourceShape's positions's values)
+            set along to the cad difference of secondSpot and firstSpot
+            set normal to the cad cross of along and (the cad difference of thirdSpot and firstSpot)
+            set alongLength to the cad length of along
+            set normalLength to the cad length of normal
+            if (alongLength > 1e-10) and (normalLength > 1e-12):
+                set anchor to firstSpot
+                set uAxis to along scaled by (1.0 / alongLength)
+                set wAxis to normal scaled by (1.0 / normalLength)
+                set vAxis to the cad cross of wAxis and uAxis
+                set oriented to true
+            set cornerCursor to cornerCursor + 3
+        return @intrinsic("construct", a bim native placement record, anchor, uAxis, vAxis, wAxis)
+
+function the bim native local mesh of {fast mesh record:sourceShape} in {bim native placement record:placement}:
+    execute:
+        set localShape to an empty fast mesh
+        set localShape's triangles to sourceShape's triangles
+        loop pointCursor from 0 to the length of (sourceShape's positions's values):
+            set delta to the cad difference of (the item at pointCursor in (sourceShape's positions's values)) and placement's origin
+            append (a cad vector3 with x (the cad dot of delta and placement's u), y (the cad dot of delta and placement's v) and z (the cad dot of delta and placement's w)) to (localShape's positions's values)
+        return localShape
+
+function the bim native hash of {fast mesh record:localShape}:
+    execute:
+        set hashValue to (the length of (localShape's positions's values)) as a 64 bit integer
+        loop indexCursor from 0 to the length of (localShape's triangles's values):
+            set hashValue to the remainder of ((hashValue * (31 as a 64 bit integer)) + ((the item at indexCursor in (localShape's triangles's values)) as a 64 bit integer)) divided by (1000000007 as a 64 bit integer)
+        loop pointCursor from 0 to the length of (localShape's positions's values):
+            set spot to the item at pointCursor in (localShape's positions's values)
+            loop axisCursor from 0 to 3:
+                set coordinate to spot's x
+                if axisCursor = 1:
+                    set coordinate to spot's y
+                else if axisCursor = 2:
+                    set coordinate to spot's z
+                set quantized to (the rounded value of (coordinate * 1000000.0)) as a 64 bit integer
+                set hashValue to the remainder of ((hashValue * (31 as a 64 bit integer)) + quantized) divided by (1000000007 as a 64 bit integer)
+        return the absolute value of hashValue
+
+function bim native mesh {fast mesh record:leftShape} matches {fast mesh record:rightShape}:
+    execute:
+        if (the length of (leftShape's positions's values)) != (the length of (rightShape's positions's values)):
+            return false
+        if (the length of (leftShape's triangles's values)) != (the length of (rightShape's triangles's values)):
+            return false
+        loop indexCursor from 0 to the length of (leftShape's triangles's values):
+            if (the item at indexCursor in (leftShape's triangles's values)) != (the item at indexCursor in (rightShape's triangles's values)):
+                return false
+        loop pointCursor from 0 to the length of (leftShape's positions's values):
+            set delta to the cad difference of (the item at pointCursor in (leftShape's positions's values)) and (the item at pointCursor in (rightShape's positions's values))
+            if (the cad length of delta) > 1e-7:
+                return false
+        return true
+
+function the bim native instances among {a pointer to a list:sourceEntries} leaving out {a pointer to a list:hiddenIds}:
+    execute:
+        set batch to @intrinsic("construct", a bim native instances record, a cad topology list of a fast mesh record, a cad topology list of a bim native placement record, a cad topology list of an integer, a cad topology list of an integer)
+        set capacity to ((the length of sourceEntries) * 2) + 1
+        set heads to an empty list of an integer
+        set links to an empty list of an integer
+        loop bucketCursor from 0 to capacity:
+            append -1 to heads
+        loop entryCursor from 0 to the length of sourceEntries:
+            set entryValue to the item at entryCursor in sourceEntries
+            set placement to the bim native placement of entryValue's shape
+            append placement to (batch's placements's values)
+            set prototypeIndex to -1
+            if ((bim scene mesh entryValue draws lines) = false) and ((bim element entryValue's elementId is among hiddenIds) = false):
+                if (the length of (entryValue's shape's triangles's values)) > 0:
+                    set localShape to the bim native local mesh of entryValue's shape in placement
+                    set bucket to (the remainder of (the bim native hash of localShape) divided by (capacity as a 64 bit integer)) as an integer
+                    set candidateIndex to the item at bucket in heads
+                    loop while (candidateIndex >= 0) and (prototypeIndex < 0):
+                        if bim native mesh localShape matches (the item at candidateIndex in (batch's prototypes's values)):
+                            set prototypeIndex to candidateIndex
+                        set candidateIndex to the item at candidateIndex in links
+                    if prototypeIndex < 0:
+                        set prototypeIndex to the length of (batch's prototypes's values)
+                        append localShape to (batch's prototypes's values)
+                        append 0 to (batch's counts's values)
+                        append (the item at bucket in heads) to links
+                        replace item at index bucket in heads with prototypeIndex
+                    set previousCount to the item at prototypeIndex in (batch's counts's values)
+                    replace item at index prototypeIndex in (batch's counts's values) with (previousCount + 1)
+            append prototypeIndex to (batch's prototypeOf's values)
+        free heads
+        free links
+        return batch
+
+function bim native entry {integer:entryIndex} is shared in {bim native instances record:batch}:
+    execute:
+        set prototypeIndex to the item at entryIndex in (batch's prototypeOf's values)
+        if prototypeIndex < 0:
+            return false
+        return (the item at prototypeIndex in (batch's counts's values)) > 1
+

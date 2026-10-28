@@ -2,12 +2,27 @@
 
 ## What this repository is
 
-The native Open BIM Studio application lives in spikes/dynlex-bim-slice and is
-implemented in DynLex. The repository also retains its architecture and research
-programme. Main is the shared development baseline; use short task branches and
-PRs. Read docs/WERKBORD.md and docs/TWEE-COMPUTERS.md before parallel changes.
-Compiler work belongs in its separate checkout. Run one DynLex compiler per
-physical computer, and keep private project data out of this public repository.
+The native Open BIM Studio application is implemented in DynLex and lives in
+module directories, one per domain in six layers: `kernel/` (the CAD kernel, its
+tests and notes), `bim/`, the services `viewer/`, `exchange/`, `ifc/`, `views/`,
+`materials/`, `localisation/`, `automation/` and `ui/editor/`, the shape classes
+`elements/` and `pattern/`, the disciplines `structural/`, `architectural/` and
+`mep/`, and the UI `ui/properties/`, `ui/panels/` and `ui/shell/` (`main.dl`),
+with `tools/`, `installer/`, `platform/` (the C shim), `patches/` (compiler
+patches until they are upstream) and `lib/` (overrides of the compiler checkout's
+library, tied to upstream PRs). Each module holds its tests in `tests/` and a
+`MODULE` manifest; `tools/compose_modules.py` composes the model record and the
+dispatchers from the manifests into `generated/`. `build.sh` at the root builds
+it; the compiler is a separate DynLex checkout named by `.dynlex-root.local` or
+`DYNLEX_ROOT`. `scripts/check-layers.sh` enforces the import direction between
+the layers against `scripts/layer-baseline.txt` (`docs/notes/layering.md`);
+`docs/OWNERS.md` names the owner per module and `docs/notes/dynlex-guide.md` is
+the language guide to read first. The repository also retains its architecture and
+research programme. Main is the shared development baseline; use short task
+branches and PRs. Read docs/WERKBORD.md and docs/TWEE-COMPUTERS.md before
+parallel changes. Compiler work belongs in its separate checkout. Run one DynLex
+compiler per physical computer, and keep private project data out of this
+public repository.
 
 Read `README.md` and `docs/roadmap.md` before acting. Read `docs/risks.md` to see what is
 actually open.
@@ -66,8 +81,8 @@ not silently contradict it in other documents. To change it, write a new ADR tha
 
 ## What not to do
 
-- Do not add product code, scaffolding, or build tooling during phases 0–3. Experiments belong
-  in `spikes/`, clearly marked as throwaway.
+- Product code lives in the unit directories; experiments belong in `spikes/`, clearly marked
+  as throwaway, and never become product code by staying there.
 - Do not commit large binaries. Benchmark models go in `reference/` with acquisition
   instructions; see `reference/README.md` and `.gitignore`.
 - Do not present the working hypothesis in `docs/architecture/layers.md` as settled. It is

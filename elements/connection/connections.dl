@@ -1,0 +1,291 @@
+# SPDX-License-Identifier: MPL-2.0
+# Modular connection definitions. No dependency on the BIM editor or renderer.
+# Semantic member references -> parametric voids and independent connection parts.
+import kernel/core/core.dl
+import kernel/core/topology_list.dl
+import lib/text.dl
+
+class:
+    patterns:
+        [a|] connection member
+    members:
+        elementId as a 64 bit integer
+        # 0 start, 1 finish; 2 is a non-owning host-axis reference.
+        end as an integer
+        setback as a 64 bit floating-point number
+        # Fraction along the source axis, used only by an interior host.
+        position as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] connection addition
+    members:
+        # Stable within its node, not a list index.
+        key as an integer
+        memberId as a 64 bit integer
+        # 0 plate, 1 bolts, 2 screws, 3 anchors, 4 fillet weld, 5 butt weld.
+        # Welds use thickness as nominal size, length along axis; no grid/holes.
+        kind as an integer
+        origin as a cad vector3
+        axis as a cad vector3
+        width as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+        thickness as a 64 bit floating-point number
+        diameter as a 64 bit floating-point number
+        length as a 64 bit floating-point number
+        rows as an integer
+        columns as an integer
+        rowPitch as a 64 bit floating-point number
+        columnPitch as a 64 bit floating-point number
+        holeDiameter as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] connection definition
+    members:
+        id as a 64 bit integer
+        levelId as a 64 bit integer
+        name as a string
+        # Simple = 0, Complex = 1. Styles: butt = 0, miter = 1, base plate = 2.
+        category as an integer
+        style as an integer
+        origin as a cad vector3
+        members as the type of (a cad topology list of a connection member)
+        additions as the type of (a cad topology list of a connection addition)
+
+# Input geometry supplied by the BIM adapter on each evaluation.
+class:
+    patterns:
+        [a|] connection member frame
+    members:
+        elementId as a 64 bit integer
+        endpoint as a cad vector3
+        inward as a cad vector3
+        length as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] connection void
+    members:
+        memberId as a 64 bit integer
+        # Plane trim = 0 (keep positive side); circular hole = 1.
+        kind as an integer
+        origin as a cad vector3
+        direction as a cad vector3
+        diameter as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+        sourceKey as an integer
+
+class:
+    patterns:
+        [a|] connection fastener
+    members:
+        sourceKey as an integer
+        memberId as a 64 bit integer
+        kind as an integer
+        origin as a cad vector3
+        axis as a cad vector3
+        diameter as a 64 bit floating-point number
+        length as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] connection result
+    members:
+        valid as a boolean
+        message as a string
+        voids as the type of (a cad topology list of a connection void)
+        fasteners as the type of (a cad topology list of a connection fastener)
+        plates as the type of (a cad topology list of a connection addition)
+        welds as the type of (a cad topology list of a connection addition)
+
+function a connection refusal saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a connection result, false, reason, a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition, a cad topology list of a connection addition)
+
+function the connection category name of {connection definition:spec}:
+    execute:
+        if spec's category = 0:
+            return the string form of "Simple"
+        return the string form of "Complex"
+
+function the connection issue of {connection definition:spec}:
+    execute:
+        if ((the cad length of spec's origin) < 10000000.0) = false:
+            return the string form of "Invalid node origin"
+        if (the length of (spec's additions's values)) > 128:
+            return the string form of "A node supports at most 128 additions"
+        set count to the length of (spec's members's values)
+        set basePlate to (spec's category = 1) and (spec's style = 2)
+        if (count < 1) or (((count < 2) and (spec's style != 2)) and (spec's style != 8)):
+            return the string form of "A joint requires participating members"
+        if (spec's category != 0) and (spec's category != 1):
+            return the string form of "Unknown connection category"
+        if (spec's category = 0) and (count != 2):
+            return the string form of "Simple joints require exactly two members"
+        if basePlate and (count != 1):
+            return the string form of "A base plate requires one column"
+        if (spec's style < 0) or (spec's style > 8):
+            return the string form of "Unknown joint style"
+        if (spec's category = 0) and (spec's style > 1):
+            return the string form of "Steel recipes require the Complex category"
+        if ((spec's style >= 3) and (spec's style <= 7)) and (count != 2):
+            return the string form of "This steel recipe requires two members"
+        if (spec's style = 8) and (count != 1):
+            return the string form of "An end cap requires one member"
+        if spec's style = 1:
+            if count != 2:
+                return the string form of "Simple miter requires exactly two members"
+        loop cursor from 0 to count:
+            set memberValue to the item at cursor in (spec's members's values)
+            if (memberValue's end < 0) or (memberValue's end > 2):
+                return the string form of "Invalid member end"
+            if ((memberValue's setback >= 0.0) and (memberValue's setback < 1000.0)) = false:
+                return the string form of "Invalid member setback"
+            if memberValue's end = 2:
+                if (cursor != 0) or ((basePlate or (spec's style = 1)) or (spec's style = 8)):
+                    return the string form of "Only the primary may be an interior host"
+                if ((memberValue's position >= 0.0) and (memberValue's position <= 1.0)) = false:
+                    return the string form of "Host position must lie on the axis"
+                if memberValue's setback != 0.0:
+                    return the string form of "Interior host has no end setback"
+            else:
+                if memberValue's position != 0.0:
+                    return the string form of "End references must have zero interior position"
+            loop previous from 0 to cursor:
+                if (the item at previous in (spec's members's values))'s elementId = memberValue's elementId:
+                    return the string form of "A member may occur only once"
+        if (spec's category = 0) and ((the length of (spec's additions's values)) > 0):
+            return the string form of "Parts require the Complex category"
+        loop cursor from 0 to the length of (spec's additions's values):
+            set partValue to the item at cursor in (spec's additions's values)
+            if ((the cad length of partValue's origin) < 100000.0) = false:
+                return the string form of "Invalid addition offset"
+            if (partValue's kind < 0) or (partValue's kind > 5):
+                return the string form of "Unknown addition kind"
+            if partValue's key < 1:
+                return the string form of "Addition keys must be positive"
+            loop previous from 0 to cursor:
+                if (the item at previous in (spec's additions's values))'s key = partValue's key:
+                    return the string form of "Duplicate addition key"
+            set belongs to false
+            loop memberCursor from 0 to count:
+                if (the item at memberCursor in (spec's members's values))'s elementId = partValue's memberId:
+                    set belongs to true
+            if belongs = false:
+                return the string form of "Addition refers to a member outside the node"
+            set axisLength to the cad length of partValue's axis
+            if ((axisLength > 0.000001) and (axisLength < 100000.0)) = false:
+                return the string form of "Invalid addition axis"
+            if partValue's kind = 0:
+                if (((partValue's width > 0.0) and (partValue's width < 1000.0)) and ((partValue's height > 0.0) and (partValue's height < 1000.0))) = false:
+                    return the string form of "Invalid plate dimensions"
+                if ((partValue's thickness > 0.0) and (partValue's thickness < 10.0)) = false:
+                    return the string form of "Invalid plate thickness"
+            else if partValue's kind >= 4:
+                if ((partValue's thickness > 0.0) and (partValue's thickness < 0.1)) = false:
+                    return the string form of "Invalid weld size"
+                if ((partValue's length > 0.0) and (partValue's length < 100.0)) = false:
+                    return the string form of "Invalid weld length"
+            else:
+                if ((partValue's diameter > 0.0) and (partValue's diameter < 1.0)) = false:
+                    return the string form of "Invalid fastener diameter"
+                if ((partValue's length > 0.0) and (partValue's length < 10.0)) = false:
+                    return the string form of "Invalid fastener length"
+                if ((partValue's rows < 1) or (partValue's rows > 100)) or ((partValue's columns < 1) or (partValue's columns > 100)):
+                    return the string form of "Fastener grid must be 1..100 by 1..100"
+                if (partValue's rows * partValue's columns) > 1024:
+                    return the string form of "A fastening group supports at most 1024 fasteners"
+                if (((partValue's rowPitch > 0.0) and (partValue's rowPitch < 1000.0)) and ((partValue's columnPitch > 0.0) and (partValue's columnPitch < 1000.0))) = false:
+                    return the string form of "Invalid fastener pitch"
+                if ((partValue's holeDiameter > 0.0) and (partValue's holeDiameter < 1.0)) = false:
+                    return the string form of "Invalid hole diameter"
+                if ((partValue's rows > 1) and (partValue's rowPitch <= partValue's holeDiameter)) or ((partValue's columns > 1) and (partValue's columnPitch <= partValue's holeDiameter)):
+                    return the string form of "Fastener holes overlap"
+                if ((partValue's kind = 1) or (partValue's kind = 3)) and (partValue's holeDiameter < partValue's diameter):
+                    return the string form of "Bolt clearance hole is smaller than the bolt"
+        if basePlate:
+            if (the length of (spec's additions's values)) != 2:
+                return the string form of "Base plate requires one plate and one anchor group"
+            set plateValue to the item at 0 in (spec's additions's values)
+            set anchors to the item at 1 in (spec's additions's values)
+            if (plateValue's kind != 0) or (anchors's kind != 3):
+                return the string form of "Invalid base plate parts"
+            if ((anchors's rows < 2) or (anchors's columns < 2)) or ((anchors's rows > 10) or (anchors's columns > 10)):
+                return the string form of "Base plate anchor grid requires 2 to 10 rows and columns"
+            set extentX to ((anchors's columns - 1) as a 64 bit floating-point number) * anchors's columnPitch
+            set extentY to ((anchors's rows - 1) as a 64 bit floating-point number) * anchors's rowPitch
+            if ((extentX + anchors's holeDiameter) >= plateValue's width) or ((extentY + anchors's holeDiameter) >= plateValue's height):
+                return the string form of "Anchor holes must lie inside the plate"
+            if (anchors's columnPitch <= anchors's holeDiameter) or (anchors's rowPitch <= anchors's holeDiameter):
+                return the string form of "Anchor holes overlap"
+            loop partCursor from 0 to 2:
+                set basePart to the item at partCursor in (spec's additions's values)
+                if ((basePart's axis's x != 0.0) or (basePart's axis's y != 0.0)) or (basePart's axis's z != -1.0):
+                    return the string form of "Base plate parts use a downward axis"
+                if (basePart's origin's x != 0.0) or (basePart's origin's y != 0.0):
+                    return the string form of "Base plate parts must be centred"
+        return the string form of ""
+
+# Resolve a node from fresh host geometry. Each member receives an independent
+# trim void. Additions are evaluated separately; bolts and screws retain kind.
+function the connection of {connection definition:spec} using {a pointer to a list:frames}:
+    execute:
+        set issue to the connection issue of spec
+        if issue != (the string form of ""):
+            return a connection refusal saying issue
+        set count to the length of (spec's members's values)
+        if (the length of frames) != count:
+            return a connection refusal saying (the string form of "Missing member geometry")
+        set output to @intrinsic("construct", a connection result, true, the string form of "", a cad topology list of a connection void, a cad topology list of a connection fastener, a cad topology list of a connection addition, a cad topology list of a connection addition)
+        loop cursor from 0 to count:
+            set memberValue to the item at cursor in (spec's members's values)
+            set memberFrame to the item at cursor in frames
+            if memberFrame's elementId != memberValue's elementId:
+                return a connection refusal saying (the string form of "Member geometry order mismatch")
+            if ((the cad length of memberFrame's endpoint) < 10000000.0) = false:
+                return a connection refusal saying (the string form of "Invalid member endpoint")
+            set magnitude to the cad length of memberFrame's inward
+            if ((magnitude > 0.000001) and (magnitude < 100000.0)) = false:
+                return a connection refusal saying (the string form of "Invalid member direction")
+            if ((memberFrame's length > memberValue's setback) and (memberFrame's length < 100000.0)) = false:
+                return a connection refusal saying (the string form of "Setback consumes the member")
+            set normalValue to memberFrame's inward scaled by (1.0 / magnitude)
+            if spec's style = 1:
+                if count != 2:
+                    return a connection refusal saying (the string form of "Miter requires two members")
+                set otherFrame to the item at (1 - cursor) in frames
+                set otherMagnitude to the cad length of otherFrame's inward
+                if ((otherMagnitude > 0.000001) and (otherMagnitude < 100000.0)) = false:
+                    return a connection refusal saying (the string form of "Invalid other member direction")
+                set normalValue to the cad difference of normalValue and (otherFrame's inward scaled by (1.0 / otherMagnitude))
+                if (the cad length of normalValue) < 0.000001:
+                    return a connection refusal saying (the string form of "Coincident directions cannot miter")
+                set normalValue to normalValue scaled by (1.0 / (the cad length of normalValue))
+            set planeSpot to the cad sum of memberFrame's endpoint and ((memberFrame's inward scaled by (1.0 / magnitude)) scaled by memberValue's setback)
+            if memberValue's end != 2:
+                append (@intrinsic("construct", a connection void, memberValue's elementId, 0, planeSpot, normalValue, 0.0, 0.0, 0)) to (output's voids's values)
+        loop cursor from 0 to the length of (spec's additions's values):
+            set partValue to the item at cursor in (spec's additions's values)
+            if partValue's kind = 0:
+                append partValue to (output's plates's values)
+            else if partValue's kind >= 4:
+                append partValue to (output's welds's values)
+            else:
+                set forward to partValue's axis scaled by (1.0 / (the cad length of partValue's axis))
+                set across to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and forward
+                if (the cad length of across) < 0.000001:
+                    set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+                else:
+                    set across to across scaled by (1.0 / (the cad length of across))
+                set upward to the cad cross of forward and across
+                loop rowIndex from 0 to partValue's rows:
+                    loop columnIndex from 0 to partValue's columns:
+                        set horizontal to ((columnIndex as a 64 bit floating-point number) - ((partValue's columns - 1) as a 64 bit floating-point number) * 0.5) * partValue's columnPitch
+                        set vertical to ((rowIndex as a 64 bit floating-point number) - ((partValue's rows - 1) as a 64 bit floating-point number) * 0.5) * partValue's rowPitch
+                        set spotValue to the cad sum of spec's origin and (the cad sum of partValue's origin and (the cad sum of (across scaled by horizontal) and (upward scaled by vertical)))
+                        append (@intrinsic("construct", a connection fastener, partValue's key, partValue's memberId, partValue's kind, spotValue, forward, partValue's diameter, partValue's length)) to (output's fasteners's values)
+                        # Anchors penetrate the support, not the column.
+                        if partValue's kind != 3:
+                            append (@intrinsic("construct", a connection void, partValue's memberId, 1, spotValue, forward, partValue's holeDiameter, partValue's length, partValue's key)) to (output's voids's values)
+        return output

@@ -1,0 +1,258 @@
+# SPDX-License-Identifier: MPL-2.0
+# A wall's masonry module (the head module, koppenmaat), with the wall as
+# its source. It is chosen per wall and for one layer of the wall's type,
+# so an inner leaf of blocks never counts as facing brick by itself. It
+# holds the module, the end it is counted from and an offset from that end.
+# The whole modules and the rest follow from the wall as it stands, on that
+# layer's exterior face as the wall's joins end it. Plan dimensions,
+# elevation dimensions and the 3D view's module lines read the same
+# references (`the bim masonry of wall`), so they follow the wall when it
+# moves or changes length.
+#
+# Nothing here rounds, lengthens or moves a wall. The module is not a
+# joint width: what a brick and a joint measure is left open.
+#
+# Curved walls, leaning or bowed walls and walls cut to a contour are
+# reported as unsupported, never measured as if they were straight.
+import elements/planar/bim_evaluate.dl
+
+# Rendering samples at most 2048 module stations per wall. Measurement
+# remains exact; a tiny module cannot allocate millions of line vertices.
+function the bim masonry drawing stride of {bim masonry record:masonryValue}:
+    execute:
+        return 1 + ((the floor of ((masonryValue's whole as a 64 bit floating-point number) / 2048.0)) as an integer)
+
+# Visible vertical intervals at one module station. Openings use the same
+# rough width/height and storey-relative sill as the wall evaluator.
+# Subtracting each interval also handles overlapping openings.
+function the bim masonry vertical spans at {cad vector2:spotValue} on {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set verticalRanges to an empty list of a cad vector2
+        set levelFound to the bim level index of (wallValue's levelId) in modelValue
+        if levelFound's valid = false:
+            return verticalRanges
+        set elevation to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        # The masonry layer's own foot and top, when it has them.
+        set layerReach to a cad vector2 with x 0.0 and y 0.0
+        set layerReading to the bim setting (bim masonry layer setting) of (wallValue's id) in modelValue
+        if layerReading's found:
+            set layerReach to the bim layer reach of layer (layerReading's value as an integer) of wall (wallValue's id) in modelValue
+        set foot to (elevation + wallValue's baseOffset) - layerReach's x
+        set layerHeight to (wallValue's height + layerReach's x) + layerReach's y
+        if layerHeight <= 0.0:
+            return verticalRanges
+        append (a cad vector2 with x foot and y (foot + layerHeight)) to verticalRanges
+        set direction to the bim direction of wallValue
+        set station to ((spotValue's x - wallValue's start's x) * direction's x) + ((spotValue's y - wallValue's start's y) * direction's y)
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            if openingValue's hostId = wallValue's id:
+                set typeFound to the bim opening type index of (openingValue's typeId) in modelValue
+                if typeFound's valid:
+                    set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                    set halfWidth to (the bim rough width of openingType) / 2.0
+                    if (the absolute value of (station - openingValue's offset)) < halfWidth:
+                        set low to elevation + openingType's sill
+                        set high to low + (the bim rough height of openingType)
+                        set remaining to an empty list of a cad vector2
+                        loop spanCursor from 0 to the length of verticalRanges:
+                            set spanValue to the item at spanCursor in verticalRanges
+                            if (high <= spanValue's x) or (low >= spanValue's y):
+                                append spanValue to remaining
+                            else:
+                                if low > spanValue's x:
+                                    append (a cad vector2 with x spanValue's x and y low) to remaining
+                                if high < spanValue's y:
+                                    append (a cad vector2 with x high and y spanValue's y) to remaining
+                        free verticalRanges
+                        set verticalRanges to remaining
+        return verticalRanges
+
+# The settings on the wall:
+# - its masonry layer: the index in the wall's type, counted from the
+#   exterior;
+# - its module, in tenths of a millimetre;
+# - the end it is counted from: 0 the wall's start, 1 its finish;
+# - the offset of the first module line from that end of the face, in tenths
+#   of a millimetre.
+function bim masonry layer setting:
+    replacement:
+        2200000
+function bim masonry module setting:
+    replacement:
+        2200001
+function bim masonry end setting:
+    replacement:
+        2200002
+function bim masonry offset setting:
+    replacement:
+        2200003
+
+# Why a wall's module is measured or not.
+function bim masonry measured:
+    replacement:
+        0
+function bim masonry not chosen:
+    replacement:
+        1
+function bim masonry layer missing:
+    replacement:
+        2
+function bim masonry curved:
+    replacement:
+        3
+# Leaning, bowed, or cut to a contour.
+function bim masonry shaped:
+    replacement:
+        4
+# A face too short, or a first line beyond its far end.
+function bim masonry off its face:
+    replacement:
+        5
+
+# A wall's module as it stands. All of it is in plan and in metres:
+# - `origin`: the first module line on the layer's exterior face;
+# - `onward`: the direction along the face, away from the end it is
+#   counted from;
+# - `lead`: the offset from that end of the face to the first line;
+# - `span`: the length from the first line to the face's far end;
+# - `whole`: the number of whole modules in `span`;
+# - `rest`: what remains, `span` less `whole` modules;
+# - `foot` and `height`: the wall's foot above zero, and its height.
+# Unless `status` is `bim masonry measured`, nothing else in it holds.
+class:
+    patterns:
+        [a|] bim masonry record
+    members:
+        status as an integer
+        module as a 64 bit floating-point number
+        origin as a cad vector2
+        onward as a cad vector2
+        lead as a 64 bit floating-point number
+        span as a 64 bit floating-point number
+        whole as an integer
+        rest as a 64 bit floating-point number
+        foot as a 64 bit floating-point number
+        height as a 64 bit floating-point number
+
+function the bim masonry refusal {integer:reasonCode}:
+    execute:
+        set zero to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim masonry record, reasonCode, 0.0, zero, zero, 0.0, 0.0, 0, 0.0, 0.0, 0.0)
+
+# The masonry module of `wallValue`. `index` must index the walls of
+# `modelValue`.
+function the bim masonry of wall {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set layerReading to the bim setting (bim masonry layer setting) of (wallValue's id) in modelValue
+        set moduleReading to the bim setting (bim masonry module setting) of (wallValue's id) in modelValue
+        if ((layerReading's found and moduleReading's found) = false) or (moduleReading's value <= (0 as a 64 bit integer)):
+            return the bim masonry refusal (bim masonry not chosen)
+        set typeFound to the bim wall type index of (wallValue's typeId) in modelValue
+        set levelFound to the bim level index of (wallValue's levelId) in modelValue
+        if (typeFound's valid = false) or (levelFound's valid = false):
+            return the bim masonry refusal (bim masonry layer missing)
+        set wallType to the item at typeFound's position in (modelValue's wallTypes's values)
+        set layerIndex to (layerReading's value) as an integer
+        if (layerIndex < 0) or (layerIndex >= (the length of (wallType's layers's values))):
+            return the bim masonry refusal (bim masonry layer missing)
+        if (the absolute value of (wallValue's bulge)) > 1e-9:
+            return the bim masonry refusal (bim masonry curved)
+        set ownShaping to the bim shaping of wallValue from 0.0 in modelValue using index
+        set contourPoints to the bim face contour of (wallValue's id) in modelValue
+        set contoured to (the length of contourPoints) >= 3
+        free contourPoints
+        if (bim shaping ownShaping moves) or contoured:
+            return the bim masonry refusal (bim masonry shaped)
+        set wallEnds to the bim footprint of wallValue in modelValue using index
+        set breadth to the bim thickness of wallType
+        if (wallEnds's valid = false) or (breadth <= 0.0):
+            return the bim masonry refusal (bim masonry off its face)
+        # The layer's exterior face lies as far in from the wall's exterior
+        # as the layers outside it are thick. It ends where the wall's
+        # joins end the wall, on the lines between its corners.
+        set outside to 0.0
+        loop layerCursor from 0 to layerIndex:
+            set outside to outside + ((the item at layerCursor in (wallType's layers's values))'s thickness)
+        set faceFraction to outside / breadth
+        set faceStart to the cad lerp from (wallEnds's startExterior) to (wallEnds's startInterior) at faceFraction
+        set faceFinish to the cad lerp from (wallEnds's finishExterior) to (wallEnds's finishInterior) at faceFraction
+        set alongWall to the bim direction of wallValue
+        set faceLength to ((faceFinish's x - faceStart's x) * alongWall's x) + ((faceFinish's y - faceStart's y) * alongWall's y)
+        set countedFrom to faceStart
+        set ahead to alongWall
+        if ((the bim setting (bim masonry end setting) of (wallValue's id) in modelValue)'s value) = (1 as a 64 bit integer):
+            set countedFrom to faceFinish
+            set ahead to a cad vector2 with x (0.0 - alongWall's x) and y (0.0 - alongWall's y)
+        set leadLength to (((the bim setting (bim masonry offset setting) of (wallValue's id) in modelValue)'s value) as a 64 bit floating-point number) / 10000.0
+        set moduleLength to (moduleReading's value as a 64 bit floating-point number) / 10000.0
+        set spanLength to faceLength - leadLength
+        if ((faceLength <= 1e-9) or (leadLength < 0.0)) or (spanLength < 0.0):
+            return the bim masonry refusal (bim masonry off its face)
+        set wholeCount to (the floor of ((spanLength / moduleLength) + 1e-9)) as an integer
+        set restLength to spanLength - ((wholeCount as a 64 bit floating-point number) * moduleLength)
+        if restLength < 0.0:
+            set restLength to 0.0
+        set firstLine to a cad vector2 with x (countedFrom's x + (ahead's x * leadLength)) and y (countedFrom's y + (ahead's y * leadLength))
+        # The layer's own foot and top, when it has them.
+        set layerReach to the bim layer reach of layer layerIndex of wall (wallValue's id) in modelValue
+        set footHeight to (((the item at levelFound's position in (modelValue's levels's values))'s elevation) + wallValue's baseOffset) - layerReach's x
+        return @intrinsic("construct", a bim masonry record, bim masonry measured, moduleLength, firstLine, ahead, leadLength, spanLength, wholeCount, restLength, footHeight, (wallValue's height + layerReach's x) + layerReach's y)
+
+# For a single wall; indexes the whole model first.
+function the bim masonry of wall {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        return the bim masonry of wall wallValue in modelValue using (the bim join index of modelValue)
+
+# Module line `lineNumber` of `masonryValue` in plan: the first line (0)
+# moved on by that many modules.
+function the bim masonry point {integer:lineNumber} of {bim masonry record:masonryValue}:
+    execute:
+        set reach to (lineNumber as a 64 bit floating-point number) * masonryValue's module
+        return a cad vector2 with x (masonryValue's origin's x + (masonryValue's onward's x * reach)) and y (masonryValue's origin's y + (masonryValue's onward's y * reach))
+
+# The same at the wall's foot, in the model: where an elevation measures
+# from, and where a 3D module line starts.
+function the bim masonry spot {integer:lineNumber} of {bim masonry record:masonryValue}:
+    execute:
+        set planPoint to the bim masonry point lineNumber of masonryValue
+        return a cad vector3 with x planPoint's x, y planPoint's y and z masonryValue's foot
+
+# Wall `wallId` is given a masonry module:
+# - `moduleTenths`: the module, in tenths of a millimetre, above zero;
+# - `layerIndex`: the layer of its type the module is on, counted from the
+#   exterior;
+# - `fromFinish`: counted from the wall's finish when true, else from its
+#   start;
+# - `offsetTenths`: the first line's offset from that end, in tenths of a
+#   millimetre.
+# Returns false, with nothing changed, when there is no such wall or layer
+# or the module is not above zero or its offset is negative. The wall
+# itself is left as it is.
+function give bim wall {a 64 bit integer:wallId} masonry module {a 64 bit integer:moduleTenths} on layer {integer:layerIndex} from finish {boolean:fromFinish} offset {a 64 bit integer:offsetTenths} in {a pointer to a bim model record:target}:
+    execute:
+        set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
+        if ((wallFound's valid = false) or (moduleTenths <= (0 as a 64 bit integer))) or (offsetTenths < (0 as a 64 bit integer)):
+            return false
+        set typeFound to the bim wall type index of ((the item at wallFound's position in (target's walls's values))'s typeId) in (@intrinsic("dereference", target))
+        if typeFound's valid = false:
+            return false
+        set layerCount to the length of ((the item at typeFound's position in (target's wallTypes's values))'s layers's values)
+        if (layerIndex < 0) or (layerIndex >= layerCount):
+            return false
+        set endCode to 0 as a 64 bit integer
+        if fromFinish:
+            set endCode to 1 as a 64 bit integer
+        set bim setting (bim masonry layer setting) of wallId to (layerIndex as a 64 bit integer) keeping true in target
+        set bim setting (bim masonry module setting) of wallId to moduleTenths keeping true in target
+        set bim setting (bim masonry end setting) of wallId to endCode keeping fromFinish in target
+        set bim setting (bim masonry offset setting) of wallId to offsetTenths keeping (offsetTenths != (0 as a 64 bit integer)) in target
+        return true
+
+# Wall `wallId` no longer has a masonry module.
+function clear bim wall {a 64 bit integer:wallId} masonry in {a pointer to a bim model record:target}:
+    execute:
+        set bim setting (bim masonry layer setting) of wallId to (0 as a 64 bit integer) keeping false in target
+        set bim setting (bim masonry module setting) of wallId to (0 as a 64 bit integer) keeping false in target
+        set bim setting (bim masonry end setting) of wallId to (0 as a 64 bit integer) keeping false in target
+        set bim setting (bim masonry offset setting) of wallId to (0 as a 64 bit integer) keeping false in target

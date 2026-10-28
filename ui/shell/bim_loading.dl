@@ -1,0 +1,222 @@
+# SPDX-License-Identifier: MPL-2.0
+# Loading without making the window wait. The start-up shows a loading screen
+# that names each step and counts them; a file given with --import is then
+# read on a thread of its own (a POSIX thread started on an exposed
+# function), while the editor already runs and a card over the canvas shows
+# the step under way and how far it is.
+#
+# The thread reads the file, finds the walls and floors to make native,
+# reads the other elements and writes them for the GPU into buffers of its
+# own. Nothing else touches what it makes until it has finished: DynLex
+# counts references to strings and lists without atomics, so the two
+# threads must not share one. The window's thread then adds the walls and
+# floors to the model (one undoable step) and installs the buffers.
+import ifc/bim_ifc_native.dl
+import exchange/ifcx/bim_ifcx_read.dl
+import ui/panels/bim_view_panel.dl
+import lib/atomic.dl
+
+class:
+    patterns:
+        [a|] bim import job record
+    members:
+        # The files to import (several only for IfcX layers).
+        paths as the type of (an empty list of a string)
+        kind as an integer
+        progress as a bim load progress record
+        finished as a 64 bit integer
+        started as a 64 bit integer
+        microseconds as a 64 bit integer
+        thread as a 64 bit integer
+        # Where the thread makes the GPU's buffers.
+        hardware as a gpu device record
+        # What the thread made: the walls and floors to make native (added
+        # to the model by the window's thread, one undoable step), the
+        # imported elements, and those written for the GPU.
+        natives as a bim ifc native set record
+        imported as a bim import record
+        upload as a bim gpu import upload record
+
+# The kinds of import: IFC in STEP (walls and floors made native), IfcX
+# layers, BIM-MESH.
+function bim step import kind:
+    replacement:
+        0
+
+function bim ifcx import kind:
+    replacement:
+        1
+
+function bim mesh import kind:
+    replacement:
+        2
+
+# A job importing `paths` (the first naming the kind), its GPU buffers made
+# on `hardware`; not yet started.
+function a bim import job of {a pointer to a list:paths} on {gpu device record:hardware}:
+    execute:
+        set ownPaths to an empty list of a string
+        loop pathCursor from 0 to the length of paths:
+            # Copies, so that the thread holds the only references.
+            set given to the item at pathCursor in paths
+            append (the substring of given from 0 spanning (the length of given) bytes) to ownPaths
+        set firstPath to the item at 0 in ownPaths
+        set importKind to bim mesh import kind
+        if bim path firstPath is ifcx:
+            set importKind to bim ifcx import kind
+        else if bim path firstPath is step ifc:
+            set importKind to bim step import kind
+        set nothingYet to @intrinsic("construct", a bim load progress record, 0 as a 64 bit integer, 0 as a 64 bit integer, 0 as a 64 bit integer)
+        set nowhere to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set nothingWritten to @intrinsic("construct", a bim gpu import upload record, nowhere, a cad topology list of a 64 bit integer, nowhere, nowhere, 0, 0, a cad topology list of a bim gpu shape draw record, an empty gpu mesh slot, an empty gpu mesh slot, 0 as a 64 bit integer)
+        return @intrinsic("construct", a bim import job record, ownPaths, importKind, nothingYet, 0 as a 64 bit integer, the bim microseconds now, 0 as a 64 bit integer, 0 as a 64 bit integer, hardware, no bim ifc natives, the bim import of (the string form of ""), nothingWritten)
+
+# The import itself, on the job's thread: the file read, the walls and
+# floors to make native found, the other elements read, and all of them
+# written for the GPU. Steps (`bim_step.dl`'s progress): 1 reading, 2 the
+# walls and floors, 3 the other elements (counting the file's instances), 4
+# the GPU's buffers; IfcX and BIM-MESH files have only the first and last.
+function carry out bim import job {a pointer to a bim import job record:task}:
+    execute:
+        set tracker to the address of (task's progress)
+        report bim load step 1 to tracker
+        if task's kind = bim step import kind:
+            set stepFile to the bim step file at (the item at 0 in (task's paths))
+            report bim load step 2 to tracker
+            set task's natives to the bim ifc natives of stepFile
+            report bim load step 3 to tracker
+            set task's imported to the bim ifc elements of stepFile skipping (task's natives's skipped's values) reporting to tracker
+            report bim load step 4 to tracker
+        else if task's kind = bim ifcx import kind:
+            set task's imported to the bim ifcx import of files (task's paths)
+            report bim load step 2 to tracker
+        else:
+            set task's imported to the bim import of (the item at 0 in (task's paths))
+            report bim load step 2 to tracker
+        if task's imported's valid:
+            set task's upload to the bim gpu import upload of (task's imported) on (task's hardware)
+        set task's microseconds to (the bim microseconds now) - task's started
+        atomically store release (1 as a 64 bit integer) at (the address of (task's finished))
+
+# The thread's entry, called by `obs_platform_start_thread` with the job.
+exposed function run bim import job {a pointer to a bim import job record:task}:
+    execute:
+        carry out bim import job task
+        return task
+
+# Starts the job's thread. DynLex makes a function reached only through
+# `the function named` without its list code ("runtime call argument
+# produced no value"), so the entry is called directly first, in a branch
+# that never runs. False when the thread could not be made.
+function start bim import job {a pointer to a bim import job record:task}:
+    execute:
+        if task's finished < (0 as a 64 bit integer):
+            ignore run bim import job task
+        set entry to the function named "run bim import job $"
+        set handle to 0 as a 64 bit integer
+        # A stack as large as the window's thread may grow to (the reading
+        # of nested IFC items recurses); a pthread, or a Windows thread
+        # (`platform/obs_platform.c`).
+        set outcome to @intrinsic("call", "obs_platform", "obs_platform_start_thread", a 64 bit integer, entry, task, 268435456 as a 64 bit integer, the address of handle)
+        set task's thread to handle
+        return outcome = (0 as a 64 bit integer)
+
+# Whether the job's thread has finished; then it is joined.
+function bim import job {a pointer to a bim import job record:task} has finished:
+    execute:
+        if (atomically load acquire (the address of (task's finished))) = (0 as a 64 bit integer):
+            return false
+        ignore @intrinsic("call", "obs_platform", "obs_platform_join_thread", a 64 bit integer, task's thread)
+        return true
+
+# The names of the job's steps, after the start-up's three.
+function the bim load step names of {a pointer to a bim import job record:task}:
+    execute:
+        set stepList to an empty list of a string
+        set fileName to the bim last path part of (the item at 0 in (task's paths))
+        append ((the string form of "Reading ") + fileName) to stepList
+        if task's kind = bim step import kind:
+            append (the string form of "Finding walls and floors") to stepList
+            append (the string form of "Reading the other elements") to stepList
+        append (the string form of "Preparing the 3D view") to stepList
+        return stepList
+
+# The last part of `path`, after its last slash.
+function the bim last path part of {a string:path}:
+    execute:
+        set cut to 0
+        loop cursor from 0 to the length of path:
+            if (the substring of path from cursor spanning 1 bytes) = (the string form of "/"):
+                set cut to cursor + 1
+        return the substring of path from cut spanning ((the length of path) - cut) bytes
+
+# The loading screen of the start-up before the fonts are loaded: the bar
+# at `stepNumber` of `stepCount`.
+function draw bim loading bar at step {integer:stepNumber} of {integer:stepCount} on {pointer:window}:
+    execute:
+        set frame to a new graphics frame in window with background red 0.125, green 0.149, blue 0.169 and alpha 1.0
+        draw bim loading bar at step stepNumber of stepCount on window in frame
+        display frame
+
+local function draw bim loading bar at step {integer:stepNumber} of {integer:stepCount} on {pointer:window} in {graphics frame:frame}:
+    execute:
+        set across to (the framebuffer width of window) as a 64 bit floating-point number
+        set tall to (the framebuffer height of window) as a 64 bit floating-point number
+        set barLeft to (across - 360.0) * 0.5
+        set barTop to (tall * 0.5) + 18.0
+        draw a rectangle at x barLeft and y barTop with width 360.0 and height 4.0 in color red 52, green 60 and blue 68 in frame
+        set filled to (360.0 * (stepNumber as a 64 bit floating-point number)) / (stepCount as a 64 bit floating-point number)
+        draw a rectangle at x barLeft and y barTop with width filled and height 4.0 in color red 7, green 178 and blue 247 in frame
+
+# The same with the name over the bar and the step under way below it.
+function draw bim loading screen at step {integer:stepNumber} of {integer:stepCount} saying {a string:stepText} with {bim text atlas record:atlas} on {pointer:window}:
+    execute:
+        set frame to a new graphics frame in window with background red 0.125, green 0.149, blue 0.169 and alpha 1.0
+        draw bim loading bar at step stepNumber of stepCount on window in frame
+        set across to (the framebuffer width of window) as a 64 bit floating-point number
+        set tall to (the framebuffer height of window) as a 64 bit floating-point number
+        set title to the string form of "Open BIM Studio"
+        set titleWidth to the bim text width of title in face (bim text heading) of atlas
+        draw bim text title at ((across - titleWidth) * 0.5) and ((tall * 0.5) - 14.0) in face (bim text heading) with atlas coloured 255, 255 and 255 in frame
+        set caption to ((stepText + (the string form of " (")) + ((the string form of stepNumber) + (the string form of "/"))) + ((the string form of stepCount) + (the string form of ")"))
+        set captionWidth to the bim text width of caption in face (bim text small) of atlas
+        draw bim text caption at ((across - captionWidth) * 0.5) and ((tall * 0.5) + 44.0) in face (bim text small) with atlas coloured 185, 190 and 195 in frame
+        display frame
+
+# The card over the canvas while the job runs, centred on `middle` from
+# `top`: its step (numbered after the start-up's `firstStep` steps), how far
+# the step is when that is known, and the time so far.
+function draw bim loading card of {a pointer to a bim import job record:task} after {integer:firstStep} steps centred on {a 64 bit floating-point number:middle} from {a 64 bit floating-point number:top} landing {boolean:isLanding} using {bim text atlas record:atlas} in {graphics frame:frame}:
+    execute:
+        set stepList to the bim load step names of task
+        set stepCount to firstStep + (the length of stepList)
+        set jobStep to (atomically load relaxed (the address of (task's progress's step)))
+        set done to (atomically load relaxed (the address of (task's progress's done)))
+        set total to (atomically load relaxed (the address of (task's progress's total)))
+        set shown to 0
+        if jobStep > (0 as a 64 bit integer):
+            set shown to (jobStep as an integer) - 1
+        if isLanding:
+            set shown to (the length of stepList) - 1
+        if shown >= (the length of stepList):
+            set shown to (the length of stepList) - 1
+        set stepText to the item at shown in stepList
+        set counter to ((the string form of "Step ") + (the string form of ((firstStep + shown) + 1))) + ((the string form of " of ") + (the string form of stepCount))
+        if (total > (0 as a 64 bit integer)) and (isLanding = false):
+            set counter to (counter + (the string form of ", ")) + ((the string form of ((done * (100 as a 64 bit integer)) / total)) + (the string form of " %"))
+        set seconds to ((the bim microseconds now) - task's started) / (1000000 as a 64 bit integer)
+        set counter to (counter + (the string form of ", ")) + ((the string form of seconds) + (the string form of " s"))
+        set cardWidth to (the maximum of (the bim text width of stepText in face (bim text bold) of atlas) and (the bim text width of counter in face (bim text small) of atlas)) + 32.0
+        set cardLeft to middle - (cardWidth * 0.5)
+        set cardTop to top
+        draw a rectangle at x cardLeft and y cardTop with width cardWidth and height 52.0 in color red 32, green 38 and blue 43 in frame
+        draw bim text stepText at (cardLeft + 16.0) and (cardTop + 21.0) in face (bim text bold) with atlas coloured 255, 255 and 255 in frame
+        draw bim text counter at (cardLeft + 16.0) and (cardTop + 39.0) in face (bim text small) with atlas coloured 185, 190 and 195 in frame
+        # The bar: the steps done, and the part of this one.
+        set part to 0.0
+        if total > (0 as a 64 bit integer):
+            set part to (done as a 64 bit floating-point number) / (total as a 64 bit floating-point number)
+        set reached to (((firstStep + shown) as a 64 bit floating-point number) + part) / (stepCount as a 64 bit floating-point number)
+        draw a rectangle at x cardLeft and y (cardTop + 48.0) with width cardWidth and height 4.0 in color red 52, green 60 and blue 68 in frame
+        draw a rectangle at x cardLeft and y (cardTop + 48.0) with width (cardWidth * reached) and height 4.0 in color red 7, green 178 and blue 247 in frame
+        free stepList

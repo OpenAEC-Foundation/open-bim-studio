@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MPL-2.0
+# Evaluate actual solids after footprint edits; no editor/canvas dependency.
+import lib/std.dl
+import exchange/ifcx/bim_file.dl
+import ui/editor/bim_boundary_sketch.dl
+
+function check plate anchor {boolean:passed} named {a string:label}:
+    execute:
+        if passed = false:
+            print ((the string form of "FAIL: ") + label) as a line
+            @intrinsic("call", "libc", "exit", nothing, 1)
+        print ((the string form of "PASS: ") + label) as a line
+
+# The expected top is the fixed world plane z = base + 0.5x + 0.25y.
+# Every evaluated vertex must lie on that top or its 0.2m lower surface.
+function plate anchor geometry {a 64 bit integer:plateId} in {bim model record:modelValue} retains base {a 64 bit floating-point number:baseHeight}:
+    execute:
+        set found to the bim slab index of plateId in modelValue
+        if found's valid = false:
+            return false
+        set plateValue to the item at found's position in (modelValue's slabs's values)
+        set built to the bim slab solid of plateValue in modelValue
+        if (the length of (built's shape's positions's values)) = 0:
+            return false
+        loop cursor from 0 to the length of (built's shape's positions's values):
+            set spot to the item at cursor in (built's shape's positions's values)
+            set expected to (baseHeight + (0.5 * spot's x)) + (0.25 * spot's y)
+            if ((the absolute value of (spot's z - expected)) > 1e-7) and ((the absolute value of (spot's z - (expected - 0.2))) > 1e-7):
+                return false
+        return true
+
+set documentValue to a new bim document
+set target to the address of (documentValue's current)
+set levelId to add bim level named (the string form of "Upper") at 10.0 with height 3.0 to target
+set layers to an empty list of a bim layer record
+append (@intrinsic("construct", a bim layer record, the string form of "timber", 0.2)) to layers
+set roofType to add bim planar type named (the string form of "Roof") as role bim roof planar role with layers to target
+set floorType to add bim planar type named (the string form of "Floor") as role bim floor planar role with layers to target
+set outline to an empty list of a cad vector2
+append (a cad vector2 with x 0.0 and y 0.0) to outline
+append (a cad vector2 with x 4.0 and y 0.0) to outline
+append (a cad vector2 with x 4.0 and y 4.0) to outline
+append (a cad vector2 with x 0.0 and y 4.0) to outline
+set pitchValue to @intrinsic("atan2", (the square root of 0.3125), 1.0)
+set headingValue to @intrinsic("atan2", 0.25, 0.5)
+set roofId to add bim plate typed roofType on levelId around outline at top 3.0 to target
+ignore set bim plate roofId top to 3.0 pitch pitchValue heading headingValue in target
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 13.0) named (the string form of "pitched roof begins on known world plane")
+set reordered to an empty list of a cad vector2
+loop cursor from 0 to 4:
+    append (the item at (the remainder of (cursor + 1) divided by 4) in outline) to reordered
+begin bim transaction in (the address of documentValue)
+ignore set bim slab roofId outline to reordered in target
+commit bim transaction in (the address of documentValue)
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 13.0) named (the string form of "reordering first corner preserves every solid vertex height")
+set roofValue to the item at (the bim slab index of roofId in documentValue's current)'s position in (target's slabs's values)
+check plate anchor ((the absolute value of (roofValue's top - 5.0)) < 1e-7) named (the string form of "Top follows the new anchor without moving the plane")
+ignore undo bim transaction in (the address of documentValue)
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 13.0) named (the string form of "undo restores contour and world plane together")
+ignore redo bim transaction in (the address of documentValue)
+replace item at index 0 in reordered with (a cad vector2 with x 5.0 and y -1.0)
+ignore set bim slab roofId outline to reordered in target
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 13.0) named (the string form of "moving the first corner keeps the existing slope plane")
+set clippedOutline to an empty list of a cad vector2
+loop cursor from 1 to 4:
+    append (the item at cursor in reordered) to clippedOutline
+ignore set bim slab roofId outline to clippedOutline in target
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 13.0) named (the string form of "deleting the first corner does not shift the remaining roof")
+set invalidOutline to an empty list of a cad vector2
+set refusedEdit to set bim slab roofId outline to invalidOutline in target
+check plate anchor ((refusedEdit = false) and (plate anchor geometry roofId in documentValue's current retains base 13.0)) named (the string form of "invalid contour leaves the elevation plane untouched")
+set pieces to an empty list of a bim boundary segment record
+# Reversed winding and another start, as a re-chained Tab boundary can produce.
+append (the bim boundary line from (a cad vector2 with x 0.0 and y 4.0) to (a cad vector2 with x 4.0 and y 4.0)) to pieces
+append (the bim boundary line from (a cad vector2 with x 4.0 and y 4.0) to (a cad vector2 with x 5.0 and y -1.0)) to pieces
+append (the bim boundary line from (a cad vector2 with x 5.0 and y -1.0) to (a cad vector2 with x 0.0 and y 0.0)) to pieces
+append (the bim boundary line from (a cad vector2 with x 0.0 and y 0.0) to (a cad vector2 with x 0.0 and y 4.0)) to pieces
+set refusal to set bim slab roofId boundary to pieces in target
+check plate anchor (((the length of refusal) = 0) and (plate anchor geometry roofId in documentValue's current retains base 13.0)) named (the string form of "Tab boundary rechaining and reversed winding preserve plane")
+set reread to the bim model parsed from (the bim file text of documentValue's current)
+check plate anchor (reread's valid and (plate anchor geometry roofId in reread's modelValue retains base 13.0)) named (the string form of "adjusted anchor survives native persistence")
+ignore set bim plate roofId top to 7.0 pitch pitchValue heading headingValue in target
+# The current first corner (0,4) is now explicitly at z=17: plane base=16.
+check plate anchor (plate anchor geometry roofId in documentValue's current retains base 16.0) named (the string form of "explicit Top edit still sets the current anchor height")
+set floorId to add bim plate typed floorType on levelId around outline at top 3.0 to target
+ignore set bim plate floorId top to 3.0 pitch pitchValue heading headingValue in target
+ignore set bim slab floorId outline to reordered in target
+check plate anchor (plate anchor geometry floorId in documentValue's current retains base 13.0) named (the string form of "sloped floor uses the same fixed elevation plane")
+set flatId to add bim plate typed floorType on levelId around outline at top 3.0 to target
+ignore set bim slab flatId outline to reordered in target
+set flatValue to the item at (the bim slab index of flatId in documentValue's current)'s position in (target's slabs's values)
+check plate anchor (flatValue's top = 3.0) named (the string form of "flat plate Top remains unchanged")
+
+# Merge regression: valid contour changes keep both the slope and the holes;
+# rejected edits must leave the entire model unchanged and safely release copies.
+set perforatedId to add bim plate typed roofType on levelId around outline at top 3.0 to target
+ignore set bim plate perforatedId top to 3.0 pitch pitchValue heading headingValue in target
+set holeRing to an empty list of a cad vector2
+append (a cad vector2 with x 1.0 and y 1.0) to holeRing
+append (a cad vector2 with x 2.0 and y 1.0) to holeRing
+append (a cad vector2 with x 2.0 and y 2.0) to holeRing
+append (a cad vector2 with x 1.0 and y 2.0) to holeRing
+check plate anchor ((add bim plate opening on perforatedId around holeRing in target) = 1) named (the string form of "sloped roof accepts an interior opening")
+set rotatedOutline to an empty list of a cad vector2
+loop cornerIndex from 0 to 4:
+    append (the item at (the remainder of (cornerIndex + 1) divided by 4) in outline) to rotatedOutline
+check plate anchor (set bim slab perforatedId outline to rotatedOutline in target) named (the string form of "reanchoring preserves a valid opening")
+check plate anchor (plate anchor geometry perforatedId in documentValue's current retains base 13.0) named (the string form of "perforated roof retains the same world plane")
+set beforeRefusal to the bim file text of documentValue's current
+set remoteRing to an empty list of a cad vector2
+loop cornerIndex from 0 to 4:
+    set originalCorner to the item at cornerIndex in outline
+    append (a cad vector2 with x (originalCorner's x + 10.0) and y originalCorner's y) to remoteRing
+check plate anchor ((set bim slab perforatedId outline to remoteRing in target) = false) named (the string form of "abandoning a roof opening is refused safely")
+check plate anchor ((the bim file text of documentValue's current) = beforeRefusal) named (the string form of "refused roof edit retains anchor and opening metadata")

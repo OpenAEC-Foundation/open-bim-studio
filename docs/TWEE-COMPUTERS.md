@@ -5,9 +5,11 @@ wordt in de bestaande Codex-sessie op computer 1 gecoördineerd.
 
 ## Startpunt en status
 
-De native BIM-modeller staat in `spikes/dynlex-bim-slice`. De productlogica en
-geometrie worden in **DynLex** ontwikkeld. De overlay wordt bij het bouwen over
-een afzonderlijke DynLex-checkout gelegd. De bestaande platformbrug en
+De native BIM-modeller staat in de unitmappen in de root (`kernel/`, `model/`,
+`formats/`, `graphics/`, `editor/`, `app/`, `automation/`). De productlogica en
+geometrie worden in **DynLex** ontwikkeld. `build.sh` compileert vanuit de
+repositoryroot met een afzonderlijke DynLex-checkout als compiler; er wordt
+niets meer over die checkout heen gelegd. De bestaande platformbrug en
 buildscripts zijn infrastructuur; voeg geen Python-implementatie van BIM-tools toe.
 
 Gebruik **main** als gezamenlijke ontwikkelbasis, zodra de lokale consolidatie
@@ -40,24 +42,22 @@ dezelfde bestanden tegelijk aanpassen niet.
 
 ## Bestanden en eigenaarschap
 
-Paden hieronder zijn relatief aan `spikes/dynlex-bim-slice`, tenzij anders vermeld.
+Paden hieronder zijn relatief aan de repositoryroot.
 
-**Computer 1:** `overlay/examples/bim-slice/main.dl`, `bim_editor*.dl`,
-`bim_ui*.dl`, `bim_view_panel.dl`, `bim_scene.dl`, `bim_model.dl`, de overige
-BIM-/wapeningsmodules en hun tests. Binnen deze computer zijn de huidige
-Sketch-taken verder verdeeld in [het taakbord](WERKBORD.md).
+**Per module een eigenaar** sinds de modulesplitsing van 2026-10-28: de tabel
+staat in [OWNERS.md](OWNERS.md) en `.github/CODEOWNERS`; een computer claimt daar
+de modules waaraan hij werkt. Het taakbord [WERKBORD.md](WERKBORD.md) houdt de
+lopende claims.
 
-**Computer 2:** `build.sh`, `toolchain.sh`, `ci/`,
-`overlay/examples/bim-slice/installer/` en `platform/`; daarnaast de compilerbron
+**Computer 2:** `build.sh`, `toolchain.sh`, `scripts/`, `.github/workflows/`,
+`installer/`, `platform/`, `patches/` en `lib/`; daarnaast de compilerbron
 in een **afzonderlijke DynLex-repository**. Native platformcode blijft beperkt
 tot platformintegratie. De app blijft DynLex.
 
 **Eerst afstemmen, dan één eigenaar aanwijzen:**
 
-- `patches/`, `overlay/lib/`, `shaders/` en de platformbrug in
-  `overlay/examples/bim-slice/platform/`;
-- `.github/workflows/` in de repositoryroot; houd de actieve workflow en de
-  bijbehorende kopie onder `ci/` gelijk;
+- `kernel/` en `viewer/` (Vulkan en shaders);
+- `.github/workflows/` in de repositoryroot is de enige plek van de workflows;
 - compiler-ABI, openbare module-API's, nieuwe commandocodes, bestandsschema,
   exportsemantiek en migraties;
 - een wijziging die bestanden van beide computers nodig heeft.
@@ -113,7 +113,7 @@ afhankelijkheid van een ongedocumenteerde lokale compilerbinary.
   `ui_layout`-test wegens een ontbrekende standaardimport; die fix staat in de
   startbranch (`34b9fde`, gevolgd door `78e55ab`). App/MSI zijn daarmee nog niet bewezen.
 - Hergebruik beschikbare Actions-artifacts/caches. Lees
-  `spikes/dynlex-bim-slice/ci/WINDOWS-RELEASE.md`. Controleer altijd de actuele
+  `docs/notes/windows-release.md`. Controleer altijd de actuele
   workflow en artifactbeschikbaarheid voordat je een nieuwe run start.
 - Laat buildrapporten de **werkelijk gebouwde commit** noemen. Een groene
   compilerbuild of een nieuwere branch-HEAD bewijst niets over een oudere appbinary.
@@ -142,3 +142,44 @@ een geslaagde headless test vervangt geen Windows-GUI-controle.
 > Geen appfunctionaliteit, gedeelde kernel-API of schema wijzigen zonder
 > afstemming; geen gebruikersapp sluiten. Productcode blijft DynLex. Push je
 > eigen branch en lever een draft PR aan; de coördinator merget en publiceert.
+
+## Connection module development — 2026-10-26
+
+The explicit module assignment extends this session to issue #6 on
+`feature/connection-module`, based on `1768c2d`. Scope: connection kernel,
+BIM adapter, native connection persistence, connection commands/properties,
+headless tests and a synthetic steel hall example. Command range 2320–2330
+is reserved for steel recipes, welds and reusable connection types. Existing
+base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
+
+The required full-build repair also renames local identifiers in sheet paper
+recording and plan/mesh helpers to avoid DynLex pattern-word capture. These are
+identifier-only changes; sheet/layout behaviour is unchanged.
+
+The build repair includes `build.sh` and `tools/check_dynlex_locals.py`: a fast
+application-source preflight for these proven local/pattern-name collisions,
+with focused Python regression tests. It does not modify the compiler or the
+active source snapshots/build scripts.
+
+GUI validation exposed a connection-hole meshing hotspot in the overlay's
+`kernel/brep/brep_append.dl`. The connection task also owns its bounded
+face-component traversal repair and geometric regression checks: direct
+arena-slot membership and adjacency, preserving seed and breadth-first order.
+The compiler checkout is unchanged. Application readiness still requires the
+full steel-hall scene and GUI checks.
+
+## Compiler and drilled display geometry — 2026-10-27
+
+The explicit performance assignment extends this session to an isolated DynLex
+compiler worktree. The connection task also covers `bim_plate_mesh.dl`,
+`bim_swept_perforations.dl`, `kernel/fast/perforation.dl`, their scene
+integration and geometry tests. `bim_profiles.dl` is included for the missing
+rounded-box tangent points exposed by the hollow-brace drilling checks. Product geometry remains DynLex. The fast display
+path accepts closed planar stock and separate through-bores; unsupported
+cuts retain the existing general BREP path. Validation must establish volumes,
+closed meshes, complete hall rendering and actual editor interaction.
+
+`build.sh` and `toolchain.sh` accept an explicit `BIM_DYNLEX_COMPILER` for isolated
+candidate benchmarking. Compiler-binary hashes must be recorded separately from
+the library checkout commit. Compiler regression checks and application GUI
+checks remain separate acceptance conditions. One compiler runs per machine.

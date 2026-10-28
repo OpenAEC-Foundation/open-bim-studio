@@ -16,7 +16,15 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 | Windows/Linux builds en installers | PC2, na taakacceptatie | `pc2/build-installers` | CI/build/installer; geen modelleringscode | Voorgesteld / nog niet geclaimd |
 | Release samenstellen en publiceren | PC1 / coördinator | `main` | Integratie, geteste artefacten, tags | Geblokkeerd op app-/installatietests |
 
-## Herstructurering stap 1 — computer 1 — 2026-10-27
+## Modulesplitsing — 2026-10-28
+
+Branch `restructure/modules`, volgens [het ontwerp](superpowers/specs/2026-10-28-module-split-design.md)
+en [het plan](superpowers/plans/2026-10-28-module-split-plan.md): elke unit is
+verhuisd naar zijn module, tests staan per module, eigenaren staan in
+[OWNERS.md](OWNERS.md). Claims gaan voortaan per module; de bevriezing van stap 1
+is opgeheven zodra deze branch op `main` staat.
+
+## Herstructurering stap 1 — computer 1 — 2026-10-27 (afgerond; tag `restructure-stage-1` bij de merge)
 
 Branch `restructure/one-tree`, volgens
 [het ontwerp](superpowers/specs/2026-10-27-restructuring-design.md) en
@@ -25,7 +33,13 @@ Bestanden: heel `spikes/dynlex-bim-slice`, `.github/workflows`, `CLAUDE.md`,
 `README.md` en `docs/`. Bevriezing: geen andere branch raakt deze bestanden
 totdat de pull request van stap 1 is gemerged. Computer 2: alleen review van
 de workflow- en patchdelen en het draaien van de Windows-workflow; geen
-gelijktijdige bewerkingen.
+gelijktijdige bewerkingen. Status: de verhuizing staat op de branch; de
+bevriezing eindigt bij de merge van de pull request van stap 1.
+
+`origin/feature/connection-module` (25 commits, gepusht tot 2026-10-27 08:16,
+vóór deze claim) raakt verhuisde bestanden en voegt nieuwe modules toe onder
+het oude pad. Na de merge van stap 1 moet die branch op main worden gerebased,
+met de nieuwe bestanden per unit geplaatst; een proefmerge geeft 42 conflicten.
 
 Command `2360` en tool-id `27` zijn gereserveerd voor Sketch Split. Hergebruik
 die nummers niet voor een andere functie. Leg nieuwe openbare commandocodes
@@ -41,7 +55,7 @@ Files: `connections.dl`, `bim_connections.dl`, `bim_baseplate.dl`,
 `bim_editor.dl`, `bim_editor_properties.dl`, `bim_ui.dl`, and related tests.
 
 The same PC1 task fixes selection overlay clipping and adds view-tab dragging in
-`main.dl`, `bim_workspace_tabs.dl` and `overlay/lib/vulkan/context.dl`.
+`main.dl`, `bim_workspace_tabs.dl` and `graphics/vulkan/context.dl`.
 The Vulkan change separates overlay scissoring from its full-window projection;
 mesh viewports and the batch record layout are unchanged. PC2 should not edit
 these files concurrently. Full application/interactive validation is pending.
@@ -80,7 +94,7 @@ fastener; distant-view performance has not yet been measured.
 PC1 extends `bim_system_types.dl` with append-only recipe indices 33–42,
 updates `system_types.expected.txt`, and adds the lightweight `window_recipes`
 check. Sources and explicit schematic-geometry limits are in
-`spikes/dynlex-bim-slice/WINDOW-SYSTEMS.md`. No model schema or new command codes.
+`docs/notes/window-systems.md`. No model schema or new command codes.
 Validation: `window_recipes` PASS (seven checks, no compiler diagnostics) in
 `/tmp/obs-window-recipes`. Full gallery and GUI validation remain pending;
 no new application build has been launched.
@@ -110,7 +124,7 @@ branches in `bim_app_parts.dl`, and the grid-head property in
 `OpenBIM_Drawing.CustomFrame=true` supports an independent frame viewport;
 all-hidden template views no longer draw model annotations. View-bound vector
 artwork is now included when recording sheets, as it already is in plan views.
-Details: `spikes/dynlex-bim-slice/DRAWING-FIDELITY.md`.
+Details: `docs/notes/drawing-fidelity.md`.
 
 `paper_units` and existing `dimension_text` PASS in
 `/tmp/obs-paper-units-check`. The full application with `paper_units`, `grid_sheet`, `plan_presentation`
@@ -150,7 +164,7 @@ an isolated compiler regression test before upstream adoption.
 ### PC1 — image references and interactive sheets (26 October 2026)
 
 PC1 owns image-reference import, `bim_images.dl`, `bim_image_data.dl`,
-`overlay/lib/vulkan/images.dl`, the related canvas/context shaders and tests.
+`graphics/vulkan/images.dl`, the related canvas/context shaders and tests.
 Command **2270** is reserved for linked PNG image import. This is in progress,
 not yet a validated application feature. Physical drawing content must still
 come from editable 3D objects; raster references are explicitly 2D underlays.
@@ -167,4 +181,45 @@ metadata uses **2400600–2401599** on the sheet. PC1 also owns
 `bim_sheet_workspace*.dl`, `bim_sheet_renderer.dl`, `bim_workspace_tabs.dl`,
 `bim_app_parts.dl` and their integration in `main.dl`/`bim_ui.dl`.
 The tested render checkpoint **9b0767c** was pushed. Candidate details and explicit
-validation gaps are in `spikes/dynlex-bim-slice/SHEET-WORKSPACE.md`.
+validation gaps are in `docs/notes/sheet-workspace.md`.
+
+## Connection module development — 2026-10-26
+
+The explicit module assignment extends this session to issue #6 on
+`feature/connection-module`, based on `1768c2d`. Scope: connection kernel,
+BIM adapter, native connection persistence, connection commands/properties,
+headless tests and a synthetic steel hall example. Command range 2320–2330
+is reserved for steel recipes, welds and reusable connection types. Existing
+base-plate style 2 and anchor kind 3 remain compatible. No compiler changes.
+
+The required full-build repair also renames local identifiers in sheet paper
+recording and plan/mesh helpers to avoid DynLex pattern-word capture. These are
+identifier-only changes; sheet/layout behaviour is unchanged.
+
+The build repair includes `build.sh` and `tools/check_dynlex_locals.py`: a fast
+application-source preflight for these proven local/pattern-name collisions,
+with focused Python regression tests. It does not modify the compiler or the
+active source snapshots/build scripts.
+
+GUI validation exposed a connection-hole meshing hotspot in the overlay's
+`lib/cadkernel/brep_append.dl`. The connection task also owns its bounded
+face-component traversal repair and geometric regression checks: direct
+arena-slot membership and adjacency, preserving seed and breadth-first order.
+The compiler checkout is unchanged. Application readiness still requires the
+full steel-hall scene and GUI checks.
+
+## Compiler and drilled display geometry — 2026-10-27
+
+The explicit performance assignment extends this session to an isolated DynLex
+compiler worktree. The connection task also covers `bim_plate_mesh.dl`,
+`bim_swept_perforations.dl`, `overlay/lib/fastkernel/perforation.dl`, their scene
+integration and geometry tests. `bim_profiles.dl` is included for the missing
+rounded-box tangent points exposed by the hollow-brace drilling checks. Product geometry remains DynLex. The fast display
+path accepts closed planar stock and separate through-bores; unsupported
+cuts retain the existing general BREP path. Validation must establish volumes,
+closed meshes, complete hall rendering and actual editor interaction.
+
+`build.sh` and `toolchain.sh` accept an explicit `BIM_DYNLEX_COMPILER` for isolated
+candidate benchmarking. Compiler-binary hashes must be recorded separately from
+the library checkout commit. Compiler regression checks and application GUI
+checks remain separate acceptance conditions. One compiler runs per machine.

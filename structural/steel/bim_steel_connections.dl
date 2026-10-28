@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: MPL-2.0
+# Author steel recipes against semantic axes, including end-to-interior joints.
+import elements/connection/bim_connections.dl
+import elements/linear/bim_profiles.dl
+
+function add bim steel connection among {a pointer to a list:identities} style {integer:styleCode} in {a pointer to a bim model record:target}:
+    execute:
+        set count to the length of identities
+        if (styleCode < 3) or (styleCode > 8):
+            return the bim refused id
+        if (count != 2) and (((styleCode = 8) and (count = 1)) = false):
+            return the bim refused id
+        set modelValue to @intrinsic("dereference", target)
+        loop cursor from 0 to count:
+            if (the bim linear index of (the item at cursor in identities) in modelValue)'s valid = false:
+                return the bim refused id
+        set primaryHost to the item at (the bim linear index of (the item at 0 in identities) in modelValue)'s position in (modelValue's linears's values)
+        set primaryFrame to the bim frame of linear primaryHost in modelValue
+        set secondaryHost to primaryHost
+        set secondaryFrame to primaryFrame
+        set anchor to primaryFrame's last
+        set secondaryEnd to 1
+        if count = 2:
+            set secondaryHost to the item at (the bim linear index of (the item at 1 in identities) in modelValue)'s position in (modelValue's linears's values)
+            set secondaryFrame to the bim frame of linear secondaryHost in modelValue
+            set firstShare to ((the cad dot of (the cad difference of secondaryFrame's first and primaryFrame's first) and primaryFrame's along) / primaryFrame's length) clamped between 0.0 and 1.0
+            set lastShare to ((the cad dot of (the cad difference of secondaryFrame's last and primaryFrame's first) and primaryFrame's along) / primaryFrame's length) clamped between 0.0 and 1.0
+            set firstProjection to the cad sum of primaryFrame's first and (primaryFrame's along scaled by (primaryFrame's length * firstShare))
+            set lastProjection to the cad sum of primaryFrame's first and (primaryFrame's along scaled by (primaryFrame's length * lastShare))
+            set firstDistance to the cad distance from firstProjection to secondaryFrame's first
+            set lastDistance to the cad distance from lastProjection to secondaryFrame's last
+            set anchor to firstProjection
+            set secondaryEnd to 0
+            if lastDistance < firstDistance:
+                set anchor to lastProjection
+                set secondaryEnd to 1
+            if (the minimum of firstDistance and lastDistance) > 0.001:
+                return the bim refused id
+        set primaryEnd to 2
+        set positionValue to (the cad dot of (the cad difference of anchor and primaryFrame's first) and primaryFrame's along) / primaryFrame's length
+        if (the cad distance from anchor to primaryFrame's first) <= 0.001:
+            set primaryEnd to 0
+            set positionValue to 0.0
+            set anchor to primaryFrame's first
+        else if (the cad distance from anchor to primaryFrame's last) <= 0.001:
+            set primaryEnd to 1
+            set positionValue to 0.0
+            set anchor to primaryFrame's last
+        if (styleCode != 6) and (styleCode != 8):
+            # A supporting axis does not own its end, even at an endpoint.
+            set primaryEnd to 2
+            set positionValue to ((the cad dot of (the cad difference of anchor and primaryFrame's first) and primaryFrame's along) / primaryFrame's length) clamped between 0.0 and 1.0
+        set members to a cad topology list of a connection member
+        append (@intrinsic("construct", a connection member, primaryHost's id, primaryEnd, 0.0, positionValue)) to (members's values)
+        if count = 2:
+            append (@intrinsic("construct", a connection member, secondaryHost's id, secondaryEnd, 0.0, 0.0)) to (members's values)
+        set sectionType to the bim type of linear secondaryHost in modelValue
+        set shape to the bim profile of linear type sectionType in modelValue
+        set webSize to shape's web
+        if (webSize <= 0.0) or (shape's kind != bim i shape profile):
+            set webSize to sectionType's width
+        set recipeAdditions to the steel connection parts for style styleCode on secondaryHost's id wide sectionType's width deep sectionType's depth web webSize
+        if (styleCode = 3) or (styleCode = 5):
+            # Axial fasteners attach plates/cleat feet to the primary.
+            loop cursor from 0 to the length of (recipeAdditions's values):
+                set bolts to the item at cursor in (recipeAdditions's values)
+                if (bolts's kind = 1) and ((the absolute value of bolts's axis's z) > 0.999):
+                    set bolts's memberId to primaryHost's id
+                    replace item at index cursor in (recipeAdditions's values) with bolts
+        set label to ((the steel connection style name of styleCode) + (the string form of " ")) + (the string form of target's nextId)
+        set spec to @intrinsic("construct", a connection definition, the bim refused id, primaryHost's levelId, label, 1, styleCode, anchor, members, recipeAdditions)
+        return store bim connection spec in target
+
+# Capture edited local recipes as named model types. Definitions own their lists;
+# instances remain editable copies, so changing one cannot mutate another/undo.
+function save bim connection {a 64 bit integer:nodeId} as type named {a string:typeName} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim connection index of nodeId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return the bim refused id
+        set source to the item at found's position in (target's connections's values)
+        if (source's style < 3) or (typeName = (the string form of "")):
+            return the bim refused id
+        set spec to source
+        set spec's id to the bim new id in target
+        set spec's name to typeName
+        set spec's levelId to 0 as a 64 bit integer
+        set spec's origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set spec's members to the cad clone of source's members
+        set spec's additions to the cad clone of source's additions
+        loop cursor from 0 to the length of (spec's members's values):
+            set memberValue to the item at cursor in (spec's members's values)
+            set oldId to memberValue's elementId
+            set memberValue's elementId to (cursor + 1) as a 64 bit integer
+            replace item at index cursor in (spec's members's values) with memberValue
+            loop partCursor from 0 to the length of (spec's additions's values):
+                set part to the item at partCursor in (spec's additions's values)
+                if part's memberId = oldId:
+                    # Remap from the original, avoiding collision with slot numbers.
+                    set part's memberId to 0 - ((cursor + 1) as a 64 bit integer)
+                    replace item at index partCursor in (spec's additions's values) with part
+        loop cursor from 0 to the length of (spec's additions's values):
+            set part to the item at cursor in (spec's additions's values)
+            set part's memberId to 0 - part's memberId
+            replace item at index cursor in (spec's additions's values) with part
+        append spec to (target's connectionTypes's values)
+        return spec's id
+
+function apply bim connection type {a 64 bit integer:typeId} among {a pointer to a list:identities} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim position of typeId among (target's connectionTypes's values)
+        if found's valid = false:
+            return the bim refused id
+        set template to the item at found's position in (target's connectionTypes's values)
+        if (the length of identities) != (the length of (template's members's values)):
+            return the bim refused id
+        # Build on a private model first: a failed type application is atomic.
+        set scratch to the bim snapshot of (@intrinsic("dereference", target))
+        set scratch's journal to a cad topology list of a 64 bit integer
+        set nodeId to add bim steel connection among identities style template's style in (the address of scratch)
+        if nodeId = the bim refused id:
+            return the bim refused id
+        set nodeFound to the bim connection index of nodeId in scratch
+        set spec to the item at nodeFound's position in (scratch's connections's values)
+        set spec's additions to the cad clone of template's additions
+        loop cursor from 0 to the length of (spec's additions's values):
+            set part to the item at cursor in (spec's additions's values)
+            set slot to (part's memberId as an integer) - 1
+            if (slot < 0) or (slot >= (the length of identities)):
+                return the bim refused id
+            set part's memberId to the item at slot in identities
+            replace item at index cursor in (spec's additions's values) with part
+        set spec's members to the cad clone of spec's members
+        loop cursor from 0 to the length of (spec's members's values):
+            set memberValue to the item at cursor in (spec's members's values)
+            set memberValue's setback to (the item at cursor in (template's members's values))'s setback
+            replace item at index cursor in (spec's members's values) with memberValue
+        set spec's id to the bim refused id
+        set spec's name to template's name + ((the string form of " ") + (the string form of target's nextId))
+        return store bim connection spec in target

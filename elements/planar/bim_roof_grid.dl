@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MPL-2.0
+# A shared, indexed grid for a straight swept roof. Sampling follows the
+# actual section vertices, including steep eaves, rather than an arbitrary
+# uniform XY tessellation. Layers offset along the same surface normals.
+import bim/bim_model.dl
+import kernel/fast/prism.dl
+import elements/planar/bim_roof_offset.dl
+
+local function append bim roof grid face {integer:a}, {integer:b}, {integer:c} to {a pointer to a fast polyhedron record:target}:
+    execute:
+        set first to the item at a in (target's positions's values)
+        set second to the item at b in (target's positions's values)
+        set third to the item at c in (target's positions's values)
+        set normal to the cad cross of (the cad difference of second and first) and (the cad difference of third and first)
+        if (the cad length of normal) > 1e-12:
+            set ring to an empty list of an integer
+            append a to ring
+            append b to ring
+            append c to ring
+            set holes to an empty list of the type of (an empty list of an integer)
+            add fast face ring with holes holes facing normal to target
+            free holes
+            free ring
+
+function the bim roof grid of {fast polyhedron record:shape} using {a pointer to a list:section} along {a pointer to a list:pathPoints} limited by {a pointer to a list:endProfile} above {a 64 bit floating-point number:baseHeight}:
+    execute:
+        set result to an empty fast polyhedron
+        # Six faces and four XY corners: holes, trimmed outlines and sweeps
+        # take the general warped-prism path instead.
+        if ((the length of pathPoints) != 2) or ((the length of (shape's faces's values)) != 6):
+            return result
+        set origin to the item at 0 in pathPoints
+        set finish to the item at 1 in pathPoints
+        set run to the cad distance from origin to finish
+        if run < 0.001:
+            return result
+        set ux to (finish's x - origin's x) / run
+        set uy to (finish's y - origin's y) / run
+        set nx to 0.0 - uy
+        set ny to ux
+        set lowAcross to (the item at 0 in section)'s x
+        set highAcross to (the item at ((the length of section) - 1) in section)'s x
+        set lowZ to 1e100
+        set highZ to -1e100
+        loop cursor from 0 to the length of (shape's positions's values):
+            set spot to the item at cursor in (shape's positions's values)
+            set alongValue to ((spot's x - origin's x) * ux) + ((spot's y - origin's y) * uy)
+            set acrossValue to ((spot's x - origin's x) * nx) + ((spot's y - origin's y) * ny)
+            set atEnd to ((the absolute value of alongValue) < 0.00001) or ((the absolute value of (alongValue - run)) < 0.00001)
+            set atSide to ((the absolute value of (acrossValue - lowAcross)) < 0.00001) or ((the absolute value of (acrossValue - highAcross)) < 0.00001)
+            if (atEnd and atSide) = false:
+                return result
+            set lowZ to the minimum of lowZ and spot's z
+            set highZ to the maximum of highZ and spot's z
+        set stations to an empty list of a cad vector2
+        if (the length of endProfile) >= 2:
+            if ((the absolute value of (the item at 0 in endProfile)'s x) > 0.00001) or ((the absolute value of ((the item at ((the length of endProfile) - 1) in endProfile)'s x - run)) > 0.00001):
+                free stations
+                return result
+            loop cursor from 0 to the length of endProfile:
+                append (the item at cursor in endProfile) to stations
+        else:
+            append (a cad vector2 with x 0.0 and y 1e30) to stations
+            append (a cad vector2 with x run and y 1e30) to stations
+        set columns to the length of section
+        set rows to the length of stations
+        set faceSize to columns * rows
+        loop layerCursor from 0 to 2:
+            set layerOffset to lowZ - baseHeight
+            if layerCursor = 1:
+                set layerOffset to highZ - baseHeight
+            set offsetSection to the bim parallel roof profile of section offset layerOffset
+            set offsetStations to the bim parallel roof profile of stations offset layerOffset
+            if ((the length of offsetSection) != columns) or ((the length of offsetStations) != rows):
+                free offsetSection
+                free offsetStations
+                free stations
+                return an empty fast polyhedron
+            loop row from 0 to rows:
+                set station to the item at row in offsetStations
+                loop column from 0 to columns:
+                    set pointValue to the item at column in offsetSection
+                    set heightValue to the minimum of pointValue's y and station's y
+                    set x to (origin's x + (ux * station's x)) + (nx * pointValue's x)
+                    set y to (origin's y + (uy * station's x)) + (ny * pointValue's x)
+                    set z to baseHeight + heightValue
+                    ignore add fast position (a cad vector3 with x x, y y and z z) to (the address of result)
+            free offsetSection
+            free offsetStations
+        loop row from 0 to (rows - 1):
+            loop column from 0 to (columns - 1):
+                set a to (row * columns) + column
+                set b to a + columns
+                set c to a + 1
+                set d to b + 1
+                append bim roof grid face a, c, b to (the address of result)
+                append bim roof grid face b, c, d to (the address of result)
+                append bim roof grid face (a + faceSize), (b + faceSize), (c + faceSize) to (the address of result)
+                append bim roof grid face (b + faceSize), (d + faceSize), (c + faceSize) to (the address of result)
+        loop column from 0 to (columns - 1):
+            set a to column
+            set b to a + 1
+            append bim roof grid face a, (a + faceSize), (b + faceSize) to (the address of result)
+            append bim roof grid face a, (b + faceSize), b to (the address of result)
+            set a to ((rows - 1) * columns) + column
+            set b to a + 1
+            append bim roof grid face a, b, (b + faceSize) to (the address of result)
+            append bim roof grid face a, (b + faceSize), (a + faceSize) to (the address of result)
+        loop row from 0 to (rows - 1):
+            set a to row * columns
+            set b to a + columns
+            append bim roof grid face a, b, (b + faceSize) to (the address of result)
+            append bim roof grid face a, (b + faceSize), (a + faceSize) to (the address of result)
+            set a to ((row + 1) * columns) - 1
+            set b to a + columns
+            append bim roof grid face a, (a + faceSize), (b + faceSize) to (the address of result)
+            append bim roof grid face a, (b + faceSize), b to (the address of result)
+        free stations
+        return result
