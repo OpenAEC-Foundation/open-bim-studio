@@ -36,7 +36,7 @@ try {
     & python -B (Join-Path $repoPath 'tools\compose_modules.py') --root $repoPath --out (Join-Path $repoPath 'generated') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Composing the modules failed.' }
     # The prebuilt SPIR-V shaders, where the program reads them (build/shaders).
-    Copy-Item graphics\shaders\*.spv build\shaders -Force
+    Copy-Item viewer\shaders\*.spv build\shaders -Force
 
     # The C ABI bridge is required by the Windows port. Never link a Linux
     # object or a host-MSVC library into the llvm-mingw program.
