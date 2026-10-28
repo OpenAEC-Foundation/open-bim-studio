@@ -125,6 +125,12 @@ the two import files of `generated/` (the platform's window style and the
 self-test entry) and copies the prebuilt shaders into `build/shaders`; every
 build command runs it first. It does not edit the compiler checkout.
 
+On a Windows development machine, `scripts/dev-windows.ps1 -Tests evaluate,wall_base`
+compiles, runs and compares named tests, `-Kernel` builds the kernel library and
+runs its seam tests, and `-App` builds the application into `build\windows-app`;
+it reads the toolchain from `.dynlex-windows.local.ps1` (see
+`scripts/dev-windows.example.ps1`) and the compiler from `.dynlex-root.local`.
+
 Alternatively, save the absolute compiler-checkout path on one line in
 `.dynlex-root.local`. That machine-local file is ignored by Git; an explicit
 `DYNLEX_ROOT` takes precedence. Record both the source commit and compiler-binary
