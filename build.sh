@@ -129,7 +129,7 @@ run_one_test() {
     fi
     echo "$result" > "$out/tests/$name.result"
 }
-export -f run_one_test
+export -f run_one_test test_source
 export dynlex out
 
 case "$command" in
