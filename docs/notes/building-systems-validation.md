@@ -15,10 +15,40 @@ packages are extracted under the user's local data directory. The native DynLex
 runtime archives are built locally from the same compiler source with the system
 C compiler, and placed in the compiler's installed-library layout. The compiler
 checkout is selected by the ignored `.dynlex-root.local`; its bootstrap library
-path supplies linking and runtime lookup. Ignored local links under `lib/` expose
-the pinned standard library while retaining all tracked application overrides;
-the CI compiler's original build path does not exist on this machine. None of
-these host paths or library links is part of the product change.
+path supplies linking and runtime lookup.
+
+The downloaded compiler embeds its CI build root. An initial attempt to expose
+its library through ignored application-local links was incorrect: canonical
+source paths then fell outside the compiler's internal-library prefix.
+`isInternalSourcePath` controls standard-library handling in both pattern
+expansion and validation. That run was stopped after 53:13 (peak 1,725,824 KiB),
+without diagnostics or a test result; it is not a valid performance baseline.
+The temporary library links were removed, retaining tracked overrides.
+
+The corrected local launcher uses a user-local PRoot bind of the compiler
+checkout at its original `/home/runner/work/dynlex/dynlex` build root. This keeps
+canonical standard-library paths under the compiler's expected prefix, without
+modifying compiler code, replacing the binary or requiring administrator access.
+A core-only vector reproduction compiles and runs through that launcher. Local
+builds use `bash build/run-with-toolchain.sh bash build.sh ...`; the launcher
+and host configuration remain ignored build artifacts.
+
+An independent app-only Linux build of application source `2b58b0f` passed in
+[Actions run 40780935702](https://github.com/OpenAEC-Foundation/dynlex/actions/runs/40780935702).
+The `BIM_DEBUG=0 build.sh dev` command took 24:03.82, peak RSS 3,511,468 KiB on the
+Actions runner, with no compiler diagnostics. This build excludes embedded checks.
+Its compiler source `c184581` differs from `ff5c334` only by the build workflow;
+the binary SHA-256 is the same. The resulting binary was downloaded and run on
+this machine with the user-local shared libraries.
+
+A replacement compiler built at the actual local destination prefix is available
+from [run 40782028896](https://github.com/OpenAEC-Foundation/dynlex/actions/runs/40782028896),
+source `328c27557a69b8b2dca53291fcbec9b6c861d548`, binary SHA-256
+`e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`.
+Only the build workflow changes; its embedded prefix is the local compiler
+checkout, so future native use can avoid PRoot. Installation is deferred until
+the active app/check compile finishes. Do not replace a running toolchain's
+libraries or start a second local compiler to validate it concurrently.
 
 ## Restored editing regression
 
@@ -39,8 +69,13 @@ including part suppression, undo, frame replacement and panel unpinning checks.
 - Python module-composition/preflight tests: 10 passed.
 - `scripts/check-layers.sh`: passed; no new dependency edges.
 - Minimal vector reproduction: original calls DIAG, corrected calls compile and run.
-- `BIM_DEBUG=0 bash build.sh dev-test system_editing building_system system_types`: in progress.
-- Interactive application inspection: pending the build.
+- `BIM_DEBUG=0 bash build.sh dev-test system_editing building_system system_types`: in progress through the corrected PRoot launcher; still CPU-active after 51 minutes, diagnostic file empty. No pass/fail result yet.
+- Windows app CI for #24: passed in 12m43s.
+- Independent app-only Linux build: passed; native application starts locally.
+- Native application/API smoke: passed for library enumeration, two curtain-system recipes,
+  a fixed timber window, and an HSB wall with its two child layers. Undo/redo restores
+  complete HSB creation atomically. The model is the supplied example plus synthetic samples.
+- Native 3D view inspected; screenshot and API response reports remain ignored build artifacts.
 
 Elize's independent Linux baseline in #22 reports every pattern check passing
 except `system_editing` (the diagnostic above) and `grid_sheet` (runtime assertion
