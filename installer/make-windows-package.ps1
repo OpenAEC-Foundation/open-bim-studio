@@ -59,7 +59,7 @@ foreach ($shader in $shaderFiles) { Copy-Item $shader.FullName (Join-Path $stage
 
 # The fonts with their licences: osifont (drawings), Inter and JetBrains Mono
 # (the interface), Liberation Mono (the fallback).
-$fonts = Join-Path $repoPath "app\fonts"
+$fonts = Join-Path $repoPath "ui\shell\fonts"
 foreach ($name in "osifont.ttf", "Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf",
                   "JetBrainsMono-Regular.ttf", "Inter-OFL.txt", "JetBrainsMono-OFL.txt") {
     Copy-Item (Join-Path $fonts $name) (Join-Path $stage "fonts")
@@ -90,12 +90,12 @@ $toolchainLicence = Join-Path $ToolchainRoot "LICENSE.TXT"
 Copy-Item $toolchainLicence (Join-Path $stage "licenses\llvm-mingw.txt")
 
 # The interface's icons and the drawing import's script (it needs Python 3).
-Copy-Item (Join-Path $repoPath "app\icons\ui-icons.txt") (Join-Path $stage "icons")
-Copy-Item (Join-Path $repoPath "app\icons\README.md") (Join-Path $stage "icons")
+Copy-Item (Join-Path $repoPath "ui\shell\icons\ui-icons.txt") (Join-Path $stage "icons")
+Copy-Item (Join-Path $repoPath "ui\shell\icons\README.md") (Join-Path $stage "icons")
 foreach ($icon in "open-bim-studio.svg", "open-bim-studio.png", "open-bim-studio.ico", "open-bim-studio.rgba") {
-    Copy-Item (Join-Path $repoPath "app\icons\$icon") (Join-Path $stage "icons")
+    Copy-Item (Join-Path $repoPath "ui\shell\icons\$icon") (Join-Path $stage "icons")
 }
-Copy-Item (Join-Path $repoPath "formats\import\drawing_to_lines.py") (Join-Path $stage "import")
+Copy-Item (Join-Path $repoPath "exchange\import\drawing_to_lines.py") (Join-Path $stage "import")
 
 @"
 Open BIM Studio $Version for Windows (x64)
