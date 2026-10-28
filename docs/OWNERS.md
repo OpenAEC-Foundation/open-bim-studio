@@ -11,10 +11,10 @@ computer and the person.
 
 | Layer | Module | Directory | Owner |
 |---|---|---|---|
-| 0 | kernel-core | `kernel/core`, `kernel/fast` | unassigned |
-| 0 | kernel-planar | `kernel/planar` | unassigned |
-| 0 | kernel-nurbs | `kernel/nurbs`, `kernel/space` | unassigned |
-| 0 | kernel-brep | `kernel/brep`, `kernel/acis` | unassigned |
+| 0 | kernel-core | `kernel/core`, `kernel/fast` | Maarten, computer 2 (Windows) |
+| 0 | kernel-planar | `kernel/planar` | Maarten, computer 2 (Windows) |
+| 0 | kernel-nurbs | `kernel/nurbs`, `kernel/space` | Maarten, computer 2 (Windows) |
+| 0 | kernel-brep | `kernel/brep`, `kernel/acis` | Maarten, computer 2 (Windows) |
 | 1 | bim | `bim/` | maintainer |
 | 2 | viewer | `viewer/` | Elize, computer 1 (Linux) |
 | 2 | native format (IFCX) | `exchange/ifcx` | Elize, computer 1 (Linux) |
