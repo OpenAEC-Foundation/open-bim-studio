@@ -109,6 +109,33 @@ corner/side grips are delivered by this PR. Rotated, curved and nested systems,
 new contour multi-selection, and generator regeneration are outside this visual
 check. A separate native demonstration remains open with the first LED selected.
 
+## Translated and rotated sample
+
+A fresh copy was moved by the native Move tool from (0, 0) to (10, 5) metres,
+then rotated 90 degrees about (10, 5) by the native Rotate tool with numeric
+angle input. The carrier endpoints changed from (10, 5)/(14.8, 5) to
+(10, 5)/(10, 9.8), retaining host ID 6. **7 additional native checks passed**:
+translation/rotation coordinates, real 3D clicks selecting LED parts 2033 and
+2007, one Undo/Redo of the rotation, and unchanged InputV1/semantic target.
+Visual inspection confirms that both orange cell outlines follow the rotated
+ceiling plane. These checks used the same PR #35 binary without a rebuild.
+
+Fit did not recenter this standalone system. The camera fitting function
+collects walls and several detail-object classes, but omits standalone building
+systems and returns the current camera when it finds no bounds. Manual zoom
+and middle-button pan brought the ceiling back into view. This reproducible
+navigation defect is tracked separately in
+[issue #38](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/38);
+it does not invalidate the observed panel outlines.
+
+Native Ctrl+S wrote the transformed example as `rotated-overlay-ceiling.ifcxb`
+(local verification artifact, SHA-256
+`48a150ffc5fe92db50ab6b8cc53979299de8201efcdb13692a63d9f69b4d18de`).
+This audit did not independently reopen that saved file. The temporary app was
+closed after recording the result; earlier visible demonstrations were untouched.
+The tested rotation is 90 degrees; arbitrary angles, curved/nested hosts and
+ordinary-selection corner/side grips remain outside this check.
+
 ## Generator boundary
 
 Existing native contour editing does **not** rewrite the generator's InputV1.
