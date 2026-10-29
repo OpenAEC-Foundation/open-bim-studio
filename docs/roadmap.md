@@ -129,6 +129,12 @@ Consolidate everything into [`BUILD-BRIEF.md`](BUILD-BRIEF.md).
 **Acceptance test:** hand it to a fresh AI session with no other context. If it cannot produce a
 coherent implementation plan, the brief is not finished.
 
+## Planning round of 29 October 2026
+
+Views, grids, levels, georeferencing and building systems are planned as issues before anything
+is built: [`superpowers/plans/2026-10-29-views-grids-levels-plan.md`](superpowers/plans/2026-10-29-views-grids-levels-plan.md),
+epic [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67).
+
 ## After phase 5
 
 The build itself, which is out of scope for this repository as currently constituted. If it
