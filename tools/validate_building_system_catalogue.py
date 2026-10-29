@@ -14,7 +14,9 @@ CAPABILITIES = set("layers opening-regions prefab-partition roll-courses semanti
                    "point-support nested-systems explicit-axes ordinary-linear-elements "
                    "staggered-grid bonded-corners unit-cutting supplier-cut-constraints "
                    "polygon-clipping stock-ledger edge-aware-reuse curved-offsets "
-                   "polygon-cutting parallel-grid".split())
+                   "polygon-cutting parallel-grid manufactured-assemblies discipline-adapters "
+                   "overlap-patterns folded-stock drainage-zones motif-grid discrete-placement "
+                   "tensioned-surfaces".split())
 RULES = set("supported-board-edges rectangular-opening-regions prefab-max-length "
             "sealed-membrane-laps insulation-excludes-frame layer-suppression-dependencies "
             "offset-lining-seams head-movement-clearance main-runner-continuity "
@@ -27,10 +29,16 @@ RULES = set("supported-board-edges rectangular-opening-regions prefab-max-length
             "minimum-cut-width border-offset-validity movement-joint-continuity "
             "support-and-fixings ventilation-continuity panel-expansion grain-and-face-direction "
             "bearing-and-span opening-trimming supplier-widths-only span-and-bearing "
-            "strand-and-web-exclusions engineered-cuts-only".split())
+            "strand-and-web-exclusions engineered-cuts-only fire-compartment-interfaces "
+            "expansion-and-slip joint-fill-complete panel-edge-interlock site-cut-authorization "
+            "thermal-bridge-interfaces disassembly-sequence wet-system-compatibility "
+            "continuous-waterproofing overlap-and-working-pitch uplift-and-restraint "
+            "surface-drainage root-barrier-continuity maintenance-access independent-support "
+            "service-clearance finish-direction connection-capacity".split())
 COVERAGE = set("roll-courses linear-repetition cavity-fill rectangular-stock point-support "
                "linear-network cell-fill nested-cells perimeter-network joint-fill "
-               "continuous-coating linear-stock".split())
+               "continuous-coating linear-stock empty-zone manufactured-panel continuous-volume "
+               "overlapping-cells folded-stock profiled-stock discrete-components tensioned-surface".split())
 
 
 def validate(data):
@@ -78,7 +86,7 @@ def validate(data):
         return errors + ["families: expected object"]
     source_ids = unique(data["sources"], "sources")
     unique(data["recipes"], "recipes")
-    unique(data["components"], "components")
+    component_ids = unique(data["components"], "components")
     for source in data["sources"]:
         if not keys(source, {"id", "url", "title", "locator", "retrieved", "scope"}, "source"):
             continue
@@ -89,6 +97,7 @@ def validate(data):
             continue
         require(set(family["sources"]) <= source_ids, name, "unknown evidence reference")
         require(set(family["rules"]) <= RULES, name, "unknown rule")
+        require(set(family["substitutions"]) <= component_ids, name, "unknown substitution interface")
         require(bool(family["inputs"]), name, "unresolved project inputs must be explicit")
         layers = family["layers"]
         layer_keys = [item.get("key") for item in layers]
@@ -100,7 +109,12 @@ def validate(data):
             if "shares_zone_with" in item:
                 require(item["shares_zone_with"] in layer_keys and item["shares_zone_with"] != item["key"], name, "invalid shared-zone reference")
     for component in data["components"]:
-        keys(component, {"id", "kind", "ports", "requires"}, "component")
+        if keys(component, {"id", "kind", "ports", "requires"}, "component"):
+            require(bool(component["ports"]) and len(component["ports"]) == len(set(component["ports"])), component["id"], "ports must be nonempty and unique")
+            require(bool(component["requires"]), component["id"], "product definition inputs required")
+            if "used_by_families" in component:
+                actual = {name for name, family in data["families"].items() if component["id"] in family["substitutions"]}
+                require(set(component["used_by_families"]) == actual, component["id"], "component/family usage references disagree")
     for item in data["recipes"]:
         required = {"id", "version", "label_nl", "family", "validation_status", "host_roles", "parameters", "requires_capabilities", "performance_claims", "default_basis", "manufacturer_system"}
         if not keys(item, required, "recipe"):

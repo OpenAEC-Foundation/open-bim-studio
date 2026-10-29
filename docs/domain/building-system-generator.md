@@ -533,7 +533,9 @@ tolerances with named units. Pair module tests with native editor/API transactio
 ## 15. Delivery
 
 1. **This change:** design, evidence-based authoring catalogue, validation and native planning
-   primitives with focused fixtures. Catalogue records are not yet imported into the live UI.
+   primitives with focused fixtures. The catalogue now covers 183 presets in 43 families and
+   83 substitution interfaces, with a bounded native metadata reader and capability checks.
+   Catalogue records are not yet connected to live model placement.
 2. **Identity and migration:** public pattern API, versioned definitions, semantic part keys,
    persistent overrides and compatibility adapter; save/reload and undo fixtures first.
 3. **First complete vertical slice:** suspended ceiling with contour, independent grid/member

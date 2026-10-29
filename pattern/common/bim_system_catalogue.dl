@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: MPL-2.0
+# Read-only, bounded catalogue metadata. Loading a concept does not activate
+# geometry generation or assert product-system compatibility/performance.
+import lib/json.dl
+
+class:
+    patterns:
+        [a|] bim system catalogue record
+    members:
+        valid as a boolean
+        diagnostic as a string
+        document as a pointer to a JSON value
+
+local function the bim catalogue member {a string:memberKey} of {a pointer to a JSON value:objectValue}:
+    execute:
+        if objectValue is not a JSON object:
+            return 0 as a pointer to a JSON value
+        if objectValue lacks JSON member named memberKey:
+            return 0 as a pointer to a JSON value
+        return the JSON member named memberKey in objectValue
+
+local function bim catalogue value {a pointer to a JSON value:node} has kind {integer:kindValue}:
+    execute:
+        if node = (0 as a pointer to a JSON value):
+            return false
+        return node's kind = kindValue
+
+local function bim catalogue text {a pointer to a JSON value:node} is nonempty:
+    execute:
+        if (bim catalogue value node has kind (the JSON text kind)) = false:
+            return false
+        return ((the length of node's text) > 0) and ((the length of node's text) <= 512)
+
+local function the bim catalogue refusal {a string:reason} releasing {a pointer to a JSON value:documentValue}:
+    execute:
+        free documentValue
+        return @intrinsic("construct", a bim system catalogue record, false, reason, 0 as a pointer to a JSON value)
+
+# The caller owns the returned document and releases it exactly once.
+# Metadata lookup results borrow from it and must not outlive it.
+function the bim system catalogue parsed from {a string:sourceText}:
+    execute:
+        if ((the length of sourceText) = 0) or ((the length of sourceText) > 2000000):
+            return the bim catalogue refusal (the string form of "Catalogue text size is outside the supported range") releasing (0 as a pointer to a JSON value)
+        set parsed to the JSON document parsed from sourceText
+        if parsed failed:
+            return the bim catalogue refusal (the string form of "Invalid catalogue JSON") releasing parsed's value
+        set rootValue to parsed's value
+        set schema to the bim catalogue member (the string form of "schema_version") of rootValue
+        set units to the bim catalogue member (the string form of "units") of rootValue
+        set recipes to the bim catalogue member (the string form of "recipes") of rootValue
+        set families to the bim catalogue member (the string form of "families") of rootValue
+        if ((bim catalogue value schema has kind (the JSON number kind)) = false) or ((bim catalogue value units has kind (the JSON text kind)) = false):
+            return the bim catalogue refusal (the string form of "Missing catalogue schema or units") releasing rootValue
+        if (schema's number != 1.0) or (units's text != (the string form of "mm")):
+            return the bim catalogue refusal (the string form of "Unsupported catalogue schema or units") releasing rootValue
+        if (recipes is not a JSON array) or (families is not a JSON object):
+            return the bim catalogue refusal (the string form of "Catalogue needs recipe and family collections") releasing rootValue
+        if ((recipes's length = 0) or (recipes's length > 2048)) or ((families's length = 0) or (families's length > 256)):
+            return the bim catalogue refusal (the string form of "Catalogue collection limit exceeded") releasing rootValue
+        loop cursor from 0 to recipes's length:
+            set recipe to the JSON value at index cursor in recipes
+            set identity to the bim catalogue member (the string form of "id") of recipe
+            set version to the bim catalogue member (the string form of "version") of recipe
+            set label to the bim catalogue member (the string form of "label_nl") of recipe
+            set family to the bim catalogue member (the string form of "family") of recipe
+            if (((bim catalogue text identity is nonempty) and (bim catalogue text version is nonempty)) and ((bim catalogue text label is nonempty) and (bim catalogue text family is nonempty))) = false:
+                return the bim catalogue refusal (the string form of "Invalid recipe identity, version, label or family") releasing rootValue
+            if families lacks JSON member named family's text:
+                return the bim catalogue refusal (the string form of "Unknown recipe family") releasing rootValue
+            if (the JSON member named family's text in families) is not a JSON object:
+                return the bim catalogue refusal (the string form of "Invalid family definition") releasing rootValue
+            loop earlier from 0 to cursor:
+                set previous to the JSON value at index earlier in recipes
+                if (the JSON text named "id" in previous) = identity's text:
+                    return the bim catalogue refusal (the string form of "Duplicate recipe identity") releasing rootValue
+            set roles to the bim catalogue member (the string form of "host_roles") of recipe
+            set capabilities to the bim catalogue member (the string form of "requires_capabilities") of recipe
+            set parameters to the bim catalogue member (the string form of "parameters") of recipe
+            if ((roles is not a JSON array) or (capabilities is not a JSON array)) or (parameters is not a JSON object):
+                return the bim catalogue refusal (the string form of "Invalid recipe roles, capabilities or parameters") releasing rootValue
+            if ((roles's length = 0) or (roles's length > 5)) or ((capabilities's length = 0) or (capabilities's length > 64)):
+                return the bim catalogue refusal (the string form of "Invalid recipe role or capability count") releasing rootValue
+            loop roleCursor from 0 to roles's length:
+                set role to the JSON value at index roleCursor in roles
+                if (bim catalogue text role is nonempty) = false:
+                    return the bim catalogue refusal (the string form of "Invalid host role") releasing rootValue
+                if (((role's text != (the string form of "wall")) and (role's text != (the string form of "floor"))) and ((role's text != (the string form of "roof")) and (role's text != (the string form of "ceiling")))) and (role's text != (the string form of "opening")):
+                    return the bim catalogue refusal (the string form of "Unknown host role") releasing rootValue
+            loop capabilityCursor from 0 to capabilities's length:
+                if (bim catalogue text (the JSON value at index capabilityCursor in capabilities) is nonempty) = false:
+                    return the bim catalogue refusal (the string form of "Invalid capability name") releasing rootValue
+            set status to the bim catalogue member (the string form of "validation_status") of recipe
+            set manufacturer to the bim catalogue member (the string form of "manufacturer_system") of recipe
+            set claims to the bim catalogue member (the string form of "performance_claims") of recipe
+            if (((bim catalogue value status has kind (the JSON text kind)) and (bim catalogue value manufacturer has kind (the JSON boolean kind))) and (claims is a JSON array)) = false:
+                return the bim catalogue refusal (the string form of "Missing recipe evidence status") releasing rootValue
+            if ((status's text != (the string form of "concept")) or manufacturer's boolean) or (claims's length != 0):
+                return the bim catalogue refusal (the string form of "Only unapproved concept metadata is supported by this catalogue reader") releasing rootValue
+        return @intrinsic("construct", a bim system catalogue record, true, the string form of "", rootValue)
+
+function the number of recipes in bim system catalogue {bim system catalogue record:catalogue}:
+    execute:
+        if catalogue's valid = false:
+            return 0
+        return (the JSON member named "recipes" in catalogue's document)'s length
+
+# Returns null when absent or invalid; the result borrows catalogue storage.
+function the recipe named {a string:identity} in bim system catalogue {bim system catalogue record:catalogue}:
+    execute:
+        if catalogue's valid = false:
+            return 0 as a pointer to a JSON value
+        set recipes to the JSON member named "recipes" in catalogue's document
+        loop cursor from 0 to recipes's length:
+            set recipe to the JSON value at index cursor in recipes
+            if (the JSON text named "id" in recipe) = identity:
+                return recipe
+        return 0 as a pointer to a JSON value
+
+# Availability is explicit, independent of loading/displaying the metadata.
+# A caller must also resolve parameters, products, host and interfaces before
+# generation. This predicate alone does not authorise physical placement.
+function bim catalogue recipe {a pointer to a JSON value:recipe} needs only capabilities {the type of (an empty list of a string):available}:
+    execute:
+        set capabilities to the bim catalogue member (the string form of "requires_capabilities") of recipe
+        if capabilities is not a JSON array:
+            return false
+        if capabilities's length = 0:
+            return false
+        loop cursor from 0 to capabilities's length:
+            set required to the JSON value at index cursor in capabilities
+            if (bim catalogue text required is nonempty) = false:
+                return false
+            set found to false
+            loop availableCursor from 0 to the length of available:
+                if (the item at availableCursor in available) = required's text:
+                    set found to true
+            if found = false:
+                return false
+        return true
+
+function free bim system catalogue {a pointer to a bim system catalogue record:catalogue}:
+    execute:
+        free catalogue's document
+        set catalogue's document to 0 as a pointer to a JSON value
+        set catalogue's valid to false

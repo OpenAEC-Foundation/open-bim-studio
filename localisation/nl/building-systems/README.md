@@ -4,9 +4,10 @@
 generator support for Dutch building practice, without confusing an example with an approved
 construction system?
 
-Status: **authoring data, version 0.1.0; not loaded by the native application yet**. The
-[catalogue](catalogue.json) contains 48 conceptual presets in 10 families, five detailed
-substitution component templates and nine primary-source references. The live application's
+Status: **authoring data, version 0.2.0; not exposed in the live placement interface**. The
+[catalogue](catalogue.json) contains 183 conceptual presets in 43 families, 83 substitution
+interface templates and 13 primary-source references. The [complete index](INDEX.md) lists
+every family, preset, layer role, boundary and component interface. The live application's
 43 legacy recipe indices are unchanged. See the [generator contract](../../../docs/domain/building-system-generator.md).
 
 ## Scope and use
@@ -24,6 +25,21 @@ substitution component templates and nine primary-source references. The live ap
 | Timber cassettes | Floor and roof | Framing/deck/insulation/lining, prefab joints, bearings and trimmed openings; structural/membrane design required |
 | Hollow-core | 320 mm depth, nominal 1200 width example | Supplier-controlled infills, strands/webs, bearings, engineered openings; no arbitrary site tile-style cutting |
 
+Version 0.2 adds cavity walls, mass timber, precast/block/insulated-formwork walls, sandwich
+panels, light steel framing, curtain facades, demountable partitions and external insulation;
+overlapping roof coverings, standing-seam and flat roofs, vegetated/water-retention roofs;
+raised floors, beam-and-block, precast and composite floors, screeds, timber/resilient/modular
+finishes, paving and decking; boarded, baffle/raft/linear and tensioned ceilings; solar mounting,
+shading, green facades, guarding, modular interiors and service carriers. These are construction
+and interface templates. Electrical/fluid calculations, engineered load capacity and product
+approval remain with their disciplines and supplied evidence.
+
+The set is extensible rather than claimed exhaustive. Nested families and typed substitutions
+represent new combinations without creating one solver per material or every permutation.
+An unspecified product is represented by required inputs and null dimensions, not invented
+technical values. A child must satisfy its parent's ports, supports and exposure constraints.
+Layer suppression is stored under family `operations`, never as an imaginary replacement product.
+
 Every `concept` recipe has an empty `performance_claims` array and `manufacturer_system: false`.
 The dimensions are editable authoring examples. In particular 38 mm timber width, 3300 mm
 prefab maximum, 18 mm plywood, 45 mm service zone and the 600/610 alternatives are not asserted
@@ -37,6 +53,10 @@ The JSON uses millimetres. IDs and rule keys are English; `label_nl` is display 
 records describe layer functions, opening/boundary roles, substitution roles, stock kinds,
 required rules and unresolved inputs. A recipe references a family and supplies parameter
 overlays. These records are declarative authoring specifications, not executable expressions.
+`pattern/common/bim_system_catalogue.dl` provides bounded read-only native metadata loading,
+stable-ID lookup and an explicit capability check. It owns its parsed JSON until released;
+lookup results borrow that storage. It does not create model elements or validate full
+product assemblies. The live placement interface is not connected to this reader yet.
 The future importer must reject unknown keys/rules or unavailable capabilities and show the
 missing input. It must never silently approximate an unsupported concealed ceiling as T24.
 
@@ -93,11 +113,17 @@ The catalogue stores retrieval date, URL, locator and scope for every source. Us
   illustrates explicit board edge-gap requirements for its product. This is a plywood/OSB
   interface design consideration, not evidence for a Dutch approved wall assembly.
 
+Additional family evidence is scoped in the catalogue: [RHEINZINK seam guidance](https://www.rheinzink.nl/producten/daksystemen/felsdak/),
+[Rockpanel installation guidance](https://www.rockpanel.com/nl/syssiteassets/documentation/nl/brochures/rockpanel_instructiegids.pdf),
+[Wienerberger working-size guidance](https://www.wienerberger.nl/informatie/dak/omgaan-met-een-maatafwijking.html)
+and [Sto system families](https://www.sto.nl/s/c/a0K2p00001NaTWwEAN/products-systems).
+These sources support interface/working-size requirements, not approval of the generic recipes.
+
 ## Validation and next delivery
 
 Run `python3 tools/validate_building_system_catalogue.py`. It checks identifiers, family/source
 references, required fields, finite positive dimensions, known rule/capability names,
-layer-zone references, tiled module arithmetic and brick pitch arithmetic. It does not
+layer-zone and substitution-interface references, component port/usage consistency, tiled module arithmetic and brick pitch arithmetic. It does not
 validate structural or building-physics design. No network access is required to validate.
 
 Before activating a preset, implement and test every declared capability, resolve every
