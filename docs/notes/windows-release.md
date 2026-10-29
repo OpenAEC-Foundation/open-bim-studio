@@ -104,7 +104,7 @@ The snapshot `Open-BIM-Studio-0.1-source.tar.gz` of release v0.1 carries its own
 `BUILD-SNAPSHOT.txt`: application sources at this repository's commit
 `2942813`, compiler sources at a local DynLex fork commit `02fbe6a` that is on
 no pushed branch (its `src/cpp` matches the pushed `42a88886` of 2026-09-24
-outside the files the six patches touch, verified on 2026-10-27 by a directory
+outside the files the seven patches touch, verified on 2026-10-27 by a directory
 digest), plus a staged `lib/` of 140 kernel files from a local worktree that
 differs from both the port and this repository's `kernel/`. Since the
 restructuring of 2026-10-27 the workflows build only the compiler from the
