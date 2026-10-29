@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: MPL-2.0
+# Version 1: regular rectangular centreline domains, one support/infill pair.
+# Integers are millimetres. Caller resolves bindings/capabilities explicitly;
+# a successful plan is geometry intent, not product or engineering approval.
+import lib/std.dl
+import lib/list.dl
+import lib/string.dl
+
+class:
+    patterns:
+        [a|] bim rectangular definition record
+    members:
+        identity as a string
+        version as an integer
+        pitchU as an integer
+        pitchV as an integer
+        jointWidth as an integer
+        frameDepth as an integer
+        panelThickness as an integer
+        frameMaterial as a string
+        panelMaterial as a string
+        frameBinding as a string
+        panelBinding as a string
+
+class:
+    patterns:
+        [a|] bim rectangular occurrence record
+    members:
+        identity as a string
+        definitionId as a string
+        pinnedVersion as an integer
+        spanU as an integer
+        spanV as an integer
+        elevation as an integer
+        partLimit as an integer
+        capabilitiesAvailable as a boolean
+        bindingsAvailable as a boolean
+
+class:
+    patterns:
+        [a|] bim cell replacement record
+    members:
+        ordinalU as an integer
+        ordinalV as an integer
+        componentKey as a string
+        material as a string
+        thickness as an integer
+        nominalU as an integer
+        nominalV as an integer
+        supportCompatible as a boolean
+
+class:
+    patterns:
+        [a|] bim generated intent record
+    members:
+        key as a string
+        # 0: U-axis member (runs along V); 1: V-axis member; 2: panel.
+        role as an integer
+        ordinalU as an integer
+        ordinalV as an integer
+        startU as an integer
+        startV as an integer
+        finishU as an integer
+        finishV as an integer
+        width as an integer
+        depth as an integer
+        material as a string
+        componentKey as a string
+
+class:
+    patterns:
+        [a|] bim rectangular evaluation record
+    members:
+        valid as a boolean
+        diagnostic as a string
+        definitionId as a string
+        version as an integer
+        occurrenceId as a string
+        columns as an integer
+        rows as an integer
+        parts as a pointer to a list
+
+function a bim rectangular refusal saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a bim rectangular evaluation record, false, reason, the string form of "", 0, the string form of "", 0, 0, an empty list of a bim generated intent record)
+
+function the bim semantic cell key of {a string:occurrenceKey} at u {integer:axisU} v {integer:axisV}:
+    execute:
+        return (((occurrenceKey + (the string form of "/infill/grid/u")) + (the string form of axisU)) + (the string form of "-v")) + (the string form of axisV)
+
+# Every refusal precedes output allocation. No model is mutated here.
+function evaluate bim rectangle {bim rectangular occurrence record:occurrenceValue} defined by {bim rectangular definition record:definitionValue} replacing {a pointer to a list:replacementValues}:
+    execute:
+        if (((the length of occurrenceValue's identity) = 0) or ((the length of definitionValue's identity) = 0)) or (((the length of occurrenceValue's identity) > 256) or ((the length of definitionValue's identity) > 256)):
+            return a bim rectangular refusal saying (the string form of "identity: occurrence and definition IDs must have 1..256 bytes")
+        if ((definitionValue's version != 1) or (occurrenceValue's pinnedVersion != definitionValue's version)) or (occurrenceValue's definitionId != definitionValue's identity):
+            return a bim rectangular refusal saying (the string form of "definition: unsupported or mismatched pinned version/ID")
+        if occurrenceValue's capabilitiesAvailable = false:
+            return a bim rectangular refusal saying (the string form of "capability: rectangular grid generation is unavailable")
+        if occurrenceValue's bindingsAvailable = false:
+            return a bim rectangular refusal saying (the string form of "binding: frame and infill inputs are unresolved")
+        if (((the length of definitionValue's frameBinding) = 0) or ((the length of definitionValue's panelBinding) = 0)) or (((the length of definitionValue's frameMaterial) = 0) or ((the length of definitionValue's panelMaterial) = 0)):
+            return a bim rectangular refusal saying (the string form of "binding: component and material references are required")
+        if (((the length of definitionValue's frameBinding) > 256) or ((the length of definitionValue's panelBinding) > 256)) or (((the length of definitionValue's frameMaterial) > 256) or ((the length of definitionValue's panelMaterial) > 256)):
+            return a bim rectangular refusal saying (the string form of "binding: references and material labels must not exceed 256 bytes")
+        if ((definitionValue's pitchU < 10) or (definitionValue's pitchU > 1000000)) or ((definitionValue's pitchV < 10) or (definitionValue's pitchV > 1000000)):
+            return a bim rectangular refusal saying (the string form of "grid: pitches must be 10..1000000 mm")
+        if ((definitionValue's jointWidth < 2) or ((the remainder of definitionValue's jointWidth divided by 2) != 0)) or ((definitionValue's jointWidth >= definitionValue's pitchU) or (definitionValue's jointWidth >= definitionValue's pitchV)):
+            return a bim rectangular refusal saying (the string form of "grid: joint must be even millimetres and leave positive infills")
+        if ((definitionValue's frameDepth < 1) or (definitionValue's frameDepth > 10000)) or ((definitionValue's panelThickness < 1) or (definitionValue's panelThickness > 10000)):
+            return a bim rectangular refusal saying (the string form of "binding: section depths must be 1..10000 mm")
+        if ((occurrenceValue's spanU < 1) or (occurrenceValue's spanU > 1000000)) or ((occurrenceValue's spanV < 1) or (occurrenceValue's spanV > 1000000)):
+            return a bim rectangular refusal saying (the string form of "domain: spans must be 1..1000000 mm")
+        if (occurrenceValue's elevation < -1000000) or (occurrenceValue's elevation > 1000000):
+            return a bim rectangular refusal saying (the string form of "domain: elevation is outside the supported range")
+        if ((the remainder of occurrenceValue's spanU divided by definitionValue's pitchU) != 0) or ((the remainder of occurrenceValue's spanV divided by definitionValue's pitchV) != 0):
+            return a bim rectangular refusal saying (the string form of "domain: partial edge modules require a later clipping evaluator")
+        set columnCount to occurrenceValue's spanU / definitionValue's pitchU
+        set rowCount to occurrenceValue's spanV / definitionValue's pitchV
+        if ((columnCount > 1000) or (rowCount > 1000)) or ((occurrenceValue's partLimit < 1) or (occurrenceValue's partLimit > 10000)):
+            return a bim rectangular refusal saying (the string form of "budget: axis or part limit is outside the supported range")
+        set intentCount to ((columnCount * rowCount) + columnCount) + (rowCount + 2)
+        if intentCount > occurrenceValue's partLimit:
+            return a bim rectangular refusal saying (the string form of "budget: generated part count exceeds the occurrence limit")
+        if (the length of replacementValues) > 64:
+            return a bim rectangular refusal saying (the string form of "replacement: at most 64 cell overrides are supported")
+        loop replacementCursor from 0 to the length of replacementValues:
+            set cellOverride to the item at replacementCursor in replacementValues
+            if ((cellOverride's ordinalU < 0) or (cellOverride's ordinalU >= columnCount)) or ((cellOverride's ordinalV < 0) or (cellOverride's ordinalV >= rowCount)):
+                return a bim rectangular refusal saying (the string form of "replacement: target cell is unresolved in this domain")
+            if (((the length of cellOverride's componentKey) = 0) or ((the length of cellOverride's material) = 0)) or ((cellOverride's thickness < 1) or (cellOverride's thickness > 10000)):
+                return a bim rectangular refusal saying (the string form of "replacement: component/material/thickness binding is missing")
+            if ((the length of cellOverride's componentKey) > 256) or ((the length of cellOverride's material) > 256):
+                return a bim rectangular refusal saying (the string form of "replacement: references and material labels must not exceed 256 bytes")
+            if (cellOverride's componentKey = definitionValue's panelBinding) or (cellOverride's componentKey = definitionValue's frameBinding):
+                return a bim rectangular refusal saying (the string form of "replacement: a different component requires its own binding key")
+            if ((cellOverride's nominalU != definitionValue's pitchU) or (cellOverride's nominalV != definitionValue's pitchV)) or (cellOverride's supportCompatible = false):
+                return a bim rectangular refusal saying (the string form of "replacement: nominal module or support compatibility is not satisfied")
+            loop previousCursor from 0 to replacementCursor:
+                set previousOverride to the item at previousCursor in replacementValues
+                if (previousOverride's ordinalU = cellOverride's ordinalU) and (previousOverride's ordinalV = cellOverride's ordinalV):
+                    return a bim rectangular refusal saying (the string form of "replacement: duplicate target cell")
+                if previousOverride's componentKey = cellOverride's componentKey:
+                    if (previousOverride's material != cellOverride's material) or (previousOverride's thickness != cellOverride's thickness):
+                        return a bim rectangular refusal saying (the string form of "replacement: conflicting component binding")
+        set generatedParts to an empty list of a bim generated intent record
+        loop axisCursor from 0 to (columnCount + 1):
+            set memberKey to (occurrenceValue's identity + (the string form of "/support/grid/u")) + (the string form of axisCursor)
+            set axisPosition to axisCursor * definitionValue's pitchU
+            append (@intrinsic("construct", a bim generated intent record, memberKey, 0, axisCursor, -1, axisPosition, 0, axisPosition, occurrenceValue's spanV, definitionValue's jointWidth, definitionValue's frameDepth, definitionValue's frameMaterial, definitionValue's frameBinding)) to generatedParts
+        loop axisCursor from 0 to (rowCount + 1):
+            set memberKey to (occurrenceValue's identity + (the string form of "/support/grid/v")) + (the string form of axisCursor)
+            set axisPosition to axisCursor * definitionValue's pitchV
+            append (@intrinsic("construct", a bim generated intent record, memberKey, 1, -1, axisCursor, 0, axisPosition, occurrenceValue's spanU, axisPosition, definitionValue's jointWidth, definitionValue's frameDepth, definitionValue's frameMaterial, definitionValue's frameBinding)) to generatedParts
+        set halfJoint to definitionValue's jointWidth / 2
+        loop cellU from 0 to columnCount:
+            loop cellV from 0 to rowCount:
+                set componentValue to definitionValue's panelBinding
+                set materialValue to definitionValue's panelMaterial
+                set thicknessValue to definitionValue's panelThickness
+                loop replacementCursor from 0 to the length of replacementValues:
+                    set cellOverride to the item at replacementCursor in replacementValues
+                    if (cellOverride's ordinalU = cellU) and (cellOverride's ordinalV = cellV):
+                        set componentValue to cellOverride's componentKey
+                        set materialValue to cellOverride's material
+                        set thicknessValue to cellOverride's thickness
+                append (@intrinsic("construct", a bim generated intent record, the bim semantic cell key of occurrenceValue's identity at u cellU v cellV, 2, cellU, cellV, (cellU * definitionValue's pitchU) + halfJoint, (cellV * definitionValue's pitchV) + halfJoint, ((cellU + 1) * definitionValue's pitchU) - halfJoint, ((cellV + 1) * definitionValue's pitchV) - halfJoint, 0, thicknessValue, materialValue, componentValue)) to generatedParts
+        return @intrinsic("construct", a bim rectangular evaluation record, true, the string form of "", definitionValue's identity, definitionValue's version, occurrenceValue's identity, columnCount, rowCount, generatedParts)
