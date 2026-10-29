@@ -11,8 +11,16 @@
 # in scripts/layer-baseline.txt; this script fails only on an edge that is not
 # in the baseline, so the count can go down but never up. Run with
 # `--write-baseline` to record the current edges after removing some.
+#
+# The kernel seam (module split plan, phase E): kernel/brep and kernel/acis
+# are the library behind kernel/api; application modules import kernel/api,
+# kernel/core, kernel/fast, kernel/planar and kernel/nurbs only. Tests may
+# still import the library's source for their own comparisons.
 set -euo pipefail
+# One collation on every machine, so the sorted edges and the baseline compare.
+export LC_ALL=C
 cd "$(dirname "$0")/.."
+modules="bim viewer exchange ifc views materials localisation automation ui elements pattern structural architectural mep"
 layer_of() {
     case "$1" in
         kernel/*|lib/*) echo 0 ;;
@@ -33,9 +41,17 @@ module_of() {
         *) echo "${1%%/*}" ;;
     esac
 }
+# shellcheck disable=SC2086
+seam=$(grep -rnoE '^import kernel/(brep|acis)/[^[:space:]]+' --include='*.dl' --exclude-dir=tests $modules 2>/dev/null || true)
+if [ -n "$seam" ]; then
+    echo "application modules importing the kernel library's source instead of kernel/api:"
+    echo "$seam"
+    exit 1
+fi
+# shellcheck disable=SC2086
 edges=$(grep -rnoE '^import [^[:space:]]+' --include='*.dl' \
     --exclude-dir=tests --exclude-dir=reference --exclude-dir=docs --exclude-dir=build --exclude-dir=generated --exclude-dir=tools \
-    bim viewer exchange ifc views materials localisation automation ui elements pattern structural architectural mep 2>/dev/null \
+    $modules 2>/dev/null \
     | while IFS=: read -r file _ line; do
         target=${line#import }
         from_layer=$(layer_of "$file"); to_layer=$(layer_of "$target")
@@ -49,7 +65,8 @@ if [ "${1:-}" = "--write-baseline" ]; then
     echo "baseline: $(printf '%s\n' "$edges" | grep -c .) edges"
     exit 0
 fi
-new=$(comm -23 <(printf '%s\n' "$edges") <(sort -u scripts/layer-baseline.txt 2>/dev/null))
+# The baseline may carry CRLF line ends in a Windows working copy.
+new=$(comm -23 <(printf '%s\n' "$edges" | sort -u) <(tr -d '\r' < scripts/layer-baseline.txt 2>/dev/null | sort -u))
 if [ -n "$new" ]; then
     echo "import edges against the layer order that are not in scripts/layer-baseline.txt:"
     echo "$new"
