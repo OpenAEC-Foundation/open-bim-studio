@@ -81,9 +81,33 @@ The temporary process was closed after restoring the baseline.
 These checks use native 3D picking and Tab/Escape, supported property API entry
 and API Undo. They do not prove keyboard focus/typing in the property widget,
 all invalid/self-intersecting contours, a full serialized-model diff, or new
-behaviour in the pending editor selection slice. The first checker attempt
-imported an old command-line helper with side effects; that tooling was guarded
-before the passing continuation. No product change was needed.
+behaviour in the pending editor selection slice. No product change was needed.
+
+## Picked-panel outline correction
+
+[PR #35](https://github.com/OpenAEC-Foundation/open-bim-studio/pull/35), source
+`4378c8745acc2232087e3c0ff8cc6b7cc80b8bf7`, was independently built and opened
+against a copy of the generated 4800 x 3600 mm two-LED sample. Native 3D clicks
+selected the LED cells at u5/v3 and u1/v1 as parts 2033 and 2007 respectively,
+without adding an Undo step. Visual inspection confirms that the orange outline
+lies on each selected ceiling cell. The plan view shows the same selected
+cell as a rectangle. The sample file's SHA-256 remains
+`36406e36a6190a5b6bbe58bc335b852f572091e3a0cb1606e321fcaa13660db7`.
+
+The independent Linux app-only build completed in **1:11:19**, peak RSS
+**4,142,456 KiB**, exit 0. The build log contains only the kernel/archive and
+app-built lines; kernel diagnostic is empty. Compiler SHA-256:
+`e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`;
+app SHA-256:
+`f319bbc1470245d4762c3e45d39b39c499db6d37cf284d79b2104877b81d4ace`.
+No headless fixtures were rerun for this visual review. The PR owner's reported
+Linux fixture results and Windows CI are separate evidence.
+
+This verifies the picked-panel outline correction in this rectangular sample.
+The generic cyan carrier grips remain off the ceiling plane: no eight ordinary
+corner/side grips are delivered by this PR. Rotated, curved and nested systems,
+new contour multi-selection, and generator regeneration are outside this visual
+check. A separate native demonstration remains open with the first LED selected.
 
 ## Generator boundary
 
@@ -96,6 +120,6 @@ subject to the agreement in
 [issue #22](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/22#issuecomment-6488059232).
 
 **Verdict:** point and edge picking, G preview/cancel, contour commit and one-step
-Undo/Redo are usable in the tested flat-ceiling sketch workflow. Corrected
+Undo/Redo are usable in the tested flat-ceiling sketch workflow. The picked-panel outline correction is visually confirmed in PR #35. Corrected
 ordinary-selection corner/side handles, general derived-feature selection and
 live generator synchronization are still outstanding.
