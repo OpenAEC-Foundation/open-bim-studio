@@ -26,7 +26,7 @@ The evaluator does not independently prove that engineering compatibility.
 Before emitting anything, the evaluator refuses missing IDs, unsupported/mismatched
 versions, unavailable capability/bindings, invalid dimensions, odd-millimetre joints,
 partial edge modules, excessive axes/parts/replacements, unresolved cells, conflicting
-bindings or duplicate targets. Limits: at most 1000 axes per direction, 10000 parts and
+bindings or duplicate targets. Limits: at most 1000 modules per direction (1001 axes), 10000 parts and
 64 replacements; IDs/material labels/binding references are limited to 256 bytes. Rejections contain a diagnostic and an empty output list. Results own
 their `parts` list; callers free it. Input lists are borrowed and never modified.
 
@@ -85,6 +85,35 @@ editable input persistence and regeneration of an existing host remain follow-up
 vertex/edge/face picking is coordinated with the editor owner in issue #30; generating
 semantic keys here does not implement that interaction.
 
-**Verdict:** the pure evaluator establishes a bounded native intent graph with logical-cell
-replacement; native materialization must be confirmed by the focused combined fixture and
-a separate desktop-open check before this slice is reported complete.
+## Measured validation
+
+Implementation **`e04ffee45bb795821077befc01ffe3bb6a67f7b3`**, on Linux:
+
+- Combined `system_evaluation system_materialization`: **25 assertions PASS** (16 evaluator,
+  9 native placement), exact expected output and **zero diagnostic bytes**.
+- Command duration **23:19.49**, peak RSS **2,587,836 KiB**, one compiler. Kernel archive
+  was already built. Source changes after this commit are documentation only.
+- Toolchain SHA-256:
+  `e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`.
+- Test binary SHA-256:
+  `59022fcb9a04c527c4e7ab7af09c06abe11fe93547ca1ddc8035a120a68eb925`.
+- 4800 x 3000 IFCX SHA-256:
+  `d1704fcb39bdba32766d61dfe8f1559bc2fce7935af0673731e89c694e62ed20`.
+- 4800 x 3600 IFCX SHA-256:
+  `7501374ab4e7e1db325843e9a42ffffa202278b08c58b611bcf11b2a4d198cad`.
+- Fresh desktop processes using existing application source `2b58b0f` open both files:
+  one native system each, LED diffuser material at the same semantic cell. Point picking
+  gives code **2012 -> 2014** when row count changes. The six-row model is displayed in
+  a separate native 3D window; the user's earlier active document is not operated.
+- [Windows CI run 40811846133](https://github.com/OpenAEC-Foundation/open-bim-studio/actions/runs/40811846133)
+  passes at the same implementation commit: nine existing headless integration checks,
+  app build, PE verification and packaging. These are separate baseline integration checks,
+  not an independent Windows run of the two new generator fixtures.
+- Layer and whitespace checks pass. Models, verification JSON, logs and screenshot remain
+  local build artifacts; no large binary is committed.
+
+**Verdict:** the bounded evaluator and create-only native adapter work for the stated
+rectangular ceiling scope, including atomic duplicate-identity refusal and logical-cell
+replacement survival across a row-count change. Full editable input persistence, existing-host
+regeneration and general subelement picking remain open; neither library activation nor
+manufacturer/engineering approval is claimed.
