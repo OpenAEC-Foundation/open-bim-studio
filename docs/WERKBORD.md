@@ -16,6 +16,19 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 | Windows/Linux builds en installers | PC2, na taakacceptatie | `pc2/build-installers` | CI/build/installer; geen modelleringscode | Voorgesteld / nog niet geclaimd |
 | Release samenstellen en publiceren | PC1 / coördinator | `main` | Integratie, geteste artefacten, tags | Geblokkeerd op app-/installatietests |
 
+## Building Systems ownership — 2026-10-28
+
+Nino (@nino2-aec), Linux machine `aia07-MP50`, takes `pattern/common`,
+`pattern/grids` and `pattern/facade`. Coordination and handover from Elize's
+broad module claim: [#22](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/22),
+with cross-module decisions in #13 and steel/connection interfaces in #6.
+Ownership branch: `mod/pattern/ownership`, based on `main` `c5fdfc8`.
+Product changes follow on `mod/pattern/<topic>` branches after checking for
+active work in these paths. First task: establish the existing pattern test
+baseline with the pinned toolchain. Kernel, steel connections and shared
+editor/renderer changes remain with their existing owners unless separately
+coordinated. No implementation or validation result is claimed by this entry.
+
 ## Modulesplitsing — 2026-10-28
 
 ### Connection fastener components — 2026-10-29

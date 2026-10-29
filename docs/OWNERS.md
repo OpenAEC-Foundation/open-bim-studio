@@ -35,7 +35,7 @@ computer and the person.
 | 3 | connection | `elements/connection` | stagiairopenaec1, Linux (aia08; Codex) |
 | 3 | planar | `elements/planar` | Elize, computer 1 (Linux) |
 | 3 | object | `elements/object` | Elize, computer 1 (Linux) |
-| 3 | pattern | `pattern/common`, `pattern/grids`, `pattern/facade` | Elize, computer 1 (Linux) |
+| 3 | pattern | `pattern/common`, `pattern/grids`, `pattern/facade` | Nino (@nino2-aec), aia07-MP50 (Linux); coordination #22 |
 | 4 | structural | `structural/rebar`, `structural/steel`, `structural/results` | Elize, computer 1 (Linux) |
 | 4 | architectural | `architectural/openings`, `architectural/stairs`, `architectural/spaces` | Elize, computer 1 (Linux) |
 | 4 | mep | `mep/common` | Elize, computer 1 (Linux) |

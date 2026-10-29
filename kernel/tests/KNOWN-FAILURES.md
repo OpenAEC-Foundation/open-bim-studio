@@ -3,7 +3,7 @@
 The fixtures under `kernel/tests` are the kernel's test set; `verify.py` runs
 them against the compiler named by `.dynlex-root.local` or `DYNLEX_ROOT`. The
 authoritative result is a Linux run with the pinned compiler (the fork's
-`codex/cadkernel-port` at `c2d32bea` with the six patches of `patches/`); a
+`codex/cadkernel-port` at `c2d32bea` with the seven patches of `patches/`); a
 Windows run with another compiler differs in diagnostics and timing.
 
 ## Authoritative run, 2026-10-27

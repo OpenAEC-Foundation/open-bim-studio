@@ -15,7 +15,9 @@ param(
     [switch] $App,
     [string] $Optimization = "O0"
 )
-$ErrorActionPreference = 'Stop'
+# 'Continue', not 'Stop': a compiler diagnostic on stderr must not end the run;
+# the setup checks below throw explicitly.
+$ErrorActionPreference = 'Continue'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
 $local = Join-Path $repo '.dynlex-windows.local.ps1'

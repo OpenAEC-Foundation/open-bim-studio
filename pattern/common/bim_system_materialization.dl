@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MPL-2.0
+# Create-only native adapter for the v1 rectangular evaluator. Existing system
+# geometry/planar types remain the renderer and persistence boundary. Caller owns
+# the transaction; no editor, serializer or model-record definition changes here.
+import pattern/common/bim_system_evaluation.dl
+import pattern/common/bim_system_types.dl
+
+class:
+    patterns:
+        [a|] bim rectangular placement record
+    members:
+        valid as a boolean
+        diagnostic as a string
+        systemId as a 64 bit integer
+        columns as an integer
+        rows as an integer
+
+class:
+    patterns:
+        [a|] bim rectangular native binding record
+    members:
+        bindingKey as a string
+        typeId as a 64 bit integer
+
+local function the bim rectangular native type bound to {a string:bindingName} of {a string:materialName} thick {integer:thicknessMm} cached in {a pointer to a list:bindingCache} to {a pointer to a bim model record:destination}:
+    execute:
+        loop bindingCursor from 0 to the length of bindingCache:
+            set cachedBinding to the item at bindingCursor in bindingCache
+            if cachedBinding's bindingKey = bindingName:
+                return cachedBinding's typeId
+        set planarLayers to an empty list of a bim layer record
+        append (@intrinsic("construct", a bim layer record, materialName, (thicknessMm as a 64 bit floating-point number) / 1000.0)) to planarLayers
+        set planarTypeId to add bim planar type named bindingName as role (bim ceiling planar role) with planarLayers to destination
+        free planarLayers
+        append (@intrinsic("construct", a bim rectangular native binding record, bindingName, planarTypeId)) to bindingCache
+        return planarTypeId
+
+function place bim rectangle {bim rectangular occurrence record:occurrenceValue} defined by {bim rectangular definition record:definitionValue} replacing {a pointer to a list:replacementValues} on {a 64 bit integer:storeyId} to {a pointer to a bim model record:destination}:
+    execute:
+        set evaluatedPlan to evaluate bim rectangle occurrenceValue defined by definitionValue replacing replacementValues
+        if evaluatedPlan's valid = false:
+            free evaluatedPlan's parts
+            return @intrinsic("construct", a bim rectangular placement record, false, evaluatedPlan's diagnostic, the bim refused id, 0, 0)
+        if (the bim level index of storeyId in (@intrinsic("dereference", destination)))'s valid = false:
+            free evaluatedPlan's parts
+            return @intrinsic("construct", a bim rectangular placement record, false, the string form of "host: storey does not exist", the bim refused id, 0, 0)
+        # A second create with the same identity must not duplicate a logical
+        # occurrence. Updating an existing host needs a separate future command.
+        loop existingCursor from 0 to the length of (destination's curtains's values):
+            set existingSystem to the item at existingCursor in (destination's curtains's values)
+            set existingIdentity to the bim property value (the string form of "OccurrenceId") of set (the string form of "OpenBIM_RectangularGeneration") of existingSystem's id in (@intrinsic("dereference", destination))
+            if existingIdentity = occurrenceValue's identity:
+                free evaluatedPlan's parts
+                return @intrinsic("construct", a bim rectangular placement record, false, the string form of "occurrence: identity is already placed; create does not regenerate an existing host", the bim refused id, 0, 0)
+        set nativeBindings to an empty list of a bim rectangular native binding record
+        set defaultPanelId to the bim rectangular native type bound to definitionValue's panelBinding of definitionValue's panelMaterial thick definitionValue's panelThickness cached in nativeBindings to destination
+        set generatedSystemId to add bim curtain wall on storeyId from (a cad vector2 with x 0.0 and y 0.0) to (a cad vector2 with x ((occurrenceValue's spanU as a 64 bit floating-point number) / 1000.0) and y 0.0) rising ((occurrenceValue's spanV as a 64 bit floating-point number) / 1000.0) in bays of ((definitionValue's pitchU as a 64 bit floating-point number) / 1000.0) by ((definitionValue's pitchV as a 64 bit floating-point number) / 1000.0) of definitionValue's frameMaterial to destination
+        shape bim example system generatedSystemId patterned (bim grid pattern) joints definitionValue's jointWidth by definitionValue's frameDepth celled true of type defaultPanelId in destination
+        set bim setting (bim system level setting) of generatedSystemId to (occurrenceValue's elevation as a 64 bit integer) keeping true in destination
+        set propertySetName to the string form of "OpenBIM_RectangularGeneration"
+        set bim property (the string form of "DefinitionId") of set propertySetName of generatedSystemId to definitionValue's identity typed (the string form of "IfcIdentifier") in destination
+        set bim property (the string form of "DefinitionVersion") of set propertySetName of generatedSystemId to (the string form of definitionValue's version) typed (the string form of "IfcLabel") in destination
+        set bim property (the string form of "OccurrenceId") of set propertySetName of generatedSystemId to occurrenceValue's identity typed (the string form of "IfcIdentifier") in destination
+        set bim property (the string form of "FrameBinding") of set propertySetName of generatedSystemId to definitionValue's frameBinding typed (the string form of "IfcIdentifier") in destination
+        # Persist provenance/selection mapping as ordinary custom properties.
+        # This is not a persisted editable occurrence or regeneration command.
+        loop intentCursor from 0 to the length of evaluatedPlan's parts:
+            set nativeIntent to the item at intentCursor in evaluatedPlan's parts
+            if nativeIntent's role = 2:
+                set nativeCellIndex to (nativeIntent's ordinalU * evaluatedPlan's rows) + nativeIntent's ordinalV
+                if nativeIntent's componentKey != definitionValue's panelBinding:
+                    set replacementTypeId to the bim rectangular native type bound to nativeIntent's componentKey of nativeIntent's material thick nativeIntent's depth cached in nativeBindings to destination
+                    set bim panel nativeCellIndex of system generatedSystemId to type replacementTypeId in destination
+                set cellPropertyName to ((the string form of "CellU") + (the string form of nativeIntent's ordinalU)) + ((the string form of "V") + (the string form of nativeIntent's ordinalV))
+                set bim property cellPropertyName of set propertySetName of generatedSystemId to nativeIntent's key typed (the string form of "IfcIdentifier") in destination
+        free nativeBindings
+        free evaluatedPlan's parts
+        return @intrinsic("construct", a bim rectangular placement record, true, the string form of "", generatedSystemId, evaluatedPlan's columns, evaluatedPlan's rows)
