@@ -6,6 +6,10 @@ code?**
 **Status:** first pass — phase 1. The reference model and the two-path proposal are the settled
 parts; evaluation mechanics are still open.
 
+The [Building System Generator proposal](building-system-generator.md) develops the layered,
+recursive construction case: domains, patterns, overrides, component interfaces and stock
+planning. Its delivery matrix distinguishes implemented behaviour from proposed contracts.
+
 ## Why this is central
 
 This is what separates a BIM tool from a 3D modeller. A wall is not geometry that happens to be
