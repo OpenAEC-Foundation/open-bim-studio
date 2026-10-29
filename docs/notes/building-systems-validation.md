@@ -46,9 +46,13 @@ from [run 40782028896](https://github.com/OpenAEC-Foundation/dynlex/actions/runs
 source `328c27557a69b8b2dca53291fcbec9b6c861d548`, binary SHA-256
 `e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`.
 Only the build workflow changes; its embedded prefix is the local compiler
-checkout, so future native use can avoid PRoot. Installation is deferred until
-the active app/check compile finishes. Do not replace a running toolchain's
-libraries or start a second local compiler to validate it concurrently.
+checkout, so native use avoids PRoot. After the app/check compile finished, the
+binary and its matching runtime archives were installed atomically, retaining a
+backup of the previous binaries. Every supplied `.dl` library source matched
+the existing checkout byte-for-byte. The isolated `system_planning` fixture from
+PR #26 then compiled locally without diagnostics and passed all nine assertions,
+including exact output comparison. This validates native-prefix operation, not
+the full application or the failed editing fixture below.
 
 ## Restored editing regression
 
@@ -69,13 +73,39 @@ including part suppression, undo, frame replacement and panel unpinning checks.
 - Python module-composition/preflight tests: 10 passed.
 - `scripts/check-layers.sh`: passed; no new dependency edges.
 - Minimal vector reproduction: original calls DIAG, corrected calls compile and run.
-- `BIM_DEBUG=0 bash build.sh dev-test system_editing building_system system_types`: in progress through the corrected PRoot launcher; still CPU-active after 51 minutes, diagnostic file empty. No pass/fail result yet.
+- `BIM_DEBUG=0 bash build.sh dev-test system_editing building_system system_types`:
+  compilation completed with an empty diagnostic file, but the self-test returned
+  a runtime failure. Total command duration was 1:22:58, peak RSS 3,907,584 KiB.
+  The application source built was `2b58b0f`; later branch changes are documentation only.
 - Windows app CI for #24: passed in 12m43s.
 - Independent app-only Linux build: passed; native application starts locally.
 - Native application/API smoke: passed for library enumeration, two curtain-system recipes,
   a fixed timber window, and an HSB wall with its two child layers. Undo/redo restores
   complete HSB creation atomically. The model is the supplied example plus synthetic samples.
 - Native 3D view inspected; screenshot and API response reports remain ignored build artifacts.
+
+## Runtime failure exposed after compilation
+
+The wrapper's original self-test output was empty. Running the same binary
+outside PRoot with the user-local shared-library path and line-buffered output
+reproduces an abort (exit 134) in `system_editing`. The output first diverges at
+the contour sketch message: the editor offers point/edge selection instead of
+the expected line-start state. After the test's Escape/pick/delete sequence it
+prints `picked: -1` and `Tab: select an element to edit its points`.
+
+A native GDB backtrace identifies `stop_because_a_list_index_is_out_of_bounds`,
+called by `show_system_test_parts_of...` inside `run_bim_bundled_test_qaa`.
+That helper unconditionally reads the first curtain. This establishes where
+the run aborts; it does not establish whether the preceding interaction is an
+outdated fixture or an editor regression. The editor owner is asked to confirm
+the intended Escape/sketch workflow before any behavioural change. Expected
+output has not been weakened or replaced to hide the failure.
+
+Consequently `system_editing` is **RUNTIME FAIL**, and the later embedded
+`building_system` and `system_types` checks were **not reached**. PR #24 fixes
+the two constructor diagnostics but is not a fully passing regression repair.
+The successful app-only Linux/Windows builds and interactive smoke checks are
+separate evidence; they do not turn this runtime failure into a pass.
 
 Elize's independent Linux baseline in #22 reports every pattern check passing
 except `system_editing` (the diagnostic above) and `grid_sheet` (runtime assertion
