@@ -136,6 +136,22 @@ closed after recording the result; earlier visible demonstrations were untouched
 The tested rotation is 90 degrees; arbitrary angles, curved/nested hosts and
 ordinary-selection corner/side grips remain outside this check.
 
+## Independent standalone Fit verification
+
+PR #53 at `a3086e5cc5b9912eb406d243a9875cae24491d68` passes the five-line
+`fit_systems` bundle with exact expected output, empty app/kernel diagnostics
+and exit 0 (31:23.67, peak RSS 2,778,356 KiB). A fresh native process independently
+reopened the saved translated/90-degree-rotated ceiling described above.
+Native F recentres it after a deliberate middle-button pan; API Fit gives the
+same centred view. Settled screenshots were visually inspected. Elements,
+saved-file hash and zero Undo steps remain unchanged.
+
+The native verifier uses one-second key holds and three-second settling to
+accommodate frame polling; initial short-hold attempts are not counted as F
+successes. This separate PR53 binary includes neither PR35 panel outlines nor
+PR52 inset corrections. Ordinary corner/side handles remain unimplemented.
+[Full result](https://github.com/OpenAEC-Foundation/open-bim-studio/pull/53#issuecomment-6499266651).
+
 ## Generator boundary
 
 Existing native contour editing does **not** rewrite the generator's InputV1.
