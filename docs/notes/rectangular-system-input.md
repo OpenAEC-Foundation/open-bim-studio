@@ -80,6 +80,25 @@ selection interaction is coordinated separately in issue #30.
 
 ## Validation
 
-Implementation `42c4718` passes the 18 focused codec assertions with exact
-expected output and empty diagnostics. The combined native bundle is pending;
-its intended checks above must not be read as a recorded pass.
+Implementation `42c4718` passes the combined Linux bundle: **30 assertions**
+(18 codec and 12 native placement), exact expected output and **zero diagnostic
+bytes**. The command took **20:21.00**, including this worktree's kernel archive,
+with peak RSS **2617608 KiB** and one compiler. Later source changes are
+documentation only. Toolchain SHA-256:
+`e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`.
+
+Measured artifact SHA-256 values:
+
+- Bundle: `fe7cdd6e1c6234ae49810c3ab46e0b46212f1568412a02e68c8ab6210106e89b`.
+- Created IFCX: `710c4b90c14ef254814cccd1320adda9a815b5ceb736d958a4cd0665b5ba0901`.
+- Rebuilt IFCX: `0cc67d074ae461e5bebf80ced896145996c623f15c91dcf623b8869cc8bddb4a`.
+
+Both IFCX files also passed independent desktop reopening in the existing Linux
+app binary from `2b58b0f`. Its automation API returned the complete 808-byte
+snapshot, equal to the authored JSON data, and both semantic cell properties.
+Picking the two intended cells returned native part codes **2007** and **2033**,
+each with material `LED diffuser`. The created model was inspected visually in
+3D and left open in a separate user-facing process. The rebuilt model's temporary
+verification process was closed. Existing user model windows were not operated.
+These checks establish output compatibility with that app binary; they do not
+add a generator command, new selection handles or synchronized regeneration to it.
