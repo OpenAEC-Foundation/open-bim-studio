@@ -13,7 +13,7 @@ API changes. Full editable occurrence persistence and in-place regeneration rema
 `pattern/common/bim_system_evaluation.dl` owns definition, occurrence, cell-replacement,
 part-intent and result records. Integer lengths are millimetres. Occurrence elevation is
 relative to its host storey. Definition ID and version must match the occurrence's pinned
-reference; only evaluator version 1 is supported. Library immutability/migration storage
+reference; only definition version 1 is supported. Library immutability/migration storage
 is not implemented by a mutable in-memory record.
 
 The first domain is an axis-aligned rectangle of reference centrelines. Pitches are exact
@@ -27,7 +27,7 @@ Before emitting anything, the evaluator refuses missing IDs, unsupported/mismatc
 versions, unavailable capability/bindings, invalid dimensions, odd-millimetre joints,
 partial edge modules, excessive axes/parts/replacements, unresolved cells, conflicting
 bindings or duplicate targets. Limits: at most 1000 axes per direction, 10000 parts and
-64 replacements. Rejections contain a diagnostic and an empty output list. Results own
+64 replacements; IDs/material labels/binding references are limited to 256 bytes. Rejections contain a diagnostic and an empty output list. Results own
 their `parts` list; callers free it. Input lists are borrowed and never modified.
 
 A 4800 x 3000 rectangle with 600 mm pitches, 24 x 38 mm support sections and 15 mm
@@ -41,7 +41,8 @@ exactly one replacement at the same logical cell.
 `pattern/common/bim_system_materialization.dl` evaluates/validates before touching the
 model, verifies the storey and creates one existing native system with planar types. It
 uses numeric section/grid inputs, not a legacy recipe index or a catalogue display name.
-A call creates a new placement; it is not an idempotent update of an existing occurrence.
+A call creates a new placement and refuses an already-placed occurrence ID without model
+changes; it is not an in-place update command.
 The caller owns the transaction.
 
 The adapter maps U/V cell ordinals to the existing native panel indices. Logical cell keys,
