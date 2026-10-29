@@ -49,9 +49,14 @@ The caller owns the transaction. The snapshot participates in the same native
 Undo/Redo and IFCX save/open mechanisms as the generated geometry. Repeating the
 same occurrence ID is refused; it neither duplicates nor replaces that host.
 The fixture rebuilds a separate fresh document from the reopened snapshot.
-Editing the raw property does not regenerate geometry. A future regeneration
-command must coordinate host identity, transactions and override policy with
-the editor owner before claiming synchronized interactive editing.
+Editing the raw property does not regenerate geometry. Likewise, existing native
+geometry edits do not rewrite the snapshot: it describes the creation input,
+not a proven live correspondence after manual edits. Drift detection and
+reconciliation are not implemented. A future regeneration command must
+coordinate host identity, transactions and override policy with the editor owner
+before claiming synchronized interactive editing. Selection-handle work on
+existing native systems must not silently treat this snapshot as current after
+changing their geometry.
 
 ## Reproduction and scope
 
