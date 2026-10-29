@@ -31,6 +31,34 @@ coordinated. No implementation or validation result is claimed by this entry.
 
 ## Modulesplitsing — 2026-10-28
 
+### Connection fastener components — 2026-10-29
+
+Owner: `stagiairopenaec1`, Linux workstation `aia08` (Codex).
+Task branch: `mod/elements-connection/fastener-components`, from `main`
+`cfaf116`. The connection module ownership is recorded in `OWNERS.md` and
+`CODEOWNERS`; other module ownership is retained. Public coordination:
+[connection claim](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/6#issuecomment-6482914412),
+[cross-module scope](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/13#issuecomment-6482914774).
+
+Scope: native bolt, nut, washer and anchor components, sizes M8-M40,
+explicit thread pitch and thread extent, classes 4.6/8.8 for external
+fasteners, separate nut class, hot-dip/electrolytic zinc finish and optional
+washer layouts. Commercial M40 dimensions stay distinct from standard M39.
+Geometry, catalogue and parameter records belong in `elements/connection`.
+Connection-only integration regions: the steel recipe factories,
+`viewer/bim_scene.dl` fastener solids/lines, native connection read/write in
+`exchange/ifcx/bim_file.dl`, and connection rows/edits in
+`ui/properties/bim_editor_properties.dl`. A library placement entry may touch
+`ui/editor/bim_editor.dl` and `ui/panels/bim_ui.dl`. No kernel, compiler,
+Building Systems or unrelated rendering changes are claimed.
+
+Reserved: command **2350** for a fastener-library placement entry if needed;
+property codes **60000-62047**, sixteen slots per connection addition.
+Existing connection kind/style IDs and 10000-series properties retain their
+meanings. Native older-file defaults must remain explicit. Validation starts
+with at most three focused checks per bundle, followed by application and
+GUI/save/reopen checks. Status: claimed; implementation and verification pending.
+
 Branch `restructure/modules`, volgens [het ontwerp](superpowers/specs/2026-10-28-module-split-design.md)
 en [het plan](superpowers/plans/2026-10-28-module-split-plan.md): elke unit is
 verhuisd naar zijn module, tests staan per module, eigenaren staan in
