@@ -35,6 +35,61 @@ The main visible demo window is left open, and the separate original example mod
 3. Select an individual ceiling panel; use its panel-type property to choose the replacement.
 4. Verify Undo and Redo, then save and reopen the model.
 
+## Reproduce from native source
+
+`pattern/common/bim_ceiling_demo.dl` builds the same bounded example through existing
+system and planar-type APIs. It resolves the ceiling recipe by name, refuses a missing
+storey before changing the model and replaces only zero-based cell 12. The caller owns
+the transaction. It intentionally remains an example adapter, not the generic evaluator.
+
+Run `bash build.sh test ceiling_demo` with the configured native toolchain. The fixture
+creates an ordinary editor document, exercises replacement transactions, saves
+`build/ceiling-led-reproducible.ifcx` and opens that file into a second native editor.
+The generated file can also be opened in the desktop application:
+
+```sh
+./build/open-bim-studio /absolute/path/to/build/ceiling-led-reproducible.ifcx
+```
+
+The seven assertions cover atomic refusal, one host, horizontal extent/elevation,
+one LED type among forty cell assignments, Undo, Redo and persisted host/replacement
+identity. These checks do not establish luminaire engineering or catalogue placement.
+
+### Measured source reproduction
+
+Implementation `2790f0a0f4c44099ec6f20b2bbe61150c333e208` passes all seven assertions
+locally with exact expected output and an empty compiler diagnostic file. Native compiler
+SHA-256: `e1127c229b1b934d59b5950489fba0ef11255bc18a6b33ce51862bce21baf3af`.
+The single-test command, including the worktree's kernel archive build, took **23:00.07**,
+peak RSS **2,539,588 KiB**. No second compiler ran on this machine.
+
+Generated IFCX SHA-256:
+`85d00fc010b46d453f13f827e9d5ffa31be70f80046614243c607382c44b6240`.
+Test binary SHA-256:
+`d4438881fa511d8c7fc5bbc41165fdb6e00f8fbf8590ab673c71fe253b41e9e1`.
+
+An independent desktop process using the existing `2b58b0f` application binary opens
+the generated file with one system and the LED material in cell 13 (part code 2012).
+The parser normalizes the illustrative type name to **Led diffuser 40**; the initial
+external verifier expected the unnormalized authoring name and was corrected to check
+the selected cell, actual material and normalized name. No model/library change was
+needed. The verification process closes only its own temporary window; existing user
+windows are retained. This is local source-test plus desktop-open evidence, not an
+independent CI run of this new fixture.
+
+## Corner selection follow-up
+
+Existing boundary sketch code already has endpoint selection and **G** movement,
+separate edge selection, preview cancellation and incident-edge joining. The existing
+`ui/editor/tests/boundary_move.dl` exercises this for floor/roof/wall hosts; those tests
+were inspected, not newly rerun as part of the ceiling fixture.
+
+The requested general vertex/edge/face selection for Building Systems, including derived
+features and stable identity in plan/3D, is tracked in
+[issue #30](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/30) and contract
+section 7.1. Shared editor/picking changes belong to the editor owner. The existing endpoint
+path should be reused; an outline-only overlay does not complete that requirement.
+
 This demonstrates geometric substitution. It does not provide a real luminaire product,
 photometric simulation, electrical design, tested fixture support/hangers, generic semantic
 classification, arbitrary contours or activation of all 183 catalogue presets. Those remain

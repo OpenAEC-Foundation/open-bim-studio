@@ -288,6 +288,38 @@ detached-part creation, is one undoable model transaction. Cancelled preview cha
 Undo restores both input state and semantic identities; regenerating after redo produces the
 same result. Do not persist renderer handles in the undo model.
 
+### 7.1 Vertex, edge and face selection
+
+Provide explicit vertex, edge and face selection modes, with additive selection, for both
+plan and 3D. A click near a corner in vertex mode selects that corner rather than the
+whole carrier. Display the active mode and distinguish hovered, selected and active targets.
+Authored contour vertices and edges are editable system inputs. Derived panel/member
+vertices and edges are inspectable targets belonging to a semantic part; selecting them
+does not automatically detach or deform the generated construction.
+
+Use semantic target identity: occurrence + layer/region + part key + feature role. For an
+authored contour this means stable vertex/edge identity; for a generated rectangular cell
+it means the cell key and a local corner/edge role. Never use a triangle buffer index as a
+persistent selection target. The owner of the shared editor must coordinate the concrete
+selection representation and picking API before integration.
+
+An edit offers the operations the selected target supports: move an authored contour
+vertex, shift a grid boundary, change a local parameter, or explicitly detach/override a
+derived part. Explain constraints on a selected generated corner and preview affected
+neighbours. Do not silently move the whole system when a corner was selected. Moving a
+point shared by two contour edges preserves their shared endpoint and regenerates the
+dependent construction in one transaction. Reject self-intersecting/degenerate contours
+without changing the model; Escape cancels the preview.
+
+Acceptance: select one ceiling contour corner in 3D; add a second corner; move their
+shared edge with a numeric distance; verify neighbouring cells regenerate and an unrelated
+LED replacement retains its semantic identity. Undo/Redo restores contour and selection.
+Then select a derived LED-panel corner: highlight that feature on the panel, show its
+constraints and require an explicit supported override/detach operation before deformation.
+Selection remains on the same logical feature after save/reopen and unrelated regeneration,
+or becomes visibly unresolved when that feature is removed. This is required behaviour,
+not functionality delivered by the current carrier handles or outline-only overlay.
+
 ## 8. Material yield and cutting
 
 ### 8.1 Geometry and stock are different
