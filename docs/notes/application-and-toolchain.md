@@ -194,6 +194,10 @@ scheduled separately. The source revision alone is not binary provenance.
 ./build.sh dev             # unoptimised with debug information
 ```
 
+The window is laid out in layout pixels and drawn at the display's scaling
+(`the ui scale of`, from GLFW's content scale); `OBS_UI_SCALE=2` forces a
+scale, for a check of the layout at 200% on any display.
+
 The build assembles `build/tree` (ignored by git) from the checkout's `lib/`, this
 overlay, the patch and the shaders; the checkout itself is not changed.
 `overlay/examples/bim-slice/README.md` describes the editor's keys and the test programs.
