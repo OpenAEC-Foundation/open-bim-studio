@@ -1,0 +1,265 @@
+# SPDX-License-Identifier: MPL-2.0
+# InputV1: bounded authoritative authoring data, not an engineering approval.
+# Runtime capability/binding availability is supplied by the caller, not JSON.
+import pattern/common/bim_system_evaluation.dl
+import lib/json.dl
+import lib/text.dl
+
+class:
+    patterns:
+        [a|] bim rectangular input record
+    members:
+        valid as a boolean
+        diagnostic as a string
+        definitionValue as a bim rectangular definition record
+        occurrenceValue as a bim rectangular occurrence record
+        replacements as a pointer to a list
+
+class:
+    patterns:
+        [a|] bim encoded input record
+    members:
+        valid as a boolean
+        diagnostic as a string
+        text as a string
+
+local function bim input text {a string:textValue} is supported:
+    execute:
+        if ((the length of textValue) < 1) or ((the length of textValue) > 256):
+            return false
+        loop byteCursor from 0 to the length of textValue:
+            set octet to ((the character at byteCursor in textValue) as a 32 bit integer) bitwise and 255
+            if (octet < 32) or (octet = 127):
+                return false
+        return true
+
+# Bound recursive parsing before invoking the general JSON parser. Braces
+# inside strings do not count; backslash parity controls escaped quotes.
+local function bim input source {a string:sourceText} is bounded:
+    execute:
+        if ((the length of sourceText) < 1) or ((the length of sourceText) > 32768):
+            return false
+        set nesting to 0
+        set quoted to false
+        set escaped to false
+        loop byteCursor from 0 to the length of sourceText:
+            set octet to the character at byteCursor in sourceText
+            if quoted:
+                if escaped:
+                    set escaped to false
+                else if octet = 92:
+                    set escaped to true
+                else if octet = 34:
+                    set quoted to false
+            else if octet = 34:
+                set quoted to true
+            else if (octet = 123) or (octet = 91):
+                set nesting to nesting + 1
+                if nesting > 8:
+                    return false
+            else if (octet = 125) or (octet = 93):
+                set nesting to nesting - 1
+                if nesting < 0:
+                    return false
+        return ((nesting = 0) and (quoted = false)) and (escaped = false)
+
+local function bim input object {a pointer to a JSON value:objectValue} has exactly fields {a string:fieldNames}:
+    execute:
+        if objectValue is not a JSON object:
+            return false
+        set requiredNames to fieldNames split at "|"
+        if objectValue's length != (the length of requiredNames):
+            free requiredNames
+            return false
+        loop nameCursor from 0 to the length of requiredNames:
+            if objectValue lacks JSON member named (the item at nameCursor in requiredNames):
+                free requiredNames
+                return false
+        free requiredNames
+        return true
+
+local function bim input object {a pointer to a JSON value:objectValue} has text fields {a string:fieldNames}:
+    execute:
+        set requiredNames to fieldNames split at "|"
+        loop nameCursor from 0 to the length of requiredNames:
+            set fieldValue to the JSON member named (the item at nameCursor in requiredNames) in objectValue
+            if fieldValue's kind != (the JSON text kind):
+                free requiredNames
+                return false
+            if (bim input text fieldValue's text is supported) = false:
+                free requiredNames
+                return false
+        free requiredNames
+        return true
+
+local function bim input object {a pointer to a JSON value:objectValue} has integer fields {a string:fieldNames}:
+    execute:
+        set requiredNames to fieldNames split at "|"
+        loop nameCursor from 0 to the length of requiredNames:
+            set fieldValue to the JSON member named (the item at nameCursor in requiredNames) in objectValue
+            if fieldValue's kind != (the JSON number kind):
+                free requiredNames
+                return false
+            set integerReading to the signed 64 bit JSON integer read from fieldValue
+            if integerReading failed:
+                free requiredNames
+                return false
+            if (integerReading's value < (-1000000 as a 64 bit integer)) or (integerReading's value > (1000000 as a 64 bit integer)):
+                free requiredNames
+                return false
+        free requiredNames
+        return true
+
+local function the bim input refusal saying {a string:reason}:
+    execute:
+        set emptyDefinition to @intrinsic("construct", a bim rectangular definition record, the string form of "", 0, 0, 0, 0, 0, 0, the string form of "", the string form of "", the string form of "", the string form of "")
+        set emptyOccurrence to @intrinsic("construct", a bim rectangular occurrence record, the string form of "", the string form of "", 0, 0, 0, 0, 0, false, false)
+        return @intrinsic("construct", a bim rectangular input record, false, reason, emptyDefinition, emptyOccurrence, an empty list of a bim cell replacement record)
+
+function the bim rectangle input parsed from {a string:sourceText} with capabilities {boolean:canGenerate} bindings {boolean:canBind}:
+    execute:
+        if (bim input source sourceText is bounded) = false:
+            return the bim input refusal saying (the string form of "InputV1: size, quoting or nesting exceeds the supported bounds")
+        set jsonReading to the JSON document parsed from sourceText
+        if jsonReading failed:
+            free jsonReading's value
+            return the bim input refusal saying (the string form of "InputV1: invalid JSON")
+        set jsonRoot to jsonReading's value
+        if (bim input object jsonRoot has exactly fields (the string form of "schema_version|units|definition|occurrence|replacements")) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: missing, duplicate or unknown root fields")
+        if ((bim input object jsonRoot has integer fields (the string form of "schema_version")) and (bim input object jsonRoot has text fields (the string form of "units"))) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: invalid schema version or units")
+        if ((the JSON number named "schema_version" in jsonRoot) != 1.0) or ((the JSON text named "units" in jsonRoot) != (the string form of "mm")):
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: unsupported schema version or units")
+        set definitionNode to the JSON member named "definition" in jsonRoot
+        set occurrenceNode to the JSON member named "occurrence" in jsonRoot
+        set replacementNodes to the JSON member named "replacements" in jsonRoot
+        if (bim input object definitionNode has exactly fields (the string form of "id|version|pitch_u|pitch_v|joint_width|frame_depth|panel_thickness|frame_material|panel_material|frame_binding|panel_binding")) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: missing, duplicate or unknown definition fields")
+        if ((bim input object definitionNode has text fields (the string form of "id|frame_material|panel_material|frame_binding|panel_binding")) and (bim input object definitionNode has integer fields (the string form of "version|pitch_u|pitch_v|joint_width|frame_depth|panel_thickness"))) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: invalid definition field types or bounds")
+        if (bim input object occurrenceNode has exactly fields (the string form of "id|definition_id|pinned_version|span_u|span_v|elevation|part_limit")) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: missing, duplicate or unknown occurrence fields")
+        if ((bim input object occurrenceNode has text fields (the string form of "id|definition_id")) and (bim input object occurrenceNode has integer fields (the string form of "pinned_version|span_u|span_v|elevation|part_limit"))) = false:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: invalid occurrence field types or bounds")
+        if replacementNodes is not a JSON array:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: replacements must be an array")
+        if replacementNodes's length > 64:
+            free jsonRoot
+            return the bim input refusal saying (the string form of "InputV1: replacement budget exceeds 64")
+        set decodedDefinition to @intrinsic("construct", a bim rectangular definition record, the JSON text named "id" in definitionNode, (the JSON number named "version" in definitionNode) as an integer, (the JSON number named "pitch_u" in definitionNode) as an integer, (the JSON number named "pitch_v" in definitionNode) as an integer, (the JSON number named "joint_width" in definitionNode) as an integer, (the JSON number named "frame_depth" in definitionNode) as an integer, (the JSON number named "panel_thickness" in definitionNode) as an integer, the JSON text named "frame_material" in definitionNode, the JSON text named "panel_material" in definitionNode, the JSON text named "frame_binding" in definitionNode, the JSON text named "panel_binding" in definitionNode)
+        set decodedOccurrence to @intrinsic("construct", a bim rectangular occurrence record, the JSON text named "id" in occurrenceNode, the JSON text named "definition_id" in occurrenceNode, (the JSON number named "pinned_version" in occurrenceNode) as an integer, (the JSON number named "span_u" in occurrenceNode) as an integer, (the JSON number named "span_v" in occurrenceNode) as an integer, (the JSON number named "elevation" in occurrenceNode) as an integer, (the JSON number named "part_limit" in occurrenceNode) as an integer ,canGenerate, canBind)
+        set decodedReplacements to an empty list of a bim cell replacement record
+        loop replacementCursor from 0 to replacementNodes's length:
+            set replacementNode to the JSON value at index replacementCursor in replacementNodes
+            if (bim input object replacementNode has exactly fields (the string form of "ordinal_u|ordinal_v|component_key|material|thickness|nominal_u|nominal_v|support_compatible")) = false:
+                free jsonRoot
+                free decodedReplacements
+                return the bim input refusal saying (the string form of "InputV1: missing, duplicate or unknown replacement fields")
+            if ((bim input object replacementNode has text fields (the string form of "component_key|material")) and (bim input object replacementNode has integer fields (the string form of "ordinal_u|ordinal_v|thickness|nominal_u|nominal_v"))) = false:
+                free jsonRoot
+                free decodedReplacements
+                return the bim input refusal saying (the string form of "InputV1: invalid replacement field types or bounds")
+            if (the JSON member named "support_compatible" in replacementNode)'s kind != (the JSON boolean kind):
+                free jsonRoot
+                free decodedReplacements
+                return the bim input refusal saying (the string form of "InputV1: replacement support input must be boolean")
+            append (@intrinsic("construct", a bim cell replacement record, (the JSON number named "ordinal_u" in replacementNode) as an integer, (the JSON number named "ordinal_v" in replacementNode) as an integer, the JSON text named "component_key" in replacementNode, the JSON text named "material" in replacementNode, (the JSON number named "thickness" in replacementNode) as an integer, (the JSON number named "nominal_u" in replacementNode) as an integer, (the JSON number named "nominal_v" in replacementNode) as an integer, the JSON boolean named "support_compatible" in replacementNode)) to decodedReplacements
+        free jsonRoot
+        set decodedPlan to evaluate bim rectangle decodedOccurrence defined by decodedDefinition replacing decodedReplacements
+        if decodedPlan's valid = false:
+            free decodedPlan's parts
+            free decodedReplacements
+            return the bim input refusal saying decodedPlan's diagnostic
+        free decodedPlan's parts
+        return @intrinsic("construct", a bim rectangular input record, true, the string form of "", decodedDefinition, decodedOccurrence, decodedReplacements)
+
+local function add bim input text {a string:textValue} named {a string:fieldName} to {a pointer to a JSON value:objectValue}:
+    execute:
+        set textNode to a new JSON value of kind (the JSON text kind)
+        set textNode's text to textValue
+        add a JSON member named fieldName with value textNode to objectValue
+
+local function add bim input integer {integer:numberValue} named {a string:fieldName} to {a pointer to a JSON value:objectValue}:
+    execute:
+        add a JSON member named fieldName with value (a new JSON number from (numberValue as a 64 bit integer)) to objectValue
+
+function the bim rectangle input encoding of {bim rectangular definition record:definitionValue} for {bim rectangular occurrence record:occurrenceValue} replacing {a pointer to a list:replacementValues}:
+    execute:
+        set validationPlan to evaluate bim rectangle occurrenceValue defined by definitionValue replacing replacementValues
+        if validationPlan's valid = false:
+            free validationPlan's parts
+            return @intrinsic("construct", a bim encoded input record, false, validationPlan's diagnostic, the string form of "")
+        free validationPlan's parts
+        if (bim input text definitionValue's identity is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported definition text", the string form of "")
+        if (bim input text definitionValue's frameMaterial is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported definition text", the string form of "")
+        if (bim input text definitionValue's panelMaterial is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported definition text", the string form of "")
+        if (bim input text definitionValue's frameBinding is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported definition text", the string form of "")
+        if (bim input text definitionValue's panelBinding is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported definition text", the string form of "")
+        if (bim input text occurrenceValue's identity is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported occurrence text", the string form of "")
+        if (bim input text occurrenceValue's definitionId is supported) = false:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported occurrence text", the string form of "")
+        loop replacementCursor from 0 to the length of replacementValues:
+            set textOverride to the item at replacementCursor in replacementValues
+            if ((bim input text textOverride's componentKey is supported) and (bim input text textOverride's material is supported)) = false:
+                return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: unsupported replacement text", the string form of "")
+        set outputRoot to a new JSON value of kind (the JSON object kind)
+        add bim input integer 1 named (the string form of "schema_version") to outputRoot
+        add bim input text (the string form of "mm") named (the string form of "units") to outputRoot
+        set definitionOutput to a new JSON value of kind (the JSON object kind)
+        add a JSON member named (the string form of "definition") with value definitionOutput to outputRoot
+        add bim input text definitionValue's identity named (the string form of "id") to definitionOutput
+        add bim input integer definitionValue's version named (the string form of "version") to definitionOutput
+        add bim input integer definitionValue's pitchU named (the string form of "pitch_u") to definitionOutput
+        add bim input integer definitionValue's pitchV named (the string form of "pitch_v") to definitionOutput
+        add bim input integer definitionValue's jointWidth named (the string form of "joint_width") to definitionOutput
+        add bim input integer definitionValue's frameDepth named (the string form of "frame_depth") to definitionOutput
+        add bim input integer definitionValue's panelThickness named (the string form of "panel_thickness") to definitionOutput
+        add bim input text definitionValue's frameMaterial named (the string form of "frame_material") to definitionOutput
+        add bim input text definitionValue's panelMaterial named (the string form of "panel_material") to definitionOutput
+        add bim input text definitionValue's frameBinding named (the string form of "frame_binding") to definitionOutput
+        add bim input text definitionValue's panelBinding named (the string form of "panel_binding") to definitionOutput
+        set occurrenceOutput to a new JSON value of kind (the JSON object kind)
+        add a JSON member named (the string form of "occurrence") with value occurrenceOutput to outputRoot
+        add bim input text occurrenceValue's identity named (the string form of "id") to occurrenceOutput
+        add bim input text occurrenceValue's definitionId named (the string form of "definition_id") to occurrenceOutput
+        add bim input integer occurrenceValue's pinnedVersion named (the string form of "pinned_version") to occurrenceOutput
+        add bim input integer occurrenceValue's spanU named (the string form of "span_u") to occurrenceOutput
+        add bim input integer occurrenceValue's spanV named (the string form of "span_v") to occurrenceOutput
+        add bim input integer occurrenceValue's elevation named (the string form of "elevation") to occurrenceOutput
+        add bim input integer occurrenceValue's partLimit named (the string form of "part_limit") to occurrenceOutput
+        set replacementOutput to a new JSON value of kind (the JSON array kind)
+        add a JSON member named (the string form of "replacements") with value replacementOutput to outputRoot
+        loop replacementCursor from 0 to the length of replacementValues:
+            set outputOverride to the item at replacementCursor in replacementValues
+            set overrideOutput to a new JSON value of kind (the JSON object kind)
+            add overrideOutput to the JSON array replacementOutput
+            add bim input integer outputOverride's ordinalU named (the string form of "ordinal_u") to overrideOutput
+            add bim input integer outputOverride's ordinalV named (the string form of "ordinal_v") to overrideOutput
+            add bim input text outputOverride's componentKey named (the string form of "component_key") to overrideOutput
+            add bim input text outputOverride's material named (the string form of "material") to overrideOutput
+            add bim input integer outputOverride's thickness named (the string form of "thickness") to overrideOutput
+            add bim input integer outputOverride's nominalU named (the string form of "nominal_u") to overrideOutput
+            add bim input integer outputOverride's nominalV named (the string form of "nominal_v") to overrideOutput
+            set compatibilityOutput to a new JSON value of kind (the JSON boolean kind)
+            set compatibilityOutput's boolean to outputOverride's supportCompatible
+            add a JSON member named (the string form of "support_compatible") with value compatibilityOutput to overrideOutput
+        set compactText to the compact JSON form of outputRoot
+        free outputRoot
+        if (the length of compactText) > 32768:
+            return @intrinsic("construct", a bim encoded input record, false, the string form of "InputV1: encoded snapshot exceeds 32768 bytes", the string form of "")
+        return @intrinsic("construct", a bim encoded input record, true, the string form of "", compactText)
