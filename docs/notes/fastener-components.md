@@ -100,3 +100,22 @@ These references provide nominal envelope dimensions. The implementation does
 not assert certification, preload suitability, tolerances, coating compliance,
 anchor approval, or structural resistance. The twenty-column example is a
 synthetic modelling fixture with illustrative dimensions.
+
+## Rounded-rim review status
+
+`tools/probes/fastener_catalogue_review.dl` exports all 120 size/family
+combinations from the production definitions, with optional rounded hex rims
+and exact-pitch helix points. Its second bolt family includes two washers.
+The probe checks closure and positive volume of every display piece.
+
+The rounded rim is represented by two subtractive revolved circular-profile
+volumes (CSG primitive 6). Each cutting volume can be evaluated as an analytic
+B-rep. The kernel currently refuses their subtraction from the hexagonal stock
+with snag 1. Consequently rounding is experimental and is enabled only in the
+review probe, not in default catalogue definitions or the application build.
+The rounded review must not be described as a validated exact final B-rep.
+
+The 120-variant review probe completed successfully, checking every display
+piece for closure and positive volume. The 16 default CSG, geometry and thread
+assertions still pass. These display checks do not resolve the exact boolean
+limitation above.
