@@ -93,6 +93,21 @@ for IFC delivery. Effectively the minimum bar for exchange acceptance in Dutch p
 
 **STABU** — Dutch specification system for construction works.
 
+**NAP** — *Normaal Amsterdams Peil*; the Dutch national height datum. Level heights in Dutch
+drawings are given relative to it ("peil = NAP +5.420").
+
+**RD** — *Rijksdriehoeksmeting*; the Dutch national grid for x/y coordinates (EPSG:28992).
+Together with NAP it is the local coordinate reference system a Dutch project is georeferenced
+in (IfcProjectedCRS with IfcMapConversion).
+
+**Stramien** — the structural grid of a building: the lettered and numbered grid lines
+(IfcGrid, IfcGridAxis). English text uses "grid"; the Dutch word appears in the maintainers'
+requests.
+
+**KW and FB coding** — two Dutch coding schemes for window frames (*kozijnen*) on drawings and in
+frame schedules. Which convention or standard each refers to is still to be confirmed (issue #68);
+until then the terms are named, not defined.
+
 See [`../domain/nl-standards.md`](../domain/nl-standards.md).
 
 ## Terms we avoid
