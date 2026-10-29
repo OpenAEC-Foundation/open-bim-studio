@@ -152,6 +152,19 @@ successes. This separate PR53 binary includes neither PR35 panel outlines nor
 PR52 inset corrections. Ordinary corner/side handles remain unimplemented.
 [Full result](https://github.com/OpenAEC-Foundation/open-bim-studio/pull/53#issuecomment-6499266651).
 
+## Independent plan-inset verification
+
+PR #52 at `f3afbc724ff7a32cbdf2cec0b2f3d223f64b475c` passes the six-line
+`plan_inset` bundle with byte-identical expected output, empty app/kernel
+diagnostics and exit 0 (30:44.22, peak RSS 2,776,676 KiB). A fresh native process
+reopened the same saved standalone translated/90-degree-rotated ceiling.
+A real 3D-tab click shows its complete rectangular grid in the lower-left inset;
+the settled screenshot was visually inspected. Elements, file hash and zero
+Undo steps remain unchanged. This confirms the ceiling case, not the original
+columns/stair document reported in issue #47 or arbitrary/curved/nested systems.
+This separate binary includes neither PR35 outlines nor PR53 camera Fit.
+[Full result](https://github.com/OpenAEC-Foundation/open-bim-studio/pull/52#issuecomment-6500721496).
+
 ## Generator boundary
 
 Existing native contour editing does **not** rewrite the generator's InputV1.
