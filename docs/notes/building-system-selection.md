@@ -63,6 +63,28 @@ as a world-space sketch hit. Coordinates, messages, undo depth and retained
 InputV1 were checked; this audit does not claim a complete serialized-model diff
 or a new compiled DynLex regression fixture.
 
+## Numeric input and refusal check
+
+A separate disposable native process on the same `2b58b0f` binary passed
+**9 additional checks**. A corner was picked in 3D; the supported property API
+set Point X and Point Y to exactly 300 mm. Tab committed the change as one
+operation. Reopening the contour read the committed (300, 300) mm point.
+
+Changing its pending X to -100 mm and pressing Tab produced
+“Sketch not finished: keep the contour between the system's ends and above its
+foot”. Undo depth stayed at one. Leaving that refused sketch and reopening it
+read the previously committed (300, 300) mm point. Nonnumeric input `abc` was
+also refused without changing the point or consuming undo history. One Undo
+restored the original (0, 0) mm corner; InputV1 remained unchanged throughout.
+The temporary process was closed after restoring the baseline.
+
+These checks use native 3D picking and Tab/Escape, supported property API entry
+and API Undo. They do not prove keyboard focus/typing in the property widget,
+all invalid/self-intersecting contours, a full serialized-model diff, or new
+behaviour in the pending editor selection slice. The first checker attempt
+imported an old command-line helper with side effects; that tooling was guarded
+before the passing continuation. No product change was needed.
+
 ## Generator boundary
 
 Existing native contour editing does **not** rewrite the generator's InputV1.
