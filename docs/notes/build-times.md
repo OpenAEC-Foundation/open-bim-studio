@@ -49,6 +49,8 @@ test-by-test comparison are in issue 11.
 | `build.sh test connections_geometry` | seam step 5 branch | 19.02 s | 0.76 GB | same | same | 2026-10-29 |
 | `build.sh test drawing` / `section_caps` / `steel_hall` | seam step 5 branch | 27.51 / 31.79 / 20.79 s | 0.76 GB | same | same | 2026-10-29 |
 | `build.sh test component_solids` / `modify_preview` | seam step 5 branch | 65.6 / 252.45 s | 1.54 GB | same | same | 2026-10-29 |
+| `build.sh test` (all 242, `BIM_JOBS=8`) | after the seam on `main` (`b152310`) | 33:35.07 | 2.47 GB per process | same | same | 2026-10-29 |
+| `build.sh app` (`-O2`, alone) | after the seam on `main` (`b152310`) | 7:28.50 | 3.38 GB | same | same | 2026-10-29 |
 
 Earlier observations, recorded in `findings.md` rather than measured for this
 table: the application 40 to 51 minutes at `-O2`; `tests/ifc_read.dl` 13 to 18
