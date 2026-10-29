@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: MPL-2.0
+# Display tessellation of evaluated analytic CSG definitions, never authoring data.
+# Known stock solids share circle samples across caps and side faces. This avoids
+# cracks in general B-rep tessellation while preserving the exact CSG source/body.
+import elements/connection/fastener_csg.dl
+import kernel/fast/polyhedron.dl
+
+class:
+    patterns:
+        [a|] connection fastener ring
+    members:
+        x as a 64 bit floating-point number
+        z as a 64 bit floating-point number
+        turn as a 64 bit floating-point number
+        reach as a 64 bit floating-point number
+        sides as an integer
+
+local function an axial fastener ring at {a 64 bit floating-point number:elevationValue} reaching {a 64 bit floating-point number:radiusValue} with {integer:sideCount} sides:
+    execute:
+        return @intrinsic("construct", a connection fastener ring, 0.0, elevationValue, 0.0, radiusValue, sideCount)
+
+local function the fastener ring point of {connection fastener ring:ringValue} at {integer:cornerValue} among {integer:cornerCount}:
+    execute:
+        set phaseValue to 6.283185307179586 * ((cornerValue as a 64 bit floating-point number) / (cornerCount as a 64 bit floating-point number))
+        set radialReach to ringValue's reach
+        if ringValue's sides > 2:
+            set sectorSize to 6.283185307179586 / (ringValue's sides as a 64 bit floating-point number)
+            set sectorCentre to (the floor of ((phaseValue / sectorSize) + 0.5)) * sectorSize
+            set radialReach to radialReach / (the cosine of (phaseValue - sectorCentre))
+        set transverse to radialReach * (the cosine of phaseValue)
+        return a cad vector3 with x (ringValue's x + (transverse * (the cosine of ringValue's turn))), y (radialReach * (the sine of phaseValue)) and z (ringValue's z - (transverse * (the sine of ringValue's turn)))
+
+local function add fastener triangle {integer:firstIndex} {integer:secondIndex} {integer:thirdIndex} from {a pointer to a list:sourcePoints} to {a pointer to a fast mesh record:target}:
+    execute:
+        set firstPoint to the item at firstIndex in sourcePoints
+        set secondPoint to the item at secondIndex in sourcePoints
+        set thirdPoint to the item at thirdIndex in sourcePoints
+        set faceNormal to the cad cross of (the cad difference of secondPoint and firstPoint) and (the cad difference of thirdPoint and firstPoint)
+        set faceNormal to faceNormal scaled by (1.0 / (the cad length of faceNormal))
+        set indexBase to the length of (target's positions's values)
+        append firstPoint to (target's positions's values)
+        append secondPoint to (target's positions's values)
+        append thirdPoint to (target's positions's values)
+        loop normalCursor from 0 to 3:
+            append faceNormal to (target's normals's values)
+            append (indexBase + normalCursor) to (target's triangles's values)
+
+local function the fastener shell through {a pointer to a list:ringValues} closing profile {boolean:profileClosed}:
+    execute:
+        set sourcePoints to an empty list of a cad vector3
+        set meshValue to an empty fast mesh
+        set cornersPerRing to 48
+        set ringCount to the length of ringValues
+        loop ringCursor from 0 to ringCount:
+            loop cornerCursor from 0 to cornersPerRing:
+                append (the fastener ring point of (the item at ringCursor in ringValues) at cornerCursor among cornersPerRing) to sourcePoints
+        set linkCount to ringCount - 1
+        if profileClosed:
+            set linkCount to ringCount
+        loop ringCursor from 0 to linkCount:
+            set followingRing to the remainder of (ringCursor + 1) divided by ringCount
+            loop cornerCursor from 0 to cornersPerRing:
+                set followingCorner to the remainder of (cornerCursor + 1) divided by cornersPerRing
+                set firstIndex to (ringCursor * cornersPerRing) + cornerCursor
+                set secondIndex to (ringCursor * cornersPerRing) + followingCorner
+                set thirdIndex to (followingRing * cornersPerRing) + followingCorner
+                set fourthIndex to (followingRing * cornersPerRing) + cornerCursor
+                add fastener triangle firstIndex secondIndex thirdIndex from sourcePoints to (the address of meshValue)
+                add fastener triangle firstIndex thirdIndex fourthIndex from sourcePoints to (the address of meshValue)
+        if profileClosed = false:
+            set endBase to (ringCount - 1) * cornersPerRing
+            set bottomCentre to the length of sourcePoints
+            set bottomRing to the item at 0 in ringValues
+            set topRing to the item at (ringCount - 1) in ringValues
+            append (a cad vector3 with x bottomRing's x, y 0.0 and z bottomRing's z) to sourcePoints
+            set topCentre to the length of sourcePoints
+            append (a cad vector3 with x topRing's x, y 0.0 and z topRing's z) to sourcePoints
+            loop cornerCursor from 0 to cornersPerRing:
+                set followingCorner to the remainder of (cornerCursor + 1) divided by cornersPerRing
+                add fastener triangle bottomCentre followingCorner cornerCursor from sourcePoints to (the address of meshValue)
+                add fastener triangle topCentre (endBase + cornerCursor) (endBase + followingCorner) from sourcePoints to (the address of meshValue)
+        free sourcePoints
+        return meshValue
+
+function the connection stock display of {connection csg definition:sourceValue}:
+    execute:
+        set rings to an empty list of a connection fastener ring
+        set terms to sourceValue's terms's values
+        set firstTerm to the item at 0 in terms
+        set bottomValue to firstTerm's origin's z
+        set topValue to bottomValue + firstTerm's size's z
+        set closedProfile to false
+        if (the length of terms) = 2:
+            set secondTerm to the item at 1 in terms
+            if (firstTerm's primitive = 0) and (secondTerm's operation = cad union operation):
+                append (an axial fastener ring at bottomValue reaching (firstTerm's size's x * 0.5) with 6 sides) to rings
+                append (an axial fastener ring at topValue reaching (firstTerm's size's x * 0.5) with 6 sides) to rings
+                append (an axial fastener ring at topValue reaching secondTerm's size's x with 0 sides) to rings
+                append (an axial fastener ring at (secondTerm's origin's z + secondTerm's size's z) reaching secondTerm's size's x with 0 sides) to rings
+            else:
+                set outsideValue to firstTerm's size's x
+                set sidesValue to 0
+                if firstTerm's primitive = 0:
+                    set outsideValue to outsideValue * 0.5
+                    set sidesValue to 6
+                append (an axial fastener ring at bottomValue reaching outsideValue with sidesValue sides) to rings
+                append (an axial fastener ring at topValue reaching outsideValue with sidesValue sides) to rings
+                append (an axial fastener ring at topValue reaching secondTerm's size's x with 0 sides) to rings
+                append (an axial fastener ring at bottomValue reaching secondTerm's size's x with 0 sides) to rings
+                set closedProfile to true
+        else if (the length of terms) = 1:
+            append (an axial fastener ring at bottomValue reaching firstTerm's size's x with 0 sides) to rings
+            append (an axial fastener ring at topValue reaching firstTerm's size's x with 0 sides) to rings
+        else:
+            set straightTerm to the item at 1 in terms
+            set tailTerm to the item at 2 in terms
+            set bendValue to firstTerm's size's y
+            set radiusValue to firstTerm's size's x
+            set turnValue to firstTerm's size's z
+            append (an axial fastener ring at straightTerm's origin's z reaching radiusValue with 0 sides) to rings
+            set arcSteps to (the ceiling of (turnValue / 0.13)) as an integer
+            loop bendCursor from 0 to (arcSteps + 1):
+                set bendAngle to turnValue * ((bendCursor as a 64 bit floating-point number) / (arcSteps as a 64 bit floating-point number))
+                append (@intrinsic("construct", a connection fastener ring, bendValue * (1.0 - (the cosine of bendAngle)), bottomValue + (bendValue * (the sine of bendAngle)), bendAngle, radiusValue, 0)) to rings
+            set endPoint to the cad sum of tailTerm's origin and (tailTerm's axis scaled by tailTerm's size's z)
+            append (@intrinsic("construct", a connection fastener ring, endPoint's x, endPoint's z, turnValue, radiusValue, 0)) to rings
+        set shapeValue to the fastener shell through rings closing profile closedProfile
+        free rings
+        return shapeValue
