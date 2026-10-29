@@ -101,7 +101,7 @@ outdated fixture or an editor regression. The editor owner is asked to confirm
 the intended Escape/sketch workflow before any behavioural change. Expected
 output has not been weakened or replaced to hide the failure.
 
-Consequently `system_editing` is **RUNTIME FAIL**, and the later embedded
+In that first app/check run, `system_editing` was **RUNTIME FAIL**, and the later embedded
 `building_system` and `system_types` checks were **not reached**. PR #24 fixes
 the two constructor diagnostics but is not a fully passing regression repair.
 The successful app-only Linux/Windows builds and interactive smoke checks are
@@ -112,3 +112,33 @@ except `system_editing` (the diagnostic above) and `grid_sheet` (runtime asserti
 `reference sheet records paper and artwork once`). The latter is not fixed or
 claimed as passing by this change. A full test suite and installer validation
 are outside this bounded regression repair.
+
+## Resolved contour fixture and final verification
+
+At implementation commit `b98b67917ab888bf819278098c24f50ab3857b96`, the three-test
+bundle **passes** locally and on an independent Linux runner, with empty compiler
+diagnostics and unchanged geometry/undo/replacement expectations.
+
+The root cause was a stale test interaction. `open bim editor boundary sketch`
+explicitly starts with `bim sketch pick tool`; Escape in that state leaves the
+sketch. The fixture's old Escape therefore exited boundary editing, and its
+subsequent Delete removed the host system instead of one edge. The test now
+picks the edge directly. Its one entry-hint expectation reflects the current
+selection-first contract. Added prerequisites check entry mode, top-edge
+selection, host survival after deleting the edge, and completion on the same
+host; the inspection helper also reports a missing host explicitly. No editor
+or renderer behaviour changes were needed.
+
+- Local: `bash build.sh bundle system_editing building_system system_types`,
+  native-prefix compiler `e1127c...`; 23:07.72, peak RSS 2,848,404 KiB; exit 0;
+  `system_editing PASS`, `building_system PASS`, `system_types PASS`.
+- Independent [Linux run 40800731991](https://github.com/OpenAEC-Foundation/dynlex/actions/runs/40800731991):
+  same app commit, pinned CI-prefix compiler `a5e0723...`, same three tests;
+  10:08.25, peak RSS 2,859,420 KiB, exit 0 and all three PASS.
+- Local bundle SHA-256:
+  `42ab2f9e624edf3c68430838f1fcba227a4ea443e40e611548aaac8f28a148e3`.
+
+The earlier failed app/check result is retained above as historical evidence;
+it is superseded for this fixture by the measured passing bundle. This does
+not claim an all-module test suite or a new full application build after the
+fixture-only changes.
