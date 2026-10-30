@@ -229,9 +229,14 @@ examples beside it.
 `views/drawings/bim_drawing_rules.dl` imports the editor (it holds the Drawing
 Rules window and its commands) and `bim_drawing.dl` imports the planar
 evaluator (a baselined edge). Before the items arrive, the window moves to
-`ui/panels` and the wall cut becomes the planar module's plan item, so that
-every test of the drawings module compiles in a model-level closure (about
-half a minute) instead of the editor's (four minutes).
+`ui/panels` and the wall, masonry and opening features of dimension
+references move behind a `feature` extension point the planar module
+implements, so that every test of the drawings module compiles in a
+model-level closure (about half a minute) instead of the editor's (four
+minutes). The module still reads the evaluation's records (`bim evaluation
+record`, `bim element geometry record`), which live in
+`elements/planar/bim_evaluate.dl` and move to `bim/` with their owner; until
+then that import stays and the layer baseline keeps its edge.
 
 ## 6. Fit with the planning round of 29 October
 
@@ -258,8 +263,9 @@ grids, levels, georeferencing and building systems with their owners.
 
 ## 7. Sequence, coarse
 
-0. `views/drawings` sheds its editor and element imports (rules window to
-   `ui/panels`, the wall cut to `elements/planar`); its tests go model-level.
+0. `views/drawings` sheds its editor and masonry imports (rules window to
+   `ui/panels`, dimension-reference features behind the `feature` point in
+   `elements/planar`); its tests go model-level.
 1. The model additions of §5 (roles, span, floor system, load-bearing).
 2. The `plan` extension point in the composer, the item records and the pen
    table; the panel's drawing functions move into `plan.dl` files and the
