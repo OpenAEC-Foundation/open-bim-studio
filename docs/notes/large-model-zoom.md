@@ -96,7 +96,9 @@ improvement. The caches still build the complete construction initially.
   systems bypass zoom re-meshing and even the queue's point scan. Round profiles,
   circular hollow profiles, ellipses and generated round point supports remain
   adaptive. Documents containing connection cuts conservatively retain the
-  general path. Model changes/dragging refresh the classification.
+  general path: even one base plate disables this 3D optimization for the
+  document. Classification refreshes only when the document revision changes;
+  drag-preview frames and display-detail changes reuse it.
 - `OBS_PROFILE_FRAMES` additionally reports `meshing_us`, `zoom_pending` and
   `zoom_fixed`. These are view diagnostics, not serialized properties.
 
@@ -109,15 +111,21 @@ and independent IFC validation remain separate in issue #76.
 
 - Optimized Linux app/self-test build: `system_plan_cache`, `system_zoom_cache`
   and existing `zoom_queue` all match their expected output exactly; empty app
-  and kernel compiler diagnostics, exit 0. The two new checks contain 16 explicit
+  and kernel compiler diagnostics, exit 0. The two new checks contain 18 explicit
   assertions. Fresh-vs-cached plan output covers pan/zoom, glazing detail, model
-  commit, Undo and storey changes; circular profiles still refine in 3D.
+  commit, Undo, storey changes, committed cut height and active storey elevation; circular profiles still refine in 3D.
 - Layer, local-name and whitespace checks pass. The native audit helper runs
   both plan and 3D on both executables and checks unchanged data/file/Undo.
 - Native plan/3D views were visually inspected separately from the checks.
   This is Linux/X11 at UI scale 1, not a Windows/HiDPI visual certification.
 - Candidate executable SHA-256:
-  `d390f45633658bb0df450f78e8c6c4e6ac8e7f011e04eb131dd32a6d5ca8c4a6`.
+  `d390f45633658bb0df450f78e8c6c4e6ac8e7f011e04eb131dd32a6d5ca8c4a6`
+  for the timed comparison above. The revision-keyed classification follow-up
+  was rebuilt with the same three tests passing exactly and empty diagnostics;
+  executable SHA-256
+  `2a19293dcb6f4d97819b1eb814f9689faec859a644d0e012593b579fffad8d66`.
+  The performance measurements above belong to the original candidate; no
+  additional native input benchmark is claimed for this follow-up.
 
 ## Verdict
 
