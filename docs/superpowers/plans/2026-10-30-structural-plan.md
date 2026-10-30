@@ -174,7 +174,7 @@ Expected: three PASS lines; note the compile seconds against Task 0.1's baseline
 git add -A views/drawings/tests ui/editor/tests
 git commit -m "Keep the editor-driven tests with the editor"
 ```
-One pull request per owner: the window move and the tests move touch `ui/panels` and `ui/editor` (Elize); the feature point touches `elements/planar` (Elize) and `tools/` (the maintainer). The pull request body names the compile seconds before and after.
+One pull request for the step, reviewed by Elize, who owns every module it touches besides `tools/` and `views/` (`ui/panels`, `ui/editor`, `elements/planar`); the three tasks edit adjacent lines of `scripts/layer-baseline.txt` and would conflict as separate branches. The pull request body names the compile seconds before and after.
 
 ---
 
