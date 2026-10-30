@@ -166,3 +166,8 @@ rectangular section. The geometric distinction between leg and throat follows
 [TWI's fillet-weld terminology](https://www.twi-global.com/technical-knowledge/job-knowledge/design-part-1-090).
 These are illustrative modelling recipes, not a reproduction
 of a supplier's approved connection or a resistance calculation.
+
+The CHS gallery base explicitly leaves its circumferential weld pending. Straight
+beads on the corners of its bounding square would float away from the tube and
+are not generated. Straight gallery welds on flat sections are seated outside
+the adjoining faces, with the lower prism edge at the plate top.
