@@ -42,6 +42,11 @@ POINTS = {
         "call": "build bim element elementId of modelValue into target through hostedIndex with {module} elements",
         "style": "first-true",
     },
+    "feature": {
+        "header": "function resolve bim module feature of {bim reference record:target} in {bim model record:modelValue} using {bim join index record:index} into {a pointer to a bim anchor record:anchor}:",
+        "call": "resolve bim feature of target in modelValue using index into anchor with {module} elements",
+        "style": "first-true",
+    },
 }
 
 
