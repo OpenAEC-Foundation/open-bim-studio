@@ -7,7 +7,9 @@ model. Bolt heads and nuts intersect hexagonal stock with an analytically rounde
 cylinder. Nut and washer bores are subtracted volumes. Union combines the pieces.
 `field.dl` supplies the same geometry to the GPU and the CPU geometry checks.
 
-This is **not integrated into the Open BIM Studio model viewport**. It is not a
+This standalone probe is **not the Open BIM Studio model viewport**. The
+application now has a separate selected-component CSG detail panel; see
+[the fastener guide](../../../docs/notes/fastener-components.md#csg-detail-in-obs). It is not a
 replacement CAD kernel, a validated rounded B-rep export or a fabrication model.
 The existing rounded-rim B-rep Boolean operation is still unsupported. The probe
 does not contain anchors, footplates, welds or HEA profiles.

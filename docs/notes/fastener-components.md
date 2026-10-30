@@ -112,10 +112,35 @@ The rounded rim is represented by two subtractive revolved circular-profile
 volumes (CSG primitive 6). Each cutting volume can be evaluated as an analytic
 B-rep. The kernel currently refuses their subtraction from the hexagonal stock
 with snag 1. Consequently rounding is experimental and is enabled only in the
-review probe, not in default catalogue definitions or the application build.
+review probe, not in default catalogue B-rep definitions. The separate CSG
+detail panel described below evaluates rounded surfaces directly.
 The rounded review must not be described as a validated exact final B-rep.
 
 The 120-variant review probe completed successfully, checking every display
 piece for closure and positive volume. The 16 default CSG, geometry and thread
 assertions still pass. These display checks do not resolve the exact boolean
 limitation above.
+
+
+## CSG detail in OBS
+
+The Connections ribbon has a **CSG detail** button beside **M8–M40 library**.
+Select a placed bolt, nut or washer and open the detail. The normal Properties
+panel edits its existing shared type; make unique retains its existing meaning.
+Right-drag within the detail to orbit, use the wheel to zoom, and press Escape
+or the same ribbon button to close. Viewing does not create a model transaction.
+
+The detail reads the selected component's dimensions, pitch, thread extent,
+washer flags, nut count, grip and finish. It evaluates rounded solids directly
+per pixel, without generating a triangle boundary for this detail path. This is
+a component inspection panel: the normal whole-model viewport still uses its
+existing renderer. Anchors and arbitrary solids are explicitly unsupported here.
+Rounded head/nut relief is derived from the catalogue dimensions; exact rounded
+B-rep export is still pending. Thread marks are helical lines, not cut teeth.
+
+Ownership, scope and the follow-up for whole-scene depth, selection and sections
+are recorded in [issue #77](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/77).
+The renderer's parameter block follows the existing element flags, with a
+separate batch and a lazily created pipeline; the normal scene parameters and
+element visibility limits remain unchanged. `OBS_CSG_DETAIL=1` opens the panel
+on startup for native integration checks.
