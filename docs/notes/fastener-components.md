@@ -127,8 +127,12 @@ limitation above.
 The Connections ribbon has a **CSG detail** button beside **M8–M40 library**.
 Select a placed bolt, anchor, nut, washer or connection and open the detail. The normal Properties
 panel edits its existing shared type; make unique retains its existing meaning.
-Right-drag within the detail to orbit, use the wheel to zoom, and press Escape
-or the same ribbon button to close. Viewing does not create a model transaction.
+Middle-drag within the detail to pan; right-drag or Shift+middle-drag to orbit.
+The wheel zooms around the pointer, including fractional trackpad scrolling.
+F fits the selected component while preserving orientation; + and - zoom about
+the centre. Escape or the same ribbon button closes the detail. A drag stays
+with the detail until release, even outside its bounds. Selecting another item
+resets the pan and zoom. Viewing does not create a model transaction.
 
 The detail reads the selected component's dimensions, pitch, thread extent,
 washer flags, nut count, grip and finish. It evaluates rounded solids directly
