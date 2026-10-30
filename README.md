@@ -120,6 +120,8 @@ bash ./build.sh run-dev /absolute/path/to/project.ifcxb
 The development executable is `$BIM_BUILD_DIR/open-bim-studio-dev`.
 The interface follows the display's scaling (125%, 150%, 200%); set
 `OBS_UI_SCALE=1.5` to override what the display reports.
+`OBS_CSG_DETAIL=1` opens the experimental fastener CSG detail panel at startup;
+see [the fastener guide](docs/notes/fastener-components.md#csg-detail-in-obs).
 `build.sh` compiles from the repository root: imports such as `bim/x.dl`
 resolve here, `lib/std.dl` in the compiler checkout, and a file under `lib/`
 here shadows the checkout's (see `lib/README.md`). `build.sh generate` writes
