@@ -22,11 +22,11 @@ computer and the person.
 | 2 | dxf and dwg | `exchange/dxf_dwg` | Elize, computer 1 (Linux) |
 | 2 | step | `exchange/step` | Elize, computer 1 (Linux) |
 | 2 | import | `exchange/import` | Elize, computer 1 (Linux) |
-| 2 | views | `views/common` | Elize, computer 1 (Linux) |
-| 2 | drawings | `views/drawings` | Elize, computer 1 (Linux) |
-| 2 | sheets | `views/sheets` | Elize, computer 1 (Linux) |
-| 2 | schedules | `views/schedules` | Elize, computer 1 (Linux) |
-| 2 | export | `views/export` | Elize, computer 1 (Linux) |
+| 2 | views | `views/common` | Maarten, computer 2 (Windows) |
+| 2 | drawings | `views/drawings` | Maarten, computer 2 (Windows) |
+| 2 | sheets | `views/sheets` | Maarten, computer 2 (Windows) |
+| 2 | schedules | `views/schedules` | Maarten, computer 2 (Windows) |
+| 2 | export | `views/export` | Maarten, computer 2 (Windows) |
 | 2 | materials | `materials/` | Elize, computer 1 (Linux) |
 | 2 | localisation | `localisation/` | Elize, computer 1 (Linux) |
 | 2 | automation | `automation/` | Elize, computer 1 (Linux) |
