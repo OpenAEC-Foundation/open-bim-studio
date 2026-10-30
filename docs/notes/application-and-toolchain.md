@@ -201,6 +201,7 @@ scale, for a check of the layout at 200% on any display.
 native integration checks. With no 3D pane visible it temporarily replaces
 the plan canvas; Properties and the explorer remain available. Escape or
 Connections → CSG detail closes it without clearing the selection.
+`OBS_MODEL_VIEW=1` starts on the 3D workspace tab for native model review.
 
 The build assembles `build/tree` (ignored by git) from the checkout's `lib/`, this
 overlay, the patch and the shaders; the checkout itself is not changed.

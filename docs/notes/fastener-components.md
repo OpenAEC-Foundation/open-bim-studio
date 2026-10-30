@@ -125,7 +125,7 @@ limitation above.
 ## CSG detail in OBS
 
 The Connections ribbon has a **CSG detail** button beside **M8–M40 library**.
-Select a placed bolt, nut or washer and open the detail. The normal Properties
+Select a placed bolt, anchor, nut, washer or connection and open the detail. The normal Properties
 panel edits its existing shared type; make unique retains its existing meaning.
 Right-drag within the detail to orbit, use the wheel to zoom, and press Escape
 or the same ribbon button to close. Viewing does not create a model transaction.
@@ -134,7 +134,14 @@ The detail reads the selected component's dimensions, pitch, thread extent,
 washer flags, nut count, grip and finish. It evaluates rounded solids directly
 per pixel, without generating a triangle boundary for this detail path. This is
 a component inspection panel: the normal whole-model viewport still uses its
-existing renderer. Anchors and arbitrary solids are explicitly unsupported here.
+existing renderer. Straight, L, J and plate-ended anchors use the native bend,
+tail, nut and washer positions. Connections assemble their evaluated fasteners,
+plates, drilled holes, welds and participating members in one bounded packet
+(up to 128 parts). I, RHS, CHS and rectangular sections are supported; unsupported
+profiles and twisted/tapered members are refused explicitly. Connection detail
+uses Technical Colors: blue plates, orange welds and yellow fasteners. I-section
+root fillets are evaluated analytically in this panel; ordinary profile display
+still has its existing limitations.
 Rounded head/nut relief is derived from the catalogue dimensions; exact rounded
 B-rep export is still pending. Thread marks are helical lines, not cut teeth.
 
@@ -144,3 +151,18 @@ The renderer's parameter block follows the existing element flags, with a
 separate batch and a lazily created pipeline; the normal scene parameters and
 element visibility limits remain unchanged. `OBS_CSG_DETAIL=1` opens the panel
 on startup for native integration checks.
+
+
+The `connection_gallery` fixture writes three native models beneath
+`build/connection-gallery`: the combined workbench, the full fastener library
+(120 catalogue types plus 15 assembled bolts), and ten applied connections.
+The latter includes five column bases, a wind-brace gusset, end plate, fin plate,
+double cleat and splice. The base-plate recipe accepts stiffener plates and welds
+after its mandatory plate and anchor group; it can be saved and reapplied as a
+connection type. Anchor holes cut the plate, not the column. Fillet-weld nominal
+size is the equal leg length; its exact solid and detail field use a triangular
+prism, with throat equal to leg divided by sqrt(2). Butt welds retain their
+rectangular section. The geometric distinction between leg and throat follows
+[TWI's fillet-weld terminology](https://www.twi-global.com/technical-knowledge/job-knowledge/design-part-1-090).
+These are illustrative modelling recipes, not a reproduction
+of a supplier's approved connection or a resistance calculation.
