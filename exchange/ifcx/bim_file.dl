@@ -42,6 +42,9 @@
 #     sheet <id> <paper: 0 A0 … 4 A4> <landscape: 0 or 1> <viewport count>
 #           (<view> <x> <y> <model x> <model y>) … <number> <name>
 #                                            a drawing sheet, its views placed at sheet millimetres
+#     sheetview <id> <paper> <landscape: 0 or 1> <contents page or 0> <page count> <page> ... <prefix> <name>
+#                                            a book of sheets (#135): its pages in order, numbered
+#                                            after the prefix; a sheet in no book stands alone
 #                                            a view kept with the model (kinds: `bim_model.dl`)
 #     dimension <id> <element> <feature> <element> <feature> [<x> <y>]
 #                                            the dimension line through (x, y) when given
@@ -815,6 +818,26 @@ function the bim file text of {bim model record:modelValue}:
             append ((sheetValue's number with " " replaced by "_") with "\n" replaced by "_") to pieces
             append (the bim file name of sheetValue's name) to pieces
             append (the bim joined fields of pieces) to lines
+        loop cursor from 0 to the length of (modelValue's sheetviews's values):
+            set bookValue to the item at cursor in (modelValue's sheetviews's values)
+            clear pieces
+            append (the string form of "sheetview") to pieces
+            append (the string form of bookValue's id) to pieces
+            append (the string form of bookValue's paper) to pieces
+            if bookValue's landscape:
+                append (the string form of "1") to pieces
+            else:
+                append (the string form of "0") to pieces
+            if bookValue's contentsId > (0 as a 64 bit integer):
+                append (the string form of bookValue's contentsId) to pieces
+            else:
+                append (the string form of "0") to pieces
+            append (the string form of (the length of (bookValue's pages's values))) to pieces
+            loop pageCursor from 0 to the length of (bookValue's pages's values):
+                append (the string form of (the item at pageCursor in (bookValue's pages's values))) to pieces
+            append ((bookValue's prefix with " " replaced by "_") with "\n" replaced by "_") to pieces
+            append (the bim file name of bookValue's name) to pieces
+            append (the bim joined fields of pieces) to lines
         loop cursor from 0 to the length of (modelValue's spaceObjects's values):
             set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
             clear pieces
@@ -1121,6 +1144,33 @@ local function the bim reference fault of {bim model record:modelValue}:
             append (the item at cursor in (modelValue's views's values))'s id to ids
         loop cursor from 0 to the length of (modelValue's sheets's values):
             append (the item at cursor in (modelValue's sheets's values))'s id to ids
+        # A sheetview's pages are sheets, each in one book at most, and its
+        # contents page is one of them.
+        set pagesSeen to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (modelValue's sheetviews's values):
+            set bookValue to the item at cursor in (modelValue's sheetviews's values)
+            append bookValue's id to ids
+            set contentsFound to (bookValue's contentsId = the bim refused id)
+            loop pageCursor from 0 to the length of (bookValue's pages's values):
+                set pageId to the item at pageCursor in (bookValue's pages's values)
+                append pageId to pagesSeen
+                if pageId = bookValue's contentsId:
+                    set contentsFound to true
+                if (the bim sheet index of pageId in modelValue)'s valid = false:
+                    free ids
+                    free pagesSeen
+                    return (the string form of "sheetview ") + ((the string form of bookValue's id) + (the string form of " has a page that is no sheet"))
+            if contentsFound = false:
+                free ids
+                free pagesSeen
+                return (the string form of "sheetview ") + ((the string form of bookValue's id) + (the string form of " lists its contents on a sheet outside it"))
+        set pagesTotal to the length of pagesSeen
+        sort and deduplicate bim ids pagesSeen
+        set pagesShared to (the length of pagesSeen) != pagesTotal
+        free pagesSeen
+        if pagesShared:
+            free ids
+            return the string form of "a sheet is a page of two sheetviews"
         loop cursor from 0 to the length of (modelValue's stairs's values):
             append (the item at cursor in (modelValue's stairs's values))'s id to ids
         loop cursor from 0 to the length of (modelValue's railings's values):
@@ -2077,6 +2127,32 @@ function the bim model parsed from {a string:content}:
                             set refusal to the string form of "a sheet's paper is A0 to A4"
                         else:
                             append (@intrinsic("construct", a bim sheet record, the item at 0 in fields's wholes, sheetNumber, sheetTitle's text, paperCode, (the item at 2 in fields's wholes) = (1 as a 64 bit integer), placedViews)) to (modelValue's sheets's values)
+                    free bim field reading fields
+                else if kind = (the string form of "sheetview"):
+                    set fields to the bim fields 1 to 5 of tokens laid out as (the string form of "iiiii")
+                    set pageCount to 0
+                    if fields's valid:
+                        set pageCount to (the item at 4 in fields's wholes) as an integer
+                    set bookTitle to the bim remainder of line after (7 + pageCount) fields
+                    if ((fields's valid = false) or (bookTitle's valid = false)) or ((pageCount < 0) or (pageCount > 100000)):
+                        set refusal to the string form of "malformed sheetview"
+                    else if (bim id (the item at 0 in (fields's wholes)) follows (modelValue's sheetviews's values)) = false:
+                        set refusal to the string form of "sheetview ids out of order"
+                    else:
+                        set bookPages to a cad topology list of a 64 bit integer
+                        loop pageCursor from 0 to pageCount:
+                            set pageReading to the bim whole reading of (the item at (6 + pageCursor) in tokens)
+                            if pageReading's valid = false:
+                                set refusal to the string form of "malformed sheetview page"
+                            append pageReading's value to (bookPages's values)
+                        set bookPaper to (the item at 1 in fields's wholes) as an integer
+                        set bookContents to the item at 3 in fields's wholes
+                        if bookContents <= (0 as a 64 bit integer):
+                            set bookContents to the bim refused id
+                        if (bookPaper < 0) or (bookPaper > 4):
+                            set refusal to the string form of "a sheetview's paper is A0 to A4"
+                        else:
+                            append (@intrinsic("construct", a bim sheetview record, the item at 0 in fields's wholes, bookTitle's text, (the item at (6 + pageCount) in tokens) with "_" replaced by " ", bookPaper, (the item at 2 in fields's wholes) = (1 as a 64 bit integer), bookContents, bookPages)) to (modelValue's sheetviews's values)
                     free bim field reading fields
                 else if kind = (the string form of "piletiplevel"):
                     set fields to the bim fields 1 to 5 of tokens laid out as (the string form of "irrri")
