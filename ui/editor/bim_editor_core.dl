@@ -5664,32 +5664,379 @@ function drag bim editor gizmo by {cad vector2:offset} lifting {a 64 bit floatin
         lift bim editor selection by rise in editor
         set editor's message to (the string form of "Move X ") + ((the bim length offset's x in units unitCode) + ((the string form of ", Y ") + ((the bim length offset's y in units unitCode) + ((the string form of ", Z ") + (the bim length rise in units unitCode)))))
 
-# The selected element's control points `rise` higher than when the open
-# transaction began, where it now stands in plan (the gizmo's Z arrow).
+# The selection `rise` higher than when the open transaction began, where
+# it now stands in plan (the gizmo's Z arrow): every member of it, as its
+# kind rises (`lift bim element … from … by …`). The selected element of a
+# kind that rises only through its control points (a level, a grid, a
+# building system) rises through them, as before.
 function lift bim editor selection by {a 64 bit floating-point number:rise} in {a pointer to a bim editor record:editor}:
     execute:
         set stack to editor's documentValue's undoStack's values
-        if ((the length of stack) = 0) or ((bim kind (editor's selectionKind) has handles) = false):
+        if (the length of stack) = 0:
             return nothing
         set original to the item at ((the length of stack) - 1) in stack
+        set target to the address of (editor's documentValue's current)
+        set ids to the bim selection members of (@intrinsic("dereference", editor))
+        loop cursor from 0 to the length of ids:
+            set memberId to the item at cursor in ids
+            set lifted to lift bim element memberId from original by rise in target
+            if ((lifted = false) and (memberId = editor's selectionId)) and (bim kind (editor's selectionKind) has handles):
+                lift bim editor handles of editor's selectionKind numbered memberId from original by rise in target
+        free ids
+
+# The control points of element `elementId` (pick kind `pickKind`) `rise`
+# higher than in `original`, where they now stand in plan.
+function lift bim editor handles of {integer:pickKind} numbered {a 64 bit integer:elementId} from {bim model record:original} by {a 64 bit floating-point number:rise} in {a pointer to a bim model record:target}:
+    execute:
+        set before to the bim handles of pickKind numbered elementId in original
+        set present to the bim handles of pickKind numbered elementId in (@intrinsic("dereference", target))
+        if (the length of (before's values)) = (the length of (present's values)):
+            set raised to an empty list of a cad vector3
+            loop cursor from 0 to the length of (present's values):
+                set now to the item at cursor in (present's values)
+                append (a cad vector3 with x now's x, y now's y and z ((the item at cursor in (before's values))'s z + rise)) to raised
+            ignore (set bim handles of pickKind numbered elementId to raised in target)
+            free raised
+
+# Element `elementId` `rise` higher than in `original`, where it now stands
+# in plan; false for a kind that does not rise this way. A wall rises as a
+# whole, its height kept: a top held at a level lets go of it while the
+# wall is lifted and holds it again when the lift comes back to nothing. A
+# floor's or roof's top rises; a linear element's ends, a mesh's points and
+# reinforcement without a host rise with it.
+function lift bim element {a 64 bit integer:elementId} from {bim model record:original} by {a 64 bit floating-point number:rise} in {a pointer to a bim model record:target}:
+    execute:
+        set unlifted to (the absolute value of rise) <= 1e-9
+        set wallBefore to the bim wall index of elementId in original
+        if wallBefore's valid:
+            set wallValue to the item at wallBefore's position in (original's walls's values)
+            if (set bim wall elementId base to (wallValue's baseOffset + rise) and height to wallValue's height in target) = false:
+                return true
+            set heldLevel to the bim refused id
+            if unlifted:
+                set heldLevel to wallValue's topLevelId
+            ignore (hold bim wall elementId top at level heldLevel in target)
+            return true
+        set plateBefore to the bim slab index of elementId in original
+        if plateBefore's valid:
+            set plateFound to the bim slab index of elementId in (@intrinsic("dereference", target))
+            if plateFound's valid:
+                set plate to the item at plateFound's position in (target's slabs's values)
+                ignore set bim plate elementId top to ((the item at plateBefore's position in (original's slabs's values))'s top + rise) pitch plate's pitch heading plate's heading in target
+            return true
+        set linearBefore to the bim linear index of elementId in original
+        if linearBefore's valid:
+            set linearFound to the bim linear index of elementId in (@intrinsic("dereference", target))
+            if linearFound's valid:
+                set beforeMember to the item at linearBefore's position in (original's linears's values)
+                set member to the item at linearFound's position in (target's linears's values)
+                set raisedStart to a cad vector3 with x member's start's x, y member's start's y and z (beforeMember's start's z + rise)
+                set raisedFinish to a cad vector3 with x member's finish's x, y member's finish's y and z (beforeMember's finish's z + rise)
+                ignore move bim linear elementId to raisedStart and raisedFinish turned member's angle in target
+            return true
+        set meshBefore to the bim mesh index of elementId in original
+        if meshBefore's valid:
+            set meshFound to the bim mesh index of elementId in (@intrinsic("dereference", target))
+            if meshFound's valid:
+                set beforePoints to (the item at meshBefore's position in (original's meshes's values))'s vertices's values
+                set meshValue to the item at meshFound's position in (target's meshes's values)
+                if (the length of beforePoints) = (the length of (meshValue's vertices's values)):
+                    set raised to an empty list of a cad vector3
+                    loop cursor from 0 to the length of beforePoints:
+                        set now to the item at cursor in (meshValue's vertices's values)
+                        append (a cad vector3 with x now's x, y now's y and z ((the item at cursor in beforePoints)'s z + rise)) to raised
+                    ignore set bim mesh elementId to raised and (meshValue's faces's values) in target
+                    free raised
+            return true
+        set rebarBefore to the bim reinforcement index of elementId in original
+        if rebarBefore's valid:
+            set rebarFound to the bim reinforcement index of elementId in (@intrinsic("dereference", target))
+            set beforeRebar to the item at rebarBefore's position in (original's reinforcements's values)
+            if rebarFound's valid and (beforeRebar's hostId = the bim refused id):
+                set rebarValue to the item at rebarFound's position in (target's reinforcements's values)
+                set rebarValue's start to a cad vector3 with x rebarValue's start's x, y rebarValue's start's y and z (beforeRebar's start's z + rise)
+                set rebarValue's finish to a cad vector3 with x rebarValue's finish's x, y rebarValue's finish's y and z (beforeRebar's finish's z + rise)
+                ignore (store bim reinforcement rebarValue in target)
+            return true
+        return false
+
+# ---------------------------------------------------------------- tilting
+
+# `point` turned `turnAngle` radians about the line through `pivot` along
+# the unit vector `axis`, by the right hand.
+function the bim point {cad vector3:point} turned {a 64 bit floating-point number:turnAngle} about {cad vector3:axis} through {cad vector3:pivot}:
+    execute:
+        set offset to the cad difference of point and pivot
+        set cosine to the cosine of turnAngle
+        set sine to the sine of turnAngle
+        set swung to the cad sum of (offset scaled by cosine) and (the cad sum of ((the cad cross of axis and offset) scaled by sine) and (axis scaled by ((the cad dot of axis and offset) * (1.0 - cosine))))
+        return the cad sum of pivot and swung
+
+# An angle brought within a half turn either way.
+function the bim angle {a 64 bit floating-point number:value} within a half turn:
+    execute:
+        set wrapped to value
+        loop while wrapped > 3.141592653589793:
+            set wrapped to wrapped - 6.283185307179586
+        loop while wrapped <= -3.141592653589793:
+            set wrapped to wrapped + 6.283185307179586
+        return wrapped
+
+# Which of the gizmo's tilting rings the selected element takes, as bits: 1
+# about its X axis, 2 about its Y axis. A straight wall leans about its own
+# line only (its lean); a floor or roof, a linear element, a mesh and
+# reinforcement without a host tilt about both.
+function the bim tilt axes of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if editor's selectionKind = bim wall picked:
+            set wallFound to the bim wall index of editor's selectionId in modelValue
+            if wallFound's valid:
+                if (the item at wallFound's position in (modelValue's walls's values))'s bulge = 0.0:
+                    return 1
+            return 0
+        if ((editor's selectionKind = bim slab picked) or (editor's selectionKind = bim linear picked)) or (editor's selectionKind = bim mesh picked):
+            return 3
+        if editor's selectionKind = bim reinforcement picked:
+            set rebarFound to the bim reinforcement index of editor's selectionId in modelValue
+            if rebarFound's valid:
+                if (the item at rebarFound's position in (modelValue's reinforcements's values))'s hostId = the bim refused id:
+                    return 3
+        return 0
+
+# Element `elementId` tilted `turnAngle` radians about the unit vector
+# `axis` through `pivot` (height absolute) from where it stands in
+# `original`; false when its kind cannot take that tilt. What a tilt means
+# per element: a straight wall leans about its own line (`lean`, its top
+# shifted sideways, its height kept); a floor or roof turns its slope about
+# its first corner (`pitch` and `heading`, its outline kept in plan); a
+# linear element rolls about its own axis (`angle`), or its ends turn about
+# any other axis; a mesh's points and the ends of reinforcement without a
+# host turn in full.
+function tilt bim element {a 64 bit integer:elementId} from {bim model record:original} by {a 64 bit floating-point number:turnAngle} about {cad vector3:axis} through {cad vector3:pivot} in {a pointer to a bim model record:target}:
+    execute:
+        set unturned to (the absolute value of turnAngle) <= 1e-12
+        set wallFound to the bim wall index of elementId in original
+        if wallFound's valid:
+            set wallValue to the item at wallFound's position in (original's walls's values)
+            if unturned:
+                return set bim wall elementId lean to wallValue's lean and rise to wallValue's rise in target
+            if wallValue's bulge != 0.0:
+                return false
+            set direction to the bim direction of wallValue
+            set along to (axis's x * direction's x) + (axis's y * direction's y)
+            if (the absolute value of along) < 0.9999:
+                return false
+            set sign to 1.0
+            if along < 0.0:
+                set sign to -1.0
+            # Turning about the wall's line by the right hand takes its top
+            # to the right, its exterior side: a positive lean.
+            set leaning to @intrinsic("atan2", wallValue's lean, wallValue's height) + (sign * turnAngle)
+            if (the absolute value of leaning) >= 1.5:
+                return false
+            return set bim wall elementId lean to (wallValue's height * ((the sine of leaning) / (the cosine of leaning))) and rise to wallValue's rise in target
+        set plateFound to the bim slab index of elementId in original
+        if plateFound's valid:
+            set plate to the item at plateFound's position in (original's slabs's values)
+            if unturned:
+                return set bim plate elementId top to plate's top pitch plate's pitch heading plate's heading in target
+            set plateNormal to a cad vector3 with x (0.0 - ((the sine of plate's pitch) * (the cosine of plate's heading))), y (0.0 - ((the sine of plate's pitch) * (the sine of plate's heading))) and z (the cosine of plate's pitch)
+            set turnedNormal to the bim point plateNormal turned turnAngle about axis through (a cad vector3 with x 0.0, y 0.0 and z 0.0)
+            if turnedNormal's z <= 0.05:
+                return false
+            set flatness to the square root of ((turnedNormal's x * turnedNormal's x) + (turnedNormal's y * turnedNormal's y))
+            set newPitch to @intrinsic("atan2", flatness, turnedNormal's z)
+            set newHeading to plate's heading
+            if flatness > 1e-12:
+                # The slope's direction nearest the old one: a slope turned
+                # past flat keeps its heading and pitches the other way.
+                set swing to the bim angle (@intrinsic("atan2", 0.0 - turnedNormal's y, 0.0 - turnedNormal's x) - plate's heading) within a half turn
+                if (the absolute value of swing) > 1.5707963267948966:
+                    set swing to the bim angle (swing + 3.141592653589793) within a half turn
+                    set newPitch to 0.0 - newPitch
+                set newHeading to plate's heading + swing
+            return set bim plate elementId top to plate's top pitch newPitch heading newHeading in target
+        set linearFound to the bim linear index of elementId in original
+        if linearFound's valid:
+            set member to the item at linearFound's position in (original's linears's values)
+            set run to the cad difference of member's finish and member's start
+            set span to the cad length of run
+            if span <= 1e-9:
+                return false
+            set along to (the cad dot of axis and run) / span
+            if (the absolute value of along) >= 0.9999:
+                set sign to 1.0
+                if along < 0.0:
+                    set sign to -1.0
+                return move bim linear elementId to member's start and member's finish turned (member's angle + (sign * turnAngle)) in target
+            set storeyPivot to a cad vector3 with x pivot's x, y pivot's y and z (pivot's z - (the bim elevation of level member's levelId in original))
+            return move bim linear elementId to (the bim point member's start turned turnAngle about axis through storeyPivot) and (the bim point member's finish turned turnAngle about axis through storeyPivot) turned member's angle in target
+        set meshFound to the bim mesh index of elementId in original
+        if meshFound's valid:
+            set meshValue to the item at meshFound's position in (original's meshes's values)
+            set storeyPivot to a cad vector3 with x pivot's x, y pivot's y and z (pivot's z - (the bim elevation of level meshValue's levelId in original))
+            set turnedPoints to an empty list of a cad vector3
+            loop cursor from 0 to the length of (meshValue's vertices's values):
+                append (the bim point (the item at cursor in (meshValue's vertices's values)) turned turnAngle about axis through storeyPivot) to turnedPoints
+            set placed to set bim mesh elementId to turnedPoints and (meshValue's faces's values) in target
+            free turnedPoints
+            return placed
+        set rebarFound to the bim reinforcement index of elementId in original
+        if rebarFound's valid:
+            set rebarValue to the item at rebarFound's position in (original's reinforcements's values)
+            if rebarValue's hostId != the bim refused id:
+                return false
+            set storeyPivot to a cad vector3 with x pivot's x, y pivot's y and z (pivot's z - (the bim elevation of level rebarValue's levelId in original))
+            set rebarValue's start to the bim point rebarValue's start turned turnAngle about axis through storeyPivot
+            set rebarValue's finish to the bim point rebarValue's finish turned turnAngle about axis through storeyPivot
+            return (store bim reinforcement rebarValue in target) != the bim refused id
+        return false
+
+# The selection tilted `turnAngle` radians about `axis` through `pivot`
+# (height absolute) from where it was when the open transaction began,
+# every member as `tilt bim element` tilts it; false, and the selection
+# where it began, when any member cannot take the tilt.
+function tilt bim editor selection about {cad vector3:axis} through {cad vector3:pivot} by {a 64 bit floating-point number:turnAngle} in {a pointer to a bim editor record:editor}:
+    execute:
+        set stack to editor's documentValue's undoStack's values
+        set axisLength to the cad length of axis
+        if ((the length of stack) = 0) or (axisLength <= 1e-12):
+            return false
+        set unit to axis scaled by (1.0 / axisLength)
+        set original to the item at ((the length of stack) - 1) in stack
+        set target to the address of (editor's documentValue's current)
+        set ids to the bim selection members of (@intrinsic("dereference", editor))
+        set valid to true
+        loop cursor from 0 to the length of ids:
+            if valid:
+                set valid to tilt bim element (the item at cursor in ids) from original by turnAngle about unit through pivot in target
+        if valid = false:
+            loop cursor from 0 to the length of ids:
+                ignore (tilt bim element (the item at cursor in ids) from original by 0.0 about unit through pivot in target)
+        free ids
+        return valid
+
+# The gizmo's X or Y ring: the selection tilted `turnAngle` about `axis`
+# through `pivot` (height absolute) from where it was when the drag began.
+function drag bim editor gizmo tilting {a 64 bit floating-point number:turnAngle} about {cad vector3:axis} through {cad vector3:pivot} in {a pointer to a bim editor record:editor}:
+    execute:
+        if tilt bim editor selection about axis through pivot by turnAngle in editor:
+            set editor's message to (the string form of "Tilt ") + ((the string form of ((the floor of (((turnAngle * 180.0) / 3.141592653589793) + 0.5)) as an integer)) + (the string form of " deg"))
+        else:
+            set editor's message to the string form of "Tilt refused: the selection cannot turn that way"
+
+# Where the selected element stands and how it is turned, as the properties
+# show it: its gizmo's origin (`the bim object frame of`, height absolute)
+# and its turn about X, Y and Z in radians, by the right hand about the
+# element's own X and its level Y axis, Z its heading in plan. A wall's X is
+# its lean (about its own line), a plate's Y its slope (a roof pitched up
+# toward its heading turns negative about Y), a linear element's X its
+# roll and Y its fall along its axis. `editable` has a bit per value that
+# can be typed, as `set bim editor placement` numbers them (1 the X
+# position up to 32 the turn about Z).
+class:
+    patterns:
+        [a|] bim placement record
+    members:
+        found as a boolean
+        position as a cad vector3
+        rotation as a cad vector3
+        editable as an integer
+
+function the bim selection placement of {bim editor record:editor}:
+    execute:
+        set basis to the bim object frame of editor
+        set rotation to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set modelValue to editor's documentValue's current
+        set editable to 0
+        if basis's found = false:
+            return @intrinsic("construct", a bim placement record, false, basis's origin, rotation, editable)
+        if editor's selectionKind = bim wall picked:
+            set wallFound to the bim wall index of editor's selectionId in modelValue
+            if wallFound's valid:
+                set wallValue to the item at wallFound's position in (modelValue's walls's values)
+                set direction to the bim direction of wallValue
+                set rotation to a cad vector3 with x (@intrinsic("atan2", wallValue's lean, wallValue's height)), y 0.0 and z (@intrinsic("atan2", direction's y, direction's x))
+                set editable to (1 + 2) + (4 + 32)
+                if wallValue's bulge = 0.0:
+                    set editable to editable + 8
         if editor's selectionKind = bim slab picked:
-            set plateFound to the bim slab index of editor's selectionId in editor's documentValue's current
-            set originalFound to the bim slab index of editor's selectionId in original
-            if plateFound's valid and originalFound's valid:
-                set plate to the item at plateFound's position in (editor's documentValue's current's slabs's values)
-                set beforePlate to the item at originalFound's position in (original's slabs's values)
-                ignore set bim plate plate's id top to (beforePlate's top + rise) pitch plate's pitch heading plate's heading in (the address of (editor's documentValue's current))
-            return nothing
-        set before to the bim handles of editor's selectionKind numbered editor's selectionId in original
-        set present to the bim handles of editor's selectionKind numbered editor's selectionId in editor's documentValue's current
-        if (the length of (before's values)) != (the length of (present's values)):
-            return nothing
-        set raised to an empty list of a cad vector3
-        loop cursor from 0 to the length of (present's values):
-            set now to the item at cursor in (present's values)
-            append (a cad vector3 with x now's x, y now's y and z ((the item at cursor in (before's values))'s z + rise)) to raised
-        ignore (set bim handles of editor's selectionKind numbered editor's selectionId to raised in (the address of (editor's documentValue's current)))
-        free raised
+            set slabFound to the bim slab index of editor's selectionId in modelValue
+            if slabFound's valid:
+                set plate to the item at slabFound's position in (modelValue's slabs's values)
+                set rotation to a cad vector3 with x 0.0, y (0.0 - plate's pitch) and z plate's heading
+                set editable to (1 + 2) + ((4 + 16) + 32)
+        if editor's selectionKind = bim linear picked:
+            set linearFound to the bim linear index of editor's selectionId in modelValue
+            if linearFound's valid:
+                set member to the item at linearFound's position in (modelValue's linears's values)
+                set run to the cad difference of member's finish and member's start
+                set flat to the square root of ((run's x * run's x) + (run's y * run's y))
+                set bearing to 0.0
+                if flat > 1e-9:
+                    set bearing to @intrinsic("atan2", run's y, run's x)
+                set rotation to a cad vector3 with x member's angle, y (0.0 - @intrinsic("atan2", run's z, flat)) and z bearing
+                set editable to (1 + 2) + ((4 + 8) + (16 + 32))
+        return @intrinsic("construct", a bim placement record, true, basis's origin, rotation, editable)
+
+# The selection's placement value `slot` (0, 1 and 2 its position X, Y and
+# Z in metres, height absolute; 3, 4 and 5 its turn about X, Y and Z in
+# radians, as `the bim selection placement of` reads them) made `wanted`,
+# as one edit: what the gizmo does when dragged that far (moved, lifted,
+# tilted about the element's X axis or its level Y axis through its
+# origin, turned about its origin in plan). False, and nothing changed,
+# when the value cannot be typed or the element refuses it.
+function set bim editor placement {integer:slot} to {a 64 bit floating-point number:wanted} in {a pointer to a bim editor record:editor}:
+    execute:
+        set reading to the bim selection placement of (@intrinsic("dereference", editor))
+        set basis to the bim object frame of (@intrinsic("dereference", editor))
+        if ((reading's found = false) or (slot < 0)) or (slot > 5):
+            return false
+        set bit to 1
+        loop step from 0 to slot:
+            set bit to bit * 2
+        if (reading's editable bitwise and bit) = 0:
+            return false
+        set present to reading's position's x
+        if slot = 1:
+            set present to reading's position's y
+        if slot = 2:
+            set present to reading's position's z
+        if slot = 3:
+            set present to reading's rotation's x
+        if slot = 4:
+            set present to reading's rotation's y
+        if slot = 5:
+            set present to reading's rotation's z
+        set change to wanted - present
+        if (change - change) != 0.0:
+            return false
+        set pivot to a cad vector2 with x basis's origin's x and y basis's origin's y
+        begin bim transaction in (the address of (editor's documentValue))
+        set placed to true
+        if slot = 0:
+            set placed to place bim editor selection by (the bim shift transform by (a cad vector2 with x change and y 0.0)) in editor
+        if slot = 1:
+            set placed to place bim editor selection by (the bim shift transform by (a cad vector2 with x 0.0 and y change)) in editor
+        if slot = 2:
+            lift bim editor selection by change in editor
+        if slot = 3:
+            set placed to tilt bim editor selection about basis's xAxis through basis's origin by change in editor
+        if slot = 4:
+            # The level axis across the element's X: a plate's slope or a
+            # linear element's fall changes, whatever its roll.
+            set across to the cad cross of (a cad vector3 with x 0.0, y 0.0 and z 1.0) and basis's xAxis
+            if (the cad length of across) <= 1e-9:
+                set across to a cad vector3 with x 0.0, y 1.0 and z 0.0
+            set placed to tilt bim editor selection about across through basis's origin by change in editor
+        if slot = 5:
+            set placed to place bim editor selection by (the bim turn transform about pivot by change) in editor
+        if placed:
+            commit bim transaction in (the address of (editor's documentValue))
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+        return placed
 
 function finish bim editor gizmo drag in {a pointer to a bim editor record:editor}:
     execute:
