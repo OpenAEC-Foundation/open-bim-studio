@@ -825,3 +825,267 @@ function the bim inner face segments of walls from {a pointer to a list:starts} 
         free shifts
         free breadths
         return result
+
+# ---------------------------------------------------------------- sketch edit tools (#89)
+
+# The size of the bulge of an arc over a chord `chordLength` long with radius
+# `arcRadius`: the shorter way round, or the longer when `longWay`; a half
+# circle when the radius is shorter than half the chord.
+function the bim bulge over {a 64 bit floating-point number:chordLength} at radius {a 64 bit floating-point number:arcRadius} long {boolean:longWay}:
+    execute:
+        set halfChord to chordLength * 0.5
+        if arcRadius <= halfChord:
+            return halfChord
+        set rest to the square root of ((arcRadius * arcRadius) - (halfChord * halfChord))
+        if longWay:
+            return arcRadius + rest
+        return arcRadius - rest
+
+# The bulge of the arc from `fromPoint` to `toPoint` with radius
+# `arcRadius`, the shorter way round, to the side of the chord where
+# `sidePoint` lies (start, end, radius); a half circle when the radius is
+# shorter than half the chord.
+function the bim boundary bulge from {cad vector2:fromPoint} to {cad vector2:toPoint} with radius {a 64 bit floating-point number:arcRadius} toward {cad vector2:sidePoint}:
+    execute:
+        set chordX to toPoint's x - fromPoint's x
+        set chordY to toPoint's y - fromPoint's y
+        set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+        if chordLength <= 1e-9:
+            return 0.0
+        set across to (((sidePoint's x - fromPoint's x) * chordY) - ((sidePoint's y - fromPoint's y) * chordX)) / chordLength
+        set rise to the bim bulge over chordLength at radius arcRadius long false
+        if across < 0.0:
+            return 0.0 - rise
+        return rise
+
+# The arc round `centrePoint` from `startPoint`, turning `sweep` radians
+# anticlockwise (centre, start, end). Its bulge is the radius times
+# 1 - cos(sweep / 2), so it may turn more than a half circle; a segment of
+# no length when it turns a whole circle or none.
+function the bim boundary arc around {cad vector2:centrePoint} from {cad vector2:startPoint} sweeping {a 64 bit floating-point number:sweep}:
+    execute:
+        set arcRadius to the cad distance from centrePoint to startPoint
+        set startAngle to @intrinsic("atan2", startPoint's y - centrePoint's y, startPoint's x - centrePoint's x)
+        set endAngle to startAngle + sweep
+        set endPoint to a cad vector2 with x (centrePoint's x + (arcRadius * (the cosine of endAngle))) and y (centrePoint's y + (arcRadius * (the sine of endAngle)))
+        if (bim boundary point startPoint meets endPoint) or (sweep <= 0.0):
+            return the bim boundary line from startPoint to startPoint
+        return the bim boundary arc from startPoint to endPoint bulging (arcRadius * (1.0 - (the cosine of (sweep * 0.5))))
+
+# The same, ending where the ray from the centre through `towardPoint`
+# meets the circle.
+function the bim boundary arc around {cad vector2:centrePoint} from {cad vector2:startPoint} toward {cad vector2:towardPoint}:
+    execute:
+        set startAngle to @intrinsic("atan2", startPoint's y - centrePoint's y, startPoint's x - centrePoint's x)
+        set endAngle to @intrinsic("atan2", towardPoint's y - centrePoint's y, towardPoint's x - centrePoint's x)
+        set turning to endAngle - startAngle
+        if turning < 0.0:
+            set turning to turning + 6.283185307179586
+        return the bim boundary arc around centrePoint from startPoint sweeping turning
+
+# The direction in which segment `piece` runs on at its finish, and the one
+# in which it leaves its start, as unit vectors.
+function the bim finish direction of boundary segment {bim boundary segment record:piece}:
+    execute:
+        if piece's elliptic:
+            return the bim unit direction of (a cad vector2 with x (piece's centre's x - piece's start's x) and y (piece's centre's y - piece's start's y))
+        return the bim end direction of boundary arc from piece's start to piece's finish bulging piece's bulge
+
+function the bim start direction of boundary segment {bim boundary segment record:piece}:
+    execute:
+        if piece's elliptic:
+            return the bim unit direction of (a cad vector2 with x (piece's finish's x - piece's centre's x) and y (piece's finish's y - piece's centre's y))
+        return the bim start direction of boundary arc from piece's start to piece's finish bulging piece's bulge
+
+# The direction a tangent arc from `spot` leaves in: on along the last
+# segment of `pieces` that ends at `spot`, else back along the last that
+# starts there; of no length when none does.
+function the bim tangent at {cad vector2:spot} of boundary segments {a pointer to a list:pieces}:
+    execute:
+        set heading to a cad vector2 with x 0.0 and y 0.0
+        set foundFinish to false
+        loop cursor from 0 to the length of pieces:
+            set piece to the item at cursor in pieces
+            if bim boundary point piece's finish meets spot:
+                set heading to the bim finish direction of boundary segment piece
+                set foundFinish to true
+            else if (foundFinish = false) and (bim boundary point piece's start meets spot):
+                set leaving to the bim start direction of boundary segment piece
+                set heading to a cad vector2 with x (0.0 - leaving's x) and y (0.0 - leaving's y)
+        return heading
+
+# The segment `piece` with each end that meets one of `movingPoints` moved
+# by `displacement`; an elliptic quarter's centre moves along when both its
+# ends do. An arc with one end moved keeps its bulge, or its radius when
+# `keepingRadius` (a half circle when the new chord is too long for it).
+function the bim boundary segment {bim boundary segment record:piece} moving any of {a pointer to a list:movingPoints} by {cad vector2:displacement} keeping radius {boolean:keepingRadius}:
+    execute:
+        set startMoves to false
+        set finishMoves to false
+        loop cursor from 0 to the length of movingPoints:
+            set spot to the item at cursor in movingPoints
+            if bim boundary point piece's start meets spot:
+                set startMoves to true
+            if bim boundary point piece's finish meets spot:
+                set finishMoves to true
+        set movedPiece to piece
+        if startMoves:
+            set movedPiece's start to a cad vector2 with x (piece's start's x + displacement's x) and y (piece's start's y + displacement's y)
+        if finishMoves:
+            set movedPiece's finish to a cad vector2 with x (piece's finish's x + displacement's x) and y (piece's finish's y + displacement's y)
+        if (piece's elliptic and startMoves) and finishMoves:
+            set movedPiece's centre to a cad vector2 with x (piece's centre's x + displacement's x) and y (piece's centre's y + displacement's y)
+        if (keepingRadius and (startMoves != finishMoves)) and ((piece's elliptic = false) and (piece's bulge != 0.0)):
+            set oldArc to the bim arc of boundary segment piece
+            set oldChord to the cad distance from piece's start to piece's finish
+            set newChord to the cad distance from movedPiece's start to movedPiece's finish
+            set rise to the bim bulge over newChord at radius oldArc's radius long ((the absolute value of piece's bulge) > (oldChord * 0.5))
+            if piece's bulge < 0.0:
+                set rise to 0.0 - rise
+            set movedPiece's bulge to rise
+        return movedPiece
+
+# Whether the straight piece from `runFrom` to `runTo` meets the box from
+# `boxLow` to `boxHigh` (Liang and Barsky's clipping).
+local function bim boundary run from {cad vector2:runFrom} to {cad vector2:runTo} meets box {cad vector2:boxLow} {cad vector2:boxHigh}:
+    execute:
+        set entering to 0.0
+        set leaving to 1.0
+        set dx to runTo's x - runFrom's x
+        set dy to runTo's y - runFrom's y
+        loop sideCursor from 0 to 4:
+            set step to 0.0 - dx
+            set limit to runFrom's x - boxLow's x
+            if sideCursor = 1:
+                set step to dx
+                set limit to boxHigh's x - runFrom's x
+            if sideCursor = 2:
+                set step to 0.0 - dy
+                set limit to runFrom's y - boxLow's y
+            if sideCursor = 3:
+                set step to dy
+                set limit to boxHigh's y - runFrom's y
+            if (the absolute value of step) <= 1e-15:
+                if limit < 0.0:
+                    return false
+            else:
+                set ratio to limit / step
+                if step < 0.0:
+                    set entering to the maximum of entering and ratio
+                else:
+                    set leaving to the minimum of leaving and ratio
+        return entering <= leaving
+
+# Whether segment `piece` lies wholly in the box from `boxLow` to `boxHigh`
+# (a window selection takes it), or, `touchingToo`, meets it anywhere (a
+# crossing selection).
+function bim boundary segment {bim boundary segment record:piece} is in box {cad vector2:boxLow} {cad vector2:boxHigh} touching {boolean:touchingToo}:
+    execute:
+        set drawn to the bim drawn points of boundary segment piece
+        set inside to 0
+        loop cursor from 0 to the length of drawn:
+            set spot to the item at cursor in drawn
+            if ((spot's x >= boxLow's x) and (spot's x <= boxHigh's x)) and ((spot's y >= boxLow's y) and (spot's y <= boxHigh's y)):
+                set inside to inside + 1
+        set taken to inside = (the length of drawn)
+        if touchingToo and (taken = false):
+            set taken to inside > 0
+            set corner to 0
+            loop while (taken = false) and ((corner + 1) < (the length of drawn)):
+                set taken to bim boundary run from (the item at corner in drawn) to (the item at (corner + 1) in drawn) meets box boxLow boxHigh
+                set corner to corner + 1
+        free drawn
+        return taken
+
+# Where the lines of straight segments `first` and `second` cross (Trim /
+# Extend to corner); `found` false when they run parallel.
+function the bim crossing of boundary line {bim boundary segment record:first} with boundary line {bim boundary segment record:second}:
+    execute:
+        return the bim crossing of line from first's start along (a cad vector2 with x (first's finish's x - first's start's x) and y (first's finish's y - first's start's y)) with line from second's start along (a cad vector2 with x (second's finish's x - second's start's x) and y (second's finish's y - second's start's y))
+
+# Line `piece` trimmed or extended to `corner` on its line, keeping the side
+# of `corner` where `keptPoint` lies: the end on the other side moves there.
+function the bim boundary line {bim boundary segment record:piece} trimmed to {cad vector2:corner} keeping {cad vector2:keptPoint}:
+    execute:
+        set runX to piece's finish's x - piece's start's x
+        set runY to piece's finish's y - piece's start's y
+        set runSquared to (runX * runX) + (runY * runY)
+        set cutLine to piece
+        if runSquared <= 1e-18:
+            return cutLine
+        set cornerShare to (((corner's x - piece's start's x) * runX) + ((corner's y - piece's start's y) * runY)) / runSquared
+        set keptShare to (((keptPoint's x - piece's start's x) * runX) + ((keptPoint's y - piece's start's y) * runY)) / runSquared
+        if keptShare < cornerShare:
+            set cutLine's finish to corner
+        else:
+            set cutLine's start to corner
+        return cutLine
+
+# Gives the elliptic quarters of `pieces` round `centrePoint` the semi-axis
+# `semiAxis` along their axis through `axisPoint`: the ends on that axis
+# move along it, each on its own side of the centre. How many ends moved.
+function set bim ellipse round {cad vector2:centrePoint} axis through {cad vector2:axisPoint} to {a 64 bit floating-point number:semiAxis} in {a pointer to a list:pieces}:
+    execute:
+        set axisWay to the bim unit direction of (a cad vector2 with x (axisPoint's x - centrePoint's x) and y (axisPoint's y - centrePoint's y))
+        set moved to 0
+        loop cursor from 0 to the length of pieces:
+            set piece to the item at cursor in pieces
+            if piece's elliptic and (bim boundary point piece's centre meets centrePoint):
+                loop endCursor from 0 to 2:
+                    set endPoint to piece's start
+                    if endCursor = 1:
+                        set endPoint to piece's finish
+                    set offsetX to endPoint's x - centrePoint's x
+                    set offsetY to endPoint's y - centrePoint's y
+                    set offAxis to (offsetX * axisWay's y) - (offsetY * axisWay's x)
+                    set onAxis to (offsetX * axisWay's x) + (offsetY * axisWay's y)
+                    if ((the absolute value of offAxis) <= the bim boundary tolerance) and ((the absolute value of onAxis) > the bim boundary tolerance):
+                        set sense to 1.0
+                        if onAxis < 0.0:
+                            set sense to -1.0
+                        set placed to a cad vector2 with x (centrePoint's x + ((sense * semiAxis) * axisWay's x)) and y (centrePoint's y + ((sense * semiAxis) * axisWay's y))
+                        if endCursor = 0:
+                            set piece's start to placed
+                        else:
+                            set piece's finish to placed
+                        set moved to moved + 1
+                replace item at index cursor in pieces with piece
+        return moved
+
+# Gives the circular arc at `chosen` in `pieces` the radius `arcRadius`.
+# When the arcs on its circle close it (a circle drawn as half arcs), they
+# all scale about its centre; else the arc keeps its ends and side, the
+# longer way round when it was. False when it is no arc, or the radius is
+# shorter than half its kept chord.
+function set bim boundary arc {integer:chosen} radius to {a 64 bit floating-point number:arcRadius} in {a pointer to a list:pieces}:
+    execute:
+        set piece to the item at chosen in pieces
+        set circle to the bim arc of boundary segment piece
+        if (piece's elliptic or (circle's curved = false)) or (arcRadius <= the bim boundary tolerance):
+            return false
+        set turned to 0.0
+        loop cursor from 0 to the length of pieces:
+            set other to the item at cursor in pieces
+            set otherArc to the bim arc of boundary segment other
+            if ((other's elliptic = false) and otherArc's curved) and ((bim boundary point otherArc's centre meets circle's centre) and ((the absolute value of (otherArc's radius - circle's radius)) <= the bim boundary tolerance)):
+                set turned to turned + (the absolute value of otherArc's sweep)
+        if turned >= 6.2831:
+            set factor to arcRadius / circle's radius
+            loop cursor from 0 to the length of pieces:
+                set other to the item at cursor in pieces
+                set otherArc to the bim arc of boundary segment other
+                if ((other's elliptic = false) and otherArc's curved) and ((bim boundary point otherArc's centre meets circle's centre) and ((the absolute value of (otherArc's radius - circle's radius)) <= the bim boundary tolerance)):
+                    set other's start to a cad vector2 with x (circle's centre's x + ((other's start's x - circle's centre's x) * factor)) and y (circle's centre's y + ((other's start's y - circle's centre's y) * factor))
+                    set other's finish to a cad vector2 with x (circle's centre's x + ((other's finish's x - circle's centre's x) * factor)) and y (circle's centre's y + ((other's finish's y - circle's centre's y) * factor))
+                    set other's bulge to other's bulge * factor
+                    replace item at index cursor in pieces with other
+            return true
+        set chordLength to the cad distance from piece's start to piece's finish
+        if arcRadius < ((chordLength * 0.5) - 1e-9):
+            return false
+        set rise to the bim bulge over chordLength at radius arcRadius long ((the absolute value of piece's bulge) > (chordLength * 0.5))
+        if piece's bulge < 0.0:
+            set rise to 0.0 - rise
+        set piece's bulge to rise
+        replace item at index chosen in pieces with piece
+        return true
