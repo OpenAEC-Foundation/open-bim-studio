@@ -88,6 +88,17 @@ The world origin has a permanent screen marker. Grid placement snaps to the
 grid and click its plus control to add parallel grids using current-unit
 spacing, for example `5000 3000 3x5400`. The entire batch is one undo step.
 
+### Project settings and levels
+
+**Model > Settings** opens the Project settings window. Its Settings page
+holds the drawing standard, the units (length, decimals, area, angle,
+currency) and the georeferencing (EPSG code, map origin, true north): a
+choice shows its options side by side, a value is typed and applied with
+Enter. **Model > Levels** opens the same window on its Levels page: every
+level with its name, elevation, storey height and plan extent, each typed
+or turned over in place, and Add level. Each change is one undo step, and
+the properties panel shows the same values.
+
 ### Type library
 
 **Home > IfcTypes** and **Model > IfcTypes** open the native type library
