@@ -26,6 +26,7 @@ import ui/editor/bim_point_input.dl
 import ui/editor/bim_pile_tip_tool.dl
 import ui/editor/bim_crop_sketch.dl
 import ui/editor/bim_grid_handles.dl
+import bim/bim_grid_height.dl
 
 function bim select tool:
     replacement:
@@ -1070,6 +1071,7 @@ function the bim failure count of {bim evaluation record:evaluation}:
 # before (an opening that no longer fits its wall), reporting `refusal`.
 function settle bim editor change in {a pointer to a bim editor record:editor} described {a string:description} or refused as {a string:refusal}:
     execute:
+        refresh bim shared grid heights in (the address of (editor's documentValue's current))
         set trialStarted to the bim microseconds now
         set trial to the bim evaluation of editor's documentValue's current after editor's evaluation
         set trialSpent to (the bim microseconds now) - trialStarted
@@ -3564,6 +3566,18 @@ function the bim grips of {bim editor record:editor}:
     execute:
         set modelValue to editor's documentValue's current
         set handles to a cad topology list of a bim grip record
+        if editor's selectionKind = bim grid picked:
+            set gridFound to the bim grid index of editor's selectionId in modelValue
+            if gridFound's valid:
+                set gridValue to the item at gridFound's position in (modelValue's grids's values)
+                set midX to (gridValue's start's x + gridValue's finish's x) * 0.5
+                set midY to (gridValue's start's y + gridValue's finish's y) * 0.5
+                set midZ to (gridValue's low + gridValue's high) * 0.5
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x gridValue's start's x, y gridValue's start's y and z midZ), the bim refused id, false, bim shape grip base)) to (handles's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x gridValue's finish's x, y gridValue's finish's y and z midZ), the bim refused id, true, (bim shape grip base) - 1)) to (handles's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x midX, y midY and z gridValue's low), the bim refused id, false, (bim shape grip base) - 2)) to (handles's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x midX, y midY and z gridValue's high), the bim refused id, false, (bim shape grip base) - 3)) to (handles's values)
+                append (@intrinsic("construct", a bim grip record, (a cad vector3 with x midX, y midY and z midZ), the bim refused id, false, (bim shape grip base) - 4)) to (handles's values)
         if editor's selectionKind = bim wall picked:
             set found to the bim wall index of editor's selectionId in modelValue
             if found's valid:
@@ -3608,6 +3622,8 @@ function the bim handle lift of {integer:pickKind} numbered {a 64 bit integer:el
 # transom or top): it is dragged up and down, not across the plan.
 function bim editor drags a handle upright {bim editor record:editor}:
     execute:
+        if editor's selectionKind = bim grid picked:
+            return (editor's handleDrag = 2) or (editor's handleDrag = 3)
         if (editor's handleDrag < 0) or (editor's selectionKind != bim curtain picked):
             return false
         set found to the bim curtain index of editor's selectionId in editor's documentValue's current
@@ -3623,6 +3639,27 @@ function raise bim editor handle drag to {a 64 bit floating-point number:height}
         if (editor's handleDrag < 0) or ((the length of stack) = 0):
             return nothing
         set original to the item at ((the length of stack) - 1) in stack
+        if editor's selectionKind = bim grid picked:
+            set gridFound to the bim grid index of editor's selectionId in original
+            if (gridFound's valid = false) or (((editor's handleDrag = 2) or (editor's handleDrag = 3)) = false):
+                return nothing
+            set gridValue to the item at gridFound's position in (original's grids's values)
+            set lowHeight to gridValue's low
+            set highHeight to gridValue's high
+            set oldHeight to highHeight
+            if editor's handleDrag = 2:
+                set lowHeight to height
+                set oldHeight to gridValue's low
+            else:
+                set highHeight to height
+            if (editor's dragMoved = false) and ((the absolute value of (height - oldHeight)) < (editor's pickTolerance * 0.5)):
+                return nothing
+            if set bim grid gridValue's id height from lowHeight to highHeight sharing common false in (the address of (editor's documentValue's current)):
+                set editor's dragMoved to true
+                set editor's message to (the string form of "Grid height: ") + (the bim length height in units editor's lengthUnit)
+            else:
+                set editor's message to the string form of "Refused: the grid top must stay above its base"
+            return nothing
         set before to the bim handles of editor's selectionKind numbered editor's selectionId in original
         set lift to the bim handle lift of editor's selectionKind numbered editor's selectionId in original
         set raised to an empty list of a cad vector3
@@ -3658,25 +3695,26 @@ function start bim editor drag of {bim grip record:grip} in {a pointer to a bim 
             set levelId to (the item at found's position in (editor's documentValue's current's walls's values))'s levelId
             set editor's dragEnds to the bim wall ends meeting origin on level levelId in (@intrinsic("dereference", editor))
             set editor's slabCorner to -1
+        if editor's selectionKind = bim grid picked:
+            set gridHandle to (bim shape grip base) - grip's corner
+            set editor's gridDragId to the bim refused id
+            if (gridHandle = 0) or (gridHandle = 1):
+                set editor's handleDrag to -1
+                set editor's gridDragId to editor's selectionId
+                set editor's gridDragAtFinish to gridHandle = 1
+                set editor's gridDragOffset to a cad vector2 with x 0.0 and y 0.0
+            if gridHandle = 4:
+                set editor's handleDrag to bim whole drag
+                set editor's moveBase to origin
         begin bim transaction in (the address of (editor's documentValue))
         set editor's dragOrigin to origin
         set editor's dragging to true
         set editor's dragMoved to false
 
-# The elevations a new grid reaches: a metre below the lowest storey to a
-# metre above the top of the highest.
+# New grids share the common height, initially the storeys' full range.
 function the bim grid reach of {bim model record:modelValue}:
     execute:
-        set lowest to 0.0
-        set highest to 3.0
-        loop cursor from 0 to the length of (modelValue's levels's values):
-            set levelValue to the item at cursor in (modelValue's levels's values)
-            if cursor = 0:
-                set lowest to levelValue's elevation
-                set highest to levelValue's elevation + levelValue's height
-            set lowest to the minimum of lowest and levelValue's elevation
-            set highest to the maximum of highest and (levelValue's elevation + levelValue's height)
-        return a cad vector2 with x (lowest - 1.0) and y (highest + 1.0)
+        return the bim common grid height of modelValue
 
 # The name of a new grid from `startPoint` to `finishPoint`: grids running
 # mostly north-south are numbered 1, 2, 3...; the others are lettered A, B,
@@ -4253,6 +4291,7 @@ function change bim editor storey up {boolean:upward} in {a pointer to a bim edi
             if fresh = the bim refused id:
                 roll back bim transaction in (the address of (editor's documentValue))
                 return nothing
+            refresh bim shared grid heights in (the address of (editor's documentValue's current))
             commit bim transaction in (the address of (editor's documentValue))
             set editor's levelId to fresh
         else:
@@ -4297,6 +4336,7 @@ function add bim editor storeys of {bim import record:imported} in {a pointer to
             roll back bim transaction in (the address of (editor's documentValue))
             set editor's message to the string form of "Every imported storey has a storey in the model"
             return nothing
+        refresh bim shared grid heights in (the address of (editor's documentValue's current))
         commit bim transaction in (the address of (editor's documentValue))
         set editor's viewsDirty to true
         set editor's message to ((the string form of "Added ") + (the string form of added)) + (the string form of " storeys from the import")
@@ -4434,7 +4474,7 @@ function move bim editor pointer to {cad vector2:location} within {a 64 bit floa
                     set newFinish to target
                 else:
                     set newStart to target
-                if move bim grid editor's gridDragId to newStart and newFinish in (the address of (editor's documentValue's current)):
+                if (editor's dragMoved or ((the cad distance from target to editor's dragOrigin) >= (editor's pickTolerance * 0.5))) and (move bim grid editor's gridDragId to newStart and newFinish in (the address of (editor's documentValue's current))):
                     set editor's dragMoved to true
                     # The ends of the parallel lines in one row with the
                     # dragged end, as they stood when the drag began, go
@@ -5374,6 +5414,8 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
             set gridName to the bim next grid name from editor's gridStart to point in editor's documentValue's current
             begin bim transaction in (the address of (editor's documentValue))
             set fresh to add bim grid named gridName from editor's gridStart to point reaching reach's x to reach's y to (the address of (editor's documentValue's current))
+            if fresh != the bim refused id:
+                ignore set bim grid fresh height from reach's x to reach's y sharing common true in (the address of (editor's documentValue's current))
             if fresh = the bim refused id:
                 roll back bim transaction in (the address of (editor's documentValue))
                 set editor's message to the string form of "Refused: a grid needs a length"

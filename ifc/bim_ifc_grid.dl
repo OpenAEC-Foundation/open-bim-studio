@@ -14,6 +14,138 @@ class:
         start as a cad vector2
         finish as a cad vector2
         elevation as a 64 bit floating-point number
+        top as a 64 bit floating-point number
+
+# Accept a rectangular vertical surface only when all four different
+# corners are present, on the axis and at two finite heights.
+local function the bim grid rectangle height among {a pointer to a list:points} from {cad vector3:first} to {cad vector3:last}:
+    execute:
+        set missing to a cad vector2 with x first's z and y first's z
+        if (the length of points) != 4:
+            return missing
+        set low to (the item at 0 in points)'s z
+        set high to low
+        loop cursor from 0 to 4:
+            set point to the item at cursor in points
+            if ((the absolute value of point's z) < 1000000000.0) = false:
+                return missing
+            set low to the minimum of low and point's z
+            set high to the maximum of high and point's z
+        if (high - low) <= 0.000000001:
+            return missing
+        set startPoint to a cad vector2 with x first's x and y first's y
+        set endPoint to a cad vector2 with x last's x and y last's y
+        set xyTolerance to the minimum of 0.000001 and ((the cad distance from startPoint to endPoint) * 0.125)
+        set zTolerance to the minimum of 0.000001 and ((high - low) * 0.125)
+        set mask to 0
+        loop cursor from 0 to 4:
+            set point to the item at cursor in points
+            set pointXY to a cad vector2 with x point's x and y point's y
+            set slot to 0
+            if (the cad distance from pointXY to startPoint) <= xyTolerance:
+                set slot to 0
+            else if (the cad distance from pointXY to endPoint) <= xyTolerance:
+                set slot to 1
+            else:
+                return missing
+            if (the absolute value of (point's z - low)) <= zTolerance:
+                set slot to slot
+            else if (the absolute value of (point's z - high)) <= zTolerance:
+                set slot to slot + 2
+            else:
+                return missing
+            set bitValue to 1 shifted left by slot
+            if (mask bitwise and bitValue) != 0:
+                return missing
+            set mask to mask bitwise or bitValue
+        if mask != 15:
+            return missing
+        return a cad vector2 with x low and y high
+
+# Two triangles must cover the rectangle: each has distinct valid indices,
+# all four points are used, and their shared edge is a diagonal.
+local function bim grid triangles of {bim step instance record:faceSet} cover rectangle {a pointer to a list:points}:
+    execute:
+        set faces to the bim step argument 3 of faceSet
+        if (the bim step count of faces in faceSet) != 2:
+            return false
+        if (the bim step count of (the bim step argument 4 of faceSet) in faceSet) > 0:
+            return false
+        set indices to an empty list of an integer
+        set valid to true
+        loop faceCursor from 0 to 2:
+            set face to the bim step member faceCursor of faces in faceSet
+            if (the bim step count of face in faceSet) != 3:
+                set valid to false
+            loop cursor from 0 to 3:
+                set value to the bim step number of (the bim step member cursor of face in faceSet) in faceSet
+                set index to value as an integer
+                if (value != (index as a 64 bit floating-point number)) or ((index < 1) or (index > 4)):
+                    set valid to false
+                append index to indices
+            set offset to faceCursor * 3
+            set a to the item at offset in indices
+            set b to the item at (offset + 1) in indices
+            set c to the item at (offset + 2) in indices
+            if (a = b) or ((a = c) or (b = c)):
+                set valid to false
+        set shared to an empty list of an integer
+        loop firstCursor from 0 to 3:
+            loop secondCursor from 3 to 6:
+                if (the item at firstCursor in indices) = (the item at secondCursor in indices):
+                    append (the item at firstCursor in indices) to shared
+        if (the length of shared) != 2:
+            set valid to false
+        if valid:
+            set firstShared to the item at ((the item at 0 in shared) - 1) in points
+            set lastShared to the item at ((the item at 1 in shared) - 1) in points
+            set horizontalSpan to the cad distance from (a cad vector2 with x firstShared's x and y firstShared's y) to (a cad vector2 with x lastShared's x and y lastShared's y)
+            set valid to (horizontalSpan > 0.000000001) and ((the absolute value of (firstShared's z - lastShared's z)) > 0.000000001)
+        free indices
+        free shared
+        return valid
+
+# The heights of an axis's rectangular open Body surface, in model metres.
+# A missing, remapped, bent or ambiguous surface leaves the default intact.
+function the bim ifc grid plane height from {cad vector3:first} to {cad vector3:last} shaped {integer:shapeId} through {bim ifc frame record:frame} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set missing to a cad vector2 with x first's z and y first's z
+        set result to missing
+        set matched to false
+        set ambiguous to false
+        if (bim step instance shapeId is a "IFCPRODUCTDEFINITIONSHAPE" in (reader's stepFile)) = false:
+            return missing
+        set shape to the bim step instance shapeId in (reader's stepFile)
+        set representations to the bim step argument 2 of shape
+        loop cursor from 0 to the bim step count of representations in shape:
+            set representationId to the bim step reference of (the bim step member cursor of representations in shape) in shape
+            set representation to the bim step instance representationId in (reader's stepFile)
+            if (the bim step string of (the bim step argument 1 of representation) in representation) = (the string form of "Body"):
+                set items to the bim step argument 3 of representation
+                loop itemCursor from 0 to the bim step count of items in representation:
+                    set itemId to the bim step reference of (the bim step member itemCursor of items in representation) in representation
+                    if bim step instance itemId is a "IFCTRIANGULATEDFACESET" in (reader's stepFile):
+                        set faceSet to the bim step instance itemId in (reader's stepFile)
+                        if (the bim step raw text of (the bim step argument 2 of faceSet) in faceSet) != (the string form of "T"):
+                            set pool to the bim ifc coordinate list (the bim step reference of (the bim step argument 0 of faceSet) in faceSet) in reader
+                            set points to an empty list of a cad vector3
+                            loop pointCursor from 0 to the length of pool:
+                                append (the bim ifc placed (the item at pointCursor in pool) through frame) to points
+                            if (the length of points) = 4:
+                                set candidate to the bim grid rectangle height among points from first to last
+                                if (candidate's y > candidate's x) and (bim grid triangles of faceSet cover rectangle points):
+                                    if matched and (((the absolute value of (candidate's x - result's x)) > 0.000001) or ((the absolute value of (candidate's y - result's y)) > 0.000001)):
+                                        set ambiguous to true
+                                    set result to candidate
+                                    set matched to true
+                            free pool
+                            free points
+                        free bim step instance faceSet
+            free bim step instance representation
+        free bim step instance shape
+        if ambiguous:
+            return missing
+        return result
 
 function the bim ifc native grids in {a pointer to a bim ifc reader record:reader}:
     execute:
@@ -23,6 +155,7 @@ function the bim ifc native grids in {a pointer to a bim ifc reader record:reade
             set gridValue to the bim step instance (the item at gridCursor in gridIds) in (reader's stepFile)
             set gridGuid to the bim step string of (the bim step argument 0 of gridValue) in gridValue
             set placementId to the bim step reference of (the bim step argument 5 of gridValue) in gridValue
+            set shapeId to the bim step reference of (the bim step argument 6 of gridValue) in gridValue
             set frame to the bim ifc object axes placementId in reader
             # UAxes, VAxes and optional WAxes, in file order.
             loop directionCursor from 7 to 10:
@@ -52,7 +185,8 @@ function the bim ifc native grids in {a pointer to a bim ifc reader record:reade
                                     set sourceKey to (gridGuid + (the string form of "/axis/")) + (the string form of axisId)
                                     if (the length of gridGuid) = 0:
                                         set sourceKey to the string form of ""
-                                    append (@intrinsic("construct", a bim ifc native grid record, sourceKey, axisName, startPoint, finishPoint, first's z)) to (found's values)
+                                    set planeHeight to the bim ifc grid plane height from first to last shaped shapeId through frame in reader
+                                    append (@intrinsic("construct", a bim ifc native grid record, sourceKey, axisName, startPoint, finishPoint, planeHeight's x, planeHeight's y)) to (found's values)
                             free points
                         free bim step instance axisValue
             free bim step instance gridValue
