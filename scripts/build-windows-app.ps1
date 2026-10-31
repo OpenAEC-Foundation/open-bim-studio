@@ -92,6 +92,13 @@ try {
     $compileCode = $LASTEXITCODE
     $diagnostics | Set-Content "$outPath\app.diag"
     if ($compileCode -ne 0 -or ($diagnostics | Out-String).Trim().Length -gt 0) { throw 'Application compilation failed or emitted diagnostics.' }
+    & "$repoPath\scripts\install-text-shaper-windows.ps1" -CompilerTree $treePath -Output $outPath
+    $shapeCheck = Join-Path $outPath 'check-lao-shaping.exe'
+    & $compiler localisation/tests/lao_shaping.dl -O0 -o $shapeCheck
+    if ($LASTEXITCODE -ne 0) { throw 'Lao shaping check compilation failed.' }
+    $actual = (& $shapeCheck | Out-String) -replace "`r`n", "`n"
+    $expected = (Get-Content -Raw localisation/tests/lao_shaping.expected.txt) -replace "`r`n", "`n"
+    if ($LASTEXITCODE -ne 0 -or $actual.TrimEnd() -ne $expected.TrimEnd()) { throw "Lao shaping failed: $actual" }
     # Verify architecture and DLL closure before packaging the current app.
     $peFiles = @(Get-ChildItem -Path $outPath -File | Where-Object { $_.Extension -in '.exe', '.dll' }).FullName
     & "$treePath\scripts\verify-windows-pe-files.ps1" -Files $peFiles -Architecture x64

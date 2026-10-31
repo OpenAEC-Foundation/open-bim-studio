@@ -52,3 +52,11 @@ anything. The script prints every forbidden edge and exits non-zero.
   `bim_model_explorer`, `bim_modify_options`, `bim_modify_preview`,
   `bim_type_manager`, `bim_ui_files` import `app/bim_ui.dl`, `bim_plan_panel.dl`
   or `bim_view_panel.dl`): editor and app are one unit.
+
+## Localisation foundation (issue #157)
+
+The localisation module is layer 1: UTF-8 decoding and message catalogues depend
+only on the standard library. Both rendering and the application consume it.
+Regional catalogues remain data; BIM type factories belong to their domain
+modules. This removes the unused BIM dependency instead of introducing a
+renderer-to-service exception in the baseline.

@@ -51,9 +51,19 @@ cp "$root/ui/shell/fonts/osifont.ttf" "$stage/payload/fonts/"
 cp "$root/ui/shell/fonts/README.md" "$stage/payload/fonts/README-osifont.md"
 # The interface fonts of the OpenAEC style, Inter and JetBrains Mono, with
 # their licences (SIL OFL 1.1).
-for style_font in Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf JetBrainsMono-Regular.ttf Inter-OFL.txt JetBrainsMono-OFL.txt; do
+for style_font in Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf JetBrainsMono-Regular.ttf Inter-OFL.txt JetBrainsMono-OFL.txt NotoSansLao.ttf NotoSansLao-OFL.txt; do
     cp "$root/ui/shell/fonts/$style_font" "$stage/payload/fonts/"
 done
+# Message catalogues are runtime assets, independent of the current directory.
+mkdir -p "$stage/payload/localisation/messages"
+cp "$root/localisation/messages/"*.json "$stage/payload/localisation/messages/"
+# HarfBuzz is dynamically opened, so it does not appear in the binary's ldd.
+harfbuzz=$(ldconfig -p | awk '/libharfbuzz.so.0 .*x86-64/ && !found { found=$NF } END { print found }')
+if [ -z "$harfbuzz" ]; then echo "libharfbuzz.so.0 is required for Lao text" >&2; exit 1; fi
+cp -L "$harfbuzz" "$stage/payload/lib/libharfbuzz.so.0"
+if [ -f /usr/share/doc/libharfbuzz0b/copyright ]; then
+    cp /usr/share/doc/libharfbuzz0b/copyright "$stage/payload/licenses/HarfBuzz-system.txt"
+fi
 # The interface's icons (CC BY-SA 4.0, see icons/README.md).
 mkdir -p "$stage/payload/icons"
 cp "$root/ui/shell/icons/ui-icons.txt" "$root/ui/shell/icons/README.md" "$stage/payload/icons/"

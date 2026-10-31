@@ -2,8 +2,8 @@
 # Checks the import direction between the modules (module split design §4):
 # a file may import its own module, the kernel, lib/, and modules of a lower
 # layer; programs (ui/shell, tests) may import anything. The layers:
-#   0 kernel   1 bim   2 services (viewer, exchange/*, ifc, views/*, materials,
-#   localisation, automation, ui/editor)   3 elements/*, pattern/*
+#   0 kernel   1 bim, localisation   2 services (viewer, exchange/*, ifc, views/*, materials,
+#   automation, ui/editor)   3 elements/*, pattern/*
 #   4 structural/*, architectural/*, mep/*   5 ui/properties   6 ui/panels
 #   7 ui/shell
 # The tree still carries edges from before the split (the editor framework
@@ -24,7 +24,7 @@ modules="bim viewer exchange ifc views materials localisation automation ui elem
 layer_of() {
     case "$1" in
         kernel/*|lib/*) echo 0 ;;
-        bim/*) echo 1 ;;
+        bim/*|localisation/*) echo 1 ;;
         viewer/*|exchange/*|ifc/*|views/*|materials/*|localisation/*|automation/*|ui/editor/*) echo 2 ;;
         elements/*|pattern/*) echo 3 ;;
         structural/*|architectural/*|mep/*) echo 4 ;;

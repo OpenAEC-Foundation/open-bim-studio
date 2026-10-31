@@ -6,6 +6,12 @@ viewer/, exchange/, ifc/, views/, materials/, localisation/, automation/, ui/,
 elements/, pattern/, structural/, architectural/, mep/; owners in docs/OWNERS.md). Read README.md for
 setup, docs/WERKBORD.md for ownership and docs/TWEE-COMPUTERS.md for coordination.
 
+## Interface translations
+
+See [the catalogue guide](localisation/README.md) for UTF-8 JSON keys, the
+language setting, Lao shaping and checks. Starter Dutch and Lao messages need
+terminology review; missing translations fall back to English.
+
 ## Application changes
 
 Start one short task branch from main and submit a PR back to main. Keep BIM

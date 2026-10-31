@@ -304,3 +304,163 @@ int64_t obs_platform_join_thread(int64_t handle) {
 	return pthread_join((pthread_t)handle, NULL) == 0 ? 0 : -1;
 #endif
 }
+
+/* HarfBuzz is the native OpenType shaping service. Keep its types behind
+ * this bridge: DynLex sees only six signed 64-bit fields per shaped glyph.
+ * Atlas faces have a fixed pixel size and remain alive for the atlas lifetime.
+ * https://harfbuzz.github.io/harfbuzz-hb-ft.html
+ */
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
+struct obs_shaped_glyph {
+    int64_t glyph, cluster, advance_x, advance_y, offset_x, offset_y;
+};
+_Static_assert(sizeof(struct obs_shaped_glyph) == 48, "DynLex shaped glyph ABI");
+struct obs_hb_info { uint32_t glyph, mask, cluster, private1, private2; };
+struct obs_hb_position { int32_t ax, ay, ox, oy; uint32_t private1; };
+struct obs_hb_api {
+    void *(*font_create)(void *);
+    void (*font_destroy)(void *);
+    void *(*buffer_create)(void);
+    void (*buffer_destroy)(void *);
+    void (*buffer_add)(void *, const char *, int, unsigned, int);
+    void (*buffer_guess)(void *);
+    void (*shape)(void *, void *, const void *, unsigned);
+    struct obs_hb_info *(*infos)(void *, unsigned *);
+    struct obs_hb_position *(*positions)(void *, unsigned *);
+};
+static struct obs_hb_api obs_hb;
+static int obs_hb_state;
+#ifdef _WIN32
+static SRWLOCK obs_shape_lock = SRWLOCK_INIT;
+#define OBS_SHAPE_LOCK() AcquireSRWLockExclusive(&obs_shape_lock)
+#define OBS_SHAPE_UNLOCK() ReleaseSRWLockExclusive(&obs_shape_lock)
+#else
+static pthread_mutex_t obs_shape_lock = PTHREAD_MUTEX_INITIALIZER;
+#define OBS_SHAPE_LOCK() pthread_mutex_lock(&obs_shape_lock)
+#define OBS_SHAPE_UNLOCK() pthread_mutex_unlock(&obs_shape_lock)
+#endif
+
+static int obs_hb_load(void) {
+    if (obs_hb_state) return obs_hb_state > 0;
+#ifdef _WIN32
+    HMODULE module = LoadLibraryW(L"harfbuzz.dll");
+    if (!module) module = LoadLibraryW(L"libharfbuzz-0.dll");
+#define OBS_HB_SYMBOL(field, name) do { \
+    FARPROC symbol = GetProcAddress(module, name); \
+    if (!symbol || sizeof(symbol) != sizeof(obs_hb.field)) return 0; \
+    memcpy(&obs_hb.field, &symbol, sizeof(symbol)); \
+} while (0)
+#else
+    void *module = dlopen("libharfbuzz.so.0", RTLD_NOW | RTLD_LOCAL);
+#define OBS_HB_SYMBOL(field, name) do { \
+    void *symbol = dlsym(module, name); \
+    if (!symbol || sizeof(symbol) != sizeof(obs_hb.field)) return 0; \
+    memcpy(&obs_hb.field, &symbol, sizeof(symbol)); \
+} while (0)
+#endif
+    obs_hb_state = -1;
+    if (!module) return 0;
+    OBS_HB_SYMBOL(font_create, "hb_ft_font_create_referenced");
+    OBS_HB_SYMBOL(font_destroy, "hb_font_destroy");
+    OBS_HB_SYMBOL(buffer_create, "hb_buffer_create");
+    OBS_HB_SYMBOL(buffer_destroy, "hb_buffer_destroy");
+    OBS_HB_SYMBOL(buffer_add, "hb_buffer_add_utf8");
+    OBS_HB_SYMBOL(buffer_guess, "hb_buffer_guess_segment_properties");
+    OBS_HB_SYMBOL(shape, "hb_shape");
+    OBS_HB_SYMBOL(infos, "hb_buffer_get_glyph_infos");
+    OBS_HB_SYMBOL(positions, "hb_buffer_get_glyph_positions");
+#undef OBS_HB_SYMBOL
+    obs_hb_state = 1;
+    return 1;
+}
+
+int64_t obs_platform_has_text_shaper(void) {
+    OBS_SHAPE_LOCK();
+    int available = obs_hb_load();
+    OBS_SHAPE_UNLOCK();
+    return available;
+}
+
+/* A bounded cache avoids reshaping static UI labels on every frame. Hashes
+ * select a bucket; face, byte count and bytes must also match exactly. */
+#define OBS_SHAPE_SLOTS 2048
+#define OBS_SHAPE_BUDGET (8u * 1024u * 1024u)
+struct obs_shape_cache_entry {
+    void *face;
+    uint64_t hash;
+    size_t bytes, count;
+    char *text;
+    struct obs_shaped_glyph *glyphs;
+};
+static struct obs_shape_cache_entry obs_shape_cache[OBS_SHAPE_SLOTS];
+static size_t obs_shape_bytes;
+
+static void obs_shape_drop(struct obs_shape_cache_entry *entry) {
+    if (entry->text) obs_shape_bytes -= entry->bytes + 1 + entry->count * sizeof(*entry->glyphs);
+    free(entry->text);
+    free(entry->glyphs);
+    memset(entry, 0, sizeof(*entry));
+}
+
+/* NULL output queries the required glyph count; insufficient capacity
+ * returns its negative. All glyph positions are FreeType 26.6 pixel units. */
+int64_t obs_platform_shape_utf8(void *face, const char *text, int64_t bytes,
+                              struct obs_shaped_glyph *output, int64_t capacity) {
+    if (!face || !text || bytes < 0 || bytes > 4096 || capacity < 0) return -1;
+    if (bytes == 0) return 0;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (int64_t i = 0; i < bytes; ++i) hash = (hash ^ (unsigned char)text[i]) * UINT64_C(1099511628211);
+    OBS_SHAPE_LOCK();
+    if (!obs_hb_load()) { OBS_SHAPE_UNLOCK(); return -1; }
+    struct obs_shape_cache_entry *entry = &obs_shape_cache[hash % OBS_SHAPE_SLOTS];
+    if (!(entry->face == face && entry->hash == hash && entry->bytes == (size_t)bytes &&
+          entry->text && memcmp(entry->text, text, (size_t)bytes) == 0)) {
+        void *font = obs_hb.font_create(face);
+        void *buffer = obs_hb.buffer_create();
+        if (!font || !buffer) {
+            if (font) obs_hb.font_destroy(font);
+            if (buffer) obs_hb.buffer_destroy(buffer);
+            OBS_SHAPE_UNLOCK(); return -1;
+        }
+        obs_hb.buffer_add(buffer, text, (int)bytes, 0, (int)bytes);
+        obs_hb.buffer_guess(buffer);
+        obs_hb.shape(font, buffer, NULL, 0);
+        unsigned count = 0, position_count = 0;
+        struct obs_hb_info *infos = obs_hb.infos(buffer, &count);
+        struct obs_hb_position *positions = obs_hb.positions(buffer, &position_count);
+        size_t cost = (size_t)bytes + 1 + (size_t)count * sizeof(struct obs_shaped_glyph);
+        if (!infos || !positions || count != position_count || cost > OBS_SHAPE_BUDGET) {
+            obs_hb.buffer_destroy(buffer); obs_hb.font_destroy(font);
+            OBS_SHAPE_UNLOCK(); return -1;
+        }
+        char *saved = malloc((size_t)bytes + 1);
+        struct obs_shaped_glyph *glyphs = count ? malloc((size_t)count * sizeof(*glyphs)) : NULL;
+        if (!saved || (count && !glyphs)) {
+            free(saved); free(glyphs);
+            obs_hb.buffer_destroy(buffer); obs_hb.font_destroy(font);
+            OBS_SHAPE_UNLOCK(); return -1;
+        }
+        memcpy(saved, text, (size_t)bytes); saved[bytes] = '\0';
+        for (unsigned i = 0; i < count; ++i) {
+            glyphs[i] = (struct obs_shaped_glyph){infos[i].glyph, infos[i].cluster,
+                positions[i].ax, positions[i].ay, positions[i].ox, positions[i].oy};
+        }
+        obs_hb.buffer_destroy(buffer); obs_hb.font_destroy(font);
+        obs_shape_drop(entry);
+        if (obs_shape_bytes + cost > OBS_SHAPE_BUDGET) {
+            for (unsigned i = 0; i < OBS_SHAPE_SLOTS; ++i) obs_shape_drop(&obs_shape_cache[i]);
+        }
+        *entry = (struct obs_shape_cache_entry){face, hash, (size_t)bytes, count, saved, glyphs};
+        obs_shape_bytes += cost;
+    }
+    int64_t result = (int64_t)entry->count;
+    if (output) {
+        if (capacity < result) result = -result;
+        else if (entry->count) memcpy(output, entry->glyphs, entry->count * sizeof(*output));
+    }
+    OBS_SHAPE_UNLOCK();
+    return result;
+}

@@ -68,13 +68,18 @@ foreach ($shader in $shaderFiles) { Copy-Item $shader.FullName (Join-Path $stage
 # (the interface), Liberation Mono (the fallback).
 $fonts = Join-Path $repoPath "ui\shell\fonts"
 foreach ($name in "osifont.ttf", "Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf",
-                  "JetBrainsMono-Regular.ttf", "Inter-OFL.txt", "JetBrainsMono-OFL.txt") {
+                  "JetBrainsMono-Regular.ttf", "Inter-OFL.txt", "JetBrainsMono-OFL.txt", "NotoSansLao.ttf", "NotoSansLao-OFL.txt") {
     Copy-Item (Join-Path $fonts $name) (Join-Path $stage "fonts")
 }
 Copy-Item (Join-Path $fonts "README.md") (Join-Path $stage "fonts\README-osifont.md")
 foreach ($name in "LiberationMono-Regular.ttf", "LICENSE-LiberationFonts") {
     Copy-Item (Join-Path $fonts $name) (Join-Path $stage "fonts")
 }
+
+$messages = Join-Path $stage "localisation\messages"
+New-Item -ItemType Directory -Force $messages | Out-Null
+Copy-Item (Join-Path $repoPath 'localisation\messages\*.json') $messages
+if (-not (Test-Path (Join-Path $stage 'bin\harfbuzz.dll'))) { throw 'Lao shaping requires harfbuzz.dll beside the application.' }
 
 # The notices: the application's and the bundled libraries' from
 # installer\licenses, every vcpkg package's copyright, llvm-mingw's licence.

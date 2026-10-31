@@ -21,6 +21,7 @@ reserved number for another function. Record new public command codes in advance
 
 | Code / range | Kind | Reserved for | Reserved by (date) |
 |---|---|---|---|
+| **2740–2742** | commands | Interface language: English, Dutch, Lao (#157) | Localisation (1 November 2026) |
 | **2228** | command | Bending schedule | PC1, `feature/steel-baseplates` (24 October) |
 | **2229** | command | Optional reinforcement diameter display | PC1, `feature/steel-baseplates` (24 October) |
 | **2240** | command | Pile tip level tool (Structural tab, Piles; issue #138) | Computer 1, `mod/structural/pile-tip-levels` (31 October) |

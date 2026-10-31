@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
-# Text drawing for the BIM slice through a glyph atlas. The printable ASCII
-# characters of several faces (a font file at a pixel size) are rendered once,
+# Text drawing through a glyph atlas. Latin-1 characters and shaped Lao
+# glyphs of several faces (a font file at a pixel size) are rendered once,
 # at start, into one single-channel texture; a line of text is then one batch
 # of textured triangles. Glyphs are rendered with FreeType's light hinting,
 # which keeps proportional text crisp at small sizes without distorting its
@@ -10,6 +10,8 @@
 import viewer/vulkan/graphics.dl
 import lib/string.dl
 import lib/text.dl
+import localisation/bim_utf8.dl
+import localisation/bim_catalogue.dl
 
 # FreeType's face and glyph slot records, as far as the atlas reads them.
 # FT_FaceRec — font face metadata
@@ -143,6 +145,9 @@ class:
         atlasWidth as an integer
         atlasHeight as an integer
         icons as the type of (an empty list of a bim icon cell record)
+        messages as a bim message catalogue record
+        fallbackFaces as the type of (an empty list of a pointer)
+        fallbackBase as an integer
 
 # The faces every atlas holds, by index.
 function bim text body:
@@ -188,22 +193,30 @@ function the bim printable count:
         95
 function the bim atlas columns:
     replacement:
-        16
+        64
 
-# The atlas holds printable ASCII and, after it, Ø and ø (U+00D8, U+00F8),
-# which reinforcement labels write as a bar's diameter: 97 glyphs.
+# Keep ASCII and the two diameter glyphs stable, then Latin-1 and the euro.
+# Lao uses shaped glyph IDs in a separate fallback face, not character slots.
 function the bim atlas glyph count:
     replacement:
-        97
+        192
 
-# The character (its Unicode code point) of atlas glyph `index`.
 function the bim atlas code at {integer:index}:
     execute:
         if index < (the bim printable count):
             return (the bim first printable code) + index
         if index = (the bim printable count):
             return 216
-        return 248
+        if index = ((the bim printable count) + 1):
+            return 248
+        if index = 191:
+            return 8364
+        set unicodeCode to 160 + (index - 97)
+        if unicodeCode >= 216:
+            set unicodeCode to unicodeCode + 1
+        if unicodeCode >= 248:
+            set unicodeCode to unicodeCode + 1
+        return unicodeCode
 
 # Light hinting (FT_LOAD_TARGET_LIGHT) and rendering (FT_LOAD_RENDER).
 local function load bim glyph {integer:code} of {pointer:face}:
@@ -211,6 +224,12 @@ local function load bim glyph {integer:code} of {pointer:face}:
         set error to @intrinsic("call", "freetype", "FT_Load_Char", an integer, face, code as a C long integer, 65540)
         if error != 0:
             print ((the string form of "Could not render character ") + (the string form of code)) as a line
+            @intrinsic("call", "libc", "abort", nothing)
+
+local function load bim indexed glyph {integer:index} of {pointer:face}:
+    execute:
+        set error to @intrinsic("call", "freetype", "FT_Load_Glyph", an integer, face, index as a 32 bit unsigned integer, 65540)
+        if error != 0:
             @intrinsic("call", "libc", "abort", nothing)
 
 local function the bim glyph slot of {pointer:face}:
@@ -263,8 +282,12 @@ function the bim text atlas from regular font at {a string:regularPath} and bold
 # when the regular font cannot be loaded.
 function the bim text atlas from regular font at {a string:regularPath} and bold font at {a string:boldPath} and drawing font at {a string:drawingPath} and mono font at {a string:monoPath} and medium font at {a string:mediumPath} with icons from {a string:iconPath} for {pointer:window}:
     execute:
+        return the bim text atlas from regular font at regularPath and bold font at boldPath and drawing font at drawingPath and mono font at monoPath and medium font at mediumPath and Lao font at (the string form of "") with icons from iconPath for window
+
+function the bim text atlas from regular font at {a string:regularPath} and bold font at {a string:boldPath} and drawing font at {a string:drawingPath} and mono font at {a string:monoPath} and medium font at {a string:mediumPath} and Lao font at {a string:laoPath} with icons from {a string:iconPath} for {pointer:window}:
+    execute:
         set library to 0 as a pointer
-        set nothingLoaded to @intrinsic("construct", a bim text atlas record, @intrinsic("construct", a graphics texture, 0 as a pointer to a byte, 0, 0), an empty list of a bim text face record, 0, 0, an empty list of a bim icon cell record)
+        set nothingLoaded to @intrinsic("construct", a bim text atlas record, @intrinsic("construct", a graphics texture, 0 as a pointer to a byte, 0, 0), an empty list of a bim text face record, 0, 0, an empty list of a bim icon cell record, an empty bim message catalogue, an empty list of a pointer, -1)
         if (@intrinsic("call", "freetype", "FT_Init_FreeType", an integer, the address of library)) != 0:
             return @intrinsic("construct", a bim text atlas result record, false, nothingLoaded)
         set sources to an empty list of a pointer
@@ -295,9 +318,26 @@ function the bim text atlas from regular font at {a string:regularPath} and bold
         loop faceCursor from 3 to the length of sources:
             if (the item at faceCursor in sources) = (0 as a pointer):
                 replace item at index faceCursor in sources with (the bim font face at regularPath sized (the item at faceCursor in sizes) through library)
+        set fallbackFaces to an empty list of a pointer
+        set fallbackBase to -1
+        if ((the length of laoPath) > 0) and ((@intrinsic("call", "obs_platform", "obs_platform_has_text_shaper", a 64 bit integer)) = (1 as a 64 bit integer)):
+            set loaded to true
+            loop cursor from 0 to the length of sizes:
+                set fallbackFace to the bim font face at laoPath sized (the item at cursor in sizes) through library
+                if fallbackFace = (0 as a pointer):
+                    set loaded to false
+                append fallbackFace to fallbackFaces
+            if loaded:
+                set fallbackBase to the length of sources
+                loop cursor from 0 to the length of fallbackFaces:
+                    append (the item at cursor in fallbackFaces) to sources
+            else:
+                clear fallbackFaces
         free sizes
         set iconImages to the bim icon images at iconPath
-        set made to the bim text atlas of sources with icons iconImages for window
+        set made to the bim text atlas of sources indexed from fallbackBase with icons iconImages for window
+        set made's fallbackFaces to fallbackFaces
+        set made's fallbackBase to fallbackBase
         free iconImages
         free sources
         return @intrinsic("construct", a bim text atlas result record, true, made)
@@ -379,6 +419,10 @@ function the bim icon images at {a string:path}:
 # icon images `images` stacked in one texture of `window`.
 function the bim text atlas of {a pointer to a list:sources} with icons {a pointer to a list:images} for {pointer:window}:
     execute:
+        return the bim text atlas of sources indexed from -1 with icons images for window
+
+function the bim text atlas of {a pointer to a list:sources} indexed from {integer:fallbackBase} with icons {a pointer to a list:images} for {pointer:window}:
+    execute:
         set faces to an empty list of a bim text face record
         set atlasWidth to 1
         set atlasHeight to 0
@@ -387,8 +431,16 @@ function the bim text atlas of {a pointer to a list:sources} with icons {a point
             set glyphs to an empty list of a bim glyph record
             set widest to 1
             set tallest to 1
-            loop index from 0 to the bim atlas glyph count:
-                load bim glyph (the bim atlas code at index) of face
+            set usesIndexedGlyphs to (fallbackBase >= 0) and (faceCursor >= fallbackBase)
+            set glyphCount to the bim atlas glyph count
+            if usesIndexedGlyphs:
+                set metadata to face as a pointer to an FT face
+                set glyphCount to (the glyph count of metadata) as an integer
+            loop index from 0 to glyphCount:
+                if usesIndexedGlyphs:
+                    load bim indexed glyph index of face
+                else:
+                    load bim glyph (the bim atlas code at index) of face
                 set slot to the bim glyph slot of face
                 set width to the bitmap width of slot
                 set height to the bitmap rows of slot
@@ -399,7 +451,7 @@ function the bim text atlas of {a pointer to a list:sources} with icons {a point
             # A blank pixel around each cell keeps filtering from bleeding.
             set cellWidth to widest + 2
             set cellHeight to tallest + 2
-            set rows to ((the bim atlas glyph count) + ((the bim atlas columns) - 1)) / (the bim atlas columns)
+            set rows to (glyphCount + ((the bim atlas columns) - 1)) / (the bim atlas columns)
             set lineHeight to cellHeight
             set ascent to tallest
             append (@intrinsic("construct", a bim text face record, glyphs, cellWidth, cellHeight, atlasHeight, lineHeight, ascent)) to faces
@@ -427,8 +479,16 @@ function the bim text atlas of {a pointer to a list:sources} with icons {a point
         loop faceCursor from 0 to the length of sources:
             set face to the item at faceCursor in sources
             set entry to the item at faceCursor in faces
-            loop index from 0 to the bim atlas glyph count:
-                load bim glyph (the bim atlas code at index) of face
+            set usesIndexedGlyphs to (fallbackBase >= 0) and (faceCursor >= fallbackBase)
+            set glyphCount to the bim atlas glyph count
+            if usesIndexedGlyphs:
+                set metadata to face as a pointer to an FT face
+                set glyphCount to (the glyph count of metadata) as an integer
+            loop index from 0 to glyphCount:
+                if usesIndexedGlyphs:
+                    load bim indexed glyph index of face
+                else:
+                    load bim glyph (the bim atlas code at index) of face
                 set slot to the bim glyph slot of face
                 set glyph to the item at index in (entry's glyphs)
                 set source to (the bitmap buffer of slot) as a pointer to a byte
@@ -446,7 +506,7 @@ function the bim text atlas of {a pointer to a list:sources} with icons {a point
                 loop dot from 0 to image's size:
                     store (the character at ((line * image's size) + dot) in image's coverage) into the data of pixels at (((cell's y + line) * atlasWidth) + (cell's x + dot))
         set texture to a new red texture sized atlasWidth by atlasHeight from ((the data of pixels) as a pointer) for window
-        return @intrinsic("construct", a bim text atlas record, texture, faces, atlasWidth, atlasHeight, cells)
+        return @intrinsic("construct", a bim text atlas record, texture, faces, atlasWidth, atlasHeight, cells, an empty bim message catalogue, an empty list of a pointer, -1)
 
 local function add bim atlas corner {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} at texture {a 64 bit floating-point number:u} and {a 64 bit floating-point number:v} to {graphics frame:frame}:
     execute:
@@ -455,13 +515,23 @@ local function add bim atlas corner {a 64 bit floating-point number:x} and {a 64
 
 local function the bim glyph number of {integer:code}:
     execute:
-        set index to code - (the bim first printable code)
-        if (index < 0) or (index >= (the bim printable count)):
-            return 63 - (the bim first printable code)
-        return index
+        if (code >= 32) and (code <= 126):
+            return code - 32
+        if code = 216:
+            return 95
+        if code = 248:
+            return 96
+        if code = 8364:
+            return 191
+        if (code >= 160) and (code <= 255):
+            set index to 97 + (code - 160)
+            if code > 216:
+                set index to index - 1
+            if code > 248:
+                set index to index - 1
+            return index
+        return 31
 
-# One character of a text: the atlas glyph it is drawn with and how many
-# bytes of the text it takes.
 class:
     patterns:
         [a|] bim glyph step record
@@ -469,45 +539,58 @@ class:
         glyph as an integer
         size as an integer
 
-# The character starting at byte `position` of `message`: printable ASCII as
-# itself; the UTF-8 of Ø (C3 98) and ø (C3 B8) as their glyphs; any other
-# UTF-8 character as one `?` over its lead and continuation bytes, and any
-# other byte as `?`.
 function the bim character step of {a string:message} at {integer:position}:
     execute:
-        set lead to (the character at position in message) as an integer
-        if lead < 0:
-            set lead to lead + 256
-        if lead < 192:
-            return @intrinsic("construct", a bim glyph step record, the bim glyph number of lead, 1)
-        set taken to 1
-        set scanning to true
-        loop while scanning:
-            if ((position + taken) >= (the length of message)) or (taken >= 4):
-                set scanning to false
-            else:
-                set follower to (the character at (position + taken) in message) as an integer
-                if follower < 0:
-                    set follower to follower + 256
-                if (follower >= 128) and (follower < 192):
-                    set taken to taken + 1
-                else:
-                    set scanning to false
-        if (lead = 195) and (taken = 2):
-            set second to (the character at (position + 1) in message) as an integer
-            if second < 0:
-                set second to second + 256
-            if second = 152:
-                return @intrinsic("construct", a bim glyph step record, the bim printable count, 2)
-            if second = 184:
-                return @intrinsic("construct", a bim glyph step record, (the bim printable count) + 1, 2)
-        return @intrinsic("construct", a bim glyph step record, the bim glyph number of 63, taken)
+        set decoded to the bim unicode step of message at position
+        return @intrinsic("construct", a bim glyph step record, the bim glyph number of decoded's codepoint, the maximum of 1 and decoded's size)
 
-# The width in pixels of `message` in face `faceIndex` of `atlas`.
+# Exactly six int64 fields, matching obs_shaped_glyph in the platform bridge.
+class:
+    patterns:
+        [a|] bim shaped glyph record
+    members:
+        glyph as a 64 bit integer
+        cluster as a 64 bit integer
+        advanceX as a 64 bit integer
+        advanceY as a 64 bit integer
+        offsetX as a 64 bit integer
+        offsetY as a 64 bit integer
+
+class:
+    patterns:
+        [a|] bim shaped run record
+    members:
+        valid as a boolean
+        glyphs as a pointer to a bim shaped glyph record
+        count as an integer
+
+function the bim shaped text {a string:message} using {pointer:fontFace}:
+    execute:
+        set missing to @intrinsic("construct", a bim shaped run record, false, 0 as a pointer to a bim shaped glyph record, 0)
+        set count to @intrinsic("call", "obs_platform", "obs_platform_shape_utf8", a 64 bit integer, fontFace, the data of message, (the length of message) as a 64 bit integer, 0 as a pointer to a bim shaped glyph record, 0 as a 64 bit integer)
+        if (count <= (0 as a 64 bit integer)) or (count > (4096 as a 64 bit integer)):
+            return missing
+        set glyphs to @intrinsic("call", "libc", "malloc", a pointer to a bim shaped glyph record, (count * (48 as a 64 bit integer)) as a word sized unsigned integer)
+        if glyphs = (0 as a pointer to a bim shaped glyph record):
+            return missing
+        set copied to @intrinsic("call", "obs_platform", "obs_platform_shape_utf8", a 64 bit integer, fontFace, the data of message, (the length of message) as a 64 bit integer, glyphs, count)
+        if copied != count:
+            @intrinsic("call", "libc", "free", nothing, glyphs)
+            return missing
+        return @intrinsic("construct", a bim shaped run record, true, glyphs, count as an integer)
+
 function the bim text width of {a string:message} in face {integer:faceIndex} of {bim text atlas record:atlas}:
     execute:
         if (the length of atlas's faces) = 0:
             return 0.0
+        if ((faceIndex >= 0) and (faceIndex < (the length of atlas's fallbackFaces))) and (bim text message contains Lao):
+            set shaped to the bim shaped text message using (the item at faceIndex in atlas's fallbackFaces)
+            if shaped's valid:
+                set advance to 0 as a 64 bit integer
+                loop cursor from 0 to shaped's count:
+                    set advance to advance + (the item at cursor in shaped's glyphs)'s advanceX
+                @intrinsic("call", "libc", "free", nothing, shaped's glyphs)
+                return (advance as a 64 bit floating-point number) / 64.0
         set entry to the item at faceIndex in (atlas's faces)
         set total to 0
         set position to 0
@@ -523,8 +606,46 @@ function the bim text width of {a string:message} in {bim text atlas record:atla
         return the bim text width of message in face (bim text body) of atlas
 
 # Draws `message` in face `faceIndex` with its baseline starting at `x`, `y` in
-# pixels, in one batch. Characters outside printable ASCII, Ø and ø are drawn
-# as `?`.
+# pixels, in one batch. Unsupported scripts fall back to `?`.
+# Lao marks are positioned by HarfBuzz in 26.6 pixels; atlas slots here
+# contain all glyph IDs of the fallback font, including contextual forms.
+function draw bim shaped text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} in face {integer:faceIndex} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} cut at {a 64 bit floating-point number:rightEdge} in {graphics frame:frame}:
+    execute:
+        if ((atlas's fallbackBase < 0) or (faceIndex < 0)) or (faceIndex >= (the length of atlas's fallbackFaces)):
+            return false
+        set shapedRun to the bim shaped text message using (the item at faceIndex in atlas's fallbackFaces)
+        if shapedRun's valid = false:
+            return false
+        set entry to the item at (atlas's fallbackBase + faceIndex) in atlas's faces
+        set penX to x
+        set penY to y
+        start triangles using atlas's texture in frame
+        use vertex color red red, green green and blue blue in frame
+        loop cursor from 0 to shapedRun's count:
+            set placed to the item at cursor in shapedRun's glyphs
+            if (placed's glyph >= (0 as a 64 bit integer)) and (placed's glyph < ((the length of entry's glyphs) as a 64 bit integer)):
+                set glyph to the item at (placed's glyph as an integer) in entry's glyphs
+                set west to penX + ((placed's offsetX as a 64 bit floating-point number) / 64.0) + (glyph's left as a 64 bit floating-point number)
+                set north to penY - ((placed's offsetY as a 64 bit floating-point number) / 64.0) - (glyph's top as a 64 bit floating-point number)
+                set east to west + (glyph's width as a 64 bit floating-point number)
+                set south to north + (glyph's height as a 64 bit floating-point number)
+                if ((glyph's width > 0) and (glyph's height > 0)) and (east <= rightEdge):
+                    set u0 to (((glyph's column * entry's cellWidth) + 1) as a 64 bit floating-point number) / (atlas's atlasWidth as a 64 bit floating-point number)
+                    set v0 to (((entry's top + (glyph's row * entry's cellHeight)) + 1) as a 64 bit floating-point number) / (atlas's atlasHeight as a 64 bit floating-point number)
+                    set u1 to u0 + ((glyph's width as a 64 bit floating-point number) / (atlas's atlasWidth as a 64 bit floating-point number))
+                    set v1 to v0 + ((glyph's height as a 64 bit floating-point number) / (atlas's atlasHeight as a 64 bit floating-point number))
+                    add bim atlas corner west and north at texture u0 and v0 to frame
+                    add bim atlas corner east and north at texture u1 and v0 to frame
+                    add bim atlas corner east and south at texture u1 and v1 to frame
+                    add bim atlas corner west and north at texture u0 and v0 to frame
+                    add bim atlas corner east and south at texture u1 and v1 to frame
+                    add bim atlas corner west and south at texture u0 and v1 to frame
+            set penX to penX + ((placed's advanceX as a 64 bit floating-point number) / 64.0)
+            set penY to penY - ((placed's advanceY as a 64 bit floating-point number) / 64.0)
+        finish triangles in frame
+        @intrinsic("call", "libc", "free", nothing, shapedRun's glyphs)
+        return true
+
 function draw bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} in face {integer:faceIndex} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} in {graphics frame:frame}:
     execute:
         draw bim text message at x and y in face faceIndex with atlas coloured red, green and blue cut at 1000000.0 in frame
@@ -539,6 +660,9 @@ function draw bim text {a string:message} at {a 64 bit floating-point number:x} 
     execute:
         if ((the length of message) = 0) or ((the length of atlas's faces) = 0):
             return nothing
+        if bim text message contains Lao:
+            if draw bim shaped text message at x and y in face faceIndex with atlas coloured red, green and blue cut at rightEdge in frame:
+                return nothing
         set entry to the item at faceIndex in (atlas's faces)
         set pen to (x as an integer) as a 64 bit floating-point number
         set baseline to (y as an integer) as a 64 bit floating-point number
@@ -578,11 +702,16 @@ function draw bim text {a string:message} at {a 64 bit floating-point number:x} 
 # in capitals in the mono label face, letters 0.08 em (one pixel) apart.
 function the bim caps width of {a string:message} with {bim text atlas record:atlas}:
     execute:
+        if bim text message contains Lao:
+            return the bim text width of message in face (bim text mono label) of atlas
         set capitals to the uppercase form of message
         return (the bim text width of capitals in face (bim text mono label) of atlas) + ((the length of capitals) as a 64 bit floating-point number)
 
 function draw bim caps {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} with {bim text atlas record:atlas} coloured {integer:red}, {integer:green} and {integer:blue} in {graphics frame:frame}:
     execute:
+        if bim text message contains Lao:
+            draw bim text message at x and y in face (bim text mono label) with atlas coloured red, green and blue in frame
+            return
         set capitals to the uppercase form of message
         draw bim text capitals at x and y in face (bim text mono label) with atlas coloured red, green and blue cut at 1000000.0 spaced 1.0 in frame
 
