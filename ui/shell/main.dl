@@ -67,6 +67,7 @@ import ifc/bim_ifc_promote.dl
 import views/common/bim_section_box.dl
 import ui/shell/bim_app_files.dl
 import ui/shell/bim_ui_files.dl
+import ui/shell/bim_navigation.dl
 import ui/panels/bim_model_explorer.dl
 import ui/panels/bim_analytic_detail.dl
 import ui/shell/bim_demo_pavilion_editor.dl
@@ -592,6 +593,10 @@ set contextHover to -1
 # Export; `bim_ui.dl`) when this is above 0.
 set contextChooser to 0
 set rightPressPixel to a cad vector2 with x 0.0 and y 0.0
+# Where a right or middle drag began: a zoom by dragging keeps the model
+# point there in place. Whether a keypad view key was down last frame.
+set navigationAnchor to a cad vector2 with x 0.0 and y 0.0
+set keypadWasDown to false
 set rightDragged to false
 # What the snap button under the pointer sends, from the last frame drawn.
 set snapHover to -1
@@ -1638,6 +1643,16 @@ loop while window remains open:
             else if barHit = 21:
                 set panelClicked to true
                 set uiCommand to 2129
+            else if barHit = bim view bar axes hit:
+                # The gizmo's axes, the selection's own or the model's: a
+                # setting, kept.
+                set panelClicked to true
+                set appSettings's gizmoAxes to (bim global gizmo axes) - appSettings's gizmoAxes
+                ignore (keep bim app settings appSettings)
+                if appSettings's gizmoAxes = bim global gizmo axes:
+                    set editor's message to the string form of "Gizmo: global axes"
+                else:
+                    set editor's message to the string form of "Gizmo: local axes"
             else if barHit = 13:
                 set panelClicked to true
                 set shadowsOn to shadowsOn = false
@@ -1939,6 +1954,22 @@ loop while window remains open:
             set flightShown to camera
             set flying to true
             set panelClicked to true
+    # The keypad's views in Blender's navigation (#137): 1 front, 3 right,
+    # 7 top, with Ctrl the opposite side, flown to as from the view cube.
+    set keypadDown to ((key 321 is down in window) or (key 323 is down in window)) or (key 327 is down in window)
+    if (keypadDown and (keypadWasDown = false)) and (bim navigation style (appSettings's navigation) has keypad views):
+        if (overView and (elevationLocked = false)) and ((editor's textActive = false) and ((bim editor accepts point input editor) = false)):
+            set keypadKey to 327
+            if key 321 is down in window:
+                set keypadKey to 321
+            else if key 323 is down in window:
+                set keypadKey to 323
+            set flightFrom to camera
+            set flightTo to the bim camera camera looking from (the bim keypad view direction of key keypadKey opposite ((key 341 is down in window) or (key 345 is down in window)))
+            set flightSince to the bim microseconds now
+            set flightShown to camera
+            set flying to true
+    set keypadWasDown to keypadDown
     if flying:
         if the bim camera camera matches flightShown:
             set flightProgress to (((the bim microseconds now) - flightSince) as a 64 bit floating-point number) / 320000.0
@@ -2019,14 +2050,19 @@ loop while window remains open:
         commit bim transaction in (the address of (editor's documentValue))
         set boxKeySeen to the bim stored section box key of editor's documentValue's current
     # The gizmo: a press on an arrow drags the selection along X, Y or Z, on
-    # its square across the plane (in 10 mm steps), on its ring turns it
-    # about its middle, on its red or green ring tilts it about its X or Y
-    # axis (in whole degrees).
+    # its square across the plane, on its ring turns it about its middle, on
+    # its red or green ring tilts it about its X or Y axis; in the
+    # selection's axes or the model's, moving and turning in the steps of
+    # the settings (#137: 10 mm and whole degrees unless changed).
+    set gizmoWorld to appSettings's gizmoAxes = bim global gizmo axes
+    set gizmoFactor to the bim gizmo scale of size (appSettings's gizmoSize)
+    set gizmoMoveStep to the bim gizmo move step of choice (appSettings's moveStep)
+    set gizmoTurnStep to the bim gizmo turn step of choice (appSettings's turnStep)
     if ((leftDown and (previousLeft = false)) and (overView and (drawingInView = false))) and ((panelClicked = false) and ((editor's tool = bim select tool) and (editor's editMode = false))):
-        set pressFrame to the bim object frame of editor
+        set pressFrame to the bim gizmo frame of (the bim object frame of editor) in world axes gizmoWorld
         if pressFrame's found:
             set pressHeight to pressFrame's origin's z
-            set pressGizmo to the bim gizmo for frame pressFrame tilting (the bim tilt axes of editor) in viewLayout with camera
+            set pressGizmo to the bim gizmo for frame pressFrame tilting (the bim gizmo tilt axes (the bim tilt axes of editor) in world axes gizmoWorld) sized gizmoFactor showing (appSettings's gizmoHandles) in viewLayout with camera
             set pressHandle to the bim gizmo handle of pressGizmo at pixel
             if pressHandle > 0:
                 set gizmoFrame to pressFrame
@@ -2035,7 +2071,7 @@ loop while window remains open:
                 set gizmoPivot to a cad vector2 with x pressFrame's origin's x and y pressFrame's origin's y
                 set gizmoStart to the bim plane hit of (the bim view ray through pixel in viewLayout with camera) at height pressHeight
                 set gizmoPressPixel to pixel
-                set pixelScale to camera's viewScale / 70.0
+                set pixelScale to camera's viewScale / (70.0 * gizmoFactor)
                 set gizmoPixelX to a cad vector2 with x ((pressGizmo's xTip's x - pressGizmo's middle's x) * pixelScale) and y ((pressGizmo's xTip's y - pressGizmo's middle's y) * pixelScale)
                 set gizmoPixelY to a cad vector2 with x ((pressGizmo's yTip's x - pressGizmo's middle's x) * pixelScale) and y ((pressGizmo's yTip's y - pressGizmo's middle's y) * pixelScale)
                 set gizmoPixelZ to a cad vector2 with x ((pressGizmo's zTip's x - pressGizmo's middle's x) * pixelScale) and y ((pressGizmo's zTip's y - pressGizmo's middle's y) * pixelScale)
@@ -2051,7 +2087,7 @@ loop while window remains open:
             set tiltAxis to gizmoFrame's xAxis
             if gizmoAxis = bim gizmo y ring handle:
                 set tiltAxis to gizmoFrame's yAxis
-            drag bim editor gizmo tilting (the bim gizmo tilt of gizmoFrame on handle gizmoAxis from gizmoPressPixel to pixel in viewLayout with camera) about tiltAxis through gizmoFrame's origin in (the address of editor)
+            drag bim editor gizmo tilting (the bim gizmo tilt of gizmoFrame on handle gizmoAxis from gizmoPressPixel to pixel snapped to gizmoTurnStep in viewLayout with camera) about tiltAxis through gizmoFrame's origin in (the address of editor)
         else if gizmoAxis != bim gizmo ring handle:
             if gizmoAxis = bim gizmo plane handle:
                 set determinant to (gizmoPixelX's x * gizmoPixelY's y) - (gizmoPixelX's y * gizmoPixelY's x)
@@ -2074,18 +2110,20 @@ loop while window remains open:
                     set localY to travel
                 if gizmoAxis = bim gizmo z handle:
                     set localZ to travel
-            set localX to (the floor of ((localX * 100.0) + 0.5)) / 100.0
-            set localY to (the floor of ((localY * 100.0) + 0.5)) / 100.0
-            set localZ to (the floor of ((localZ * 100.0) + 0.5)) / 100.0
+            set localX to the bim gizmo value localX snapped to gizmoMoveStep
+            set localY to the bim gizmo value localY snapped to gizmoMoveStep
+            set localZ to the bim gizmo value localZ snapped to gizmoMoveStep
             set displacement to the cad sum of (gizmoFrame's xAxis scaled by localX) and (the cad sum of (gizmoFrame's yAxis scaled by localY) and (gizmoFrame's zAxis scaled by localZ))
             drag bim editor gizmo by (a cad vector2 with x (displacement's x) and y (displacement's y)) lifting displacement's z turning 0.0 about gizmoPivot in (the address of editor)
-            set editor's message to ((the string form of "Local X ") + (the bim length localX in units editor's lengthUnit)) + (((the string form of "  Y ") + (the bim length localY in units editor's lengthUnit)) + ((the string form of "  Z ") + (the bim length localZ in units editor's lengthUnit)))
+            set axesWord to the string form of "Local X "
+            if gizmoWorld:
+                set axesWord to the string form of "Global X "
+            set editor's message to (axesWord + (the bim length localX in units editor's lengthUnit)) + (((the string form of "  Y ") + (the bim length localY in units editor's lengthUnit)) + ((the string form of "  Z ") + (the bim length localZ in units editor's lengthUnit)))
         else:
             set gizmoNow to the bim plane hit of (the bim view ray through pixel in viewLayout with camera) at height gizmoHeight
             set turnNow to @intrinsic("atan2", gizmoNow's y - gizmoPivot's y, gizmoNow's x - gizmoPivot's x)
             set turnStart to @intrinsic("atan2", gizmoStart's y - gizmoPivot's y, gizmoStart's x - gizmoPivot's x)
-            set wholeDegrees to the floor of ((((turnNow - turnStart) * 180.0) / 3.141592653589793) + 0.5)
-            drag bim editor gizmo by (a cad vector2 with x 0.0 and y 0.0) lifting 0.0 turning ((wholeDegrees * 3.141592653589793) / 180.0) about gizmoPivot in (the address of editor)
+            drag bim editor gizmo by (a cad vector2 with x 0.0 and y 0.0) lifting 0.0 turning (the bim gizmo angle (turnNow - turnStart) snapped to gizmoTurnStep degrees) about gizmoPivot in (the address of editor)
     if (gizmoAxis > 0) and (leftDown = false):
         finish bim editor gizmo drag in (the address of editor)
         set gizmoAxis to 0
@@ -2229,17 +2267,24 @@ loop while window remains open:
             set analyticDetailCamera to the analytic camera analyticDetailCamera orbited by dx and dy
         else:
             set analyticDetailCamera to the analytic camera analyticDetailCamera panned by dx and dy over height analyticDetailHeight
+    # The navigation style of the settings (`bim_navigation.dl`, #137) maps
+    # the right and the middle button, with Shift, Ctrl or Alt held, to
+    # orbiting, panning, zooming or placing the 3D cursor.
+    set heldModifier to the bim navigation modifier with shift shiftHeld control ((key 341 is down in window) or (key 345 is down in window)) alt ((key 342 is down in window) or (key 346 is down in window))
+    set rightAction to the bim navigation of style (appSettings's navigation) dragging button (bim right navigation button) holding heldModifier
     # A right click that does not drag opens the context menu at the
     # pointer, on the selection or else on what is under the pointer.
     if (rightDown and (previousRight = false)) and (gridAddOwnsFrame = false):
         set rightPressPixel to pixel
+        set navigationAnchor to pixel
         set rightDragged to false
         set contextOpen to false
     if (rightDown and ((the cad distance from pixel to rightPressPixel) > 4.0)) and (gridAddOwnsFrame = false):
         set rightDragged to true
-    # With Shift held the right button only places the 3D cursor (as in
-    # Blender): no menu, the selection kept, so that G moves it next.
-    set cursorClick to (key 340 is down in window) or (key 344 is down in window)
+    # Where the style places the 3D cursor with the right button (Shift held,
+    # as in Blender) a click only places it: no menu, the selection kept, so
+    # that G moves it next.
+    set cursorClick to rightAction = bim cursor navigation
     if ((((rightDown = false) and previousRight) and ((rightDragged = false) and (overPlan or overView))) and (cursorClick = false)) and (gridAddOwnsFrame = false):
         if editor's selectionKind = bim nothing picked:
             if overPlan:
@@ -2267,38 +2312,48 @@ loop while window remains open:
         set contextChooser to 0
         set contextAt to pixel
         set contextHover to -1
+    set dragAction to bim no navigation
     if (rightDown and previousRight) and (gridAddOwnsFrame = false):
-        # Shift and the right button drag the 3D cursor, as in Blender: in
-        # the plan to the snapped pointer, in the 3D view over the storey.
-        if ((key 340 is down in window) or (key 344 is down in window)) and (overPlan or overView):
-            if overPlan:
-                place bim editor cursor at editor's snap's point in (the address of editor)
-            else:
-                place bim editor cursor at (the bim plane hit of (the bim view ray through pixel in viewLayout with camera) at height (the bim storey elevation of editor)) in (the address of editor)
-        else if overSection:
-            set editor's sectionPanX to editor's sectionPanX + dx
-            set editor's sectionPanY to editor's sectionPanY + dy
-        else if overPlan:
-            set camera's centre to a cad vector2 with x (camera's centre's x - (dx / camera's scale)) and y (camera's centre's y + (dy / camera's scale))
-        else if overView and (elevationLocked = false):
-            set camera to the bim camera camera orbited by dx and dy
-    # The middle button pans; with Shift held it orbits the 3D view.
+        set dragAction to rightAction
+    # The middle button pans a sheet in every style; elsewhere it does what
+    # the style says.
     set middleDown to the middle mouse button is pressed in window
+    if middleDown and (previousMiddle = false):
+        set navigationAnchor to pixel
     if (middleDown and previousMiddle) and (gridAddOwnsFrame = false):
         if overSheetBoard:
             set sheetBoardCamera's pan to a cad vector2 with x (sheetBoardCamera's pan's x + dx) and y (sheetBoardCamera's pan's y + dy)
         else if overSheet:
             set sheetWorkspace's camera's pan to a cad vector2 with x (sheetWorkspace's camera's pan's x + dx) and y (sheetWorkspace's camera's pan's y + dy)
-        else if overSection:
+        else:
+            set dragAction to the bim navigation of style (appSettings's navigation) dragging button (bim middle navigation button) holding heldModifier
+    set previousMiddle to middleDown
+    if dragAction = bim cursor navigation:
+        # The 3D cursor dragged: in the plan to the snapped pointer, in the
+        # 3D view over the storey.
+        if overPlan:
+            place bim editor cursor at editor's snap's point in (the address of editor)
+        else if overView:
+            place bim editor cursor at (the bim plane hit of (the bim view ray through pixel in viewLayout with camera) at height (the bim storey elevation of editor)) in (the address of editor)
+    else if (dragAction = bim orbit navigation) or (dragAction = bim pan navigation):
+        # A plan or section cannot orbit: there it pans; so does the 3D view
+        # while it shows an elevation.
+        if overSection:
             set editor's sectionPanX to editor's sectionPanX + dx
             set editor's sectionPanY to editor's sectionPanY + dy
         else if overPlan:
             set camera's centre to a cad vector2 with x (camera's centre's x - (dx / camera's scale)) and y (camera's centre's y + (dy / camera's scale))
-        else if (overView and (elevationLocked = false)) and ((key 340 is down in window) or (key 344 is down in window)):
+        else if (overView and (dragAction = bim orbit navigation)) and (elevationLocked = false):
             set camera to the bim camera camera orbited by dx and dy
         else if overView:
             set camera to the bim camera camera panned by dx and dy
-    set previousMiddle to middleDown
+    else if dragAction = bim zoom navigation:
+        # Dragging up zooms in, about where the drag began.
+        set dragFactor to 1.01 raised to the power of (0.0 - dy)
+        if overPlan:
+            set camera to the bim camera camera zoomed by dragFactor in plan at navigationAnchor in layout
+        else if overView:
+            set camera to the bim camera camera zoomed by dragFactor in view at navigationAnchor in viewLayout
     set wheel to the scroll taken from window
     if analyticDetailOwnsPointer:
         if analyticDetailEnabled and (overAnalyticBody or (analyticDetailDrag != 0)):
@@ -3589,6 +3644,10 @@ loop while window remains open:
             set barOpen to bim view bar status hit
         set statusCaption to the bim view status caption of frameMeter at (the bim microseconds now) on device kind gpuDeviceKind sleeping ((quietFrames >= 19) and (lodQueueNext >= (the length of lodQueue)))
         draw bim view bar ending at (layout's width - 8.0) and (viewLayout's bottom - 38.0) mode viewMode shadows shadowsOn boxed sectionBoxOn status statusCaption on device kind gpuDeviceKind open barOpen using typeface in frame
+        set axesCaption to the string form of "Local"
+        if appSettings's gizmoAxes = bim global gizmo axes:
+            set axesCaption to the string form of "Global"
+        draw bim view control axesCaption at (the bim view bar axes left from (layout's width - 8.0)) and (viewLayout's bottom - 38.0) wide (the bim view bar axes width) active (appSettings's gizmoAxes = bim global gizmo axes) using typeface in frame
         if bim category bim space category is visible in editor's modelRules:
             if editor's documentValue's revision != roomRevision:
                 set roomSpaces to the bim rooms of editor's documentValue's current using editor's evaluation's index
@@ -3611,18 +3670,22 @@ loop while window remains open:
         set storeyLift to the bim storey elevation of editor
         draw bim cursor mark in view at (a cad vector3 with x editor's cursorPoint's x, y editor's cursorPoint's y and z (editor's cursorPoint's z + storeyLift)) in viewLayout with camera in frame
         draw bim modification preview of editor in view true in viewLayout with camera in frame
-        set gizmoCentre to the bim object frame of editor
+        set gizmoCentre to the bim gizmo frame of (the bim object frame of editor) in world axes gizmoWorld
         if (gizmoCentre's found and (editor's tool = bim select tool)) and (editor's editMode = false):
             # The handle being dragged, else the one under the pointer, lights up.
-            set shownGizmo to the bim gizmo for frame gizmoCentre tilting (the bim tilt axes of editor) in viewLayout with camera
+            set shownGizmo to the bim gizmo for frame gizmoCentre tilting (the bim gizmo tilt axes (the bim tilt axes of editor) in world axes gizmoWorld) sized gizmoFactor showing (appSettings's gizmoHandles) in viewLayout with camera
             set litHandle to gizmoAxis
             if (litHandle = 0) and overView:
                 set litHandle to the bim gizmo handle of shownGizmo at pixel
             draw bim gizmo shownGizmo active litHandle in frame
-            draw bim text (the string form of "X") at (shownGizmo's xTip's x + 6.0) and (shownGizmo's xTip's y) in face (bim text small) with typeface coloured 225, 55 and 55 in frame
-            draw bim text (the string form of "Y") at (shownGizmo's yTip's x + 6.0) and (shownGizmo's yTip's y) in face (bim text small) with typeface coloured 70, 190 and 70 in frame
-            draw bim text (the string form of "Z") at (shownGizmo's zTip's x + 6.0) and (shownGizmo's zTip's y) in face (bim text small) with typeface coloured 70, 120 and 235 in frame
-            draw bim text (the string form of "0, 0, 0 (local)") at (shownGizmo's middle's x + 8.0) and (shownGizmo's middle's y + 16.0) in face (bim text small) with typeface coloured 70, 75 and 85 in frame
+            if (shownGizmo's shown bitwise and (bim gizmo arrows shown)) != 0:
+                draw bim text (the string form of "X") at (shownGizmo's xTip's x + 6.0) and (shownGizmo's xTip's y) in face (bim text small) with typeface coloured 225, 55 and 55 in frame
+                draw bim text (the string form of "Y") at (shownGizmo's yTip's x + 6.0) and (shownGizmo's yTip's y) in face (bim text small) with typeface coloured 70, 190 and 70 in frame
+                draw bim text (the string form of "Z") at (shownGizmo's zTip's x + 6.0) and (shownGizmo's zTip's y) in face (bim text small) with typeface coloured 70, 120 and 235 in frame
+            set originNote to the string form of "0, 0, 0 (local)"
+            if gizmoWorld:
+                set originNote to the string form of "0, 0, 0 (global)"
+            draw bim text originNote at (shownGizmo's middle's x + 8.0) and (shownGizmo's middle's y + 16.0) in face (bim text small) with typeface coloured 70, 75 and 85 in frame
         # Canvas first: the active storey's plan at the 3D view's lower left,
         # with an arrow where the camera looks from and to.
         set insetExtent to the bim plan extent of editor's documentValue's current
