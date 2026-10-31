@@ -15,3 +15,6 @@ Anderzijds moet het ook een soort GIS-database zijn die tilebased is zodat je on
 ### 2026-07-29 20:05
 Push naar Github
 
+
+### 2026-10-31 13:54
+Ik wou nog even dat je onderzoek die daarnaast doet, van wat staat hier allemaal op? En zou je bijvoorbeeld een just-in-time compiler, zou dat makkelijk te maken zijn? Kun je er anders hier eens eentje gaan bouwen? Ik zou die namelijk bij de BIM-model wel willen implementeren, zodat je gewoon rechtstreeks tegen het BIM-model kan praten.
