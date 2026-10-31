@@ -1,0 +1,546 @@
+# SPDX-License-Identifier: MPL-2.0
+# The category tree of Visibility/Graphics (issue #124): every category is a
+# node keyed by its IFC class, and walls and floors open into their parts,
+# structural (load-bearing) and non-structural, as the structural plan
+# design proposes (PR #81, section 5: the load-bearing property as one more
+# key). Every node can override, on a drawing type or a view, whether it is
+# shown, halftone, and the colour and weight of its projection and cut
+# lines. A part inherits from its category, a drawing type from its parent:
+# on each type of the chain, from the chosen one up, the part's own setting
+# comes first, then its category's.
+#
+# Overrides are element settings (`bim setting record`) of the drawing type
+# or view they belong to, so they are saved, read and undone with the
+# model. A category's own shown and halftone stay in the drawing type's
+# lists and the view's flags (`bim_view.dl`).
+import bim/bim_model.dl
+import views/common/bim_view.dl
+import lib/string.dl
+
+# ---------------------------------------------------------------- nodes
+
+# The parts of a category: the whole, and for walls and floors the
+# structural and the non-structural ones.
+function bim whole category part:
+    replacement:
+        0
+function bim structural part:
+    replacement:
+        1
+function bim non structural part:
+    replacement:
+        2
+# Keys leave room for this many parts per category.
+function the bim parts per category:
+    replacement:
+        4
+
+# The key of part `part` of category `categoryCode`.
+function the bim node key of category {integer:categoryCode} part {integer:part}:
+    execute:
+        return (categoryCode * (the bim parts per category)) + part
+
+function the bim category of node {integer:key}:
+    execute:
+        return key / (the bim parts per category)
+
+function the bim part of node {integer:key}:
+    execute:
+        return the remainder of key divided by (the bim parts per category)
+
+# How many parts category `categoryCode` has, the whole one counted.
+function the bim part count of category {integer:categoryCode}:
+    execute:
+        if (categoryCode = bim wall category) or (categoryCode = bim slab category):
+            return 3
+        return 1
+
+# The IFC class (IFC4x3) the elements of category `categoryCode` are.
+function the bim ifc class of category {integer:categoryCode}:
+    execute:
+        if categoryCode = bim wall category:
+            return the string form of "IfcWall"
+        if (categoryCode = bim slab category) or (categoryCode = bim roof category):
+            return the string form of "IfcSlab"
+        if categoryCode = bim door category:
+            return the string form of "IfcDoor"
+        if categoryCode = bim window category:
+            return the string form of "IfcWindow"
+        if categoryCode = bim space category:
+            return the string form of "IfcSpace"
+        if categoryCode = bim grid category:
+            return the string form of "IfcGrid"
+        if categoryCode = bim column category:
+            return the string form of "IfcColumn"
+        if categoryCode = bim beam category:
+            return the string form of "IfcBeam"
+        if categoryCode = bim stair category:
+            return the string form of "IfcStair"
+        if categoryCode = bim railing category:
+            return the string form of "IfcRailing"
+        if categoryCode = bim furniture category:
+            return the string form of "IfcFurniture"
+        if categoryCode = bim ceiling category:
+            return the string form of "IfcCovering"
+        if categoryCode = bim pile category:
+            return the string form of "IfcPile"
+        if ((categoryCode = bim dimension category) or (categoryCode = bim line category)) or (categoryCode = bim text category):
+            return the string form of "IfcAnnotation"
+        return the string form of "IfcBuildingElementProxy"
+
+# The name of node `key` in the tree: "Floors (IfcSlab)", or a part's name.
+function the bim name of node {integer:key}:
+    execute:
+        set part to the bim part of node key
+        if part = bim structural part:
+            return the string form of "Structural"
+        if part = bim non structural part:
+            return the string form of "Non-structural"
+        set categoryCode to the bim category of node key
+        return ((the bim name of category categoryCode) + (the string form of " (")) + ((the bim ifc class of category categoryCode) + (the string form of ")"))
+
+# ---------------------------------------------------------------- load-bearing
+
+local function bim word {a string:value} says yes:
+    execute:
+        set lowered to the lowercase form of value
+        return ((lowered = (the string form of ".t.")) or (lowered = (the string form of "true"))) or (lowered = (the string form of "1"))
+
+local function bim word {a string:value} says no:
+    execute:
+        set lowered to the lowercase form of value
+        return ((lowered = (the string form of ".f.")) or (lowered = (the string form of "false"))) or (lowered = (the string form of "0"))
+
+# Whether a material named `name` bears load by default: concrete, masonry,
+# stone and steel do; timber frames, boards and insulation do not.
+function bim material {a string:name} bears load:
+    execute:
+        set lowered to the lowercase form of name
+        if (lowered contains "concrete") or (lowered contains "beton"):
+            return true
+        if ((lowered contains "brick") or (lowered contains "masonry")) or ((lowered contains "sand-lime") or (lowered contains "calcium")):
+            return true
+        if ((lowered contains "block") or (lowered contains "stone")) or (lowered contains "steel"):
+            return true
+        return false
+
+# Whether planar type `typeId` bears load by default: one of its layers is of
+# a load-bearing material.
+function bim planar type {a 64 bit integer:typeId} bears load in {bim model record:modelValue}:
+    execute:
+        set found to the bim wall type index of typeId in modelValue
+        if found's valid = false:
+            return false
+        set planarType to the item at found's position in (modelValue's wallTypes's values)
+        loop cursor from 0 to the length of (planarType's layers's values):
+            if bim material ((the item at cursor in (planarType's layers's values))'s material) bears load:
+                return true
+        return false
+
+# Whether element `elementId` bears load: its own `LoadBearing` in
+# `Pset_WallCommon` or `Pset_SlabCommon`, else its type's, else its type's
+# default by material. Elements other than walls and floors bear none.
+function bim element {a 64 bit integer:elementId} bears load in {bim model record:modelValue}:
+    execute:
+        set setName to the string form of "Pset_WallCommon"
+        set typeId to the bim refused id
+        set material to the string form of ""
+        set wallFound to the bim wall index of elementId in modelValue
+        set slabFound to the bim slab index of elementId in modelValue
+        if wallFound's valid:
+            set typeId to (the item at wallFound's position in (modelValue's walls's values))'s typeId
+        else if slabFound's valid:
+            set setName to the string form of "Pset_SlabCommon"
+            set slabValue to the item at slabFound's position in (modelValue's slabs's values)
+            set typeId to slabValue's typeId
+            set material to slabValue's material
+        else:
+            return false
+        set own to the bim property value (the string form of "LoadBearing") of set setName of elementId in modelValue
+        if bim word own says yes:
+            return true
+        if bim word own says no:
+            return false
+        set typed to the bim property value (the string form of "LoadBearing") of set setName of typeId in modelValue
+        if bim word typed says yes:
+            return true
+        if bim word typed says no:
+            return false
+        if (the bim wall type index of typeId in modelValue)'s valid:
+            return bim planar type typeId bears load in modelValue
+        return bim material material bears load
+
+# The node element `elementId` falls under: its category's structural or
+# non-structural part, or its category; -1 when it has no category.
+function the bim node of element {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        set categoryCode to the bim category of element elementId in modelValue
+        if categoryCode < 0:
+            return -1
+        if (the bim part count of category categoryCode) = 1:
+            return the bim node key of category categoryCode part (bim whole category part)
+        if bim element elementId bears load in modelValue:
+            return the bim node key of category categoryCode part (bim structural part)
+        return the bim node key of category categoryCode part (bim non structural part)
+
+# ---------------------------------------------------------------- overrides
+
+# What a node can override, each kept as one setting.
+function bim node visible field:
+    replacement:
+        0
+function bim node halftone field:
+    replacement:
+        1
+function bim projection colour field:
+    replacement:
+        2
+function bim projection weight field:
+    replacement:
+        3
+function bim cut colour field:
+    replacement:
+        4
+function bim cut weight field:
+    replacement:
+        5
+function the bim node field count:
+    replacement:
+        6
+
+# The settings of the category tree start here: setting code base + key * 8
+# + field, on the drawing type or view.
+function bim category override setting:
+    replacement:
+        2500000
+function the bim override span:
+    replacement:
+        10000
+
+function the bim override code of field {integer:field} at node {integer:key}:
+    execute:
+        return ((bim category override setting) + (key * 8)) + field
+
+# The tree's settings in `modelValue`, collected once so that resolving
+# many nodes scans the model's settings only once.
+function the bim tree settings of {bim model record:modelValue}:
+    execute:
+        set entries to a cad topology list of a bim setting record
+        loop cursor from 0 to the length of (modelValue's settings's values):
+            set entry to the item at cursor in (modelValue's settings's values)
+            if (entry's code >= bim category override setting) and (entry's code < ((bim category override setting) + (the bim override span))):
+                append entry to (entries's values)
+        return entries
+
+# The owners whose rules `ownerId` follows, nearest first: a drawing type
+# and its ancestors (at most 32, so a cycle cannot hang), or a view alone.
+function the bim rule chain of {a 64 bit integer:ownerId} in {bim model record:modelValue}:
+    execute:
+        set owners to a cad topology list of a 64 bit integer
+        set current to ownerId
+        loop depth from 0 to 32:
+            set found to the bim drawing type index of current in modelValue
+            if found's valid = false:
+                if depth = 0:
+                    append ownerId to (owners's values)
+                return owners
+            append current to (owners's values)
+            set current to (the item at found's position in (modelValue's drawingTypes's values))'s parentId
+        return owners
+
+# What `ownerId` itself sets for `field` of node `key`, or -1: a setting, or
+# for a whole category's shown and halftone the drawing type's lists or the
+# view's flags.
+function the bim own override {integer:field} of node {integer:key} on {a 64 bit integer:ownerId} among {the type of (a cad topology list of a bim setting record):entries} in {bim model record:modelValue}:
+    execute:
+        if ((the bim part of node key) = bim whole category part) and (field <= bim node halftone field):
+            set categoryCode to the bim category of node key
+            set typeFound to the bim drawing type index of ownerId in modelValue
+            if typeFound's valid:
+                set drawingType to the item at typeFound's position in (modelValue's drawingTypes's values)
+                set settings to drawingType's shown's values
+                if field = bim node halftone field:
+                    set settings to drawingType's faint's values
+                if categoryCode < (the length of settings):
+                    return (the item at categoryCode in settings) as a 64 bit integer
+                return (-1) as a 64 bit integer
+            set viewFound to the bim view index of ownerId in modelValue
+            if viewFound's valid:
+                set viewValue to the item at viewFound's position in (modelValue's views's values)
+                set flags to viewValue's shown's values
+                if field = bim node halftone field:
+                    set flags to viewValue's faint's values
+                if categoryCode < (the length of flags):
+                    if the item at categoryCode in flags:
+                        return 1 as a 64 bit integer
+                    return 0 as a 64 bit integer
+            return (-1) as a 64 bit integer
+        set code to the bim override code of field field at node key
+        loop cursor from 0 to the length of (entries's values):
+            set entry to the item at cursor in (entries's values)
+            if (entry's elementId = ownerId) and (entry's code = code):
+                return entry's value
+        return (-1) as a 64 bit integer
+
+# `field` of node `key` resolved along `chain` (`the bim rule chain of`):
+# on each owner the part's own setting, then its category's; -1 when none
+# sets it. With `skipping` the nearest owner's own setting of the node
+# itself is passed over: what the node would inherit.
+function the bim resolved override {integer:field} of node {integer:key} along {the type of (a cad topology list of a 64 bit integer):chain} skipping own {boolean:skipping} among {the type of (a cad topology list of a bim setting record):entries} in {bim model record:modelValue}:
+    execute:
+        set part to the bim part of node key
+        set wholeKey to the bim node key of category (the bim category of node key) part (bim whole category part)
+        loop level from 0 to the length of (chain's values):
+            set ownerId to the item at level in (chain's values)
+            set passing to skipping and (level = 0)
+            if (part != bim whole category part) and (passing = false):
+                set value to the bim own override field of node key on ownerId among entries in modelValue
+                if value >= (0 as a 64 bit integer):
+                    return value
+            if (part != bim whole category part) or (passing = false):
+                set value to the bim own override field of node wholeKey on ownerId among entries in modelValue
+                if value >= (0 as a 64 bit integer):
+                    return value
+        return (-1) as a 64 bit integer
+
+# Every node of the tree resolved for `ownerId` (a drawing type or a view),
+# whose categories' shown and halftone `ruled` already holds.
+function the bim category nodes of owner {a 64 bit integer:ownerId} following {bim view rules record:ruled} in {bim model record:modelValue}:
+    execute:
+        set resolvedNodes to a cad topology list of a bim category node record
+        set entries to the bim tree settings of modelValue
+        set chain to the bim rule chain of ownerId in modelValue
+        loop categoryCode from 0 to the bim category count:
+            set categoryShown to bim category categoryCode is visible in ruled
+            set categoryFaint to bim category categoryCode is halftone in ruled
+            loop part from 0 to the bim part count of category categoryCode:
+                set key to the bim node key of category categoryCode part part
+                set shownHere to categoryShown
+                set faintHere to categoryFaint
+                if part != bim whole category part:
+                    set shownSetting to the bim resolved override (bim node visible field) of node key along chain skipping own false among entries in modelValue
+                    set faintSetting to the bim resolved override (bim node halftone field) of node key along chain skipping own false among entries in modelValue
+                    if shownSetting >= (0 as a 64 bit integer):
+                        set shownHere to categoryShown and (shownSetting = (1 as a 64 bit integer))
+                    if faintSetting >= (0 as a 64 bit integer):
+                        set faintHere to faintSetting = (1 as a 64 bit integer)
+                set projectionColour to the bim resolved override (bim projection colour field) of node key along chain skipping own false among entries in modelValue
+                set projectionWeight to the bim resolved override (bim projection weight field) of node key along chain skipping own false among entries in modelValue
+                set cutColour to the bim resolved override (bim cut colour field) of node key along chain skipping own false among entries in modelValue
+                set cutWeight to the bim resolved override (bim cut weight field) of node key along chain skipping own false among entries in modelValue
+                append (@intrinsic("construct", a bim category node record, key, shownHere, faintHere, projectionColour, projectionWeight, cutColour, cutWeight)) to (resolvedNodes's values)
+        return resolvedNodes
+
+# Node `key` of `viewRules`; its category's rule with the drawing's own
+# lines when the rules hold no nodes.
+function the bim tree node {integer:key} in {bim view rules record:viewRules}:
+    execute:
+        loop cursor from 0 to the length of (viewRules's nodes's values):
+            set candidate to the item at cursor in (viewRules's nodes's values)
+            if candidate's key = key:
+                return candidate
+        set categoryCode to the bim category of node key
+        set shownHere to true
+        set faintHere to false
+        if (categoryCode >= 0) and (categoryCode < (the length of (viewRules's rules's values))):
+            set shownHere to bim category categoryCode is visible in viewRules
+            set faintHere to bim category categoryCode is halftone in viewRules
+        set none to (-1) as a 64 bit integer
+        return @intrinsic("construct", a bim category node record, key, shownHere, faintHere, none, none, none, none)
+
+# Whether the parts of category `categoryCode` are drawn differently in
+# `viewRules`: only then does it matter which part an element is in.
+function bim category {integer:categoryCode} is split in {bim view rules record:viewRules}:
+    execute:
+        set whole to the bim tree node (the bim node key of category categoryCode part (bim whole category part)) in viewRules
+        loop part from 1 to the bim part count of category categoryCode:
+            set node to the bim tree node (the bim node key of category categoryCode part part) in viewRules
+            if (node's visible != whole's visible) or (node's halftone != whole's halftone):
+                return true
+            if (node's projectionColour != whole's projectionColour) or (node's projectionWeight != whole's projectionWeight):
+                return true
+            if (node's cutColour != whole's cutColour) or (node's cutWeight != whole's cutWeight):
+                return true
+        return false
+
+# How element `elementId` is drawn by `viewRules`: the node of its part when
+# its category is split, else its category's.
+function the bim node of element {a 64 bit integer:elementId} by {bim view rules record:viewRules} in {bim model record:modelValue}:
+    execute:
+        set categoryCode to the bim category of element elementId in modelValue
+        if categoryCode < 0:
+            set none to (-1) as a 64 bit integer
+            return @intrinsic("construct", a bim category node record, -1, true, false, none, none, none, none)
+        if bim category categoryCode is split in viewRules:
+            return the bim tree node (the bim node of element elementId in modelValue) in viewRules
+        return the bim tree node (the bim node key of category categoryCode part (bim whole category part)) in viewRules
+
+# The tree's nodes of `viewRules` as text, for the keys of cached drawings.
+function the bim node text of {bim view rules record:viewRules}:
+    execute:
+        set written to the string form of ""
+        loop cursor from 0 to the length of (viewRules's nodes's values):
+            set entry to the item at cursor in (viewRules's nodes's values)
+            set written to (written + (the string form of entry's key)) + (the string form of ":")
+            if entry's visible:
+                set written to written + (the string form of "v")
+            if entry's halftone:
+                set written to written + (the string form of "h")
+            set written to (written + (the string form of " ")) + (the string form of entry's projectionColour)
+            set written to (written + (the string form of " ")) + (the string form of entry's projectionWeight)
+            set written to (written + (the string form of " ")) + (the string form of entry's cutColour)
+            set written to ((written + (the string form of " ")) + (the string form of entry's cutWeight)) + (the string form of ";")
+        return written
+
+# ---------------------------------------------------------------- colours and pens
+
+# A colour packed as a setting: red * 65536 + green * 256 + blue.
+function the bim pen colour {integer:red}, {integer:green} and {integer:blue}:
+    execute:
+        return ((((red * 65536) + (green * 256)) + blue) as a 64 bit integer)
+
+function the bim red of colour {a 64 bit integer:packed}:
+    execute:
+        return (packed / (65536 as a 64 bit integer)) as an integer
+
+function the bim green of colour {a 64 bit integer:packed}:
+    execute:
+        return (the remainder of (packed / (256 as a 64 bit integer)) divided by (256 as a 64 bit integer)) as an integer
+
+function the bim blue of colour {a 64 bit integer:packed}:
+    execute:
+        return (the remainder of packed divided by (256 as a 64 bit integer)) as an integer
+
+# The colours a click on a colour cell runs through, after the inherited
+# one: black, red, blue, green, orange and grey.
+function the bim override colour count:
+    replacement:
+        6
+
+function the bim override colour {integer:index}:
+    execute:
+        if index = 1:
+            return the bim pen colour 200, 30 and 30
+        if index = 2:
+            return the bim pen colour 30, 80 and 200
+        if index = 3:
+            return the bim pen colour 30, 140 and 60
+        if index = 4:
+            return the bim pen colour 230, 130 and 20
+        if index = 5:
+            return the bim pen colour 128, 128 and 128
+        return the bim pen colour 0, 0 and 0
+
+function the bim name of colour {a 64 bit integer:packed}:
+    execute:
+        if packed < (0 as a 64 bit integer):
+            return the string form of "Default"
+        loop index from 0 to the bim override colour count:
+            if (the bim override colour index) = packed:
+                if index = 1:
+                    return the string form of "Red"
+                if index = 2:
+                    return the string form of "Blue"
+                if index = 3:
+                    return the string form of "Green"
+                if index = 4:
+                    return the string form of "Orange"
+                if index = 5:
+                    return the string form of "Grey"
+                return the string form of "Black"
+        return the string form of "Custom"
+
+# The pen weights a click on a weight cell runs through, in hundredths of a
+# millimetre on paper, after the inherited one.
+function the bim override weight count:
+    replacement:
+        7
+
+function the bim override weight {integer:index}:
+    execute:
+        if index = 1:
+            return 18 as a 64 bit integer
+        if index = 2:
+            return 25 as a 64 bit integer
+        if index = 3:
+            return 35 as a 64 bit integer
+        if index = 4:
+            return 50 as a 64 bit integer
+        if index = 5:
+            return 70 as a 64 bit integer
+        if index = 6:
+            return 100 as a 64 bit integer
+        return 13 as a 64 bit integer
+
+# A weight as text: "0.35", or "Default".
+function the bim name of weight {a 64 bit integer:hundredths}:
+    execute:
+        if hundredths < (0 as a 64 bit integer):
+            return the string form of "Default"
+        set whole to hundredths / (100 as a 64 bit integer)
+        set fraction to the remainder of hundredths divided by (100 as a 64 bit integer)
+        set fractionText to the string form of fraction
+        if fraction < (10 as a 64 bit integer):
+            set fractionText to (the string form of "0") + fractionText
+        return ((the string form of whole) + (the string form of ".")) + fractionText
+
+# How wide a line of `hundredths` of a millimetre on paper is drawn, in the
+# pixels of a cut outline (one pixel for 0.35 mm); the pen table of the
+# structural plan design (PR #81, section 4) will scale it with the view.
+function the bim pixel width of weight {a 64 bit integer:hundredths}:
+    execute:
+        return the maximum of 0.5 and ((hundredths as a 64 bit floating-point number) / 35.0)
+
+# The value after `value` a click on a cell of `field` gives: inherited (-1)
+# first, then each choice in turn, then inherited again.
+function the bim next override after {a 64 bit integer:value} for {integer:field}:
+    execute:
+        set none to (-1) as a 64 bit integer
+        if field <= bim node halftone field:
+            if value < (0 as a 64 bit integer):
+                return 1 as a 64 bit integer
+            if value = (1 as a 64 bit integer):
+                return 0 as a 64 bit integer
+            return none
+        if (field = bim projection colour field) or (field = bim cut colour field):
+            if value < (0 as a 64 bit integer):
+                return the bim override colour 0
+            loop index from 0 to (the bim override colour count) - 1:
+                if (the bim override colour index) = value:
+                    return the bim override colour (index + 1)
+            return none
+        if value < (0 as a 64 bit integer):
+            return the bim override weight 0
+        loop index from 0 to (the bim override weight count) - 1:
+            if (the bim override weight index) = value:
+                return the bim override weight (index + 1)
+        return none
+
+# `ownerId` (a drawing type or a view) sets `field` of node `key` to
+# `value`, or inherits it again for -1. A whole category's shown and
+# halftone on a drawing type go to its lists.
+function set bim override {integer:field} of node {integer:key} on {a 64 bit integer:ownerId} to {a 64 bit integer:value} in {a pointer to a bim model record:target}:
+    execute:
+        if ((the bim part of node key) = bim whole category part) and (field <= bim node halftone field):
+            if (the bim drawing type index of ownerId in (@intrinsic("dereference", target)))'s valid:
+                ignore set bim drawing type ownerId setting field at (the bim category of node key) to (value as an integer) in target
+            return nothing
+        set bim setting (the bim override code of field field at node key) of ownerId to value keeping (value >= (0 as a 64 bit integer)) in target
+
+# One click on the cell of `field` of node `key` on `ownerId`: its own
+# setting moves on (`the bim next override after`).
+function cycle bim override {integer:field} of node {integer:key} on {a 64 bit integer:ownerId} in {a pointer to a bim model record:target}:
+    execute:
+        set entries to the bim tree settings of (@intrinsic("dereference", target))
+        set own to the bim own override field of node key on ownerId among entries in (@intrinsic("dereference", target))
+        set bim override field of node key on ownerId to (the bim next override after own for field) in target
+
+# Every tree setting of `sourceId` given to `copyId` as well (a duplicated
+# drawing type).
+function copy bim overrides of {a 64 bit integer:sourceId} to {a 64 bit integer:copyId} in {a pointer to a bim model record:target}:
+    execute:
+        set entries to the bim tree settings of (@intrinsic("dereference", target))
+        loop cursor from 0 to the length of (entries's values):
+            set entry to the item at cursor in (entries's values)
+            if entry's elementId = sourceId:
+                set bim setting entry's code of copyId to entry's value keeping true in target

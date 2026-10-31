@@ -2,20 +2,28 @@
 # The Drawing Rules window: every drawing type of the model in a tree on the
 # left (each beneath the type it inherits from), and on the right the chosen
 # type's rules in three tabs:
-# - Visibility/Graphics, as Revit's: per category shown or hidden, and
-#   halftone;
+# - Visibility/Graphics, as Revit's: the category tree
+#   (`views/common/bim_category_tree.dl`), each category opening into its
+#   parts (structural and non-structural walls and floors), and per node
+#   shown or hidden, halftone, and the colour and weight of its projection
+#   and cut lines;
 # - Annotation: which annotations its drawings get automatically;
 # - Phasing: its phase filter.
 # A cell shows what the type sets, or "Inherit" with the value it inherits;
-# a click goes from inherit to on to off and back. New makes a child of the
+# a click goes from inherit to on to off and back. In Visibility/Graphics a
+# value set here is bright with a blue mark, an inherited one grey, and the
+# clicks run through the choices back to inherited. New makes a child of the
 # chosen type, Duplicate a sibling with its settings, Rename types a name,
 # Delete refuses a type a view follows or another type inherits from.
 import ui/editor/bim_editor.dl
 import views/drawings/bim_text.dl
+import views/common/bim_category_tree.dl
 
 # What a click in the window does: `action` (`bim rules …`), the type it is
 # about, and for a cell which setting (0 shown, 1 halftone, 2 annotation,
-# 3 phase filter) at which slot.
+# 3 phase filter) at which slot; 10 and up a category tree field (`which`
+# - 10, `bim node visible field` …) of node `slot`. Opening a category
+# names it in `slot`.
 class:
     patterns:
         [a|] bim rules hit record
@@ -55,6 +63,13 @@ function bim rules rename type:
 function bim rules close:
     replacement:
         8
+function bim rules toggle node:
+    replacement:
+        9
+# Which settings are category tree fields: `which` minus this.
+function bim rules tree field base:
+    replacement:
+        10
 
 function a bim rules hit {integer:actionCode} on {a 64 bit integer:typeId} at {integer:which} and {integer:slot}:
     execute:
@@ -62,10 +77,10 @@ function a bim rules hit {integer:actionCode} on {a 64 bit integer:typeId} at {i
 
 function the bim rules window width:
     replacement:
-        880.0
+        980.0
 function the bim rules window height:
     replacement:
-        580.0
+        640.0
 
 # ---------------------------------------------------------------- editing
 
@@ -98,6 +113,7 @@ function duplicate bim editor drawing type {a 64 bit integer:typeId} in {a point
         begin bim transaction in (the address of (editor's documentValue))
         set fresh to the bim new id in target
         append (@intrinsic("construct", a bim drawing type record, fresh, original's name + (the string form of " (copy)"), original's parentId, the cad clone of original's shown, the cad clone of original's faint, the cad clone of original's annotations, original's phaseFilter)) to (target's drawingTypes's values)
+        copy bim overrides of typeId to fresh in target
         commit bim transaction in (the address of (editor's documentValue))
         set editor's message to (the string form of "Duplicated ") + original's name
         return fresh
@@ -133,6 +149,7 @@ function delete bim editor drawing type {a 64 bit integer:typeId} in {a pointer 
                 return false
         begin bim transaction in (the address of (editor's documentValue))
         remove item found's position from (target's drawingTypes's values)
+        drop bim settings of typeId in target
         note bim change of typeId in target
         commit bim transaction in (the address of (editor's documentValue))
         set editor's message to the string form of "Drawing type deleted"
@@ -158,6 +175,12 @@ function cycle bim editor drawing type {a 64 bit integer:typeId} setting {intege
         set target to the address of (editor's documentValue's current)
         set found to the bim drawing type index of typeId in (@intrinsic("dereference", target))
         if found's valid = false:
+            return nothing
+        if which >= bim rules tree field base:
+            begin bim transaction in (the address of (editor's documentValue))
+            cycle bim override (which - (bim rules tree field base)) of node slot on typeId in target
+            commit bim transaction in (the address of (editor's documentValue))
+            refresh bim editor plan rules in editor
             return nothing
         set original to the item at found's position in (target's drawingTypes's values)
         set value to -1
@@ -196,6 +219,23 @@ function apply bim rules hit {bim rules hit record:hit} choosing {a 64 bit integ
             if delete bim editor drawing type chosenId in editor:
                 return the bim refused id
         return chosenId
+
+# Whether category `categoryCode` is opened in the tree, its parts shown.
+function bim rules category {integer:categoryCode} is open in {a pointer to a list:openCategories}:
+    execute:
+        loop cursor from 0 to the length of openCategories:
+            if (the item at cursor in openCategories) = categoryCode:
+                return true
+        return false
+
+# Opens category `categoryCode` in the tree, or closes it when open.
+function toggle bim rules category {integer:categoryCode} in {a pointer to a list:openCategories}:
+    execute:
+        loop cursor from 0 to the length of openCategories:
+            if (the item at cursor in openCategories) = categoryCode:
+                remove item cursor from openCategories
+                return nothing
+        append categoryCode to openCategories
 
 # ---------------------------------------------------------------- drawing
 
@@ -250,11 +290,138 @@ local function the bim rules cell text of {integer:own} resolving {integer:inher
             return onWord
         return offWord
 
+# Where column `fieldCode` of the Visibility/Graphics table starts, from the
+# pane's left: shown, halftone, then the projection lines' colour and
+# weight and the cut lines' colour and weight (the tree's fields in order).
+local function the bim tree column {integer:fieldCode} offset:
+    execute:
+        if fieldCode = 0:
+            return 220.0
+        if fieldCode = 1:
+            return 294.0
+        if fieldCode = 2:
+            return 368.0
+        if fieldCode = 3:
+            return 464.0
+        if fieldCode = 4:
+            return 528.0
+        return 624.0
+
+local function the bim tree column {integer:fieldCode} width:
+    execute:
+        if (fieldCode = 2) or (fieldCode = 4):
+            return 96.0
+        if (fieldCode = 3) or (fieldCode = 5):
+            return 64.0
+        return 74.0
+
+# The text of a tree cell of column `fieldCode` showing `value` (-1 the
+# drawing's own).
+local function the bim tree cell text of {a 64 bit integer:value} in column {integer:fieldCode}:
+    execute:
+        set on to value = (1 as a 64 bit integer)
+        if fieldCode = bim node visible field:
+            if on:
+                return the string form of "Shown"
+            return the string form of "Hidden"
+        if fieldCode = bim node halftone field:
+            if on:
+                return the string form of "Halftone"
+            return the string form of "Normal"
+        if (fieldCode = bim projection colour field) or (fieldCode = bim cut colour field):
+            return the bim name of colour value
+        return the bim name of weight value
+
+# The Visibility/Graphics tab of drawing type `chosenId`: the category tree
+# with `openCategories` opened, from `paneLeft` and `tableTop`. A row's
+# cells show what the type sets (bright, with a blue mark) or what it
+# inherits from the category or its parent types (grey). Writes what a
+# click at the pointer would hit into `result`.
+function draw bim visibility tree of {a 64 bit integer:chosenId} in {bim model record:modelValue} opening {a pointer to a list:openCategories} from {a 64 bit floating-point number:paneLeft} and {a 64 bit floating-point number:tableTop} pointing at {a 64 bit floating-point number:pointerX} and {a 64 bit floating-point number:pointerY} into {a pointer to a bim rules hit record:result} using {bim text atlas record:atlas} in {graphics frame:frame}:
+    execute:
+        set fallback to the bim template rules of view kind bim plan view kind
+        set entries to the bim tree settings of modelValue
+        set chain to the bim rule chain of chosenId in modelValue
+        draw bim text (the string form of "Projection lines") at (paneLeft + (the bim tree column 2 offset)) and (tableTop + 10.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
+        draw bim text (the string form of "Cut lines") at (paneLeft + (the bim tree column 4 offset)) and (tableTop + 10.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
+        set headings to [the string form of "Visible", the string form of "Halftone", the string form of "Colour", the string form of "Weight", the string form of "Colour", the string form of "Weight"]
+        draw bim text (the string form of "Category") at paneLeft and (tableTop + 24.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
+        loop field from 0 to the bim node field count:
+            draw bim text (the item at field in headings) at (paneLeft + (the bim tree column field offset)) and (tableTop + 24.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
+        free headings
+        set row to 0
+        loop categoryCode from 0 to the bim category count:
+            set partCount to the bim part count of category categoryCode
+            set opened to bim rules category categoryCode is open in openCategories
+            set partsShown to 1
+            if opened:
+                set partsShown to partCount
+            loop part from 0 to partsShown:
+                set key to the bim node key of category categoryCode part part
+                set rowTop to (tableTop + 30.0) + ((row as a 64 bit floating-point number) * 20.0)
+                set row to row + 1
+                # The node's name; a category with parts opens and closes.
+                set nameLeft to paneLeft + 16.0
+                if part > 0:
+                    set nameLeft to paneLeft + 32.0
+                if (part = 0) and (partCount > 1):
+                    set overName to (((pointerX >= paneLeft) and (pointerX < (paneLeft + 210.0))) and (pointerY >= rowTop)) and (pointerY < (rowTop + 20.0))
+                    if overName:
+                        fill bim rules box paneLeft (rowTop + 1.0) 210.0 19.0 coloured 52, 52 and 56 in frame
+                        set result's action to bim rules toggle node
+                        set result's typeId to chosenId
+                        set result's which to -1
+                        set result's slot to categoryCode
+                    set sign to the string form of "+"
+                    if opened:
+                        set sign to the string form of "-"
+                    fill bim rules box (paneLeft + 2.0) (rowTop + 5.0) 11.0 11.0 coloured 70, 70 and 76 in frame
+                    draw bim text sign at (paneLeft + 4.0) and (rowTop + 14.0) in face (bim text small) with atlas coloured 235, 235 and 235 in frame
+                draw bim text (the bim name of node key) at nameLeft and (rowTop + 14.0) in face (bim text small) with atlas coloured 220, 220 and 220 in frame
+                loop field from 0 to the bim node field count:
+                    set own to the bim own override field of node key on chosenId among entries in modelValue
+                    set inherited to the bim resolved override field of node key along chain skipping own true among entries in modelValue
+                    if (field <= bim node halftone field) and (inherited < (0 as a 64 bit integer)):
+                        set inherited to 0 as a 64 bit integer
+                        if (field = bim node visible field) and (bim category categoryCode is visible in fallback):
+                            set inherited to 1 as a 64 bit integer
+                    set value to inherited
+                    if own >= (0 as a 64 bit integer):
+                        set value to own
+                    set cellLeft to paneLeft + (the bim tree column field offset)
+                    set cellWidth to the bim tree column field width
+                    set over to (((pointerX >= cellLeft) and (pointerX < ((cellLeft + cellWidth) - 4.0))) and (pointerY >= rowTop)) and (pointerY < (rowTop + 20.0))
+                    set shade to 46
+                    if over:
+                        set shade to 64
+                        set result's action to bim rules cycle cell
+                        set result's typeId to chosenId
+                        if (part = 0) and (field <= bim node halftone field):
+                            set result's which to field
+                            set result's slot to categoryCode
+                        else:
+                            set result's which to (bim rules tree field base) + field
+                            set result's slot to key
+                    fill bim rules box cellLeft (rowTop + 1.0) (cellWidth - 4.0) 19.0 coloured shade, shade and (shade + 6) in frame
+                    set textLeft to cellLeft + 6.0
+                    if own >= (0 as a 64 bit integer):
+                        fill bim rules box cellLeft (rowTop + 1.0) 3.0 19.0 coloured 6, 150 and 215 in frame
+                    if ((field = bim projection colour field) or (field = bim cut colour field)) and (value >= (0 as a 64 bit integer)):
+                        fill bim rules box (cellLeft + 6.0) (rowTop + 5.0) 11.0 11.0 coloured (the bim red of colour value), (the bim green of colour value) and (the bim blue of colour value) in frame
+                        set textLeft to cellLeft + 21.0
+                    set ink to 242
+                    if own < (0 as a 64 bit integer):
+                        set ink to 150
+                    draw bim text (the bim tree cell text of value in column field) at textLeft and (rowTop + 14.0) in face (bim text small) with atlas coloured ink, ink and ink in frame
+        set noteTop to (tableTop + 30.0) + (((row as a 64 bit floating-point number) * 20.0) + 16.0)
+        draw bim text (the string form of "Bright with a blue mark: set on this type. Grey: inherited. A click runs through the choices back to inherited.") at paneLeft and noteTop in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
+
 # Draws the window centred in the `width` by `height` window, the type
 # `chosenId` chosen and tab `tabIndex` open (0 visibility, 1 annotation,
-# 2 phasing), its name being typed as `typed` when `renaming`; returns what
+# 2 phasing) with the categories `openCategories` opened in the tree, its
+# name being typed as `typed` when `renaming`; returns what
 # a click at the pointer would hit.
-function draw bim drawing rules of {bim editor record:editor} choosing {a 64 bit integer:chosenId} on tab {integer:tabIndex} renaming {boolean:renaming} as {a string:typed} across {a 64 bit floating-point number:screenWidth} by {a 64 bit floating-point number:screenHeight} pointing at {a 64 bit floating-point number:pointerX} and {a 64 bit floating-point number:pointerY} using {bim text atlas record:atlas} in {graphics frame:frame}:
+function draw bim drawing rules of {bim editor record:editor} choosing {a 64 bit integer:chosenId} on tab {integer:tabIndex} opening {a pointer to a list:openCategories} renaming {boolean:renaming} as {a string:typed} across {a 64 bit floating-point number:screenWidth} by {a 64 bit floating-point number:screenHeight} pointing at {a 64 bit floating-point number:pointerX} and {a 64 bit floating-point number:pointerY} using {bim text atlas record:atlas} in {graphics frame:frame}:
     execute:
         set modelValue to editor's documentValue's current
         set boxWidth to the bim rules window width
@@ -350,45 +517,9 @@ function draw bim drawing rules of {bim editor record:editor} choosing {a 64 bit
             set tabLeft to (tabLeft + tabWidth) + 4.0
         set tableTop to top + 122.0
         set firstCell to paneLeft + 190.0
-        set secondCell to paneLeft + 390.0
         set cellWidth to 190.0
-        set fallback to the bim template rules of view kind bim plan view kind
         if tabIndex = 0:
-            draw bim text (the string form of "Category") at paneLeft and (tableTop + 14.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
-            draw bim text (the string form of "Visible") at firstCell and (tableTop + 14.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
-            draw bim text (the string form of "Halftone") at secondCell and (tableTop + 14.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
-            loop code from 0 to the bim category count:
-                set rowTop to (tableTop + 20.0) + ((code as a 64 bit floating-point number) * 21.0)
-                draw bim text (the bim name of category code) at paneLeft and (rowTop + 14.0) in face (bim text small) with atlas coloured 220, 220 and 220 in frame
-                loop column from 0 to 2:
-                    set own to -1
-                    set settings to chosenType's shown's values
-                    if column = 1:
-                        set settings to chosenType's faint's values
-                    if code < (the length of settings):
-                        set own to the item at code in settings
-                    set inherited to -1
-                    if parentFound's valid:
-                        set inherited to the bim resolved setting column at code of drawing type chosenType's parentId in modelValue
-                    if inherited < 0:
-                        set inherited to 0
-                        if (column = 0) and (bim category code is visible in fallback):
-                            set inherited to 1
-                    set cellLeft to firstCell
-                    set cellText to the bim rules cell text of own resolving inherited saying (the string form of "Shown") or (the string form of "Hidden")
-                    if column = 1:
-                        set cellLeft to secondCell
-                        set cellText to the bim rules cell text of own resolving inherited saying (the string form of "Halftone") or (the string form of "Normal")
-                    set over to (((pointerX >= cellLeft) and (pointerX < (cellLeft + cellWidth))) and (pointerY >= rowTop)) and (pointerY < (rowTop + 20.0))
-                    set shade to 46
-                    if over:
-                        set shade to 64
-                        set result to a bim rules hit (bim rules cycle cell) on chosenId at column and code
-                    fill bim rules box cellLeft (rowTop + 1.0) (cellWidth - 6.0) 19.0 coloured shade, shade and (shade + 6) in frame
-                    set ink to 242
-                    if own < 0:
-                        set ink to 150
-                    draw bim text cellText at (cellLeft + 6.0) and (rowTop + 14.0) in face (bim text small) with atlas coloured ink, ink and ink in frame
+            draw bim visibility tree of chosenId in modelValue opening openCategories from paneLeft and tableTop pointing at pointerX and pointerY into (the address of result) using atlas in frame
         if tabIndex = 1:
             draw bim text (the string form of "Annotation") at paneLeft and (tableTop + 14.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
             draw bim text (the string form of "Applied") at firstCell and (tableTop + 14.0) in face (bim text caption) with atlas coloured 150, 150 and 150 in frame
