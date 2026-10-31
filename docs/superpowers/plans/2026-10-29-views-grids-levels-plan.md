@@ -81,6 +81,13 @@ Owner of `pattern/`: Nino (see `docs/OWNERS.md`).
 4. Which conventions the KW and FB codings refer to (#68).
 5. IFC4 or IFC4.3 as the reference schema (#66).
 
+Status on 31 October: the structural plan design
+([`../specs/2026-10-30-structural-plan-design.md`](../specs/2026-10-30-structural-plan-design.md) §6)
+proposes answers to questions 1 and 2, awaiting the maintainer's confirmation; it does not depend
+on question 5. Questions 3 to 5 are open. All five are also listed in
+[`../../open-questions.md`](../../open-questions.md), together with the open questions on the
+individual issues.
+
 ## Verdict
 
 Provisional: start with A1–A3 and B once questions 1–3 are answered; C and D can follow in

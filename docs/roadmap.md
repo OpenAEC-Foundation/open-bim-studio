@@ -10,9 +10,34 @@ Phases 2 and 3 overlap and are the natural point to divide work between contribu
 | **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | **in progress** |
 | **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | [`research/kernels/synthesis.md`](research/kernels/synthesis.md) — completed matrix, twenty-one candidates, three-axis verdicts | **done** (2026-09-12) |
 | **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike — R-01, R-16, R-17, R-18, R-19, plus the point-cloud, tessellation, object-count and topological-naming result sets | **done** (2026-09-12) |
-| **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | **in progress** — ADR-0005 and ADR-0006 accepted; **ADR-0004 amended and still `proposed`** with three named conditions, so ADR-0003 stays in force and the kernel spec stays a working hypothesis. The MVP slice is not yet specified |
-| **5** | Consolidate into the handover document | `BUILD-BRIEF.md` | |
-| **6** | Kernel build milestones M0–M8 | working kernel | blocked on phase 4 |
+| **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | **in progress** — ADR-0005, ADR-0006, ADR-0007 and ADR-0008 accepted; **ADR-0004 amended and still `proposed`** with three named conditions, so ADR-0003 formally stays in force and the kernel spec stays a working hypothesis. The MVP slice is not yet specified |
+| **5** | Consolidate into the handover document | `BUILD-BRIEF.md` | not started |
+| **6** | Kernel build milestones M0–M8 | working kernel | formally blocked on phase 4; in practice the DynLex kernel and the application are already developed in this repository (ADR-0007, ADR-0008) — see [Where the plan stands](#where-the-plan-stands-31-october-2026) |
+
+## Where the plan stands, 31 October 2026
+
+The roadmap above describes a research repository that hands over a build brief. Since
+October the repository has also become the place where the native application is built:
+the DynLex kernel lives in `kernel/` (ADR-0007), the application is compiled as units joined by
+C-ABI seams (ADR-0008), and the module split of 28 October gave every domain an owner
+([`OWNERS.md`](OWNERS.md)). Phases 4 and 5 have not caught up with that, so two tracks now run
+side by side:
+
+- **The formal track** — phase 1's open items, ADR-0004's three conditions, the MVP slice and
+  the build brief. Nothing on it moved since 12 September apart from ADR-0007 and ADR-0008.
+- **The product track** — module work under issues and pull requests. Its current planning
+  round is views, grids, levels and georeferencing (epic
+  [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67)). The structural plan
+  design ([`superpowers/specs/2026-10-30-structural-plan-design.md`](superpowers/specs/2026-10-30-structural-plan-design.md),
+  PR #81) and its step 0 (PR #83) are merged, and drawings and views move to computer 2.
+
+The gap between the two tracks is itself a decision: either ADR-0004 is accepted (or
+superseded) so that the product track becomes the plan, or the product track is explicitly
+marked as running ahead of an unsettled architecture. Until the maintainer decides, this
+roadmap records both and claims neither.
+
+Every question that waits on the maintainer, across both tracks, is collected in
+[`open-questions.md`](open-questions.md).
 
 ## Phase 1 — domain and prior art
 
@@ -135,7 +160,17 @@ Views, grids, levels, georeferencing and building systems are planned as issues 
 is built: [`superpowers/plans/2026-10-29-views-grids-levels-plan.md`](superpowers/plans/2026-10-29-views-grids-levels-plan.md),
 epic [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67).
 
+Status on 31 October: the structural plan design (PR #81) proposes answers to blocking
+questions 1 and 2, as calls the maintainer can overrule; questions 3 to 5 are still open. The
+design's own step 0 (PR #83) is merged, so building has started on the views side before the
+maintainer has confirmed those answers.
+
 ## After phase 5
 
 The build itself, which is out of scope for this repository as currently constituted. If it
 happens here, phase 5 is where the repository changes character and this document gets rewritten.
+
+**Note, 31 October 2026:** the build did move here before phase 5 (ADR-0007), so this
+document is due for that rewrite. It is not rewritten yet, because what replaces phases 4–6
+depends on the maintainer's answer to the first questions in
+[`open-questions.md`](open-questions.md).

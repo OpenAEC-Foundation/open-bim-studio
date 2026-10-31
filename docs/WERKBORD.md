@@ -16,6 +16,27 @@ of afgerond. Een oude claim verdwijnt niet automatisch omdat een sessie uitvalt.
 | Windows/Linux builds en installers | PC2, na taakacceptatie | `pc2/build-installers` | CI/build/installer; geen modelleringscode | Voorgesteld / nog niet geclaimd |
 | Release samenstellen en publiceren | PC1 / coördinator | `main` | Integratie, geteste artefacten, tags | Geblokkeerd op app-/installatietests |
 
+## Review of the board — 31 October 2026
+
+Since the module split of 28 October, ownership is per module in [OWNERS.md](OWNERS.md) and
+claims go per module. Several entries on this board predate that and refer to branches or files
+that no longer exist in that form. They are **not** released by this review — a claim ends only
+when its owner says so — but each needs its owner's confirmation:
+
+- The table above (dated 23 October) names files by their old flat paths and `main` as branch.
+  All rows marked "lokaal geïntegreerd" or "code aanwezig" still list an open app/GUI check.
+- `feature/steel-baseplates` (PC1 claims of 24 and 26 October) has no remote branch; its units
+  (base plate, fastener detail, plan presentation, image import) are on `main` in their modules. Command and property numbers
+  reserved there (2228, 2229, 2270–2279, 2313, 2314, 2400100–2401599, 12600–12611) stay reserved.
+- `pc2/compiler-memory` and `pc2/build-installers` were proposed and never claimed; no branches
+  exist.
+- `feature/connection-module`, `restructure/modules` and `mod/pattern/ownership` are fully merged
+  into `main`; `restructure/one-tree` holds one unmerged commit (stage 1 build times) and
+  `mod/elements-connection/fastener-components` one unmerged probe commit.
+- Views and drawings (`views/*`) moved to computer 2 on 30 October (#67).
+
+The questions these raise for the maintainer are in [open-questions.md](open-questions.md).
+
 ## Building Systems ownership — 2026-10-28
 
 Nino (@nino2-aec), Linux machine `aia07-MP50`, takes `pattern/common`,
