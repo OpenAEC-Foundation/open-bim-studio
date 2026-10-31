@@ -13,7 +13,7 @@ from pathlib import Path
 import open_bim_studio_mcp as mcp
 
 
-VERBS = {"ping", "state", "elements", "buttons", "button", "key", "pointer", "click", "press", "release",
+VERBS = {"ping", "state", "elements", "buttons", "button", "ribbon", "key", "pointer", "click", "press", "release",
          "select", "properties", "property", "wall", "slab", "system", "systemtypes", "undo", "redo", "fit", "tab",
          "grid", "gridrepeat", "cursor", "types", "typeadd", "typeduplicate", "typeset", "typeapply", "typedelete", "options"}
 MAX_BODY = 1024 * 1024
