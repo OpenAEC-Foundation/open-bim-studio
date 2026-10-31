@@ -35,7 +35,7 @@ Input classes the spec implies and no existing test exercises; each gets its tes
 
 ## Step 0: the drawings module becomes model-level
 
-Today `views/drawings/bim_drawing_rules.dl` imports the editor and `views/drawings/bim_drawing.dl` imports `elements/planar` for the wall, masonry and opening features of dimension references. After this step the module imports neither, its three baseline edges are gone, and its tests compile without the editor.
+Today `views/drawings/bim_drawing_rules.dl` imports the editor and `views/drawings/bim_drawing.dl` imports `elements/planar` for the wall, masonry and opening features of dimension references. After this step the module imports neither the editor nor the masonry file; two of its three baseline edges are gone (the evaluation records still live in `elements/planar/bim_evaluate.dl`, so that import and its edge stay until they move to `bim/`), and its tests compile without the editor.
 
 ### Task 0.1: The Drawing Rules window moves to `ui/panels`
 
@@ -85,13 +85,13 @@ The wall, masonry and opening-side branches of `the bim feature of` are the plan
 - Modify: `views/drawings/records.dl` (the `bim anchor record` class moves here from `bim_drawing.dl`)
 - Create: `elements/planar/features.dl`
 - Modify: `elements/planar/MODULE` (`point: feature elements/planar/features.dl`)
-- Modify: `views/drawings/bim_drawing.dl:8-9,233-300` (the two `elements/planar` imports go; `the bim feature of` keeps the grid branch and dispatches the rest)
+- Modify: `views/drawings/bim_drawing.dl:8-9,233-300` (the `elements/planar/bim_masonry.dl` import goes, `bim_evaluate.dl` stays for the evaluation records; `the bim feature of` keeps the grid branch and dispatches the rest)
 - Modify: `views/drawings/tests/drawing.dl` (imports `generated/compose.dl` so the dispatcher is in its closure)
-- Modify: `scripts/layer-baseline.txt` (remove `views/drawings -> elements/planar/bim_evaluate.dl` and `views/drawings -> elements/planar/bim_masonry.dl`)
-- Test: `views/drawings/tests/drawing.dl` (existing, output unchanged), `views/drawings/tests/stale_reference.dl` (new, Review Focus 1)
+- Modify: `scripts/layer-baseline.txt` (remove `views/drawings -> elements/planar/bim_masonry.dl`)
+- Test: `views/drawings/tests/drawing.dl` (existing, output unchanged), `views/drawings/tests/stale_reference.dl` (new, Review Focus 1), `views/drawings/tests/curved_anchor.dl` (new: a wall end's anchor follows the wall's tangent, not its chord)
 
 **Interfaces:**
-- Consumes: `bim reference record` and `bim join index record` as today; `the bim footprint of {bim wall record} in {bim model record} using {bim join index record}`, `the bim direction of {bim wall record}`, `the bim span of {bim wall record} at {number} reaching {number}` from `elements/planar/bim_evaluate.dl`; `the bim masonry of wall {bim wall record} in {bim model record} using {bim join index record}` from `elements/planar/bim_masonry.dl`; `the bim rough width of {bim opening type record}` from `bim/bim_model.dl`.
+- Consumes: `bim reference record` and `bim join index record` as today; `the bim footprint of {bim wall record} in {bim model record} using {bim join index record}`, `the bim direction of {bim wall record}`, `the bim tangent of {bim wall record} at finish {boolean}` (the direction of a wall-end anchor), `the bim span of {bim wall record} at {number} reaching {number}` from `elements/planar/bim_evaluate.dl`; `the bim masonry of wall {bim wall record} in {bim model record} using {bim join index record}` from `elements/planar/bim_masonry.dl`; `the bim rough width of {bim opening type record}` from `bim/bim_model.dl`.
 - Produces: in `generated/compose.dl` the dispatcher
   `function resolve bim module feature of {bim reference record:target} in {bim model record:modelValue} using {bim join index record:index} into {a pointer to a bim anchor record:anchor}:` returning a boolean (true when a module handled the reference's kind, whether or not the anchor is valid);
   in `elements/planar/features.dl`
@@ -139,7 +139,7 @@ Expected: five PASS lines, `drawing` and the three others byte-identical to befo
 
 - [ ] **Step 7: Shrink the baseline and check the layers**
 
-Remove the two planar edges from `scripts/layer-baseline.txt`. Run: `bash scripts/check-layers.sh`
+Remove the masonry edge from `scripts/layer-baseline.txt`. Run: `bash scripts/check-layers.sh`
 Expected: silent.
 
 - [ ] **Step 8: Commit**
@@ -174,7 +174,7 @@ Expected: three PASS lines; note the compile seconds against Task 0.1's baseline
 git add -A views/drawings/tests ui/editor/tests
 git commit -m "Keep the editor-driven tests with the editor"
 ```
-One pull request per owner: the window move and the tests move touch `ui/panels` and `ui/editor` (Elize); the feature point touches `elements/planar` (Elize) and `tools/` (the maintainer). The pull request body names the compile seconds before and after.
+One pull request for the step, reviewed by Elize, who owns every module it touches besides `tools/` and `views/` (`ui/panels`, `ui/editor`, `elements/planar`); the three tasks edit adjacent lines of `scripts/layer-baseline.txt` and would conflict as separate branches. The pull request body names the compile seconds before and after.
 
 ---
 
