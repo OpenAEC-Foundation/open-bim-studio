@@ -1,0 +1,308 @@
+# SPDX-License-Identifier: MPL-2.0
+# The layers of a layered (planar) type as the type window edits them: each
+# layer's function (structure, insulation, cavity, finish) and whether it is
+# in the core, kept as settings of the type beside its layer records, and the
+# edits of the layer table (material, thickness, order, adding, removing)
+# that keep those settings with their layer. A layer without a stored
+# function takes the one its material suggests; a layer without a stored
+# core flag is in the core when its function is structure.
+import ui/editor/bim_editor.dl
+import lib/text.dl
+
+function bim structure layer function:
+    replacement:
+        1
+function bim insulation layer function:
+    replacement:
+        2
+function bim cavity layer function:
+    replacement:
+        3
+function bim finish layer function:
+    replacement:
+        4
+function bim layer function count:
+    replacement:
+        4
+
+# Setting codes on a planar type: layer `n`'s function at 2500000 + n (a
+# function above), and its core flag at 2500100 + n (1 in the core, 2
+# outside it). Layers from the hundredth on keep the defaults.
+function bim layer function setting:
+    replacement:
+        2500000
+function bim layer core setting:
+    replacement:
+        2500100
+function bim layer setting span:
+    replacement:
+        100
+
+function the bim name of layer function {integer:functionCode}:
+    execute:
+        if functionCode = bim insulation layer function:
+            return the string form of "Insulation"
+        if functionCode = bim cavity layer function:
+            return the string form of "Cavity"
+        if functionCode = bim finish layer function:
+            return the string form of "Finish"
+        return the string form of "Structure"
+
+# The function a layer of material `materialName` has unless one is chosen.
+function the bim layer function suggested for {a string:materialName}:
+    execute:
+        set lowered to the lowercase form of materialName
+        if ((lowered contains "insulation") or (lowered contains "isolat")) or ((lowered contains "wool") or (lowered contains "wol")):
+            return bim insulation layer function
+        if (((lowered contains "air") or (lowered contains "cavity")) or (lowered contains "lucht")) or (lowered contains "spouw"):
+            return bim cavity layer function
+        if (((lowered contains "gypsum") or (lowered contains "gips")) or ((lowered contains "plaster") or (lowered contains "stuc"))) or (((lowered contains "finish") or (lowered contains "tile")) or (lowered contains "screed")):
+            return bim finish layer function
+        return bim structure layer function
+
+local function the bim layer list of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set layers to an empty list of a bim layer record
+        set found to the bim wall type index of typeId in modelValue
+        if found's valid:
+            set planarType to the item at found's position in (modelValue's wallTypes's values)
+            loop cursor from 0 to the length of (planarType's layers's values):
+                append (the item at cursor in (planarType's layers's values)) to layers
+        return layers
+
+# The stored values of setting range `base` for the layers of type
+# `typeId`, one per layer, 0 where none is stored.
+function the bim stored layer settings from {integer:base} of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set layers to the bim layer list of type typeId in modelValue
+        set storedValues to an empty list of an integer
+        loop cursor from 0 to the length of layers:
+            set reading to the bim setting (base + cursor) of typeId in modelValue
+            set value to 0
+            if reading's found and (cursor < (bim layer setting span)):
+                set value to reading's value as an integer
+            append value to storedValues
+        free layers
+        return storedValues
+
+function the bim function of layer {integer:layerIndex} of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set layers to the bim layer list of type typeId in modelValue
+        set result to bim structure layer function
+        if (layerIndex >= 0) and (layerIndex < (the length of layers)):
+            set result to the bim layer function suggested for (the item at layerIndex in layers)'s material
+            if layerIndex < (bim layer setting span):
+                set reading to the bim setting ((bim layer function setting) + layerIndex) of typeId in modelValue
+                if reading's found and ((reading's value >= (1 as a 64 bit integer)) and (reading's value <= ((bim layer function count) as a 64 bit integer))):
+                    set result to reading's value as an integer
+        free layers
+        return result
+
+function bim layer {integer:layerIndex} of type {a 64 bit integer:typeId} is core in {bim model record:modelValue}:
+    execute:
+        if layerIndex < (bim layer setting span):
+            set reading to the bim setting ((bim layer core setting) + layerIndex) of typeId in modelValue
+            if reading's found:
+                return reading's value = (1 as a 64 bit integer)
+        return (the bim function of layer layerIndex of type typeId in modelValue) = bim structure layer function
+
+# Writes `stored` (one value per layer, 0 for none) as setting range `base`
+# of type `typeId`, clearing the rest of the range.
+local function store bim layer settings {a pointer to a list:stored} from {integer:base} of type {a 64 bit integer:typeId} through {integer:reach} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the minimum of reach and (bim layer setting span):
+            set value to 0
+            if cursor < (the length of stored):
+                set value to the item at cursor in stored
+            set bim setting (base + cursor) of typeId to (value as a 64 bit integer) keeping (value > 0) in target
+
+# Gives type `typeId` the layers `layers` with their stored functions and
+# core flags, in one transaction. False (and nothing changed) when the
+# layers are refused.
+local function rebuild bim type {a 64 bit integer:typeId} with {a pointer to a list:layers} functions {a pointer to a list:functionCodes} cores {a pointer to a list:coreFlags} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set previous to the bim layer list of type typeId in (@intrinsic("dereference", target))
+        set reach to the maximum of (the length of previous) and (the length of layers)
+        free previous
+        begin bim transaction in (the address of (editor's documentValue))
+        set changed to set bim wall type typeId layers to layers in target
+        if changed:
+            store bim layer settings functionCodes from (bim layer function setting) of type typeId through reach in target
+            store bim layer settings coreFlags from (bim layer core setting) of type typeId through reach in target
+            note bim change of typeId in target
+            commit bim transaction in (the address of (editor's documentValue))
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+        refresh bim editor editor
+        return changed
+
+# The layer table's edits. Each addresses layer `layerIndex` of planar type
+# `typeId` and answers whether the type changed.
+function move bim type {a 64 bit integer:typeId} layer {integer:layerIndex} by {integer:step} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        set other to layerIndex + step
+        set countValue to the length of layers
+        if (((layerIndex < 0) or (layerIndex >= countValue)) or ((other < 0) or (other >= countValue))) or (step = 0):
+            free layers
+            return false
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        set movedLayer to the item at layerIndex in layers
+        replace item at index layerIndex in layers with (the item at other in layers)
+        replace item at index other in layers with movedLayer
+        set movedFunction to the item at layerIndex in functionCodes
+        replace item at index layerIndex in functionCodes with (the item at other in functionCodes)
+        replace item at index other in functionCodes with movedFunction
+        set movedCore to the item at layerIndex in coreFlags
+        replace item at index layerIndex in coreFlags with (the item at other in coreFlags)
+        replace item at index other in coreFlags with movedCore
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+function remove bim type {a 64 bit integer:typeId} layer {integer:layerIndex} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        if ((the length of layers) <= 1) or ((layerIndex < 0) or (layerIndex >= (the length of layers))):
+            free layers
+            return false
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        remove item layerIndex from layers
+        remove item layerIndex from functionCodes
+        remove item layerIndex from coreFlags
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+# A new layer of `materialName`, `thickness` metres, after layer
+# `layerIndex` (at the start when it is -1).
+function insert bim type {a 64 bit integer:typeId} layer of {a string:materialName} {a 64 bit floating-point number:thickness} after {integer:layerIndex} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        if ((the length of layers) = 0) or ((the length of layers) >= (bim layer setting span)):
+            free layers
+            return false
+        set slot to the minimum of (the length of layers) and (the maximum of 0 and (layerIndex + 1))
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        insert (@intrinsic("construct", a bim layer record, materialName, thickness)) into layers at index slot
+        insert 0 into functionCodes at index slot
+        insert 0 into coreFlags at index slot
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+function set bim type {a 64 bit integer:typeId} layer {integer:layerIndex} function to {integer:functionCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        if (((layerIndex < 0) or (layerIndex >= (the length of layers))) or (layerIndex >= (bim layer setting span))) or ((functionCode < 1) or (functionCode > (bim layer function count))):
+            free layers
+            return false
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        replace item at index layerIndex in functionCodes with functionCode
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+# The next function in turn, as a click on the function cell gives it.
+function the bim layer function after {integer:functionCode}:
+    execute:
+        if (functionCode >= bim layer function count) or (functionCode < 1):
+            return bim structure layer function
+        return functionCode + 1
+
+function set bim type {a 64 bit integer:typeId} layer {integer:layerIndex} core to {boolean:inCore} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        if ((layerIndex < 0) or (layerIndex >= (the length of layers))) or (layerIndex >= (bim layer setting span)):
+            free layers
+            return false
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        set flag to 2
+        if inCore:
+            set flag to 1
+        replace item at index layerIndex in coreFlags with flag
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+function set bim type {a 64 bit integer:typeId} layer {integer:layerIndex} material to {a string:materialName} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set layers to the bim layer list of type typeId in modelValue
+        if ((layerIndex < 0) or (layerIndex >= (the length of layers))) or ((the length of materialName) = 0):
+            free layers
+            return false
+        set layerValue to the item at layerIndex in layers
+        set layerValue's material to materialName
+        replace item at index layerIndex in layers with layerValue
+        set functionCodes to the bim stored layer settings from (bim layer function setting) of type typeId in modelValue
+        set coreFlags to the bim stored layer settings from (bim layer core setting) of type typeId in modelValue
+        set changed to rebuild bim type typeId with layers functions functionCodes cores coreFlags in editor
+        free layers
+        free functionCodes
+        free coreFlags
+        return changed
+
+# The thickness of the core of type `typeId`: its core layers together.
+function the bim core thickness of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set layers to the bim layer list of type typeId in modelValue
+        set total to 0.0
+        loop cursor from 0 to the length of layers:
+            if bim layer cursor of type typeId is core in modelValue:
+                set total to total + (the item at cursor in layers)'s thickness
+        free layers
+        return total
+
+local function bim material {a string:candidate} is offered in {a pointer to a list:offered}:
+    execute:
+        loop cursor from 0 to the length of offered:
+            if (the item at cursor in offered) = candidate:
+                return true
+        return false
+
+# The materials the type window offers: the library's materials
+# (`the bim material after`), then every other material the model's types
+# use, each once, at most `limit` of them.
+function the bim material choices of {bim model record:modelValue} at most {integer:limit}:
+    execute:
+        set offered to an empty list of a string
+        set firstName to the bim material after (the string form of "")
+        set materialName to firstName
+        set going to true
+        loop while going:
+            append materialName to offered
+            set materialName to the bim material after materialName
+            set going to (materialName != firstName) and ((the length of offered) < limit)
+        loop typeCursor from 0 to the length of (modelValue's wallTypes's values):
+            set planarType to the item at typeCursor in (modelValue's wallTypes's values)
+            loop layerCursor from 0 to the length of (planarType's layers's values):
+                set candidate to (the item at layerCursor in (planarType's layers's values))'s material
+                if (((bim material candidate is offered in offered) = false) and ((the length of candidate) > 0)) and ((the length of offered) < limit):
+                    append candidate to offered
+        loop linearCursor from 0 to the length of (modelValue's linearTypes's values):
+            set candidate to (the item at linearCursor in (modelValue's linearTypes's values))'s material
+            if (((bim material candidate is offered in offered) = false) and ((the length of candidate) > 0)) and ((the length of offered) < limit):
+                append candidate to offered
+        return offered
