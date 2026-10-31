@@ -75,14 +75,28 @@ Owner of `pattern/`: Nino (see `docs/OWNERS.md`).
 
 ## Questions that block the start
 
-1. Per view, per view type or per project: which property lives where (#56, #57)?
-2. The acceptance of the structural plan (#58).
-3. The grid pattern syntax and where the plus handle adds (#59).
-4. Which conventions the KW and FB codings refer to (#68).
-5. IFC4 or IFC4.3 as the reference schema (#66).
+Answered by the maintainer on 31 October 2026 ([`open-questions.md`](../../open-questions.md),
+round 1, C):
+
+1. **Where each property lives (#56, #57):** project → drawing type → view, each layer falling
+   through to the one below. The properties panel shows per value whether it is inherited (grey)
+   or overridden (bold, with a reset). The view type is native only, in its own property set.
+2. **Acceptance of the structural plan (#58):** the design's §3, plus a comparison with one real
+   structural drawing that the maintainer supplies and that stays outside this repository.
+3. **Grid pattern syntax (#59):** both `4x5400` (also `4*5400`) and `5400 6000 5400`, in
+   millimetres; new lines go in the direction of the end where the plus handle sits. Levels get
+   no plus handle; they are added one at a time.
+4. **KW and FB codings (#68):** parked. #68 can be built without the coding; the coding is a
+   property set to add later.
+5. **Reference schema (#66):** IfcX, taking entity names and property sets from IFC4.3 as far as
+   possible; native-only property sets carry the prefix `OpenAEC_`
+   ([ADR-0010](../../architecture/decisions/0010-ifcx-as-the-reference-schema.md)).
+
+The answers to the per-issue questions (#56–#65, #68–#72) are in the same table and go to each
+issue.
 
 ## Verdict
 
-Provisional: start with A1–A3 and B once questions 1–3 are answered; C and D can follow in
-parallel; E is Nino's to schedule after #30. Missing evidence before any building starts: the
-maintainer's answers to the five questions above.
+A1–A3 and B can be built: questions 1–3 are answered. C and D follow in parallel, with the CRS
+chosen from a shortlist by world location and stored in both WGS-84 and the local system (#65).
+E is Nino's to schedule after #30; #68 starts without its coding, which is parked.

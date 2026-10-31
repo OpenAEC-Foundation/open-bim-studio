@@ -82,6 +82,9 @@ drawing and export subsystems rely on: that the model is always in a valid, expo
   question 6 in the spatial model document. Extent needs only a tiled coordinate architecture;
   streaming needs paging and eviction. **Answer that question before committing to this risk.**
 - **Status:** open
+- **Decision 2026-10-31:** design for unbounded extent and streaming together, so the data model
+  does not rule streaming out; what that fixes now is round 2, question 4 in
+  [`open-questions.md`](open-questions.md)
 
 ### R-15 · Georeferencing degrades on the IFC version people actually use
 IFC4/IFC4x3 support georeferencing natively through `IfcMapConversion` and `IfcProjectedCRS`.
@@ -358,20 +361,26 @@ modelling work.
 must be designed in from the start, not bolted on.
 
 - **Action:** research how existing parametric systems handle the boundary; decide in phase 4.
-- **Status:** open
+- **Status:** decided 2026-10-31 — DynLex is the default scripting language for components,
+  with bridges to Python, Java and other languages; how the bridges are built is open
+  ([`open-questions.md`](open-questions.md), round 2, question 5)
 
 ### R-07 · The free-modelling / semantic-correctness seam is unlocated
 Flexibility and valid IFC output pull against each other. We have not established where the
 boundary sits, and it affects the core data model.
 
 - **Action:** resolve in [`vision/non-goals.md`](vision/non-goals.md) before phase 4.
-- **Status:** open
+- **Status:** decided 2026-10-31 — free geometry is always allowed; without a classification
+  it exports as IfcBuildingElementProxy and the application asks for a class
 
 ### R-08 · Browser support may or may not be a requirement
 It constrains the entire stack. Deciding late is expensive.
 
 - **Action:** explicit decision, recorded as an ADR, before phase 3 spikes are designed.
-- **Status:** open
+- **Status:** decided as a direction 2026-10-31 — the full application in the browser
+  (WASM/WebGPU) is a goal. Its scope (goal or release requirement, renderer path, DynLex target)
+  is open ([`open-questions.md`](open-questions.md), round 2, question 3); the ADR follows that
+  answer
 
 ### R-20 · The DynLex GPU path is argued from source reading, not measured
 [`research/renderers/gpu-paths.md`](research/renderers/gpu-paths.md) recommends a buffer layout —
@@ -425,7 +434,9 @@ LGPL, MPL, and commercial components combined into one product, with possible op
 later. Not yet checked as a whole.
 
 - **Action:** licence compatibility review once the shortlist exists.
-- **Status:** open
+- **Status:** process decided 2026-10-31 — every PR that adds a dependency carries its licence
+  check. The review of what is already in the stack is open
+  ([`open-questions.md`](open-questions.md), round 2, question 12)
 
 ---
 
