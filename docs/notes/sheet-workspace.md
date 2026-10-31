@@ -51,6 +51,37 @@ Viewport copies reference the same model view. They are placements, not copied
 building geometry. Camera changes and drag previews do not edit the document;
 accepted placement/type changes use normal transactions and undo.
 
+## Sheetviews: books of sheets
+
+A sheetview (#135) is a book of sheets, such as a detail book or a set of
+workshop drawings (`bim sheetview record` in `views/sheets/records.dl`, the
+operations in `views/sheets/bim_sheetview.dl`). Its pages are ordinary
+sheets in order, so viewports, dragging views onto a page, tabs and the
+one-sheet exports work on a page unchanged. A page's number is the book's
+prefix and its place, two digits at least (`D-` and the third page give
+`D-03`); adding, moving or removing a page, putting a contents page in front
+or renaming the book renumbers its pages. A number another sheet already has
+is refused, and the change with it. A sheet in no book is a sheetview of one
+page by itself: models from before books load unchanged, and their file has
+no `sheetview` lines.
+
+The project browser shows **Sheetviews**: each book with its page count, its
+pages under it (clicking the book opens its first page), then the sheets in
+no book. On the View tab the group is called **Sheetviews**; next to New
+sheet, the **Sheetview** chooser holds New sheetview, Contents page, PDF book,
+Add page, Page earlier, Page later and Remove page. A page's context menu
+offers the page commands and PDF book. A page's title block says "page 3 of
+10"; a contents page lists the book's other pages with their numbers and
+names. **PDF book** (also under Collaborate → Export → Open sheetview) writes
+every page of the open sheet's book as one multi-page PDF named after the
+book; for a sheet in no book it writes that sheet alone.
+
+Not yet: filling a book from a rule (one page per steel assembly or wall
+panel, #134 and #123) with pinned and unpinned placement, editing a book's
+name and prefix in the properties panel (the model operation exists:
+`set bim sheetview … name … prefix …`), dragging pages to reorder them in the
+browser, and a book's pages folded away in the browser.
+
 ## Retained rendering
 
 Paper, sheet framing, and each viewport have independent GPU canvas buffers.
@@ -106,6 +137,9 @@ previously working compiler; the upstream native compiler is not promoted.
 
 Commands **2270–2281** are reserved for images and sheet workspace operations
 (2280 activates the selected viewport, 2281 opens its view).
+Commands **2282–2288** are the sheetview's: 2282 New sheetview, 2283 Add page,
+2284 Page earlier, 2285 Page later, 2286 Remove page, 2287 Contents page and
+2288 PDF book (the window's).
 Sheet viewport title settings use **2400600 + viewport index**, stored on the
 sheet. Index shifts on delete and copy preserve this metadata. No model-format
 version bump is needed.
