@@ -1,0 +1,321 @@
+# SPDX-License-Identifier: MPL-2.0
+# The sun of the 3D view's shading and shadows: either a fixed angle
+# (azimuth and altitude, for presentation) or the sun's position at a place
+# and a time, by the NOAA solar position equations (the NOAA Global
+# Monitoring Laboratory's solar calculator, after Meeus, "Astronomical
+# Algorithms": https://gml.noaa.gov/grad/solcalc/calcdetails.html). The
+# position leaves atmospheric refraction out (under 0.6 degrees, and only
+# near the horizon). Angles are in degrees: the azimuth from north, turning
+# east; the altitude above the horizon. The model's x points east, y north.
+import kernel/core/core.dl
+import lib/std.dl
+import lib/string.dl
+import lib/list.dl
+
+# ---------------------------------------------------------------- angles
+
+local function the bim sun radians of {a 64 bit floating-point number:degrees}:
+    execute:
+        return degrees * (3.141592653589793 / 180.0)
+
+local function the bim sun degrees of {a 64 bit floating-point number:radians}:
+    execute:
+        return radians * (180.0 / 3.141592653589793)
+
+local function the bim sun arc sine of {a 64 bit floating-point number:value}:
+    execute:
+        return @intrinsic("call", "libc", "asin", a 64 bit floating-point number, value clamped between -1.0 and 1.0)
+
+local function the bim sun arc cosine of {a 64 bit floating-point number:value}:
+    execute:
+        return @intrinsic("call", "libc", "acos", a 64 bit floating-point number, value clamped between -1.0 and 1.0)
+
+local function the bim sun tangent of {a 64 bit floating-point number:value}:
+    execute:
+        return @intrinsic("call", "libc", "tan", a 64 bit floating-point number, value)
+
+# `value` brought into [0, `period`).
+local function the bim sun wrap of {a 64 bit floating-point number:value} within {a 64 bit floating-point number:period}:
+    execute:
+        return value - (period * (the floor of (value / period)))
+
+# The unit direction toward a sun at `azimuth` and `altitude` degrees.
+function the bim direction toward the sun at azimuth {a 64 bit floating-point number:turnDegrees} and altitude {a 64 bit floating-point number:riseDegrees}:
+    execute:
+        set turn to the bim sun radians of turnDegrees
+        set rise to the bim sun radians of riseDegrees
+        return a cad vector3 with x ((the cosine of rise) * (the sine of turn)), y ((the cosine of rise) * (the cosine of turn)) and z (the sine of rise)
+
+# ---------------------------------------------------------------- position
+
+# The Julian day at `minutes` past midnight on day `dayValue` of month
+# `monthValue` in `yearValue`, by a clock
+# `utcOffset` hours ahead of UTC (Gregorian calendar).
+function the bim julian day for date {integer:dayValue} month {integer:monthValue} year {integer:yearValue} at {a 64 bit floating-point number:minutes} offset {a 64 bit floating-point number:utcOffset}:
+    execute:
+        set shift to (14 - monthValue) / 12
+        set shiftedYear to (yearValue + 4800) - shift
+        set shiftedMonth to (monthValue + (12 * shift)) - 3
+        set dayNumber to ((((dayValue + (((153 * shiftedMonth) + 2) / 5)) + (365 * shiftedYear)) + (shiftedYear / 4)) - (shiftedYear / 100)) + ((shiftedYear / 400) - 32045)
+        return (((dayNumber as a 64 bit floating-point number) - 0.5) + (minutes / 1440.0)) - (utcOffset / 24.0)
+
+# The sun's azimuth (x) and altitude (y), in degrees, seen from `latitude`
+# and `longitude` (east positive) at `minutes` past midnight on `day`
+# `month` `year` by a clock `utcOffset` hours ahead of UTC.
+function the bim sun position at latitude {a 64 bit floating-point number:northDegrees} longitude {a 64 bit floating-point number:eastDegrees} for date {integer:dayValue} month {integer:monthValue} year {integer:yearValue} at {a 64 bit floating-point number:minutes} offset {a 64 bit floating-point number:utcOffset}:
+    execute:
+        set julian to the bim julian day for date dayValue month monthValue year yearValue at minutes offset utcOffset
+        set century to (julian - 2451545.0) / 36525.0
+        set meanLongitude to the bim sun wrap of (280.46646 + (century * (36000.76983 + (century * 0.0003032)))) within 360.0
+        set meanAnomaly to 357.52911 + (century * (35999.05029 - (0.0001537 * century)))
+        set eccentricity to 0.016708634 - (century * (0.000042037 + (0.0000001267 * century)))
+        set anomaly to the bim sun radians of meanAnomaly
+        set centre to (((the sine of anomaly) * (1.914602 - (century * (0.004817 + (0.000014 * century))))) + ((the sine of (2.0 * anomaly)) * (0.019993 - (0.000101 * century)))) + ((the sine of (3.0 * anomaly)) * 0.000289)
+        set node to the bim sun radians of (125.04 - (1934.136 * century))
+        set apparentLongitude to ((meanLongitude + centre) - 0.00569) - (0.00478 * (the sine of node))
+        set meanObliquity to 23.0 + ((26.0 + ((21.448 - (century * (46.815 + (century * (0.00059 - (century * 0.001813)))))) / 60.0)) / 60.0)
+        set obliquity to the bim sun radians of (meanObliquity + (0.00256 * (the cosine of node)))
+        set declination to the bim sun arc sine of ((the sine of obliquity) * (the sine of (the bim sun radians of apparentLongitude)))
+        set halfTangent to the bim sun tangent of (obliquity / 2.0)
+        set variation to halfTangent * halfTangent
+        set longitudeRadians to the bim sun radians of meanLongitude
+        set equation to ((variation * (the sine of (2.0 * longitudeRadians))) - ((2.0 * eccentricity) * (the sine of anomaly))) + ((((4.0 * eccentricity) * variation) * (the sine of anomaly)) * (the cosine of (2.0 * longitudeRadians)))
+        set equation to (equation - ((0.5 * (variation * variation)) * (the sine of (4.0 * longitudeRadians)))) - ((1.25 * (eccentricity * eccentricity)) * (the sine of (2.0 * anomaly)))
+        set equationMinutes to 4.0 * (the bim sun degrees of equation)
+        set solarMinutes to the bim sun wrap of (((minutes + equationMinutes) + (4.0 * eastDegrees)) - (60.0 * utcOffset)) within 1440.0
+        set hourAngle to (solarMinutes / 4.0) + 180.0
+        if (solarMinutes / 4.0) >= 0.0:
+            set hourAngle to (solarMinutes / 4.0) - 180.0
+        set place to the bim sun radians of northDegrees
+        set zenith to the bim sun arc cosine of (((the sine of place) * (the sine of declination)) + (((the cosine of place) * (the cosine of declination)) * (the cosine of (the bim sun radians of hourAngle))))
+        set altitude to 90.0 - (the bim sun degrees of zenith)
+        set across to (the cosine of place) * (the sine of zenith)
+        set azimuth to 180.0
+        if (the absolute value of across) > 0.000000001:
+            set turn to the bim sun degrees of (the bim sun arc cosine of ((((the sine of place) * (the cosine of zenith)) - (the sine of declination)) / across))
+            if hourAngle > 0.0:
+                set azimuth to the bim sun wrap of (turn + 180.0) within 360.0
+            else:
+                set azimuth to the bim sun wrap of (540.0 - turn) within 360.0
+        return a cad vector2 with x azimuth and y altitude
+
+# ---------------------------------------------------------------- setting
+
+# How the 3D view places its sun: `byLocation` false, at the fixed
+# `azimuth` and `altitude`; true, where it stands at `latitude` and
+# `longitude` on `day` `month` `year` at `minutes` past midnight by a clock
+# `utcOffset` hours ahead of UTC.
+class:
+    patterns:
+        [a|] bim sun setting record
+    members:
+        byLocation as a boolean
+        azimuth as a 64 bit floating-point number
+        altitude as a 64 bit floating-point number
+        latitude as a 64 bit floating-point number
+        longitude as a 64 bit floating-point number
+        year as an integer
+        month as an integer
+        day as an integer
+        minutes as an integer
+        utcOffset as a 64 bit floating-point number
+
+# The sun the 3D view starts with: fixed, from the south-west and 38.5
+# degrees high (the direction it always had). The place and time offered
+# for the other mode, until the project carries its own location: the
+# middle of the Netherlands on midsummer's day, two in the afternoon,
+# Central European Summer Time.
+function the bim default sun setting:
+    execute:
+        return @intrinsic("construct", a bim sun setting record, false, 221.9, 38.5, 52.1, 5.1, 2026, 6, 21, 840, 2.0)
+
+# The sun's azimuth (x) and altitude (y) of `setting`.
+function the bim sun angles of {bim sun setting record:setting}:
+    execute:
+        if setting's byLocation:
+            return the bim sun position at latitude setting's latitude longitude setting's longitude for date setting's day month setting's month year setting's year at (setting's minutes as a 64 bit floating-point number) offset setting's utcOffset
+        return a cad vector2 with x setting's azimuth and y setting's altitude
+
+# Whether the sun of `setting` stands above the horizon (high enough to
+# cast a shadow: one degree).
+function the bim sun of {bim sun setting record:setting} is up:
+    execute:
+        return ((the bim sun angles of setting)'s y) >= 1.0
+
+# The unit direction toward the sun of `setting`, for the shading and the
+# shadows; a sun under the horizon lights from 5 degrees up (and casts no
+# shadow: `the bim sun of … is up`).
+function the bim direction toward the sun of {bim sun setting record:setting}:
+    execute:
+        set angles to the bim sun angles of setting
+        return the bim direction toward the sun at azimuth angles's x and altitude (the maximum of 5.0 and angles's y)
+
+# The days in `month` of `year`.
+function the bim days in month {integer:monthNumber} of {integer:yearNumber}:
+    execute:
+        if monthNumber = 2:
+            if ((the remainder of yearNumber divided by 4) = 0) and (((the remainder of yearNumber divided by 100) != 0) or ((the remainder of yearNumber divided by 400) = 0)):
+                return 29
+            return 28
+        if (((monthNumber = 4) or (monthNumber = 6)) or (monthNumber = 9)) or (monthNumber = 11):
+            return 30
+        return 31
+
+# The setting's fields a step changes (`step bim sun …`): the fixed
+# azimuth (15 degrees) and altitude (5), the latitude and longitude (1
+# degree), the month, the day, the time (30 minutes) and the clock's offset
+# from UTC (an hour).
+function bim sun azimuth field:
+    replacement:
+        0
+function bim sun altitude field:
+    replacement:
+        1
+function bim sun latitude field:
+    replacement:
+        2
+function bim sun longitude field:
+    replacement:
+        3
+function bim sun month field:
+    replacement:
+        4
+function bim sun day field:
+    replacement:
+        5
+function bim sun time field:
+    replacement:
+        6
+function bim sun offset field:
+    replacement:
+        7
+
+# `setting` with field `fieldCode` one step up (`upward`) or down: the angles
+# wrap or stop at their ends, the date rolls over the months and the time
+# over the day.
+function step bim sun {integer:fieldCode} up {boolean:upward} in {a pointer to a bim sun setting record:setting}:
+    execute:
+        set sign to -1.0
+        set count to -1
+        if upward:
+            set sign to 1.0
+            set count to 1
+        if fieldCode = bim sun azimuth field:
+            set setting's azimuth to the bim sun wrap of (setting's azimuth + (15.0 * sign)) within 360.0
+        if fieldCode = bim sun altitude field:
+            set setting's altitude to (setting's altitude + (5.0 * sign)) clamped between 1.0 and 90.0
+        if fieldCode = bim sun latitude field:
+            set setting's latitude to (setting's latitude + sign) clamped between -89.0 and 89.0
+        if fieldCode = bim sun longitude field:
+            set setting's longitude to (the bim sun wrap of ((setting's longitude + sign) + 180.0) within 360.0) - 180.0
+        if fieldCode = bim sun month field:
+            set setting's month to (the remainder of ((setting's month - 1) + (count + 12)) divided by 12) + 1
+            set setting's day to the minimum of setting's day and (the bim days in month setting's month of setting's year)
+        if fieldCode = bim sun day field:
+            set setting's day to setting's day + count
+            if setting's day < 1:
+                set setting's month to (the remainder of ((setting's month - 1) + 11) divided by 12) + 1
+                set setting's day to the bim days in month setting's month of setting's year
+            if setting's day > (the bim days in month setting's month of setting's year):
+                set setting's month to (the remainder of setting's month divided by 12) + 1
+                set setting's day to 1
+        if fieldCode = bim sun time field:
+            set setting's minutes to the remainder of ((setting's minutes + (30 * count)) + 1440) divided by 1440
+        if fieldCode = bim sun offset field:
+            set setting's utcOffset to (setting's utcOffset + sign) clamped between -12.0 and 14.0
+
+# ---------------------------------------------------------------- text
+
+# `value` rounded to one decimal, "-3.5".
+function the bim sun decimal text of {a 64 bit floating-point number:value}:
+    execute:
+        set tenths to (the floor of (((the absolute value of value) * 10.0) + 0.5)) as an integer
+        set shown to ((the string form of (tenths / 10)) + (the string form of ".")) + (the string form of (the remainder of tenths divided by 10))
+        if (value < 0.0) and (tenths > 0):
+            return (the string form of "-") + shown
+        return shown
+
+local function the bim sun two digits of {integer:value}:
+    execute:
+        if value < 10:
+            return (the string form of "0") + (the string form of value)
+        return the string form of value
+
+local function the bim sun month name of {integer:monthNumber}:
+    execute:
+        set names to an empty list of a string
+        append (the string form of "January") to names
+        append (the string form of "February") to names
+        append (the string form of "March") to names
+        append (the string form of "April") to names
+        append (the string form of "May") to names
+        append (the string form of "June") to names
+        append (the string form of "July") to names
+        append (the string form of "August") to names
+        append (the string form of "September") to names
+        append (the string form of "October") to names
+        append (the string form of "November") to names
+        append (the string form of "December") to names
+        set chosen to the item at ((monthNumber - 1) clamped between 0 and 11) in names
+        free names
+        return chosen
+
+# The value field `fieldCode` of `setting` shows: "221.9°" is written "221.9
+# deg", the atlas holding no degree sign.
+function the bim sun text of field {integer:fieldCode} in {bim sun setting record:setting}:
+    execute:
+        if fieldCode = bim sun azimuth field:
+            return (the bim sun decimal text of setting's azimuth) + (the string form of " deg")
+        if fieldCode = bim sun altitude field:
+            return (the bim sun decimal text of setting's altitude) + (the string form of " deg")
+        if fieldCode = bim sun latitude field:
+            if setting's latitude < 0.0:
+                return (the bim sun decimal text of (0.0 - setting's latitude)) + (the string form of " S")
+            return (the bim sun decimal text of setting's latitude) + (the string form of " N")
+        if fieldCode = bim sun longitude field:
+            if setting's longitude < 0.0:
+                return (the bim sun decimal text of (0.0 - setting's longitude)) + (the string form of " W")
+            return (the bim sun decimal text of setting's longitude) + (the string form of " E")
+        if fieldCode = bim sun month field:
+            return the bim sun month name of setting's month
+        if fieldCode = bim sun day field:
+            return the string form of setting's day
+        if fieldCode = bim sun time field:
+            return ((the bim sun two digits of (setting's minutes / 60)) + (the string form of ":")) + (the bim sun two digits of (the remainder of setting's minutes divided by 60))
+        set hours to setting's utcOffset
+        if hours < 0.0:
+            return (the string form of "UTC") + (the bim sun decimal text of hours)
+        return (the string form of "UTC+") + (the bim sun decimal text of hours)
+
+# The sun's position as `setting` places it, for the panel's foot:
+# "Azimuth 221.9 deg, altitude 38.5 deg" (whether it is up is `the bim sun
+# of … is up`).
+function the bim sun summary of {bim sun setting record:setting}:
+    execute:
+        set angles to the bim sun angles of setting
+        return ((the string form of "Azimuth ") + (the bim sun decimal text of angles's x)) + ((the string form of " deg, altitude ") + ((the bim sun decimal text of angles's y) + (the string form of " deg")))
+
+# A key that changes when the sun's direction does, for the shadows' upload.
+function the bim sun key of {bim sun setting record:setting}:
+    execute:
+        set angles to the bim sun angles of setting
+        return ((the bim sun decimal text of angles's x) + (the string form of "/")) + (the bim sun decimal text of angles's y)
+
+# The name of field `fieldCode`, for the panel's rows.
+function the bim sun label of field {integer:fieldCode}:
+    execute:
+        if fieldCode = bim sun azimuth field:
+            return the string form of "Azimuth"
+        if fieldCode = bim sun altitude field:
+            return the string form of "Altitude"
+        if fieldCode = bim sun latitude field:
+            return the string form of "Latitude"
+        if fieldCode = bim sun longitude field:
+            return the string form of "Longitude"
+        if fieldCode = bim sun month field:
+            return the string form of "Month"
+        if fieldCode = bim sun day field:
+            return the string form of "Day"
+        if fieldCode = bim sun time field:
+            return the string form of "Time"
+        return the string form of "Clock"
