@@ -1,0 +1,424 @@
+# SPDX-License-Identifier: MPL-2.0
+# Sweep and swept blend as the kernel API offers them (issue #115): a closed
+# profile swept along an open planar chain of lines and arcs, and a solid
+# blended through one profile at every vertex of an open planar chain of
+# lines. Both build on the ported operations and change none of them:
+# `the cad planar sweep` (extrusions and revolutions joined), `the cad
+# mitered rectangular sweep`, and the ruled `the cad loft through`.
+#
+# Frames. At the path's start the profile frame has its origin on the path,
+# x axis = normal × tangent (in the path plane, to the left of the direction
+# of travel seen from the normal's side), y axis = the path plane's normal,
+# so the frame's own normal is the start tangent. The same frame at the end,
+# with the last tangent. At an inner vertex the frame lies in the bisector
+# (miter) plane, whose normal is the sum of the incoming and outgoing unit
+# tangents; its x axis is stretched by 1 / cos(half the turn), so a profile
+# placed there projects along either adjacent segment onto exactly the
+# profile placed perpendicular to that segment. A constant profile therefore
+# gives the mitered sweep, and both segments at a vertex share one section,
+# which leaves no gap.
+import kernel/brep/brep_sweep_planar.dl
+import kernel/brep/brep_sweep_miter.dl
+import kernel/brep/brep_loft.dl
+import kernel/brep/brep_thicken_multiface_planar.dl
+import kernel/brep/brep_bounds.dl
+import kernel/planar/area2.dl
+
+# Why a sweep or a swept blend was refused; 0 when it was built. The numbers
+# cross the kernel seam: kernel/api/kernel.dl names them `kernel sweep snag …`.
+function cad swept snag none:
+    replacement:
+        0
+# The path is empty, not one connected open chain, closed, or has a
+# zero-length piece.
+function cad swept snag path chain:
+    replacement:
+        1
+# The path plane has no normal.
+function cad swept snag path plane:
+    replacement:
+        2
+# A path piece the operation does not take: the sweep takes lines and arcs,
+# the swept blend lines.
+function cad swept snag path curve:
+    replacement:
+        3
+# A profile is not one closed chain.
+function cad swept snag open profile:
+    replacement:
+        4
+# A profile encloses no area, or a lofted profile has fewer than three curves.
+function cad swept snag degenerate profile:
+    replacement:
+        5
+# The sweep's profile plane is not perpendicular to the path at its start, or
+# does not pass through the path's start point.
+function cad swept snag profile placement:
+    replacement:
+        6
+# The swept blend has not one profile per path vertex.
+function cad swept snag section count:
+    replacement:
+        7
+# The swept blend's profiles differ in curve count or in their number of arcs.
+function cad swept snag profile mismatch:
+    replacement:
+        8
+# The path turns back on itself, or a segment is too short for the profile
+# at its corners (the mitered sections would overlap).
+function cad swept snag sharp corner:
+    replacement:
+        9
+# The ported construction refused the placed sections.
+function cad swept snag construction:
+    replacement:
+        10
+
+class:
+    patterns:
+        [a|] cad swept result
+    members:
+        valid as a boolean
+        snag as an integer
+        value as a cad body
+
+local function a cad swept refusal {integer:code}:
+    execute:
+        return @intrinsic("construct", a cad swept result, false, code, a new (the type of (an empty cad body)))
+
+local function the cad swept outcome of {cad body result:made}:
+    execute:
+        if made's valid = false:
+            return a cad swept refusal (cad swept snag construction)
+        return @intrinsic("construct", a cad swept result, true, cad swept snag none, made's value)
+
+# The path's vertices in chain order, the unit tangent and length of every
+# segment, and the frame x axis at every vertex (stretched at inner ones).
+class:
+    patterns:
+        [a|] cad blend path frames
+    members:
+        valid as a boolean
+        snag as an integer
+        upward as a cad vector3
+        corners as the type of (a cad topology list of a cad vector3)
+        acrosses as the type of (a cad topology list of a cad vector3)
+        tangents as the type of (a cad topology list of a cad vector3)
+        spans as the type of (a cad topology list of a 64 bit floating-point number)
+        tolerance as a 64 bit floating-point number
+
+local function cad blend frames refused with {integer:code}:
+    execute:
+        return @intrinsic("construct", a cad blend path frames, false, code, the cad zero vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a 64 bit floating-point number, 0.0)
+
+local function the cad blend frames of {a pointer to a list:path} on {cad plane:pathPlane}:
+    execute:
+        if (the length of path) = 0:
+            return cad blend frames refused with (cad swept snag path chain)
+        loop pieceIndex from 0 to the length of path:
+            if ((the item at pieceIndex in path)'s kind) != 0:
+                return cad blend frames refused with (cad swept snag path curve)
+        set senses to the cad path senses of path
+        if senses's valid = false:
+            return cad blend frames refused with (cad swept snag path chain)
+        set planeNormal to the cad normal of pathPlane
+        if planeNormal's valid = false:
+            return cad blend frames refused with (cad swept snag path plane)
+        set upward to planeNormal's value
+        set flatCorners to a cad topology list of a cad vector2
+        loop pieceIndex from 0 to the length of path:
+            set piece to the item at pieceIndex in path
+            set first to piece's line's start
+            set last to piece's line's end
+            if (the item at pieceIndex in (senses's value's values)) = false:
+                set first to piece's line's end
+                set last to piece's line's start
+            if pieceIndex = 0:
+                append first to (flatCorners's values)
+            append last to (flatCorners's values)
+        if (the item at 0 in (flatCorners's values)) cad profile meets (the last item of (flatCorners's values)):
+            return cad blend frames refused with (cad swept snag path chain)
+        set corners to a cad topology list of a cad vector3
+        set extent to 1.0
+        loop cornerIndex from 0 to the length of (flatCorners's values):
+            set point to the cad point at (the item at cornerIndex in (flatCorners's values)) on pathPlane
+            set extent to the maximum of extent and (the absolute value of (point's x))
+            set extent to the maximum of extent and (the absolute value of (point's y))
+            set extent to the maximum of extent and (the absolute value of (point's z))
+            append point to (corners's values)
+        set tolerance to extent * 1e-9
+        set tangents to a cad topology list of a cad vector3
+        set spans to a cad topology list of a 64 bit floating-point number
+        loop segmentIndex from 0 to the length of path:
+            set delta to the cad difference of (the item at (segmentIndex + 1) in (corners's values)) and (the item at segmentIndex in (corners's values))
+            set spanLength to the cad length of delta
+            if spanLength <= tolerance:
+                return cad blend frames refused with (cad swept snag path chain)
+            append (delta cad divided by spanLength) to (tangents's values)
+            append spanLength to (spans's values)
+        set acrosses to a cad topology list of a cad vector3
+        set lastSegment to (the length of path) - 1
+        loop cornerIndex from 0 to (the length of (corners's values)):
+            set bisector to the cad zero vector3
+            set cosine to 1.0
+            if cornerIndex = 0:
+                set bisector to the item at 0 in (tangents's values)
+            else if cornerIndex > lastSegment:
+                set bisector to the item at lastSegment in (tangents's values)
+            else:
+                set incoming to the item at (cornerIndex - 1) in (tangents's values)
+                set outgoing to the item at cornerIndex in (tangents's values)
+                set halfway to the cad normalization of (the cad sum of incoming and outgoing)
+                if halfway's valid = false:
+                    return cad blend frames refused with (cad swept snag sharp corner)
+                set bisector to halfway's value
+                set cosine to the cad dot of outgoing and bisector
+            # A turn beyond about 179.9 degrees stretches the section without bound.
+            if cosine <= 0.001:
+                return cad blend frames refused with (cad swept snag sharp corner)
+            set leftward to the cad normalization of (the cad cross of upward and bisector)
+            if leftward's valid = false:
+                return cad blend frames refused with (cad swept snag path plane)
+            append ((leftward's value) scaled by (1.0 / cosine)) to (acrosses's values)
+        return @intrinsic("construct", a cad blend path frames, true, cad swept snag none, upward, corners, acrosses, tangents, spans, tolerance)
+
+# The profile frame at the path's start (see the header): origin on the path,
+# x axis normal × tangent, y axis the path plane's normal. The path is a
+# connected open chain of lines and arcs; not valid otherwise.
+function the cad blend start frame of {a pointer to a list:path} on {cad plane:pathPlane}:
+    execute:
+        set refused to @intrinsic("construct", a cad plane result, false, the cad xy plane)
+        if (the length of path) = 0:
+            return refused
+        set senses to the cad path senses of path
+        if senses's valid = false:
+            return refused
+        set planeNormal to the cad normal of pathPlane
+        if planeNormal's valid = false:
+            return refused
+        set piece to the item at 0 in path
+        set forward to the item at 0 in (senses's value's values)
+        set parameter to 0.0
+        if forward = false:
+            set parameter to 1.0
+        set heading to the cad vector at (the cad tangent of piece at parameter) on pathPlane
+        if forward = false:
+            set heading to the cad negative of heading
+        set origin to the cad point at (the cad point on piece at parameter) on pathPlane
+        set leftward to the cad normalization of (the cad cross of (planeNormal's value) and heading)
+        if leftward's valid = false:
+            return refused
+        set framePlane to a cad plane with origin origin, x axis (leftward's value) and y axis (planeNormal's value)
+        return @intrinsic("construct", a cad plane result, true, framePlane)
+
+# The signed area a closed profile encloses in its own coordinates.
+local function the cad blend area of {a pointer to a list:profile} with {cad profile senses result:senses}:
+    execute:
+        set total to 0.0
+        loop pieceIndex from 0 to the length of profile:
+            set share to the cad enclosed area of (the item at pieceIndex in profile)
+            if (the item at pieceIndex in (senses's value's values)) = false:
+                set share to share * -1.0
+            set total to total + share
+        return total
+
+# The lowest and highest coordinate of the profile's points along `across`
+# (a unit vector) measured from `origin`, sampled 32 times per curve.
+local function the cad blend range of {a pointer to a list:profile} on {cad plane:profilePlane} from {cad vector3:origin} toward {cad vector3:across}:
+    execute:
+        set lowest to 1.0 / 0.0
+        set highest to the negative of lowest
+        loop pieceIndex from 0 to the length of profile:
+            set piece to the item at pieceIndex in profile
+            loop sample from 0 to 33:
+                set point to the cad point at (the cad point on piece at ((sample as a 64 bit floating-point number) / 32.0)) on profilePlane
+                set measure to the cad dot of (the cad difference of point and origin) and across
+                set lowest to the minimum of lowest and measure
+                set highest to the maximum of highest and measure
+        return a cad vector2 with x lowest and y highest
+
+# The solid through `profiles` (one closed chain of `cad curve2` per path
+# vertex, in the coordinates of `basePlane`, which lies in the start frame)
+# placed at the vertices of `frames`. Every section is `basePlane` carried
+# from the start frame to the vertex frame; the ruled loft joins them.
+local function the cad blend loft of {a pointer to a list:profiles} from {cad plane:basePlane} with {cad blend path frames:frames}:
+    execute:
+        set sectionTotal to the length of (frames's corners's values)
+        if (the length of profiles) != sectionTotal:
+            return a cad swept refusal (cad swept snag section count)
+        set startCorner to the item at 0 in (frames's corners's values)
+        set startAcross to the item at 0 in (frames's acrosses's values)
+        set upward to frames's upward
+        set curveTotal to 0
+        set arcTotal to 0
+        set ranges to a cad topology list of a cad vector2
+        loop sectionIndex from 0 to sectionTotal:
+            set profile to the item at sectionIndex in profiles
+            set senses to the cad profile senses of profile
+            if senses's valid = false:
+                return a cad swept refusal (cad swept snag open profile)
+            if (the length of profile) < 3:
+                return a cad swept refusal (cad swept snag degenerate profile)
+            set range to the cad blend range of profile on basePlane from startCorner toward startAcross
+            set breadth to (range's y) - (range's x)
+            set enclosed to the cad blend area of profile with senses
+            if ((the absolute value of enclosed) <= ((breadth * breadth) * 1e-12)) or (breadth <= frames's tolerance):
+                return a cad swept refusal (cad swept snag degenerate profile)
+            set arcs to 0
+            loop pieceIndex from 0 to the length of profile:
+                if ((the item at pieceIndex in profile)'s kind) != 0:
+                    set arcs to arcs + 1
+            if sectionIndex = 0:
+                set curveTotal to the length of profile
+                set arcTotal to arcs
+            else if ((the length of profile) != curveTotal) or (arcs != arcTotal):
+                return a cad swept refusal (cad swept snag profile mismatch)
+            append range to (ranges's values)
+        # Every point of a segment's end section must lie ahead of every
+        # point of its start section along the segment.
+        loop segmentIndex from 0 to (sectionTotal - 1):
+            set heading to the item at segmentIndex in (frames's tangents's values)
+            set startSlope to the cad dot of (the item at segmentIndex in (frames's acrosses's values)) and heading
+            set endSlope to the cad dot of (the item at (segmentIndex + 1) in (frames's acrosses's values)) and heading
+            set startRange to the item at segmentIndex in (ranges's values)
+            set endRange to the item at (segmentIndex + 1) in (ranges's values)
+            set startAhead to the maximum of ((startRange's x) * startSlope) and ((startRange's y) * startSlope)
+            set endBehind to the minimum of ((endRange's x) * endSlope) and ((endRange's y) * endSlope)
+            if ((the item at segmentIndex in (frames's spans's values)) + (endBehind - startAhead)) <= frames's tolerance:
+                return a cad swept refusal (cad swept snag sharp corner)
+        # The base plane in start-frame coordinates (its tangent component is
+        # zero: it lies in the start frame).
+        set offset to the cad difference of (basePlane's origin) and startCorner
+        set originAcross to the cad dot of offset and startAcross
+        set originUp to the cad dot of offset and upward
+        set xAcross to the cad dot of (basePlane's xAxis) and startAcross
+        set xUp to the cad dot of (basePlane's xAxis) and upward
+        set yAcross to the cad dot of (basePlane's yAxis) and startAcross
+        set yUp to the cad dot of (basePlane's yAxis) and upward
+        set sections to an empty list of a cad loft section
+        loop sectionIndex from 0 to sectionTotal:
+            set corner to the item at sectionIndex in (frames's corners's values)
+            set across to the item at sectionIndex in (frames's acrosses's values)
+            set placedOrigin to the cad sum of corner and (the cad sum of (across scaled by originAcross) and (upward scaled by originUp))
+            set placedX to the cad sum of (across scaled by xAcross) and (upward scaled by xUp)
+            set placedY to the cad sum of (across scaled by yAcross) and (upward scaled by yUp)
+            set placedPlane to a cad plane with origin placedOrigin, x axis placedX and y axis placedY
+            set placedProfile to the item at sectionIndex in profiles
+            append (a cad loft section on placedPlane with profile placedProfile) to sections
+        set made to the cad loft through sections
+        if made's valid or (sectionTotal < 3):
+            free sections
+            return the cad swept outcome of made
+        # The loft through all sections orients curved bands and end caps by
+        # the chord from the first to the last section; a path that turns
+        # away from its chord is lofted per segment and the segments are
+        # joined on their shared planar section.
+        set joined to no cad body
+        loop segmentIndex from 0 to (sectionTotal - 1):
+            set pair to a list containing (the item at segmentIndex in sections)
+            append (the item at (segmentIndex + 1) in sections) to pair
+            set band to the cad loft through pair
+            free pair
+            if band's valid = false:
+                free sections
+                return a cad swept refusal (cad swept snag construction)
+            if segmentIndex = 0:
+                set joined to band
+            else:
+                set toleranceBodies to a list containing (joined's value)
+                append (band's value) to toleranceBodies
+                set tolerance to the cad operation tolerance of toleranceBodies
+                free toleranceBodies
+                set joined to the cad planar pair join of (joined's value) and (band's value) within tolerance
+                if joined's valid = false:
+                    free sections
+                    return a cad swept refusal (cad swept snag construction)
+        free sections
+        return the cad swept outcome of joined
+
+# The swept blend: `profiles` holds one closed chain of `cad curve2` per
+# vertex of `path` (an open chain of lines in `pathPlane`), each in the
+# profile frame at its vertex (see the header): x across the path, y along
+# the path plane's normal. Two profiles on one line give the classic
+# two-profile blend; more profiles blend segment by segment, every segment
+# ruled between the sections at its ends. The profiles have the same number
+# of curves and of arcs; the ruled loft pairs their curves.
+function the cad swept blend of {a pointer to a list:profiles} along {a pointer to a list:path} on {cad plane:pathPlane}:
+    execute:
+        set frames to the cad blend frames of path on pathPlane
+        if frames's valid = false:
+            return a cad swept refusal (frames's snag)
+        set startFrame to a cad plane with origin (the item at 0 in (frames's corners's values)), x axis (the item at 0 in (frames's acrosses's values)) and y axis (frames's upward)
+        return the cad blend loft of profiles from startFrame with frames
+
+# The sweep: `profile` is a closed chain of `cad curve2` on `profilePlane`,
+# which is perpendicular to the path at its start and passes through the
+# path's start point (`the cad blend start frame` is such a plane); `path` is
+# an open chain of lines and arcs in `pathPlane`. A path of lines is mitered
+# at every corner: rectangles by the ported mitered sweep, other profiles by
+# the ruled loft through the profile carried to every vertex. A path with
+# arcs is the ported planar sweep: an extrusion per line, a revolution per
+# arc, joined.
+function the cad checked sweep of {a pointer to a list:profile} on {cad plane:profilePlane} following {a pointer to a list:path} on {cad plane:pathPlane}:
+    execute:
+        if (the length of path) = 0:
+            return a cad swept refusal (cad swept snag path chain)
+        set straight to true
+        loop pieceIndex from 0 to the length of path:
+            set kind to (the item at pieceIndex in path)'s kind
+            if kind = 2:
+                set straight to false
+            else if kind != 0:
+                return a cad swept refusal (cad swept snag path curve)
+        set senses to the cad path senses of path
+        if senses's valid = false:
+            return a cad swept refusal (cad swept snag path chain)
+        set lastIndex to (the length of path) - 1
+        set lastParameter to 1.0
+        if (the item at lastIndex in (senses's value's values)) = false:
+            set lastParameter to 0.0
+        set firstParameter to 0.0
+        if (the item at 0 in (senses's value's values)) = false:
+            set firstParameter to 1.0
+        if (the cad point on (the item at 0 in path) at firstParameter) cad profile meets (the cad point on (the item at lastIndex in path) at lastParameter):
+            return a cad swept refusal (cad swept snag path chain)
+        if (the cad normal of pathPlane)'s valid = false:
+            return a cad swept refusal (cad swept snag path plane)
+        set startFrame to the cad blend start frame of path on pathPlane
+        if startFrame's valid = false:
+            return a cad swept refusal (cad swept snag path chain)
+        set profileSenses to the cad profile senses of profile
+        if profileSenses's valid = false:
+            return a cad swept refusal (cad swept snag open profile)
+        if (the absolute value of (the cad blend area of profile with profileSenses)) <= 1e-18:
+            return a cad swept refusal (cad swept snag degenerate profile)
+        set profileNormal to the cad normal of profilePlane
+        set startNormal to the cad normal of (startFrame's value)
+        if (profileNormal's valid = false) or (startNormal's valid = false):
+            return a cad swept refusal (cad swept snag profile placement)
+        if (the absolute value of (the cad dot of (profileNormal's value) and (startNormal's value))) < (1.0 - 1e-9):
+            return a cad swept refusal (cad swept snag profile placement)
+        set startPoint to startFrame's value's origin
+        set extent to the maximum of 1.0 and (the cad length of startPoint)
+        set extent to the maximum of extent and (the cad length of (profilePlane's origin))
+        if (the absolute value of (the cad dot of (the cad difference of (profilePlane's origin) and startPoint) and (profileNormal's value))) > (extent * 1e-9):
+            return a cad swept refusal (cad swept snag profile placement)
+        if straight and ((the length of path) >= 2):
+            set mitered to the cad mitered rectangular sweep of profile on profilePlane along path on pathPlane
+            if mitered's valid:
+                return the cad swept outcome of mitered
+            set frames to the cad blend frames of path on pathPlane
+            if frames's valid = false:
+                return a cad swept refusal (frames's snag)
+            set copies to an empty list of the type of (an empty list of a cad curve2)
+            loop cornerIndex from 0 to the length of (frames's corners's values):
+                set copied to an empty list of a cad curve2
+                loop pieceIndex from 0 to the length of profile:
+                    append (the item at pieceIndex in profile) to copied
+                append copied to copies
+            set lofted to the cad blend loft of copies from profilePlane with frames
+            loop cornerIndex from 0 to the length of copies:
+                free (the item at cornerIndex in copies)
+            free copies
+            return lofted
+        return the cad swept outcome of (the cad planar sweep of profile on profilePlane following path on pathPlane)
