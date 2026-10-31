@@ -13,6 +13,7 @@
 #   ./build.sh probe NAME                    compile one manual tools/probes/ probe
 #   ./build.sh run-probe NAME [ARGS...]      run an already compiled probe
 #   ./build.sh installer OUT.sh              self-contained Linux installer
+#   ./build.sh wasm-test NAME [NAME...]      tests compiled to WebAssembly and run under Node
 #   ./build.sh toolchain-info                the selected compiler, without building
 #
 # The compiler is the DynLex checkout named by DYNLEX_ROOT or .dynlex-root.local,
@@ -160,7 +161,8 @@ run_one_test() {
 export -f run_one_test test_source
 export dynlex out
 
-if [ "$command" != kernel ]; then build_kernel_library; fi
+# A WebAssembly build is one module: it compiles the kernel in rather than linking the archive.
+if [ "$command" != kernel ] && [ "$command" != wasm-test ]; then build_kernel_library; fi
 case "$command" in
     app)
         "$dynlex" ui/shell/main.dl -O2 -o "$out/open-bim-studio"
@@ -232,6 +234,32 @@ case "$command" in
     kernel)
         build_kernel_library
         ;;
+    wasm-test)
+        # Each test (a module test by name, or a kernel test directory) compiled with
+        # --emit-wasm and run on the browser host under Node (platform/web/run.mjs),
+        # its output compared with the native expected output.
+        if [ "$#" -eq 0 ]; then echo 'wasm-test requires test names' >&2; exit 2; fi
+        mkdir -p "$out/wasm"
+        status=0
+        for name in "$@"; do
+            source=$(test_source "$name")
+            expected=${source%.dl}.expected.txt
+            if [ -z "$source" ] && [ -f "kernel/tests/$name/main.dl" ]; then
+                source=kernel/tests/$name/main.dl; expected=kernel/tests/$name/expected.txt
+            fi
+            if [ -z "$source" ]; then echo "$name MISSING"; status=1; continue; fi
+            if ! "$dynlex" "$source" --emit-wasm -O2 -o "$out/wasm/$name.wasm" > "$out/wasm/$name.diag" 2>&1 || [ -s "$out/wasm/$name.diag" ]; then
+                echo "$name DIAG"; head -5 "$out/wasm/$name.diag"; status=1; continue
+            fi
+            if ! node platform/web/run.mjs "$root" "$out/wasm/$name.wasm" > "$out/wasm/$name.out" 2> "$out/wasm/$name.err"; then
+                echo "$name RUNTIME FAIL"; tail -3 "$out/wasm/$name.err"; status=1
+            elif diff -q "$out/wasm/$name.out" "$expected" > /dev/null; then
+                echo "$name PASS"; tail -1 "$out/wasm/$name.err"
+            else
+                echo "$name FAIL"; diff "$out/wasm/$name.out" "$expected" | head -10; status=1
+            fi
+        done
+        exit $status ;;
     probe|run-probe)
         probe_name=${1:-}
         case "$probe_name" in
