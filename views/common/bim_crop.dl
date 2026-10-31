@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
-# A plan crop's eight resize handles and centre translation handle.
+# A plan crop: its eight resize handles and centre translation handle, and
+# the outline a crop edited as a sketch keeps (#98).
 import views/common/bim_view.dl
 
 function the bim crop handle {integer:handle} from {cad vector2:low} to {cad vector2:high}:
@@ -47,3 +48,386 @@ function the bim crop {bim view definition record:viewValue} dragged at handle {
         set updated's cropLow to low
         set updated's cropHigh to high
         return updated
+
+# ---------------------------------------------------------------- a sketched crop
+
+# A crop edited as a sketch (#98) may be any simple polygon. The view keeps
+# it as its settings, as a building system keeps its contour: corner `n` at
+# 2600000 plus 2n (x) and 2n + 1 (y), to the millimetre, anticlockwise. The
+# view's `cropLow` and `cropHigh` stay the polygon's bounding box, so that a
+# sheet and everything else that reads the crop as a rectangle keeps
+# working; the eight handles scale the polygon with that box. A rectangular
+# crop keeps no outline.
+function bim crop outline setting:
+    replacement:
+        2600000
+
+function bim crop outline setting limit:
+    replacement:
+        2700000
+
+# Whether the crop region's frame is hidden; the view stays cropped.
+function bim crop hidden setting:
+    replacement:
+        2700001
+
+# The outline view `viewId` keeps, as stored; empty for a rectangle.
+function the bim crop outline of view {a 64 bit integer:viewId} in {bim model record:modelValue}:
+    execute:
+        set storedCorners to an empty list of a cad vector2
+        set slot to 0
+        set reading to true
+        loop while reading:
+            set acrossSetting to the bim setting ((bim crop outline setting) + (slot * 2)) of viewId in modelValue
+            set upSetting to the bim setting (((bim crop outline setting) + (slot * 2)) + 1) of viewId in modelValue
+            if acrossSetting's found and upSetting's found:
+                append (a cad vector2 with x ((acrossSetting's value as a 64 bit floating-point number) / 1000.0) and y ((upSetting's value as a 64 bit floating-point number) / 1000.0)) to storedCorners
+                set slot to slot + 1
+            else:
+                set reading to false
+        return storedCorners
+
+# Whether view `viewId` keeps a sketched outline rather than a rectangle.
+function bim crop view {a 64 bit integer:viewId} has an outline in {bim model record:modelValue}:
+    execute:
+        return (the bim setting (bim crop outline setting) of viewId in modelValue)'s found
+
+# Whether view `viewId` hides its crop region's frame.
+function bim crop view {a 64 bit integer:viewId} is hidden in {bim model record:modelValue}:
+    execute:
+        return ((the bim setting (bim crop hidden setting) of viewId in modelValue)'s value) = (1 as a 64 bit integer)
+
+# View `viewId` keeps no outline: its crop is its rectangle again.
+function forget bim crop outline of view {a 64 bit integer:viewId} in {a pointer to a bim model record:target}:
+    execute:
+        set cursor to (the length of (target's settings's values)) - 1
+        loop while cursor >= 0:
+            set entry to the item at cursor in (target's settings's values)
+            if (entry's elementId = viewId) and ((entry's code >= bim crop outline setting) and (entry's code < bim crop outline setting limit)):
+                remove item cursor from (target's settings's values)
+            set cursor to cursor - 1
+        note bim change of viewId in target
+
+# View `copyId` takes view `sourceId`'s sketched outline and whether its
+# frame is hidden (a duplicated view; its rectangle comes with its record).
+function copy bim crop outline of view {a 64 bit integer:sourceId} to view {a 64 bit integer:copyId} in {a pointer to a bim model record:target}:
+    execute:
+        forget bim crop outline of view copyId in target
+        set settingCount to the length of (target's settings's values)
+        loop cursor from 0 to settingCount:
+            set entry to the item at cursor in (target's settings's values)
+            if entry's elementId = sourceId:
+                if ((entry's code >= bim crop outline setting) and (entry's code < bim crop outline setting limit)) or (entry's code = bim crop hidden setting):
+                    set bim setting entry's code of copyId to entry's value keeping true in target
+
+local function the bim crop millimetre of {a 64 bit floating-point number:metres}:
+    execute:
+        return (@intrinsic("ceil", (metres * 1000.0) - 0.5)) as a 64 bit integer
+
+# Twice the signed area of `cornerList`: positive when it runs anticlockwise.
+local function the bim crop doubled area of {a pointer to a list:cornerList}:
+    execute:
+        set total to 0.0
+        set count to the length of cornerList
+        loop cursor from 0 to count:
+            set here to the item at cursor in cornerList
+            set following to the item at (the remainder of (cursor + 1) divided by count) in cornerList
+            set total to total + ((here's x * following's y) - (following's x * here's y))
+        return total
+
+# Whether `cornerList`, left without the corners that lie on a straight run,
+# is four corners joined by edges along the axes.
+function bim crop corners {a pointer to a list:cornerList} make a rectangle:
+    execute:
+        set turning to an empty list of a cad vector2
+        set count to the length of cornerList
+        loop cursor from 0 to count:
+            set before to the item at (the remainder of ((cursor + count) - 1) divided by count) in cornerList
+            set here to the item at cursor in cornerList
+            set following to the item at (the remainder of (cursor + 1) divided by count) in cornerList
+            set bend to ((here's x - before's x) * (following's y - here's y)) - ((here's y - before's y) * (following's x - here's x))
+            if (the absolute value of bend) > 1e-9:
+                append here to turning
+        set squared to (the length of turning) = 4
+        if squared:
+            loop cursor from 0 to 4:
+                set here to the item at cursor in turning
+                set following to the item at (the remainder of (cursor + 1) divided by 4) in turning
+                if ((the absolute value of (here's x - following's x)) > 1e-9) and ((the absolute value of (here's y - following's y)) > 1e-9):
+                    set squared to false
+        free turning
+        return squared
+
+# View `viewId` cropped to the polygon `cornerList` (model metres, either
+# way round), to the millimetre: its rectangle becomes the polygon's box,
+# and the polygon is kept unless it is that box. False, and nothing
+# changed, when the view is missing or the polygon is not simple or has no
+# width or depth.
+function keep bim crop outline {a pointer to a list:cornerList} of view {a 64 bit integer:viewId} in {a pointer to a bim model record:target}:
+    execute:
+        set viewFound to the bim view index of viewId in (@intrinsic("dereference", target))
+        if viewFound's valid = false:
+            return false
+        set rounded to an empty list of a cad vector2
+        loop cursor from 0 to the length of cornerList:
+            set corner to the item at cursor in cornerList
+            set snapped to a cad vector2 with x (((the bim crop millimetre of corner's x) as a 64 bit floating-point number) / 1000.0) and y (((the bim crop millimetre of corner's y) as a 64 bit floating-point number) / 1000.0)
+            set repeated to false
+            if (the length of rounded) > 0:
+                set previousCorner to the last item of rounded
+                set repeated to (previousCorner's x = snapped's x) and (previousCorner's y = snapped's y)
+            if repeated = false:
+                append snapped to rounded
+        if (the length of rounded) > 1:
+            set firstCorner to the item at 0 in rounded
+            set lastCorner to the last item of rounded
+            if (firstCorner's x = lastCorner's x) and (firstCorner's y = lastCorner's y):
+                remove item ((the length of rounded) - 1) from rounded
+        if (bim outline rounded is simple) = false:
+            free rounded
+            return false
+        if (the bim crop doubled area of rounded) < 0.0:
+            set turned to an empty list of a cad vector2
+            set cursor to (the length of rounded) - 1
+            loop while cursor >= 0:
+                append (the item at cursor in rounded) to turned
+                set cursor to cursor - 1
+            free rounded
+            set rounded to turned
+        set lowX to 1e300
+        set lowY to 1e300
+        set highX to -1e300
+        set highY to -1e300
+        loop cursor from 0 to the length of rounded:
+            set corner to the item at cursor in rounded
+            set lowX to the minimum of lowX and corner's x
+            set lowY to the minimum of lowY and corner's y
+            set highX to the maximum of highX and corner's x
+            set highY to the maximum of highY and corner's y
+        if ((highX - lowX) < 0.01) or ((highY - lowY) < 0.01):
+            free rounded
+            return false
+        forget bim crop outline of view viewId in target
+        if ((bim crop corners rounded make a rectangle) = false) and ((the length of rounded) < 50000):
+            loop cursor from 0 to the length of rounded:
+                set corner to the item at cursor in rounded
+                set bim setting ((bim crop outline setting) + (cursor * 2)) of viewId to (the bim crop millimetre of corner's x) keeping true in target
+                set bim setting (((bim crop outline setting) + (cursor * 2)) + 1) of viewId to (the bim crop millimetre of corner's y) keeping true in target
+        set viewValue to the item at viewFound's position in (target's views's values)
+        set viewValue's cropped to true
+        set viewValue's cropLow to a cad vector2 with x lowX and y lowY
+        set viewValue's cropHigh to a cad vector2 with x highX and y highY
+        store bim view viewValue in target
+        free rounded
+        return true
+
+# The crop's corners as drawn, anticlockwise: the outline kept, fitted to
+# `viewValue`'s rectangle (so that a handle dragged, not yet stored, scales
+# it), else the rectangle's four corners.
+function the bim crop corners of {bim view definition record:viewValue} in {bim model record:modelValue}:
+    execute:
+        set cropCorners to the bim crop outline of view (viewValue's id) in modelValue
+        set boxLow to viewValue's cropLow
+        set boxHigh to viewValue's cropHigh
+        if (the length of cropCorners) < 3:
+            clear cropCorners
+            append boxLow to cropCorners
+            append (a cad vector2 with x boxHigh's x and y boxLow's y) to cropCorners
+            append boxHigh to cropCorners
+            append (a cad vector2 with x boxLow's x and y boxHigh's y) to cropCorners
+            return cropCorners
+        set storedLowX to 1e300
+        set storedLowY to 1e300
+        set storedHighX to -1e300
+        set storedHighY to -1e300
+        loop cursor from 0 to the length of cropCorners:
+            set corner to the item at cursor in cropCorners
+            set storedLowX to the minimum of storedLowX and corner's x
+            set storedLowY to the minimum of storedLowY and corner's y
+            set storedHighX to the maximum of storedHighX and corner's x
+            set storedHighY to the maximum of storedHighY and corner's y
+        set spanX to storedHighX - storedLowX
+        set spanY to storedHighY - storedLowY
+        if (spanX < 1e-9) or (spanY < 1e-9):
+            return cropCorners
+        set scaleX to (boxHigh's x - boxLow's x) / spanX
+        set scaleY to (boxHigh's y - boxLow's y) / spanY
+        loop cursor from 0 to the length of cropCorners:
+            set corner to the item at cursor in cropCorners
+            replace item at index cursor in cropCorners with (a cad vector2 with x (boxLow's x + ((corner's x - storedLowX) * scaleX)) and y (boxLow's y + ((corner's y - storedLowY) * scaleY)))
+        return cropCorners
+
+# View `viewId`'s crop dragged at handle `handleIndex` (0 to 7 its sides
+# and corners, 8 its centre) by `shift`, a sketched outline scaled or moved
+# with its box.
+function drag bim crop of view {a 64 bit integer:viewId} at handle {integer:handleIndex} by {cad vector2:shift} in {a pointer to a bim model record:target}:
+    execute:
+        set viewFound to the bim view index of viewId in (@intrinsic("dereference", target))
+        if viewFound's valid = false:
+            return nothing
+        set original to the item at viewFound's position in (target's views's values)
+        set changedView to the bim crop original dragged at handle handleIndex by shift
+        set outlined to bim crop view viewId has an outline in (@intrinsic("dereference", target))
+        set fitted to the bim crop corners of changedView in (@intrinsic("dereference", target))
+        store bim view changedView in target
+        if outlined:
+            ignore (keep bim crop outline fitted of view viewId in target)
+        free fitted
+
+# Whether `pointerPixel` lies within 5 pixels of the frame of `viewValue`'s
+# crop.
+function bim crop of {bim view definition record:viewValue} is touched at {cad vector2:pointerPixel} in {bim model record:modelValue} through {bim drawing transform record:transform}:
+    execute:
+        if viewValue's cropped = false:
+            return false
+        set cropCorners to the bim crop corners of viewValue in modelValue
+        set touching to false
+        set count to the length of cropCorners
+        loop cursor from 0 to count:
+            set here to the bim pixel of (the item at cursor in cropCorners) through transform
+            set following to the bim pixel of (the item at (the remainder of (cursor + 1) divided by count) in cropCorners) through transform
+            set runX to following's x - here's x
+            set runY to following's y - here's y
+            set runSquared to (runX * runX) + (runY * runY)
+            set share to 0.0
+            if runSquared > 1e-12:
+                set share to (((pointerPixel's x - here's x) * runX) + ((pointerPixel's y - here's y) * runY)) / runSquared
+                set share to the maximum of 0.0 and (the minimum of 1.0 and share)
+            set nearest to a cad vector2 with x (here's x + (runX * share)) and y (here's y + (runY * share))
+            if (the cad distance from pointerPixel to nearest) <= 5.0:
+                set touching to true
+        free cropCorners
+        return touching
+
+# The part of `shapeCorners` (a convex polygon) on one side of the line
+# where coordinate `axisCode` (0 x, 1 y) is `limit`: above it when
+# `keepAbove`, else below.
+local function the bim crop clipping of {a pointer to a list:shapeCorners} along {integer:axisCode} at {a 64 bit floating-point number:limit} keeping above {boolean:keepAbove}:
+    execute:
+        set kept to an empty list of a cad vector2
+        set count to the length of shapeCorners
+        loop cursor from 0 to count:
+            set here to the item at cursor in shapeCorners
+            set following to the item at (the remainder of (cursor + 1) divided by count) in shapeCorners
+            set hereValue to here's x
+            set followingValue to following's x
+            if axisCode = 1:
+                set hereValue to here's y
+                set followingValue to following's y
+            set hereIn to hereValue <= limit
+            set followingIn to followingValue <= limit
+            if keepAbove:
+                set hereIn to hereValue >= limit
+                set followingIn to followingValue >= limit
+            if hereIn:
+                append here to kept
+            if (hereIn and (followingIn = false)) or ((hereIn = false) and followingIn):
+                set share to (limit - hereValue) / (followingValue - hereValue)
+                append (a cad vector2 with x (here's x + ((following's x - here's x) * share)) and y (here's y + ((following's y - here's y) * share))) to kept
+        return kept
+
+# The four-cornered `bandShape` cut to the box from `boxLow` to `boxHigh`,
+# added to `triangles` as a fan of triangles.
+local function add bim crop band {a pointer to a list:bandShape} within {cad vector2:boxLow} and {cad vector2:boxHigh} to {a pointer to a list:triangles}:
+    execute:
+        set clippedA to the bim crop clipping of bandShape along 0 at boxLow's x keeping above true
+        set clippedB to the bim crop clipping of clippedA along 0 at boxHigh's x keeping above false
+        set clippedC to the bim crop clipping of clippedB along 1 at boxLow's y keeping above true
+        set clippedD to the bim crop clipping of clippedC along 1 at boxHigh's y keeping above false
+        if (the length of clippedD) >= 3:
+            loop cursor from 1 to (the length of clippedD) - 1:
+                append (the item at 0 in clippedD) to triangles
+                append (the item at cursor in clippedD) to triangles
+                append (the item at (cursor + 1) in clippedD) to triangles
+        free clippedA
+        free clippedB
+        free clippedC
+        free clippedD
+
+# What covers the plan inside the crop's rectangle but outside its sketched
+# outline, as triangles (three model points each), cut to the box from
+# `visibleLow` to `visibleHigh` (the part of the plan on screen); none for a
+# rectangular crop. The rectangle is cut into bands at the outline's
+# corners; in each band the outline's edges keep their order all through,
+# and what lies between the box and the first edge, between each pair of
+# edges leaving the outline and the next, and after the last, is outside.
+function the bim crop mask of {bim view definition record:viewValue} in {bim model record:modelValue} within {cad vector2:visibleLow} and {cad vector2:visibleHigh}:
+    execute:
+        set triangles to an empty list of a cad vector2
+        if viewValue's cropped = false:
+            return triangles
+        if (bim crop view (viewValue's id) has an outline in modelValue) = false:
+            return triangles
+        set cropCorners to the bim crop corners of viewValue in modelValue
+        set count to the length of cropCorners
+        set levels to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to count:
+            set cornerHeight to (the item at cursor in cropCorners)'s y
+            # `and` evaluates both sides: the search stops by its own flag.
+            set slotIndex to 0
+            set seeking to (the length of levels) > 0
+            loop while seeking:
+                if (the item at slotIndex in levels) < cornerHeight:
+                    set slotIndex to slotIndex + 1
+                    set seeking to slotIndex < (the length of levels)
+                else:
+                    set seeking to false
+            if slotIndex = (the length of levels):
+                append cornerHeight to levels
+            else if (the item at slotIndex in levels) != cornerHeight:
+                insert cornerHeight into levels at index slotIndex
+        set boxLowX to viewValue's cropLow's x
+        set boxHighX to viewValue's cropHigh's x
+        loop bandIndex from 0 to (the length of levels) - 1:
+            set bandBottom to the item at bandIndex in levels
+            set bandTop to the item at (bandIndex + 1) in levels
+            set bandMiddle to (bandBottom + bandTop) * 0.5
+            # The edges across the band, in the order they cross its middle.
+            set middles to an empty list of a 64 bit floating-point number
+            set lowers to an empty list of a 64 bit floating-point number
+            set uppers to an empty list of a 64 bit floating-point number
+            loop cursor from 0 to count:
+                set here to the item at cursor in cropCorners
+                set following to the item at (the remainder of (cursor + 1) divided by count) in cropCorners
+                if ((the minimum of here's y and following's y) < bandMiddle) and ((the maximum of here's y and following's y) > bandMiddle):
+                    set slope to (following's x - here's x) / (following's y - here's y)
+                    set atMiddle to here's x + ((bandMiddle - here's y) * slope)
+                    set slotIndex to 0
+                    set seeking to (the length of middles) > 0
+                    loop while seeking:
+                        if (the item at slotIndex in middles) < atMiddle:
+                            set slotIndex to slotIndex + 1
+                            set seeking to slotIndex < (the length of middles)
+                        else:
+                            set seeking to false
+                    insert atMiddle into middles at index slotIndex
+                    insert (here's x + ((bandBottom - here's y) * slope)) into lowers at index slotIndex
+                    insert (here's x + ((bandTop - here's y) * slope)) into uppers at index slotIndex
+            set crossings to the length of middles
+            # Outside: before edge 0, between edges 1 and 2, 3 and 4, ...,
+            # and after the last.
+            loop gapIndex from 0 to (crossings / 2) + 1:
+                set leftLow to boxLowX
+                set leftHigh to boxLowX
+                set rightLow to boxHighX
+                set rightHigh to boxHighX
+                if gapIndex > 0:
+                    set leftLow to the item at ((gapIndex * 2) - 1) in lowers
+                    set leftHigh to the item at ((gapIndex * 2) - 1) in uppers
+                if (gapIndex * 2) < crossings:
+                    set rightLow to the item at (gapIndex * 2) in lowers
+                    set rightHigh to the item at (gapIndex * 2) in uppers
+                if ((rightLow - leftLow) > 1e-9) or ((rightHigh - leftHigh) > 1e-9):
+                    set bandShape to an empty list of a cad vector2
+                    append (a cad vector2 with x leftLow and y bandBottom) to bandShape
+                    append (a cad vector2 with x rightLow and y bandBottom) to bandShape
+                    append (a cad vector2 with x rightHigh and y bandTop) to bandShape
+                    append (a cad vector2 with x leftHigh and y bandTop) to bandShape
+                    add bim crop band bandShape within visibleLow and visibleHigh to triangles
+                    free bandShape
+            free middles
+            free lowers
+            free uppers
+        free levels
+        free cropCorners
+        return triangles
