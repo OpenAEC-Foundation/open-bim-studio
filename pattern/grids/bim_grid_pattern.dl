@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 # Bounded spacing patterns and atomic batches of parallel structural grids.
 import bim/bim_model.dl
+import pattern/grids/bim_grid_names.dl
 
 class:
     patterns:
@@ -16,6 +17,35 @@ function a refused bim grid spacing pattern:
 local function bim grid pattern byte {integer:code} is whitespace:
     execute:
         return (code = 32) or ((code >= 9) and (code <= 13))
+
+# The repeat signs: `4x5400`, `4X5400` and `4*5400` (Q14, #117).
+local function bim grid pattern byte {integer:code} is a repeat sign:
+    execute:
+        return ((code = 120) or (code = 88)) or (code = 42)
+
+# `4 x 5400` reads as `4x5400`: whitespace beside a repeat sign is dropped.
+local function the bim grid pattern text joined at repeat signs of {a string:patternText}:
+    execute:
+        set joinedText to the string form of ""
+        set count to the length of patternText
+        set keptCode to 0
+        loop cursor from 0 to count:
+            set code to (the character at cursor in patternText) as an integer
+            if bim grid pattern byte code is whitespace:
+                set aheadCode to 0
+                set ahead to cursor + 1
+                loop while (ahead < count) and (aheadCode = 0):
+                    set scanned to (the character at ahead in patternText) as an integer
+                    if bim grid pattern byte scanned is whitespace:
+                        set ahead to ahead + 1
+                    else:
+                        set aheadCode to scanned
+                if ((bim grid pattern byte keptCode is a repeat sign) or (bim grid pattern byte aheadCode is a repeat sign)) = false:
+                    set joinedText to joinedText + (the substring of patternText from cursor spanning 1 bytes)
+            else:
+                set joinedText to joinedText + (the substring of patternText from cursor spanning 1 bytes)
+                set keptCode to code
+        return joinedText
 
 # Positive decimal only, consuming the whole token. Zero denotes refusal.
 local function the bim grid pattern decimal of {a string:token}:
@@ -61,11 +91,14 @@ local function the bim grid pattern repeats of {a string:token}:
 
 # Caller supplies the current length unit's metres per unit (mm = 0.001).
 # At most 4096 input bytes, 1000 copies and 1000000 metres total spacing.
+# Spacings separate by whitespace; a repeat reads `4x5400` or `4*5400`,
+# with or without spaces around the sign.
 # Invalid input always returns an empty offsets list; callers own that list.
-function the bim grid spacing pattern of {a string:patternText} metres per unit {a 64 bit floating-point number:unitScale}:
+function the bim grid spacing pattern of {a string:rawText} metres per unit {a 64 bit floating-point number:unitScale}:
     execute:
-        if (((the length of patternText) = 0) or ((the length of patternText) > 4096)) or (((unitScale > 0.0) and (unitScale <= 1000000.0)) = false):
+        if (((the length of rawText) = 0) or ((the length of rawText) > 4096)) or (((unitScale > 0.0) and (unitScale <= 1000000.0)) = false):
             return a refused bim grid spacing pattern
+        set patternText to the bim grid pattern text joined at repeat signs of rawText
         set offsets to an empty list of a 64 bit floating-point number
         set cumulative to 0.0
         set cursor to 0
@@ -83,7 +116,7 @@ function the bim grid spacing pattern of {a string:patternText} metres per unit 
                     if bim grid pattern byte code is whitespace:
                         set tokenOpen to false
                     else:
-                        if (code = 120) or (code = 88):
+                        if bim grid pattern byte code is a repeat sign:
                             if separator >= 0:
                                 set tokenValid to false
                             set separator to cursor
@@ -128,60 +161,6 @@ function the bim grid pattern direction from {cad vector2:startPoint} to {cad ve
                 set py to 0.0 - py
         return a cad vector2 with x px and y py
 
-# Alphabetic labels use spreadsheet-style carries. Numeric suffixes carry
-# as text, including arbitrarily long numbers, without integer conversion.
-function the next bim grid pattern name after {a string:label}:
-    execute:
-        set count to the length of label
-        if count = 0:
-            return the string form of "1"
-        set upper to true
-        set lower to true
-        loop cursor from 0 to count:
-            set code to (the character at cursor in label) as an integer
-            if (code < 65) or (code > 90):
-                set upper to false
-            if (code < 97) or (code > 122):
-                set lower to false
-        set copy to the substring of label from 0 spanning count bytes
-        if upper or lower:
-            set first to 65
-            set last to 90
-            if lower:
-                set first to 97
-                set last to 122
-            set cursor to count - 1
-            loop while cursor >= 0:
-                set code to (the character at cursor in copy) as an integer
-                if code < last:
-                    store ((code + 1) as a byte) into the data of copy at cursor
-                    return copy
-                store (first as a byte) into the data of copy at cursor
-                set cursor to cursor - 1
-            if lower:
-                return (the string form of "a") + copy
-            return (the string form of "A") + copy
-        set suffix to count
-        set cursor to count - 1
-        loop while cursor >= 0:
-            set code to (the character at cursor in label) as an integer
-            if (code >= 48) and (code <= 57):
-                set suffix to cursor
-                set cursor to cursor - 1
-            else:
-                set cursor to -1
-        if suffix = count:
-            return label + (the string form of "2")
-        set cursor to count - 1
-        loop while cursor >= suffix:
-            set code to (the character at cursor in copy) as an integer
-            if code < 57:
-                store ((code + 1) as a byte) into the data of copy at cursor
-                return copy
-            store (48 as a byte) into the data of copy at cursor
-            set cursor to cursor - 1
-        return ((the substring of label from 0 spanning suffix bytes) + (the string form of "1")) + (the substring of copy from suffix spanning (count - suffix) bytes)
-
 local function bim grid pattern name {a string:label} occurs in {a pointer to a list:grids}:
     execute:
         loop cursor from 0 to the length of grids:
@@ -197,7 +176,17 @@ local function bim grid pattern point {cad vector2:point} is bounded:
 # copy before the first mutation, then performs only prevalidated additions.
 # Zero means refusal with the model untouched; positive is the batch count.
 # The caller can wrap one successful batch in one existing BIM transaction.
+# The copies go the way `the bim grid pattern direction from … to …` gives.
 function add bim grid copies of {a 64 bit integer:gridId} spaced {a string:patternText} metres per unit {a 64 bit floating-point number:unitScale} in {a pointer to a bim model record:target}:
+    execute:
+        return add bim grid copies of gridId toward side 1.0 spaced patternText metres per unit unitScale in target
+
+# The same, toward the side `sideSign` gives: 1.0 the way `the bim grid
+# pattern direction from … to …` gives, -1.0 the other way (the side of the
+# plus handle clicked, Q14 of #117). The names continue from the source
+# line's, past names the model holds and, when the project skips them, past
+# I and O.
+function add bim grid copies of {a 64 bit integer:gridId} toward side {a 64 bit floating-point number:sideSign} spaced {a string:patternText} metres per unit {a 64 bit floating-point number:unitScale} in {a pointer to a bim model record:target}:
     execute:
         set parsed to the bim grid spacing pattern of patternText metres per unit unitScale
         if parsed's valid = false:
@@ -215,6 +204,9 @@ function add bim grid copies of {a 64 bit integer:gridId} spaced {a string:patte
             free parsed's offsets
             return 0
         set direction to the bim grid pattern direction from source's start to source's finish
+        if sideSign < 0.0:
+            set direction to a cad vector2 with x (0.0 - direction's x) and y (0.0 - direction's y)
+        set skipsLetters to bim grid names skip letters in (@intrinsic("dereference", target))
         set preparedGrids to an empty list of a bim grid record
         set label to source's name
         loop cursor from 0 to the length of parsed's offsets:
@@ -225,9 +217,9 @@ function add bim grid copies of {a 64 bit integer:gridId} spaced {a string:patte
                 free preparedGrids
                 free parsed's offsets
                 return 0
-            set label to the next bim grid pattern name after label
+            set label to the next bim grid name after label skipping letters skipsLetters
             loop while (bim grid pattern name label occurs in (target's grids's values)) or (bim grid pattern name label occurs in preparedGrids):
-                set label to the next bim grid pattern name after label
+                set label to the next bim grid name after label skipping letters skipsLetters
             append (@intrinsic("construct", a bim grid record, the bim refused id, label, startPoint, finishPoint, source's low, source's high)) to preparedGrids
         set added to the length of preparedGrids
         loop cursor from 0 to added:
