@@ -129,6 +129,16 @@ scroll it by a group. The row of tabs leaves out the title, then closes up,
 then letters its tabs smaller; sub-tabs that would run into the tabs are
 left out.
 
+**Choosers.** A ribbon button that stands for several commands of one kind
+opens a chooser, a list drawn as the context menu below the pointer: View >
+Create view (a plan of each of the model's drawing types under the heading
+of the type it descends from, then section, 3D, schedule and duplicate),
+Collaborate > Import (drawings, images, IFC and IfcX) and Collaborate >
+Export (the active plan, the open sheet, the model). Each row sends the
+command its own button sent before; `the bim chooser groups of` holds the
+lists, and the automation API finds their rows by label as it finds the
+ribbon's buttons (`ribbon Collaborate/IFC 4.3`).
+
 **The properties panel.** With nothing selected it shows the active storey,
 the active tab's view (its drawing type and phase among the view's rows), the
 project, its units and its georeferencing. A view chosen in the browser shows
