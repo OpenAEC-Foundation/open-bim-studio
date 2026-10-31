@@ -179,6 +179,7 @@ let a native result fall on the floor.
 | a constructor compiles but values land in the wrong members | positional `construct` and the member order changed | regenerate or reorder; prefer one constructor function per record |
 | an integer literal rejected | a floating-point number was required | write `.0` |
 | a value left unused | an action-shaped call returned a value | `ignore` it or consume it |
+| `stop_because_a_list_index_is_out_of_bounds` from `loop while (i < n) and ((the item at i in xs) < v)` | `and` and `or` evaluate both operands; nothing short-circuits (measured 2026-10-31) | guard the read with an `if`, or stop the loop by a flag |
 | a test takes minutes to compile | its closure is most of the application | import less; model-level tests stay under 20k lines |
 | diagnostics differ between Linux and Windows | path spellings in messages | compare on Linux; the fixture runner strips the checkout path |
 
