@@ -38,9 +38,12 @@ reserved number for another function. Record new public command codes in advance
 | **2400410** | setting | Grid head | PC1, sheet paper units (24 October) |
 | **2400600–2401599** | settings on the sheet | Viewport title type metadata | PC1, interactive sheets (26 October) |
 | **2401600** | setting on a pile | The pile tip level assigned to the pile (its id) | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
+| **2401700** | setting on a wall | The wall's top offset above its top level or attached underside, whole millimetres (issue #107) | Computer 1, `mod/elements/wall-top-constraint` (31 October) |
+| **2401701** | setting on a wall | The floor, roof or ceiling the wall's top is attached to (its id; issue #107) | Computer 1, `mod/elements/wall-top-constraint` (31 October) |
 | **12600–12604** | properties | Opening detail | PC1, `feature/steel-baseplates` (24 October) |
 | **12610** | property | Toggles the technical plan palette | PC1, plan presentation (24 October) |
 | **12611** | property | Grid head | PC1, sheet paper units (24 October) |
+| **12670–12671** | properties | A wall's Top constraint (menu) and Top offset (issue #107) | Computer 1, `mod/elements/wall-top-constraint` (31 October) |
 | **60000-62047** | properties | Connection additions, sixteen slots per connection addition | `stagiairopenaec1`, fastener components (29 October) |
 | **62048-62079** | properties | Reusable connection types (recorded in [notes/fastener-components.md](notes/fastener-components.md), not originally on this board) | `stagiairopenaec1`, fastener components |
 
