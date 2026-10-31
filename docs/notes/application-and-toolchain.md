@@ -90,7 +90,7 @@ spacing, for example `5000 3000 3x5400`. The entire batch is one undo step.
 
 ### Type library
 
-**Home > IfcTypes** and **Manage > IfcTypes** open the native type library
+**Home > IfcTypes** and **Model > IfcTypes** open the native type library
 without requiring an instance selection. Its tabs cover walls, floors,
 roofs, ceilings, columns, beams, piles, openings and profiles. Add and
 Duplicate create real type definitions; fields edit names, dimensions,

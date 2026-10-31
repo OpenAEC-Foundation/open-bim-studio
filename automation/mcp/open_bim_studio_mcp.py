@@ -450,10 +450,19 @@ def buttons_tool(arguments: dict) -> dict:
 
 
 @tool("press_button", "Press the ribbon button whose label starts with `label` (e.g. 'Wall', 'Floor', "
-      "'Building system', 'Align'), as a click on it would: a tool becomes active.",
+      "'Building system', 'Align'), as a click on it would: the window runs it on its next frame, so the "
+      "window's own commands (Tile, Export, panels) work too. 'Tab/Label' picks a label several tabs share "
+      "('View/Detail', 'Sketch/Delete'). Returns the state after the press.",
       {"label": {"type": "string"}}, ["label"])
 def press_button_tool(arguments: dict) -> dict:
-    return text_result(current_modeller().request("button", arguments["label"]))
+    modeller = current_modeller()
+    pressed = modeller.request("ribbon", arguments["label"])
+    if not pressed.get("ok", False):
+        return text_result(pressed)
+    time.sleep(0.25)
+    state = modeller.request("state")
+    state["pressed"] = pressed.get("pressed")
+    return text_result(state)
 
 
 @tool("key", "Type a key or command code (as the keyboard would: 87 W, 256 Esc, 258 Tab, 257 Enter, 90 undo). "
@@ -631,12 +640,12 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("fit"))
 
 
-RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "Annotate", "View", "Manage", "Collaborate",
-               "Reinforcement", "Connections")
+RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "View", "Model", "Collaborate", "Reinforcement",
+               "Connections")
 
 
-@tool("ribbon_tab", "Show ribbon tab `index` (0 Home, 1 MEP, 2 Sketch, 3 Modify, 4 Annotate, 5 View, 6 Manage, "
-      "7 Collaborate, 8 Reinforcement, 9 Connections).", {"index": {"type": "integer"}}, ["index"])
+@tool("ribbon_tab", "Show ribbon tab `index` (0 Home, 1 MEP, 2 Sketch, 3 Modify, 4 View, 5 Model, "
+      "6 Collaborate, 7 Reinforcement, 8 Connections).", {"index": {"type": "integer"}}, ["index"])
 def tab_tool(arguments: dict) -> dict:
     index = int(arguments["index"])
     if not 0 <= index < len(RIBBON_TABS):
