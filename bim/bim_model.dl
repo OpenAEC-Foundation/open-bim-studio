@@ -2168,12 +2168,15 @@ function bend bim wall {a 64 bit integer:wallId} by {a 64 bit floating-point num
         return true
 
 # Wall `wallId` is `heightValue` high.
-# A typed height frees the wall's top from the level it was held at.
+# A typed height frees the wall's top from the level it was held at, or
+# the floor, roof or ceiling it was attached to (its top constraint becomes
+# Unconnected).
 function set bim wall {a 64 bit integer:wallId} height to {a 64 bit floating-point number:heightValue} in {a pointer to a bim model record:target}:
     execute:
         set found to the bim wall index of wallId in (@intrinsic("dereference", target))
         if (found's valid = false) or (heightValue <= 0.0):
             return false
+        release bim wall wallId top attachment in target
         set wallValue to the item at found's position in (target's walls's values)
         replace item at index found's position in (target's walls's values) with (@intrinsic("construct", a bim wall record, wallValue's id, wallValue's typeId, wallValue's levelId, wallValue's start, wallValue's finish, heightValue, wallValue's bulge, wallValue's lean, wallValue's rise, wallValue's baseOffset, the bim refused id))
         note bim change of wallId in target
@@ -2271,9 +2274,11 @@ function set bim wall {a 64 bit integer:wallId} on level {a 64 bit integer:level
         note bim change of wallId in target
         return true
 
-# Wall `wallId`'s top is held at level `levelId` (its height reaching it
-# from the foot), or freed with the refused id; refused when the level lies
-# less than 0.1 m above the foot.
+# Wall `wallId`'s top is held at level `levelId` plus the wall's top offset
+# (`the bim top offset of wall`), its height reaching there from the foot,
+# or freed with the refused id; refused when that lies less than 0.1 m
+# above the foot. Held at a level, the wall lets go of a floor, roof or
+# ceiling it was attached to.
 function hold bim wall {a 64 bit integer:wallId} top at level {a 64 bit integer:levelId} in {a pointer to a bim model record:target}:
     execute:
         set found to the bim wall index of wallId in (@intrinsic("dereference", target))
@@ -2286,12 +2291,261 @@ function hold bim wall {a 64 bit integer:wallId} top at level {a 64 bit integer:
             set baseLevel to the bim level index of wallValue's levelId in (@intrinsic("dereference", target))
             if (topLevel's valid = false) or (baseLevel's valid = false):
                 return false
-            set heightValue to (the item at topLevel's position in (target's levels's values))'s elevation - ((the item at baseLevel's position in (target's levels's values))'s elevation + wallValue's baseOffset)
+            set heightValue to ((the item at topLevel's position in (target's levels's values))'s elevation + (the bim top offset of wall wallId in (@intrinsic("dereference", target)))) - ((the item at baseLevel's position in (target's levels's values))'s elevation + wallValue's baseOffset)
             if heightValue < 0.1:
                 return false
+            release bim wall wallId top attachment in target
         replace item at index found's position in (target's walls's values) with (@intrinsic("construct", a bim wall record, wallValue's id, wallValue's typeId, wallValue's levelId, wallValue's start, wallValue's finish, heightValue, wallValue's bulge, wallValue's lean, wallValue's rise, wallValue's baseOffset, levelId))
         note bim change of wallId in target
         return true
+
+# ---------------------------------------------------------------- a wall's top constraint
+# A wall's top constraint (issue #107): Unconnected (its own height), Up to
+# level (`topLevelId` of `bim wall record`, plus its top offset) or Attached
+# to the underside of a floor, roof or ceiling (a plate, `bim slab record`)
+# above it, plus its top offset. Both live in the wall's settings, so that
+# files without them read as before: the top offset in whole millimetres at
+# `bim wall top offset setting`, the plate attached to at `bim wall top
+# attachment setting` (WERKBORD code reservations). An attached wall's
+# `topLevelId` is the refused id; its height reaches the highest point of
+# its top, and a top sloping along a straight wall is its face contour
+# (`the bim face contour of`), which the attachment owns while it lasts.
+# `refresh bim wall tops in` keeps every constrained top where its
+# constraint puts it; every committed edit runs it (`commit bim
+# transaction in`), so that walls follow their levels and plates.
+function bim wall top offset setting:
+    replacement:
+        2401700
+function bim wall top attachment setting:
+    replacement:
+        2401701
+
+# How far wall `wallId`'s top lies above the level it is held at or the
+# underside it is attached to, in metres (negative: below it).
+function the bim top offset of wall {a 64 bit integer:wallId} in {bim model record:modelValue}:
+    execute:
+        set reading to the bim setting (bim wall top offset setting) of wallId in modelValue
+        return (reading's value as a 64 bit floating-point number) / 1000.0
+
+# The plate (floor, roof or ceiling) wall `wallId`'s top is attached to, or
+# the refused id.
+function the bim top attachment of wall {a 64 bit integer:wallId} in {bim model record:modelValue}:
+    execute:
+        set reading to the bim setting (bim wall top attachment setting) of wallId in modelValue
+        if reading's found:
+            return reading's value
+        return the bim refused id
+
+# What wall `wallValue`'s top is constrained to: the plate it is attached
+# to, else the level it is held at, else the refused id (Unconnected).
+function the bim top constraint of wall {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set attachedTo to the bim top attachment of wall wallValue's id in modelValue
+        if attachedTo != the bim refused id:
+            return attachedTo
+        return wallValue's topLevelId
+
+# The height above the project's zero of plate `plateValue`'s underside at
+# plan point `location`: its top plane there (`top` above its storey at the
+# outline's first corner, rising `pitch` toward `heading`) less its
+# thickness, measured upright as its solid is built (`the bim slab solid
+# of`). A roof's curved form is not followed.
+function the bim underside of plate {bim slab record:plateValue} at {cad vector2:location} in {bim model record:modelValue}:
+    execute:
+        set storeyElevation to 0.0
+        set storeyFound to the bim level index of plateValue's levelId in modelValue
+        if storeyFound's valid:
+            set storeyElevation to (the item at storeyFound's position in (modelValue's levels's values))'s elevation
+        set undersideHeight to (storeyElevation + plateValue's top) - (the bim thickness of plate plateValue in modelValue)
+        if (plateValue's pitch != 0.0) and ((the length of (plateValue's outline's values)) > 0):
+            set anchor to the item at 0 in (plateValue's outline's values)
+            set slope to (the sine of plateValue's pitch) / (the cosine of plateValue's pitch)
+            set undersideHeight to undersideHeight + (slope * (((location's x - anchor's x) * (the cosine of plateValue's heading)) + ((location's y - anchor's y) * (the sine of plateValue's heading))))
+        return undersideHeight
+
+# Where an attached wall's top comes: its heights above the project's zero
+# over the wall's start and finish, and whether it slopes along the wall.
+class:
+    patterns:
+        [a|] bim wall top fit record
+    members:
+        valid as a boolean
+        startTop as a 64 bit floating-point number
+        finishTop as a 64 bit floating-point number
+        sloped as a boolean
+
+# The top of wall `wallValue` attached to plate `plateValue`: the plate's
+# underside over the wall's centreline plus the wall's top offset. A
+# straight upright wall follows a slope along it; a curved, leaning or
+# bowed one stays level at the lowest of its start, middle and finish.
+# Invalid when the wall's storey is gone or the top would come less than
+# 0.1 m above the foot anywhere.
+function the bim top fit of wall {bim wall record:wallValue} under plate {bim slab record:plateValue} in {bim model record:modelValue}:
+    execute:
+        set refusedFit to @intrinsic("construct", a bim wall top fit record, false, 0.0, 0.0, false)
+        set storeyFound to the bim level index of wallValue's levelId in modelValue
+        if storeyFound's valid = false:
+            return refusedFit
+        set footHeight to (the item at storeyFound's position in (modelValue's levels's values))'s elevation + wallValue's baseOffset
+        set raise to the bim top offset of wall wallValue's id in modelValue
+        set startTop to (the bim underside of plate plateValue at wallValue's start in modelValue) + raise
+        set finishTop to (the bim underside of plate plateValue at wallValue's finish in modelValue) + raise
+        set upright to ((wallValue's bulge = 0.0) and (wallValue's lean = 0.0)) and (wallValue's rise = 0.0)
+        if upright = false:
+            # The arc's middle lies `bulge` to the right of the chord's.
+            set chordX to wallValue's finish's x - wallValue's start's x
+            set chordY to wallValue's finish's y - wallValue's start's y
+            set chordLength to the square root of ((chordX * chordX) + (chordY * chordY))
+            set middleX to (wallValue's start's x + wallValue's finish's x) * 0.5
+            set middleY to (wallValue's start's y + wallValue's finish's y) * 0.5
+            if chordLength > 1e-9:
+                set middleX to middleX + ((wallValue's bulge * chordY) / chordLength)
+                set middleY to middleY - ((wallValue's bulge * chordX) / chordLength)
+            set middleTop to (the bim underside of plate plateValue at (a cad vector2 with x middleX and y middleY) in modelValue) + raise
+            set lowest to the minimum of (the minimum of startTop and finishTop) and middleTop
+            set startTop to lowest
+            set finishTop to lowest
+        if ((the minimum of startTop and finishTop) - footHeight) < 0.1:
+            return refusedFit
+        set sloped to (the absolute value of (startTop - finishTop)) > 0.0005
+        if sloped = false:
+            set levelTop to the minimum of startTop and finishTop
+            set startTop to levelTop
+            set finishTop to levelTop
+        return @intrinsic("construct", a bim wall top fit record, true, startTop, finishTop, sloped)
+
+# Wall `wallId`'s top where plate `plateId`'s underside puts it (`the bim
+# top fit of wall`): its height reaching the highest point, its contour the
+# slope along it (none for a level top). Nothing is written when the wall
+# already stands so. False, and the wall unchanged, when the fit is
+# refused.
+function fit bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+    execute:
+        set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
+        set plateFound to the bim slab index of plateId in (@intrinsic("dereference", target))
+        if (wallFound's valid = false) or (plateFound's valid = false):
+            return false
+        set wallValue to the item at wallFound's position in (target's walls's values)
+        set topFit to the bim top fit of wall wallValue under plate (the item at plateFound's position in (target's slabs's values)) in (@intrinsic("dereference", target))
+        if topFit's valid = false:
+            return false
+        set storeyElevation to (the item at (the bim level index of wallValue's levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+        set fittedHeight to (the maximum of topFit's startTop and topFit's finishTop) - (storeyElevation + wallValue's baseOffset)
+        set wantedCorners to an empty list of a cad vector2
+        if topFit's sloped:
+            set runLength to the cad distance from wallValue's start to wallValue's finish
+            append (a cad vector2 with x 0.0 and y wallValue's baseOffset) to wantedCorners
+            append (a cad vector2 with x runLength and y wallValue's baseOffset) to wantedCorners
+            append (a cad vector2 with x runLength and y (topFit's finishTop - storeyElevation)) to wantedCorners
+            append (a cad vector2 with x 0.0 and y (topFit's startTop - storeyElevation)) to wantedCorners
+        set heldCorners to the bim face contour of wallId in (@intrinsic("dereference", target))
+        set sameCorners to (the length of heldCorners) = (the length of wantedCorners)
+        if sameCorners:
+            loop cornerCursor from 0 to the length of wantedCorners:
+                if (the cad distance from (the item at cornerCursor in wantedCorners) to (the item at cornerCursor in heldCorners)) > 0.0006:
+                    set sameCorners to false
+        free heldCorners
+        if sameCorners = false:
+            keep bim face contour wantedCorners of wallId in target
+        free wantedCorners
+        if ((the absolute value of (fittedHeight - wallValue's height)) > 1e-7) or (wallValue's topLevelId != the bim refused id):
+            replace item at index wallFound's position in (target's walls's values) with (@intrinsic("construct", a bim wall record, wallValue's id, wallValue's typeId, wallValue's levelId, wallValue's start, wallValue's finish, fittedHeight, wallValue's bulge, wallValue's lean, wallValue's rise, wallValue's baseOffset, the bim refused id))
+            note bim change of wallId in target
+        return true
+
+# Wall `wallId`'s top attached to the underside of plate `plateId` (a
+# floor, roof or ceiling), letting go of a level it was held at; refused,
+# and the wall unchanged, when the plate is not there or its underside
+# lies less than 0.1 m above the wall's foot.
+function attach bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+    execute:
+        set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
+        set plateFound to the bim slab index of plateId in (@intrinsic("dereference", target))
+        if (wallFound's valid = false) or (plateFound's valid = false):
+            return false
+        set topFit to the bim top fit of wall (the item at wallFound's position in (target's walls's values)) under plate (the item at plateFound's position in (target's slabs's values)) in (@intrinsic("dereference", target))
+        if topFit's valid = false:
+            return false
+        set bim setting (bim wall top attachment setting) of wallId to plateId keeping true in target
+        return fit bim wall wallId top to plate plateId in target
+
+# Wall `wallId` no longer attached to a plate: its height stays, the
+# contour its attachment gave it goes.
+function release bim wall {a 64 bit integer:wallId} top attachment in {a pointer to a bim model record:target}:
+    execute:
+        if (the bim top attachment of wall wallId in (@intrinsic("dereference", target))) = the bim refused id:
+            return nothing
+        set bim setting (bim wall top attachment setting) of wallId to (0 as a 64 bit integer) keeping false in target
+        set noCorners to an empty list of a cad vector2
+        keep bim face contour noCorners of wallId in target
+        free noCorners
+
+# Wall `wallId`'s top Unconnected: neither held at a level nor attached,
+# its height kept.
+function free bim wall {a 64 bit integer:wallId} top in {a pointer to a bim model record:target}:
+    execute:
+        release bim wall wallId top attachment in target
+        return hold bim wall wallId top at level (the bim refused id) in target
+
+# Wall `wallId`'s top `raise` metres above the level it is held at or the
+# underside it is attached to (negative: below), to the millimetre; an
+# Unconnected wall keeps it for when it is constrained. Refused, and the
+# wall unchanged, when the top would come less than 0.1 m above the foot.
+function set bim wall {a 64 bit integer:wallId} top offset to {a 64 bit floating-point number:raise} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim wall index of wallId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set wallValue to the item at found's position in (target's walls's values)
+        set millimetres to (the floor of ((raise * 1000.0) + 0.5)) as a 64 bit integer
+        set formerReading to the bim setting (bim wall top offset setting) of wallId in (@intrinsic("dereference", target))
+        set bim setting (bim wall top offset setting) of wallId to millimetres keeping (millimetres != (0 as a 64 bit integer)) in target
+        set attachedTo to the bim top attachment of wall wallId in (@intrinsic("dereference", target))
+        set kept to true
+        if attachedTo != the bim refused id:
+            set kept to fit bim wall wallId top to plate attachedTo in target
+        else if wallValue's topLevelId != the bim refused id:
+            set kept to hold bim wall wallId top at level wallValue's topLevelId in target
+        if kept = false:
+            set bim setting (bim wall top offset setting) of wallId to formerReading's value keeping formerReading's found in target
+        return kept
+
+# Every constrained wall top where its constraint puts it: a wall held at a
+# level reaches it (plus its top offset) and lets go when the level is
+# gone; an attached wall follows its plate's underside and, when the plate
+# is gone, keeps its last height. A top that would come too low stays where
+# it is. Walls already in place are not touched (nothing is journalled).
+function refresh bim wall tops in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of (target's walls's values):
+            set wallValue to the item at cursor in (target's walls's values)
+            if wallValue's topLevelId != the bim refused id:
+                set topFound to the bim level index of wallValue's topLevelId in (@intrinsic("dereference", target))
+                set storeyFound to the bim level index of wallValue's levelId in (@intrinsic("dereference", target))
+                if topFound's valid = false:
+                    ignore hold bim wall wallValue's id top at level (the bim refused id) in target
+                else if storeyFound's valid:
+                    set heldHeight to ((the item at topFound's position in (target's levels's values))'s elevation + (the bim top offset of wall wallValue's id in (@intrinsic("dereference", target)))) - ((the item at storeyFound's position in (target's levels's values))'s elevation + wallValue's baseOffset)
+                    if ((the absolute value of (heldHeight - wallValue's height)) > 1e-7) and (heldHeight >= 0.1):
+                        ignore hold bim wall wallValue's id top at level wallValue's topLevelId in target
+        set attachedWalls to an empty list of a 64 bit integer
+        set attachedPlates to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (target's settings's values):
+            set settingEntry to the item at cursor in (target's settings's values)
+            if settingEntry's code = bim wall top attachment setting:
+                append settingEntry's elementId to attachedWalls
+                append settingEntry's value to attachedPlates
+        loop cursor from 0 to the length of attachedWalls:
+            set attachedWall to the item at cursor in attachedWalls
+            set attachedPlate to the item at cursor in attachedPlates
+            if (the bim wall index of attachedWall in (@intrinsic("dereference", target)))'s valid = false:
+                set bim setting (bim wall top attachment setting) of attachedWall to (0 as a 64 bit integer) keeping false in target
+            else if (the bim slab index of attachedPlate in (@intrinsic("dereference", target)))'s valid = false:
+                release bim wall attachedWall top attachment in target
+            else:
+                ignore fit bim wall attachedWall top to plate attachedPlate in target
+        free attachedWalls
+        free attachedPlates
 
 # Level `levelId` lies at `elevationValue` and is `heightValue` high.
 function set bim level {a 64 bit integer:levelId} at {a 64 bit floating-point number:elevationValue} with height {a 64 bit floating-point number:heightValue} in {a pointer to a bim model record:target}:
@@ -3681,6 +3935,8 @@ function begin bim transaction in {a pointer to a bim document record:documentVa
 
 function commit bim transaction in {a pointer to a bim document record:documentValue}:
     execute:
+        # Walls follow the levels and plates their tops are constrained to.
+        refresh bim wall tops in (the address of (documentValue's current))
         # A provisional gesture may still be cancelled without losing redo.
         trim bim undo stack (documentValue's undoStack's values)
         set documentValue's redoStack to a cad topology list of a bim model record

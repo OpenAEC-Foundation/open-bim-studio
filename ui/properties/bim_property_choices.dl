@@ -7,7 +7,7 @@
 # element's phases, a sheet's paper and orientation, a linear element's
 # joints, a material of a type or of a layer, a linear type's shape, a
 # stair's or railing's part profiles, a level's extent, a property set to
-# add or remove) opens
+# add or remove, a wall's top constraint) opens
 # a list of its options in the properties panel instead of taking the next
 # value on every click. The panel sends `bim browser property` with one of
 # two codes: `the bim menu toggle of property` opens or shuts the menu of
@@ -62,7 +62,7 @@ function bim property {integer:rowCode} opens a menu:
             return true
         if (rowCode = bim opening rule property) or (rowCode = bim system pattern property):
             return true
-        if (rowCode = bim sheet paper property) or (rowCode = bim sheet orientation property):
+        if ((rowCode = bim sheet paper property) or (rowCode = bim sheet orientation property)) or (rowCode = bim wall top constraint property):
             return true
         if (rowCode = bim start connection property) or (rowCode = ((bim start connection property) + 1)):
             return true
@@ -237,6 +237,89 @@ local function the bim project setting code of property {integer:rowCode}:
             return bim project currency setting
         return bim project length unit setting
 
+# The selected wall: its place among the model's walls.
+local function the bim menu wall of {bim editor record:editor}:
+    execute:
+        set wallFound to the bim wall index of editor's selectionId in editor's documentValue's current
+        if editor's selectionKind != bim wall picked:
+            set wallFound's valid to false
+        return wallFound
+
+# The name of top constraint `targetId` (`the bim top constraint of wall`):
+# "Unconnected", "Up to level: Upper", or "Attached to roof 57" (a floor,
+# roof or ceiling and its id).
+function the bim top constraint name of {a 64 bit integer:targetId} in {bim model record:modelValue}:
+    execute:
+        set levelFound to the bim level index of targetId in modelValue
+        if levelFound's valid:
+            return (the string form of "Up to level: ") + (the item at levelFound's position in (modelValue's levels's values))'s name
+        set plateFound to the bim slab index of targetId in modelValue
+        if plateFound's valid:
+            set plateRole to the bim role of plate (the item at plateFound's position in (modelValue's slabs's values)) in modelValue
+            set roleWord to the string form of "floor"
+            if plateRole = bim roof planar role:
+                set roleWord to the string form of "roof"
+            if plateRole = bim ceiling planar role:
+                set roleWord to the string form of "ceiling"
+            return ((the string form of "Attached to ") + roleWord) + ((the string form of " ") + (the string form of targetId))
+        return the string form of "Unconnected"
+
+# What the top of wall `wallValue` can be constrained to, in the order the
+# Top constraint menu offers it: the refused id (Unconnected); every level
+# a top held there (with its top offset) would stand at least 0.1 m above
+# the foot; every floor, roof and ceiling over the wall's middle whose
+# underside does (`the bim top fit of wall`); and what it is constrained to
+# now when that is none of these.
+function the bim top constraint targets of wall {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set targetIds to an empty list of a 64 bit integer
+        append (the bim refused id) to targetIds
+        set storeyFound to the bim level index of wallValue's levelId in modelValue
+        if storeyFound's valid:
+            set footHeight to (the item at storeyFound's position in (modelValue's levels's values))'s elevation + wallValue's baseOffset
+            set raise to the bim top offset of wall wallValue's id in modelValue
+            loop levelCursor from 0 to the length of (modelValue's levels's values):
+                set levelValue to the item at levelCursor in (modelValue's levels's values)
+                if ((levelValue's elevation + raise) - footHeight) >= 0.1:
+                    append levelValue's id to targetIds
+            set middlePoint to a cad vector2 with x ((wallValue's start's x + wallValue's finish's x) * 0.5) and y ((wallValue's start's y + wallValue's finish's y) * 0.5)
+            loop plateCursor from 0 to the length of (modelValue's slabs's values):
+                set plateValue to the item at plateCursor in (modelValue's slabs's values)
+                if bim plate point middlePoint is inside (plateValue's outline's values):
+                    if (the bim top fit of wall wallValue under plate plateValue in modelValue)'s valid:
+                        append plateValue's id to targetIds
+        set standingTarget to the bim top constraint of wall wallValue in modelValue
+        set offered to false
+        loop targetCursor from 0 to the length of targetIds:
+            if (the item at targetCursor in targetIds) = standingTarget:
+                set offered to true
+        if offered = false:
+            append standingTarget to targetIds
+        return targetIds
+
+# The selected wall's top constrained to target `chosenTarget` (`the bim
+# top constraint targets of wall`), as one edit: Unconnected keeps its
+# height, a level holds it there, a plate attaches it. Refused, and nothing
+# changed, when the top would come less than 0.1 m above the foot.
+local function constrain bim editor wall top to {a 64 bit integer:chosenTarget} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set wallId to editor's selectionId
+        begin bim transaction in (the address of (editor's documentValue))
+        set changed to false
+        if chosenTarget = the bim refused id:
+            set changed to free bim wall wallId top in target
+        else if (the bim level index of chosenTarget in (@intrinsic("dereference", target)))'s valid:
+            set changed to hold bim wall wallId top at level chosenTarget in target
+        else:
+            set changed to attach bim wall wallId top to plate chosenTarget in target
+        if changed = false:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Refused: the top would come less than 0.1 m above the foot"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to (the string form of "Top constraint: ") + (the bim top constraint name of chosenTarget in (@intrinsic("dereference", target)))
+
 # The options of row `rowCode` for what `editor` shows, in order, as the
 # row shows them; empty when the row is no choice there. The last phase
 # stands for "the last" (the refused id), as the stepping keeps it; the
@@ -246,6 +329,14 @@ function the bim menu offering of property {integer:rowCode} for {bim editor rec
         set offeredNames to an empty list of a string
         set modelValue to editor's documentValue's current
         set phaseList to modelValue's phases's values
+        if rowCode = bim wall top constraint property:
+            set menuWall to the bim menu wall of editor
+            if menuWall's valid:
+                set targetIds to the bim top constraint targets of wall (the item at menuWall's position in (modelValue's walls's values)) in modelValue
+                loop targetCursor from 0 to the length of targetIds:
+                    append (the bim top constraint name of (the item at targetCursor in targetIds) in modelValue) to offeredNames
+                free targetIds
+            return offeredNames
         if (rowCode = bim phase created property) or (rowCode = bim phase demolished property):
             if editor's selectionKind = bim nothing picked:
                 return offeredNames
@@ -388,6 +479,19 @@ function the bim standing menu option of property {integer:rowCode} for {bim edi
     execute:
         set modelValue to editor's documentValue's current
         set phaseTotal to the length of (modelValue's phases's values)
+        if rowCode = bim wall top constraint property:
+            set menuWall to the bim menu wall of editor
+            if menuWall's valid = false:
+                return -1
+            set wallValue to the item at menuWall's position in (modelValue's walls's values)
+            set standingTarget to the bim top constraint of wall wallValue in modelValue
+            set targetIds to the bim top constraint targets of wall wallValue in modelValue
+            set standingPlace to -1
+            loop targetCursor from 0 to the length of targetIds:
+                if (the item at targetCursor in targetIds) = standingTarget:
+                    set standingPlace to targetCursor
+            free targetIds
+            return standingPlace
         if (rowCode = bim phase created property) or (rowCode = bim phase demolished property):
             if (editor's selectionKind = bim nothing picked) or (phaseTotal = 0):
                 return -1
@@ -560,6 +664,13 @@ function choose bim editor menu option {integer:optionIndex} of property {intege
             return nothing
         set target to the address of (editor's documentValue's current)
         set lastOption to (optionIndex = (offeredTotal - 1))
+        if rowCode = bim wall top constraint property:
+            set menuWall to the bim menu wall of (@intrinsic("dereference", editor))
+            set targetIds to the bim top constraint targets of wall (the item at menuWall's position in (target's walls's values)) in (@intrinsic("dereference", target))
+            set chosenTarget to the item at optionIndex in targetIds
+            free targetIds
+            constrain bim editor wall top to chosenTarget in editor
+            return nothing
         if (rowCode = bim phase created property) or (rowCode = bim phase demolished property):
             set phaseList to target's phases's values
             set chosenPhase to the bim refused id
