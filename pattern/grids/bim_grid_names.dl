@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: MPL-2.0
+# The names of grid lines (#59, #60): how a name continues (A, B … Z, AA;
+# 1, 2 … 10), skipping the letters I and O when the project asks for it,
+# and renumbering every line of one direction in order across it. Names are
+# unique per direction (the maintainer's answer to Q20, #117); a line's name
+# is its IfcGridAxis AxisTag, so a rename travels through IFC and IFCX as
+# any other edit of the model does.
+import bim/bim_model.dl
+import ui/editor/bim_grid_handles.dl
+
+# Whether the project skips the letters I and O in grid names (a setting of
+# the project, element 0): they read as 1 and 0 on a drawing.
+function bim grid names skip setting:
+    replacement:
+        2400420
+
+function bim grid names skip letters in {bim model record:modelValue}:
+    execute:
+        set reading to the bim setting (bim grid names skip setting) of (0 as a 64 bit integer) in modelValue
+        return reading's found and (reading's value = (1 as a 64 bit integer))
+
+# Alphabetic labels use spreadsheet-style carries. Numeric suffixes carry
+# as text, including arbitrarily long numbers, without integer conversion.
+function the next bim grid pattern name after {a string:label}:
+    execute:
+        set count to the length of label
+        if count = 0:
+            return the string form of "1"
+        set upper to true
+        set lower to true
+        loop cursor from 0 to count:
+            set code to (the character at cursor in label) as an integer
+            if (code < 65) or (code > 90):
+                set upper to false
+            if (code < 97) or (code > 122):
+                set lower to false
+        set copy to the substring of label from 0 spanning count bytes
+        if upper or lower:
+            set first to 65
+            set last to 90
+            if lower:
+                set first to 97
+                set last to 122
+            set cursor to count - 1
+            loop while cursor >= 0:
+                set code to (the character at cursor in copy) as an integer
+                if code < last:
+                    store ((code + 1) as a byte) into the data of copy at cursor
+                    return copy
+                store (first as a byte) into the data of copy at cursor
+                set cursor to cursor - 1
+            if lower:
+                return (the string form of "a") + copy
+            return (the string form of "A") + copy
+        set suffix to count
+        set cursor to count - 1
+        loop while cursor >= 0:
+            set code to (the character at cursor in label) as an integer
+            if (code >= 48) and (code <= 57):
+                set suffix to cursor
+                set cursor to cursor - 1
+            else:
+                set cursor to -1
+        if suffix = count:
+            return label + (the string form of "2")
+        set cursor to count - 1
+        loop while cursor >= suffix:
+            set code to (the character at cursor in copy) as an integer
+            if code < 57:
+                store ((code + 1) as a byte) into the data of copy at cursor
+                return copy
+            store (48 as a byte) into the data of copy at cursor
+            set cursor to cursor - 1
+        return ((the substring of label from 0 spanning suffix bytes) + (the string form of "1")) + (the substring of copy from suffix spanning (count - suffix) bytes)
+
+# Whether `nameText` is letters only and holds an I or an O, in either case.
+function bim grid text {a string:nameText} holds I or O:
+    execute:
+        if (the length of nameText) = 0:
+            return false
+        set lettersOnly to true
+        set holding to false
+        loop cursor from 0 to the length of nameText:
+            set code to (the character at cursor in nameText) as an integer
+            if ((code >= 65) and (code <= 90)) or ((code >= 97) and (code <= 122)):
+                if (((code = 73) or (code = 79)) or (code = 105)) or (code = 111):
+                    set holding to true
+            else:
+                set lettersOnly to false
+        return lettersOnly and holding
+
+# The name after `label`; with `skipsLetters`, letter names holding an I or
+# an O are passed over (H, J … N, P; HZ, JA).
+function the next bim grid name after {a string:label} skipping letters {boolean:skipsLetters}:
+    execute:
+        set following to the next bim grid pattern name after label
+        if skipsLetters:
+            loop while bim grid text following holds I or O:
+                set following to the next bim grid pattern name after following
+        return following
+
+# The places, in the model's grids, of the lines parallel to grid `gridId`
+# (itself included), in order across them: left to right, and bottom to top
+# for lines that run west to east; empty for a stale id. The caller frees
+# the list.
+function the bim grid places across lines parallel to {a 64 bit integer:gridId} in {bim model record:modelValue}:
+    execute:
+        set placeList to an empty list of an integer
+        set found to the bim grid index of gridId in modelValue
+        if found's valid = false:
+            return placeList
+        set source to the item at found's position in (modelValue's grids's values)
+        set span to the cad distance from source's start to source's finish
+        if span <= 1e-9:
+            return placeList
+        set acrossX to (source's start's y - source's finish's y) / span
+        set acrossY to (source's finish's x - source's start's x) / span
+        if (acrossX < -1e-9) or (((the absolute value of acrossX) <= 1e-9) and (acrossY < 0.0)):
+            set acrossX to 0.0 - acrossX
+            set acrossY to 0.0 - acrossY
+        set keys to an empty list of a 64 bit floating-point number
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set candidate to the item at cursor in (modelValue's grids's values)
+            if (candidate's id = gridId) or (bim grid candidate runs parallel to source):
+                set acrossKey to (candidate's start's x * acrossX) + (candidate's start's y * acrossY)
+                # Stable: after every line at or before it.
+                set insertAt to 0
+                loop keyCursor from 0 to the length of keys:
+                    if (the item at keyCursor in keys) <= acrossKey:
+                        set insertAt to insertAt + 1
+                insert acrossKey into keys at index insertAt
+                insert cursor into placeList at index insertAt
+        free keys
+        return placeList
+
+# The name of the first line, across them, of the lines parallel to grid
+# `gridId`; empty for a stale id.
+function the first bim grid name across lines parallel to {a 64 bit integer:gridId} in {bim model record:modelValue}:
+    execute:
+        set placeList to the bim grid places across lines parallel to gridId in modelValue
+        set firstName to the string form of ""
+        if (the length of placeList) > 0:
+            set firstName to (the item at (the item at 0 in placeList) in (modelValue's grids's values))'s name
+        free placeList
+        return firstName
+
+# Whether a line parallel to grid `gridId`, other than itself, is named
+# `label` already.
+function bim grid name {a string:label} is taken across lines parallel to {a 64 bit integer:gridId} in {bim model record:modelValue}:
+    execute:
+        set placeList to the bim grid places across lines parallel to gridId in modelValue
+        set isTaken to false
+        loop cursor from 0 to the length of placeList:
+            set candidate to the item at (the item at cursor in placeList) in (modelValue's grids's values)
+            if (candidate's id != gridId) and (candidate's name = label):
+                set isTaken to true
+        free placeList
+        return isTaken
+
+# Renames every line parallel to grid `gridId`, in order across them, from
+# `firstLabel` on: letters continue as letters and numbers as numbers, past
+# I and O when the project skips them. Gives the number of lines in that
+# direction; zero refuses (a stale id or an empty label), the model
+# untouched. Only lines whose name changes are noted as changed. The caller
+# wraps it in one transaction.
+function renumber bim grids parallel to {a 64 bit integer:gridId} from {a string:firstLabel} in {a pointer to a bim model record:target}:
+    execute:
+        if (the length of firstLabel) = 0:
+            return 0
+        set placeList to the bim grid places across lines parallel to gridId in (@intrinsic("dereference", target))
+        set placeCount to the length of placeList
+        if placeCount = 0:
+            free placeList
+            return 0
+        set skipsLetters to bim grid names skip letters in (@intrinsic("dereference", target))
+        set currentName to firstLabel
+        loop cursor from 0 to placeCount:
+            set placeIndex to the item at cursor in placeList
+            set renamed to the item at placeIndex in (target's grids's values)
+            if renamed's name != currentName:
+                set renamed's name to currentName
+                replace item at index placeIndex in (target's grids's values) with renamed
+                note bim change of renamed's id in target
+            set currentName to the next bim grid name after currentName skipping letters skipsLetters
+        free placeList
+        return placeCount

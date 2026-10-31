@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: MPL-2.0
+# The shape handles of a grid line and the rows its ends stand in (#61).
+#
+# A grid's bubble sits on the end of its line, so the handle that drags an
+# end stands a set paper distance beyond the bubble's rim: a click on the
+# bubble selects the line, a press on the handle drags its end, and the two
+# no longer fight. The distance is in paper millimetres, scaled as the
+# bubble is (the maintainer's answer to Q21, #117). The ends of parallel
+# lines that stand in one row with the dragged end drag with it (the
+# model's extent, "3D", is the default); a dragged end snaps to the row of
+# the other lines' ends and onto crossing lines.
+import bim/bim_model.dl
+
+# Grid bubbles are screen symbols; camera zoom changes their position only.
+# The plan draws them this many pixels in radius (`ui/panels/bim_plan_panel.dl`).
+function bim grid screen head radius:
+    replacement:
+        11.0
+
+# A bubble is 3 paper millimetres in radius (6 mm across, as a sheet draws
+# it); the handle stands 3 paper millimetres beyond its rim.
+function bim grid bubble radius in paper millimetres:
+    replacement:
+        3.0
+
+function bim grid handle gap in paper millimetres:
+    replacement:
+        3.0
+
+# The window passes the editor a pick tolerance of this many pixels, in
+# metres (`move bim editor pointer to … within …` in `ui/shell/main.dl`).
+function bim grid pick pixels:
+    replacement:
+        8.0
+
+# How far an end's handle stands beyond the line's end, for a bubble
+# `bubbleRadius` across (pixels in, pixels out; or paper units).
+function the bim grid handle reach for bubble {a 64 bit floating-point number:bubbleRadius}:
+    execute:
+        return bubbleRadius + ((bim grid handle gap in paper millimetres) * (bubbleRadius / (bim grid bubble radius in paper millimetres)))
+
+# The same reach in metres, for a pick tolerance of `pickTolerance` metres
+# (which stands for `bim grid pick pixels` pixels).
+function the bim grid handle reach at tolerance {a 64 bit floating-point number:pickTolerance}:
+    execute:
+        return (the bim grid handle reach for bubble (bim grid screen head radius)) * (pickTolerance / (bim grid pick pixels))
+
+# Where the handle of the start (or, `atFinish`, the finish) of `gridValue`
+# stands: `reachLength` metres beyond that end, along the line.
+function the bim grid handle of {bim grid record:gridValue} at end {boolean:atFinish} reaching {a 64 bit floating-point number:reachLength}:
+    execute:
+        set endPoint to gridValue's start
+        set innerPoint to gridValue's finish
+        if atFinish:
+            set endPoint to gridValue's finish
+            set innerPoint to gridValue's start
+        set span to the cad distance from innerPoint to endPoint
+        if span <= 1e-9:
+            return endPoint
+        return a cad vector2 with x (endPoint's x + (((endPoint's x - innerPoint's x) / span) * reachLength)) and y (endPoint's y + (((endPoint's y - innerPoint's y) / span) * reachLength))
+
+# Whether two grid lines run parallel: the sine of the angle between them
+# below one in a million (and neither without length).
+function bim grid {bim grid record:oneGrid} runs parallel to {bim grid record:otherGrid}:
+    execute:
+        set oneSpan to the cad distance from oneGrid's start to oneGrid's finish
+        set otherSpan to the cad distance from otherGrid's start to otherGrid's finish
+        if (oneSpan <= 1e-9) or (otherSpan <= 1e-9):
+            return false
+        set oneX to oneGrid's finish's x - oneGrid's start's x
+        set oneY to oneGrid's finish's y - oneGrid's start's y
+        set otherX to otherGrid's finish's x - otherGrid's start's x
+        set otherY to otherGrid's finish's y - otherGrid's start's y
+        set crossSine to ((oneX * otherY) - (oneY * otherX)) / (oneSpan * otherSpan)
+        return (the absolute value of crossSine) <= 1e-6
+
+# The unit direction from the fixed end of `gridValue` to its dragged end
+# (the finish when `atFinish`), zero for a line without length.
+function the bim grid outward direction of {bim grid record:gridValue} at end {boolean:atFinish}:
+    execute:
+        set span to the cad distance from gridValue's start to gridValue's finish
+        if span <= 1e-9:
+            return a cad vector2 with x 0.0 and y 0.0
+        set sign to 1.0
+        if atFinish = false:
+            set sign to -1.0
+        return a cad vector2 with x (((gridValue's finish's x - gridValue's start's x) / span) * sign) and y (((gridValue's finish's y - gridValue's start's y) / span) * sign)
+
+# Whether the end of `gridValue` furthest along `alongUnit` is its finish.
+function bim grid {bim grid record:gridValue} reaches furthest at its last point along {cad vector2:alongUnit}:
+    execute:
+        set startAlong to (gridValue's start's x * alongUnit's x) + (gridValue's start's y * alongUnit's y)
+        set finishAlong to (gridValue's finish's x * alongUnit's x) + (gridValue's finish's y * alongUnit's y)
+        return finishAlong >= startAlong
+
+# The point on the line of `draggedGrid` (through its end opposite the
+# dragged one, outward) level with the end of `otherGrid` on the
+# same side: where the dragged end stands in one row with that end.
+function the bim grid row point of {bim grid record:otherGrid} on {bim grid record:draggedGrid} at end {boolean:atFinish}:
+    execute:
+        set outwardUnit to the bim grid outward direction of draggedGrid at end atFinish
+        set fixedPoint to draggedGrid's start
+        if atFinish = false:
+            set fixedPoint to draggedGrid's finish
+        set otherEnd to otherGrid's start
+        if bim grid otherGrid reaches furthest at its last point along outwardUnit:
+            set otherEnd to otherGrid's finish
+        set alongDistance to ((otherEnd's x - fixedPoint's x) * outwardUnit's x) + ((otherEnd's y - fixedPoint's y) * outwardUnit's y)
+        return a cad vector2 with x (fixedPoint's x + (outwardUnit's x * alongDistance)) and y (fixedPoint's y + (outwardUnit's y * alongDistance))
+
+# The ids of the other grid lines parallel to grid `draggedId` whose end on
+# the side of its start (or, `atFinish`, its finish) stands in one row with
+# that end: within a millimetre along the line. Empty for a stale id. The
+# caller frees the list.
+function the bim grid ends in row with {a 64 bit integer:draggedId} at end {boolean:atFinish} in {bim model record:modelValue}:
+    execute:
+        set rowIds to an empty list of a 64 bit integer
+        set found to the bim grid index of draggedId in modelValue
+        if found's valid = false:
+            return rowIds
+        set draggedGrid to the item at found's position in (modelValue's grids's values)
+        set draggedEnd to draggedGrid's start
+        if atFinish:
+            set draggedEnd to draggedGrid's finish
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            set otherGrid to the item at cursor in (modelValue's grids's values)
+            if (otherGrid's id != draggedId) and (bim grid otherGrid runs parallel to draggedGrid):
+                set rowPoint to the bim grid row point of otherGrid on draggedGrid at end atFinish
+                if (the cad distance from rowPoint to draggedEnd) <= 0.001:
+                    append otherGrid's id to rowIds
+        return rowIds
+
+# Moves the end of each grid in `rowIds` on the side `rowDirection` points to
+# by `shiftLength` metres along its own line, from where it stands in `original`,
+# into `target`. Lines that would lose their length are left as they were.
+function shift bim grid ends {a pointer to a list:rowIds} of {bim model record:original} along {cad vector2:rowDirection} by {a 64 bit floating-point number:shiftLength} in {a pointer to a bim model record:target}:
+    execute:
+        loop cursor from 0 to the length of rowIds:
+            set found to the bim grid index of (the item at cursor in rowIds) in original
+            if found's valid:
+                set rowGrid to the item at found's position in (original's grids's values)
+                set atFinish to bim grid rowGrid reaches furthest at its last point along rowDirection
+                set rowOutward to the bim grid outward direction of rowGrid at end atFinish
+                set newStart to rowGrid's start
+                set newFinish to rowGrid's finish
+                if atFinish:
+                    set newFinish to a cad vector2 with x (rowGrid's finish's x + (rowOutward's x * shiftLength)) and y (rowGrid's finish's y + (rowOutward's y * shiftLength))
+                else:
+                    set newStart to a cad vector2 with x (rowGrid's start's x + (rowOutward's x * shiftLength)) and y (rowGrid's start's y + (rowOutward's y * shiftLength))
+                if (the cad distance from newStart to newFinish) > 0.001:
+                    ignore move bim grid rowGrid's id to newStart and newFinish in target
