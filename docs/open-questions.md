@@ -4,168 +4,158 @@
 one asked?
 
 Collected on 31 October 2026 from the roadmap, the ADRs, the risk register, the work board and
-every open issue. Each question links to where it is asked; the answer belongs there (an issue
-comment, an ADR or the plan), and the line here is then struck through or removed. Questions an
+every open issue. The maintainer answered the first round the same day; the answers are recorded
+below and carried into the ADRs, the roadmap, the plans and the risk register. Questions an
 implementer can settle alone are not listed.
 
-Ordered by how much work they unblock.
+## Round 2 — still open
 
-## A. Direction of the repository
+Questions the first round left open, parked, or raised. Each needs the maintainer.
 
-1. **ADR-0004 (our own kernel, in DynLex):** accept it, or supersede it with an ADR that records
-   what ADR-0007 and ADR-0008 already assume? Its three conditions (R-18 on a clean compiler pin;
-   the GPU compute path decided; the `-O` flag demonstrated in the real build) are not met.
-   ([ADR-0004](architecture/decisions/0004-build-our-own-kernel-in-dynlex.md) §What must be true)
-2. **The B-rep arm:** written ourselves, ported from `cadkernel` (Option D) or linked (Option E)?
-   D and E change the licence position (MPL-2.0) and need their own ADR. Must be decided before M1.
-3. **GPU compute:** commit to a DynLex `GLCompute` change on the DynLex tracker, or run that work
-   on CPU threads for good? (ADR-0004 condition 2, P-28, R-20)
-4. **Roadmap phases 4–6:** rewrite the roadmap around the product track now that the build lives
-   here, or keep the research phases and the build brief as the formal endpoint?
-   ([roadmap](roadmap.md#where-the-plan-stands-31-october-2026))
-5. **The MVP slice:** confirm the thin vertical slice (one wall type, one opening, one storey, one
-   plan, one section, one parametric component, one IFC export), or replace it with the
-   structural plan as the first end-to-end target? ([roadmap](roadmap.md) phase 4)
+1. **ADR-0004** (own kernel in DynLex): accept, supersede or keep `proposed`? Asked again with
+   the trade-offs written out; the first round's answer asked for more explanation. (R1-1)
+2. **CPU and GPU per operation** (R1-3): who decides per operation which runs on the GPU, and on
+   what evidence? Does our compute dispatch (DynLex PR #8) go upstream first?
+3. **The full app in the browser** (R1-7): a long-term goal or a requirement for a release? Which
+   renderer path (WebGPU next to Vulkan) and which DynLex target (WASM) does it need?
+4. **Designing for streaming now** (R1-6): what must the data model fix today (tile identity,
+   cross-tile references), and when does the R-14 spike run?
+5. **Bridges to Python, Java and other languages** (R1-8): through the C-ABI seam of ADR-0008, as
+   a plugin process, or embedded? Which language first, and which sandbox?
+6. **IfcX in practice** (ADR-0010): which IfcX release do we follow, and which STEP schema is the
+   default export for partners?
+7. **Choosing the CRS from the world location** (R1-24): which map source for the built-in map,
+   and where does the list of local systems come from?
+8. **Round edges in building systems** (R1-30): arcs only or free curves, and how do round members
+   and panels go to IFC?
+9. **Connections between systems and elements as objects** (R1-31): one join object for all
+   element kinds, or one per discipline? Which IFC relationship?
+10. **The concept presets** (R1-52): asked again with an explanation.
+11. **Licence of new, non-derived files** (ADR-0009): the repository has no root `LICENSE` and
+    every source file carries MPL-2.0. Keep MPL-2.0 everywhere, or another licence for new code?
+12. **The first licence check of the existing stack** (R1-10): continuous checks cover new
+    dependencies; who checks what is already there?
+13. **Code signing** (R1-36): where do the Authenticode certificate and the signing key come from?
+14. **The real structural drawing** (R1-13): when does it arrive, and who compares against it?
+15. **Parked:** KW/FB codings (R1-15), whole-scene analytic renderer and rounded B-rep export
+    (R1-47), InputV1 (R1-50). Still parked, or one of them now?
 
-## B. Phase 1 and the risk register
+## Round 1 — answered 31 October 2026
 
-6. **Unbounded extent only, or streaming too?** Blocks R-14. ([roadmap](roadmap.md) phase 1)
-7. **Browser support:** a requirement or not? To be recorded as an ADR. (R-08)
-8. **Scripting escape hatch for parametric components:** designed in from the start, or not?
-   (R-06; relates to #40, families with parametric references)
-9. **The free-modelling / semantic-correctness boundary:** where does it sit? (R-07,
-   [`vision/non-goals.md`](vision/non-goals.md))
-10. **Licence review of the whole stack:** who does it, and is it a precondition for the next
-    release? (R-11)
-11. **Remaining phase-1 research** (prior art on Archicad, FreeCAD, Speckle; 3D Tiles; the IFC
-    data model at the needed depth; 2D drawing scope R-05; BIM Basis ILS): still wanted, and in
-    which order — or superseded by the product track?
+R1-n is question n of round 1. "Recorded in" names where the answer now lives.
 
-## C. Views, grids, levels and georeferencing (epic #67)
+### A. Direction of the repository
 
-The five questions the planning round says block the start:
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 1 | Accept ADR-0004 or supersede it? | **Not answered** — the maintainer asked for a fuller explanation with pros and cons. | Round 2, question 1 |
+| 2 | The B-rep arm: own, port (D) or link (E)? | The port of `cadkernel` (Option D); MPL-2.0 per file; new non-derived files may carry another licence. | [ADR-0009](architecture/decisions/0009-port-cadkernel-as-the-b-rep-arm.md) |
+| 3 | GPU compute in DynLex, or CPU threads for good? | Neither alone: the best combination of CPU and GPU, chosen per operation. | ADR-0004 condition 2 note; round 2, question 2 |
+| 4 | Rewrite the roadmap around the product track? | Yes: phases 0–3 stay as closed history; the roadmap continues in epics, modules and releases. | [roadmap](roadmap.md) |
+| 5 | The MVP: thin vertical slice, or the structural plan? | The structural plan end to end: grid, levels, columns, beams, walls, floors, tags, sheet, IFC export. | [roadmap](roadmap.md) |
 
-12. **Where each layer of the drawing properties lives** — project settings, drawing type, view
-    (#56, #57). The structural plan design §6 proposes: project = defaults, drawing type = what
-    the discipline fixes, view = overrides. Confirm or overrule.
-13. **Acceptance of the structural plan** (#58). The design proposes its §3. Confirm or overrule.
-14. **Grid pattern syntax** (#59): `4 x 5400`, `4*5400`, `5400 6000 5400`, or all; metres or
-    project units; which way new lines go (away from the previous line, or by which end the plus
-    sits at)?
-15. **KW and FB frame codings** (#68): which standard or convention does each refer to?
-16. **IFC4 or IFC4.3** as the reference schema (#66)?
+### B. Phase 1 and the risk register
 
-Also confirm the calls the structural plan design made after the builder's reading (§10, seven
-items: hybrid `plan.dl` only for planar, linear and grids; no canvas or exporter change; generated
-tags only under structural types; reuse of the existing "Structural plan" type; level elevation as
-cut datum; pilot house under `--house` in `views/drawings`; below/above from records, cut from the
-kernel). Step 0 was merged on these calls.
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 6 | Unbounded extent only, or streaming too? | Design both now, so the data model does not rule streaming out. | R-14; round 2, question 4 |
+| 7 | Browser support a requirement? | The full app in the browser (WASM/WebGPU) is a goal. | R-08; round 2, question 3 |
+| 8 | Scripting escape hatch? | DynLex by default, plus bridges to Python, Java and other languages. | R-06; round 2, question 5 |
+| 9 | Free modelling vs semantic correctness? | Free geometry is always allowed; unclassified it exports as IfcBuildingElementProxy and the app asks for a class. | R-07 |
+| 10 | Who does the licence check, when? | Continuously: every PR that adds a dependency carries its licence check. | R-11; round 2, question 12 |
+| 11 | Remaining phase-1 research? | Only the IFC data model (with #66) and BIM Basis ILS; the rest is dropped. | [roadmap](roadmap.md) phase 1 |
 
-Further questions on the individual issues:
+### C. Views, grids, levels and georeferencing (epic #67)
 
-17. **#56** — Does a detail stay a view with a crop and a scale, or carry its own extra lines?
-18. **#57** — How does a user see whether a value is inherited or overridden? Can the view type
-    map to IFC presentation entities, or is it native only?
-19. **#59** — Should levels get the same plus handle (add storeys with a height pattern)?
-20. **#60** — Renumbering from a grid properties panel, a right-click, or both? Are grid names
-    unique per direction or per model?
-21. **#61** — Handle distance from the bubble in paper millimetres or model metres? Default
-    extent per view (2D) or per model (3D)?
-22. **#62** — One height for the whole grid or per line? In IFC as placement plus extruded
-    representation, or as a property set?
-23. **#63** — Is a level's extent a property of the level (model) or of the view? In IFC as a
-    native property set or as the storey's representation?
-24. **#65** — A list of known CRSs per country in `localisation/`, or free entry? Is the CRS
-    picked by hand or derived from latitude/longitude?
-25. **#66** — Under which property set name do native-only properties travel?
-26. **#4** — The discipline switch (Design, Architecture, Structure, MEP, Fabrication): does the
-    view's discipline property of #56 follow it, and is the "show everything" escape wanted?
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 12 | Where each layer of drawing properties lives | Confirmed: project → drawing type → view, falling through. | [views plan](superpowers/plans/2026-10-29-views-grids-levels-plan.md) |
+| 13 | Acceptance of the structural plan (#58) | Design §3 plus a comparison with one real structural drawing the maintainer supplies (kept private, outside the repository). | views plan |
+| 14 | Grid pattern syntax (#59) | Both `4x5400` (also `4*5400`) and `5400 6000 5400`, in mm; the direction follows from the end where the plus sits. | views plan |
+| 15 | KW and FB codings (#68) | **Parked.** | Round 2, question 15 |
+| 16 | IFC4 or IFC4.3? | IfcX as the reference, taking as much as possible from IFC4.3. | [ADR-0010](architecture/decisions/0010-ifcx-as-the-reference-schema.md) |
+| 17 | #56 detail | A view with crop and scale, plus its own 2D detail lines and annotations that exist only in that view. | #56 |
+| 18 | #57 inherited or overridden | The properties panel shows the origin per value (grey inherited, bold overridden, with a reset); the view type is native only, in its own property set. | #57 |
+| 19 | #59 plus handle for levels | No; levels are added one at a time. | #59 |
+| 20 | #60 renumbering | Both a panel for the whole direction and a right-click for one line; names unique per direction. | #60 |
+| 21 | #61 handle distance and extent | Paper millimetres; extent 3D by default with a 2D override per view. | #61 |
+| 22 | #62 grid height | One height for the grid, overridable per line; in IFC as placement plus the plane's representation. | #62 |
+| 23 | #63 level extent | A property of the level with a per-view override, in a native property set; the level's contour must be editable. | #63 |
+| 24 | #65 choosing the CRS | From the world location the app offers a shortlist of systems; a built-in map shows where the project sits; coordinates are stored both in WGS-84 and in the local system. | #65; round 2, question 7 |
+| 25 | #66 property set name | Prefix `OpenAEC_`, shared with other OpenAEC tools. | ADR-0010 |
+| 26 | #4 discipline of a view | A new view takes the discipline chosen at the top and can be changed afterwards; "show all" is added. | #4 |
 
-## D. Building systems (Nino, #22)
+### D. Building systems (#22)
 
-27. **#68** — A frame as one IfcWindow with its parts as IfcMember/IfcPlate inside, or one
-    IfcWindow with a property set describing the division? Coding per frame or per project?
-28. **#69** — Whole system on first click and part on the second, or a modifier key? What does a
-    side handle do on a system with a fixed bay width: stretch the bays or add one?
-29. **#70** — Edit sketch also for the carrier line in plan, and for a level ceiling? At a
-    sloped edge: cut panels, or a rule per system type?
-30. **#71** — Does "round panel" mean a circular panel or a panel with rounded corners? How do two
-    round mullions meet at a corner (mitre, one through)?
-31. **#72** — Does "open hoek" mean a corner without a post (glass-to-glass or a gap), or an
-    outline that stops short? With glass-to-glass, which system's panel runs through?
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 27 | #68 frame to IFC | IfcWindow as an assembly with IfcMember and IfcPlate inside (IfcRelAggregates); coding per project, overridable per frame, in a property set. | #68 |
+| 28 | #69 selecting a system | First click selects the system, second click or Tab the part; a side handle adds or removes bays at a fixed bay width. | #69 |
+| 29 | #70 edit sketch | The plane in its own plane, and for a ceiling the outline in plan; the carrier line separately; panels are trimmed at a sloped edge. | #70 |
+| 30 | #71 round panels | A system's sketch may have round edges; panels and members must then be able to follow them. | #71; round 2, question 8 |
+| 31 | #72 open corner | More general: connections between two systems are selectable objects with properties (butt, mitre, join); in a masonry wall the bricks turn the corner. | #72; round 2, question 9 |
 
-## E. Bugs waiting on the reporter
+### E. Bugs waiting on the reporter
 
-32. **#43** — Shift+move: which behaviour was missing — the horizontal/vertical constraint, the
-    snap to another element's point, or a snap to the grid?
-33. **#45** — When exactly does the blue level edge disappear, and should dragging a grip change
-    only that storey? (A still image with the steps before it is enough.)
-34. **#41, #42, #44, #46, #47, #38, #79** — fixed and merged; each waits on a look at a Windows
-    build before it can be closed. Who checks, and on which build?
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 32 | #43 Shift+move | Drop it. | #43 |
+| 33 | #45 blue level edge | All levels together is right; only the edge disappearing is the bug. | #45 |
+| 34 | Windows check of merged fixes | Computer 2 (Windows) tests each merge and closes the issue. | [work board](WERKBORD.md) |
 
-## F. Release, build and coordination
+### F. Release, build and coordination
 
-35. **Version scheme** (#3, #29): adopt `YYYY.W.N` (for example `2026.44.0`) for the next release,
-    with the commit shown in development builds?
-36. **Installer signing** (#39): make signing a hard condition in the release workflow, and which
-    platforms (Windows, Linux) at the next release?
-37. **#5 IFCCAD export pilot:** in scope now, and which owner (`views/export` is computer 2)?
-38. **Work board** ([WERKBORD](WERKBORD.md#review-of-the-board--31-october-2026)): may the
-    pre-module-split claims of 23–27 October be closed, and should the board move to English
-    like the rest of the repository?
-39. **Leftover branches:** keep or delete `restructure/one-tree` (one commit with build times,
-    already reflected in `notes/build-times.md`?) and the probe commit on
-    `mod/elements-connection/fastener-components`?
-40. **Compiler memory and installers on computer 2** — the two proposed `pc2/*` tasks: still
-    wanted, and by whom?
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 35 | Version scheme | `YYYY.W.N` from the next release, set by the release workflow; development builds also show the short commit. | #3, #29 |
+| 36 | Installer signing | A hard condition from the next release for Linux (`.asc`) and Windows (Authenticode); an unsigned release fails. | #39; round 2, question 13 |
+| 37 | #5 IFCCAD export pilot | After the structural plan, on computer 2. | #5 |
+| 38 | Old claims and language of the board | Close the old claims and translate the board to English; claims are made per module in issues, the board keeps only reservations and handovers. | [work board](WERKBORD.md) |
+| 39 | Leftover branches | Delete `restructure/one-tree` once its build times are in `docs/notes/build-times.md`; leave the probe commit to its owner. | work board |
+| 40 | The two `pc2/*` tasks | Compiler memory stays with computer 2 (it bears on R-18 and ADR-0004); installers go to the maintainer. | work board |
 
-## G. Module work: connections, building systems, structure (#6, #11, #13, #22, #30, #76, #77)
+### G. Module work (#6, #11, #13, #22, #30, #76, #77)
 
-Connections (#6, #77):
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 41 | Connection type | A parameter schema plus a DynLex recipe in code, with a UI to set the parameters. | #6 |
+| 42 | Review of AI-filled recipes | Each recipe PR names its source; a structural engineer checks it against the Bouwen met Staal and SCI sources; until then the recipe is "concept". | #6 |
+| 43 | IFC mapping of a connection | IfcElementAssembly with IfcPlate and IfcMechanicalFastener inside, linked to the members through IfcRelConnectsWithRealizingElements. | #6 |
+| 44 | Member features a connection may use | Only semantic features: flange, web, centreline, reference side and end. | #6 |
+| 45 | Fastener catalogue | Extend to M42 and M48, with sources. | #6 |
+| 46 | Sign-off after PR #78 | The maintainer signs off visually on a build of `main`; the shell hooks stay, behind a flag or environment variable. | #77 |
+| 47 | Whole-scene analytic renderer, rounded B-rep export | **Parked.** | Round 2, question 15 |
+| 48 | `structural/steel` | The steel recipes move to `elements/connection` (the intern); the rest of `structural/steel` stays with Elize. | [OWNERS](OWNERS.md) |
+| 49 | Regenerating a system in place | Yes, within one transaction, refused on manual changes, with undo. | #22 |
+| 50 | InputV1 | **Parked.** | Round 2, question 15 |
+| 51 | Curtain geometry and Dutch recipe texts | Both move: the geometry to `pattern/facade`, the texts to `localisation/nl`. | #22 |
+| 52 | The 183 concept presets | **Not answered** — needs an explanation. | Round 2, question 10 |
+| 53 | #30 acceptance | Agreed. | #30 |
+| 54 | Eight handles or contour vertices first | The eight handles first (four corners and four mid-sides), then the vertices. | #30, #69 |
+| 55 | Large-model measurement and LOD slice | Measure first (open, first frame, orbit), then the LOD slice, built by Elize (viewer) with Nino. | #76 |
+| 56 | `exchange/step` in the layer order | Below `ifc` in the layer order. | `docs/notes/layering.md` |
+| 57 | Extension point after the scene point | `tools` first; Elize designs the dispatcher; each module owner moves their own shape functions. | #13 |
+| 58 | Compiler patch #27 (libm) | Part of the pin, and offered upstream. | [DynLex upstream note](notes/dynlex-upstream.md) |
+| 59 | The 23 known failing tests, #11 | Per module owner, with one issue listing them; close #11 after a look at the pavilion. | #11 |
+| 60 | Three decisions from the issues as ADRs | All three. | [ADR-0011](architecture/decisions/0011-hubs-are-order-free-and-keyed-by-element-id.md), [ADR-0012](architecture/decisions/0012-product-code-uses-only-the-kernel-api.md), [ADR-0013](architecture/decisions/0013-detail-levels-and-caches-never-change-model-data.md) |
+| 61 | Central code registry | Yes, generated from the `MODULE` manifests by `tools/compose_modules.py`. | #13 |
 
-41. A connection type: a parameter schema plus a DynLex recipe, or data users edit in the UI?
-42. Review of AI-filled connection recipes: which process, and against which reference set (the
-    Bouwen met Staal and SCI sources posted on #6 on 30 October)?
-43. IFC mapping of a connection: which of IfcElementAssembly, IfcMechanicalFastener, IfcPlate
-    and IfcRelConnectsWithRealizingElements?
-44. Which member features may a connection refer to (flange, web, centreline, reference side),
-    given R-13?
-45. Extend the fastener catalogue past M40 (a reference preset needs M42), or keep M40 as limit?
-46. PR #78 grew to the whole steel gallery: keep it in one PR or split it? Approve its
-    `ui/shell` hooks (input gestures, `OBS_MODEL_VIEW` startup hook) and the shader shipped via
-    `build.sh`? Who signs off the native visual, HiDPI and input checks?
-47. Whole-scene analytic CSG renderer and rounded B-rep export: wanted as follow-ups?
-48. `structural/steel` is owned by Elize, but the steel recipes are written under #6: does the
-    module move, or stay with Elize as reviewer?
+### H. DynLex upstream
 
-Building systems (#22, #30, #76):
-
-49. May a pattern-only regeneration API change a system in place within one transaction
-    (keeping its id, refusing on drift)? This is the main blocker on #22; it touches `bim/`.
-50. InputV1: creation-only, or kept in sync by native edits?
-51. Move the curtain geometry from `viewer/bim_scene.dl` to `pattern/facade`? Move the 27 Dutch
-    recipe literals to `localisation/nl`?
-52. The 183 concept presets (#26): ever live, sourced recipes, and under which provenance rule?
-53. #30 acceptance: Shift-add in the sketch pick tool instead of a vertex mode; no promise of LED
-    identity until #49 is answered; faces in a later slice; generated panel corners
-    inspect-only. Agree?
-54. #30/#69: the eight-handle whole-system selection or the contour-vertices slice first?
-55. #76: start the large-model measurement, and approve the LOD slice (screen-size proxies,
-    culling before evaluation)? Who builds it, now that #82 fixed the zoom rebuild?
-
-Architecture and tests (#11, #13):
-
-56. `exchange/step` below `ifc` in the layer order, or an extension point?
-57. Which extension point after the scene point, and who designs the dispatchers for tools,
-    API elements and native read/write? Who moves the shape functions out of the viewer?
-58. Is compiler patch #27 (libm) part of the official pin?
-59. Who owns the 23 known non-passing tests (15 FAILs) from stage 1, and may #11 be closed?
-60. Record as ADRs: order-free hubs keyed by element id (#13); product code uses `kernel/api`
-    only (#13); detail levels and caches never change IFC or native data (#76, #77)?
-61. A central registry of command and property codes, instead of reservations spread over the
-    work board and notes?
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 62 | Stay on the pin or move to DynLex master? | Stay on the pin until the cache fix, libm, the two Windows patches and `json.dl` are upstream; then move. | [DynLex upstream note](notes/dynlex-upstream.md) |
+| 63 | Who offers our patches upstream, in which order? | Computer 2: the cache fix with a regression test, then libm and the Windows patches, then `json.dl`, then the shader patch. | DynLex upstream note |
+| 64 | DynLex PR #8 | Split it: compute dispatch and float64 to master; close the kernel part, which now lives here. | DynLex upstream note |
+| 65 | `--incremental` | Yes, for `build.sh dev` and the tests, after a measurement on computer 2 of time, memory and new diagnostics. | DynLex upstream note |
+| 66 | One compiler pin for Windows CI and Linux | Yes, from one file that `build.sh` and CI both read. | DynLex upstream note |
+| 67 | Close DynLex issue #13 | Yes, with a comment naming both commits; update issue #7 with what is done. | DynLex upstream note |
 
 ## Verdict
 
-Provisional. The answers to A1, A4 and A5 decide what this repository's plan *is*; C12–C16
-unblock the current planning round; G49 unblocks building systems. Everything else can be answered issue by issue.
+Round 1 settled the direction of the product track: the structural plan is the MVP, IfcX with
+IFC4.3 vocabulary is the reference schema, the B-rep arm is the port, and the DynLex pin stays
+until our patches are upstream. One decision of substance is still open — ADR-0004 (round 2,
+question 1) — and with it formally ADR-0003 remains in force. The browser goal (round 2,
+question 3) is the answer with the largest consequence for the stack and needs its scope pinned
+before any renderer work is planned around it.

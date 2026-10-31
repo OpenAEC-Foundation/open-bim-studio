@@ -1,43 +1,66 @@
 # Roadmap
 
-Every phase ends in a concrete artefact. "We thought about it" is not an artefact.
+Every step ends in a concrete artefact. "We thought about it" is not an artefact.
 
-Phases 2 and 3 overlap and are the natural point to divide work between contributors.
+**Rewritten 31 October 2026** on the maintainer's decision ([`open-questions.md`](open-questions.md),
+round 1, A4 and A5). The repository began as research that would hand over a build brief; since
+October the native application is built here (ADR-0007, ADR-0008, the module split of 28 October).
+The research phases 0–3 are kept below as closed history. From here the roadmap continues in
+epics, modules and releases, and the build brief is no longer the endpoint.
+
+## Research phases (history)
 
 | Phase | Content | Artefact | Status |
 |---|---|---|---|
 | **0** | Skeleton, repository rules, vision, non-goals, glossary | A repository others can work in | **done** |
-| **1** | Domain knowledge and prior art: what must this do, what do existing tools get right | `domain/capability-inventory.md` | **in progress** |
-| **2** | Kernel research against the weighting matrix (layers 1, 2, 3) | [`research/kernels/synthesis.md`](research/kernels/synthesis.md) — completed matrix, twenty-one candidates, three-axis verdicts | **done** (2026-09-12) |
-| **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike — R-01, R-16, R-17, R-18, R-19, plus the point-cloud, tessellation, object-count and topological-naming result sets | **done** (2026-09-12) |
-| **4** | Freeze architecture, accept ADRs, specify the MVP slice | ADR set + MVP specification | **in progress** — ADR-0005, ADR-0006, ADR-0007 and ADR-0008 accepted; **ADR-0004 amended and still `proposed`** with three named conditions, so ADR-0003 formally stays in force and the kernel spec stays a working hypothesis. The MVP slice is not yet specified |
-| **5** | Consolidate into the handover document | `BUILD-BRIEF.md` | not started |
-| **6** | Kernel build milestones M0–M8 | working kernel | formally blocked on phase 4; in practice the DynLex kernel and the application are already developed in this repository (ADR-0007, ADR-0008) — see [Where the plan stands](#where-the-plan-stands-31-october-2026) |
+| **1** | Domain knowledge and prior art | `domain/capability-inventory.md` | **closed** 2026-10-31 — two items kept (the IFC data model with #66, BIM Basis ILS), the rest dropped |
+| **2** | Kernel research against the weighting matrix | [`research/kernels/synthesis.md`](research/kernels/synthesis.md) | **done** (2026-09-12) |
+| **3** | Spikes: measure the shortlist on the benchmark set | `FINDINGS.md` per spike — R-01, R-16, R-17, R-18, R-19 and four result sets | **done** (2026-09-12) |
+| 4–6 | Freeze, build brief, kernel milestones M0–M8 | — | **replaced** by the product roadmap below |
 
-## Where the plan stands, 31 October 2026
+## Product roadmap
 
-The roadmap above describes a research repository that hands over a build brief. Since
-October the repository has also become the place where the native application is built:
-the DynLex kernel lives in `kernel/` (ADR-0007), the application is compiled as units joined by
-C-ABI seams (ADR-0008), and the module split of 28 October gave every domain an owner
-([`OWNERS.md`](OWNERS.md)). Phases 4 and 5 have not caught up with that, so two tracks now run
-side by side:
+### The MVP: the structural plan, end to end
 
-- **The formal track** — phase 1's open items, ADR-0004's three conditions, the MVP slice and
-  the build brief. Nothing on it moved since 12 September apart from ADR-0007 and ADR-0008.
-- **The product track** — module work under issues and pull requests. Its current planning
-  round is views, grids, levels and georeferencing (epic
-  [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67)). The structural plan
-  design ([`superpowers/specs/2026-10-30-structural-plan-design.md`](superpowers/specs/2026-10-30-structural-plan-design.md),
-  PR #81) and its step 0 (PR #83) are merged, and drawings and views move to computer 2.
+The first end-to-end target is the **structural plan**: grid, levels, columns, beams, walls and
+floors, tags, a sheet, and IFC export — drawn from the model and IfcX-based throughout. It
+replaces the earlier "thin vertical slice" (one wall type, one opening, one storey, …): the
+architectural risk still lives in the chain parametric → geometry → 2D → IFC, and the structural
+plan exercises that whole chain on the drawing the maintainer needs first.
 
-The gap between the two tracks is itself a decision: either ADR-0004 is accepted (or
-superseded) so that the product track becomes the plan, or the product track is explicitly
-marked as running ahead of an unsettled architecture. Until the maintainer decides, this
-roadmap records both and claims neither.
+Its design is [`superpowers/specs/2026-10-30-structural-plan-design.md`](superpowers/specs/2026-10-30-structural-plan-design.md)
+(PR #81, step 0 merged in PR #83). Acceptance is the design's §3 plus a comparison with one real
+structural drawing that the maintainer supplies and that stays outside this repository.
 
-Every question that waits on the maintainer, across both tracks, is collected in
-[`open-questions.md`](open-questions.md).
+### Epics
+
+| Epic | Scope | Plan | Status |
+|---|---|---|---|
+| Views, grids, levels, georeferencing | [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67) | [plan](superpowers/plans/2026-10-29-views-grids-levels-plan.md) | blocking questions answered except the KW/FB codings (parked); building on computer 2 |
+| Module split | [#13](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/13) | `superpowers/plans/2026-10-28-module-split-plan.md` | phase C2 merged; next extension point is `tools` |
+| Building systems | [#22](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/22), #30 | — | regeneration in place approved; eight handles before vertices |
+| Steel connections | [#6](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/6), #77 | — | recipes as schema plus DynLex code; review against Bouwen met Staal and SCI |
+| Large models | [#76](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/76) | — | measure first, then the LOD slice |
+| Compiler upstream | — | [`notes/dynlex-upstream.md`](notes/dynlex-upstream.md) | stay on the pin until four patches are upstream |
+
+### Modules
+
+Each module has an owner in [`OWNERS.md`](OWNERS.md); claims are made per module in issues, and the
+[work board](WERKBORD.md) keeps only code reservations and handovers.
+
+### Releases
+
+From the next release: version numbers `YYYY.W.N` set by the release workflow (development builds
+also show the short commit), and signed installers for Linux (`.asc`) and Windows (Authenticode) as
+a hard condition (#3, #29, #39).
+
+### Architecture still open
+
+- **ADR-0004** (own kernel in DynLex) is still `proposed`, so ADR-0003 formally stays in force. The
+  product track runs ahead of that decision; it is round 2, question 1 in
+  [`open-questions.md`](open-questions.md).
+- The browser goal (R-08) and designing for streaming (R-14) were decided as directions on
+  31 October; their scope is still open (round 2).
 
 ## Phase 1 — domain and prior art
 
@@ -49,13 +72,14 @@ stays infinite and phase 4 cannot happen.
 - [x] Prior-art synthesis
 - [x] Parametric components: reference model and the two-path authoring position
 - [x] Spatial model: georeferencing, tiling and precision
-- [ ] **Decide: unbounded extent only, or streaming too?** Separable, and the second is an order
-      of magnitude more work. Blocks R-14
-- [ ] Prior art: Archicad, FreeCAD, Speckle
-- [ ] Prior art: geospatial tiling approaches — 3D Tiles and comparable formats
-- [ ] IFC data model written down at the depth we actually need
-- [ ] Honest scoping of the 2D drawing subsystem (R-05)
-- [ ] Dutch standards, starting with what BIM Basis ILS requires of an authoring tool
+- [x] **Decided 2026-10-31: design for both** unbounded extent and streaming, so the data model
+      does not rule streaming out (R-14)
+- ~~Prior art: Archicad, FreeCAD, Speckle~~ — dropped 2026-10-31
+- ~~Prior art: geospatial tiling approaches — 3D Tiles and comparable formats~~ — dropped 2026-10-31
+- [ ] IFC data model written down at the depth we actually need — kept, with #66
+- ~~Honest scoping of the 2D drawing subsystem (R-05)~~ — dropped 2026-10-31; the structural plan
+      is now the scoping exercise
+- [ ] Dutch standards, starting with what BIM Basis ILS requires of an authoring tool — kept
 
 ### What phase 1 has established so far
 
@@ -126,51 +150,13 @@ spikes named in `risks.md` were **not** run and stay open: R-02 (the geometry se
 scale), R-14 (cross-tile evaluation) and R-20 (the DynLex GPU path) — four spike directories that do
 not exist under [`../spikes/`](../spikes/).
 
-## Phase 4 — freeze
+## Phase 4 — freeze (history)
 
-Architecture recorded, decisions accepted as ADRs, MVP slice specified.
+ADR-0005, ADR-0006, ADR-0007 and ADR-0008 were accepted in this phase, and ADR-0009 to ADR-0013 on
+31 October 2026. ADR-0004 stays `proposed` with its three conditions. The MVP slice the phase was
+to specify is now the structural plan (above).
 
-**In progress since 2026-09-12.** Two of the three kernel ADRs are accepted — ADR-0005 (four equal
-representations) and ADR-0006 (f64 local coordinates, exact predicates, explicit tolerance).
-**ADR-0004 (build our own kernel, in DynLex) is amended and still `proposed`**: R-18 failed, R-19
-passes only with an explicit `-O` flag, the DynLex compiler cannot emit a GPU compute entry point,
-and one candidate turned out to be a live option rather than a disqualified one. Its three
-acceptance conditions are written into the ADR. Until they are met **ADR-0003 remains in force**,
-the kernel design spec stays a working hypothesis, and phase 6's M0 does not start.
+## Phase 5 — the build brief (dropped)
 
-**MVP scope direction** (to be confirmed, not assumed): a **thin vertical slice through the
-entire chain** — one wall type, one opening, one storey, one plan, one section, one parametric
-component, one IFC export.
-
-The architectural risk lives in the *chain* — parametric → geometry → 2D → IFC, with changes
-propagating — not in breadth. Once that chain holds, broaden into architectural elements (walls,
-floors, roofs, doors, windows, spaces), where IFC support is most mature and the visible result
-is most convincing.
-
-## Phase 5 — the build brief
-
-Consolidate everything into [`BUILD-BRIEF.md`](BUILD-BRIEF.md).
-
-**Acceptance test:** hand it to a fresh AI session with no other context. If it cannot produce a
-coherent implementation plan, the brief is not finished.
-
-## Planning round of 29 October 2026
-
-Views, grids, levels, georeferencing and building systems are planned as issues before anything
-is built: [`superpowers/plans/2026-10-29-views-grids-levels-plan.md`](superpowers/plans/2026-10-29-views-grids-levels-plan.md),
-epic [#67](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/67).
-
-Status on 31 October: the structural plan design (PR #81) proposes answers to blocking
-questions 1 and 2, as calls the maintainer can overrule; questions 3 to 5 are still open. The
-design's own step 0 (PR #83) is merged, so building has started on the views side before the
-maintainer has confirmed those answers.
-
-## After phase 5
-
-The build itself, which is out of scope for this repository as currently constituted. If it
-happens here, phase 5 is where the repository changes character and this document gets rewritten.
-
-**Note, 31 October 2026:** the build did move here before phase 5 (ADR-0007), so this
-document is due for that rewrite. It is not rewritten yet, because what replaces phases 4–6
-depends on the maintainer's answer to the first questions in
-[`open-questions.md`](open-questions.md).
+[`BUILD-BRIEF.md`](BUILD-BRIEF.md) was to hand the research over to a build elsewhere. The build
+moved here instead, so the brief is no longer the endpoint; it stays as a record.
