@@ -264,6 +264,11 @@ does not start.
    with §10's targets rechecked against CPU figures and the revised numbers written into §10's
    measured-reference column. Until one of those is done, the gap is recorded and undecided.
    **P-28**.
+   *Direction of 31 October 2026:* the maintainer chose neither side alone but the best combination
+   of CPU and GPU per operation ([`open-questions.md`](../../open-questions.md), round 1, A3). That
+   keeps both sides of this condition live — a GPU path that must exist and a CPU path that must
+   meet §10 on its own — and does not by itself meet the condition; how the choice per operation
+   is made is round 2, question 2.
 3. **The `-O` flag is demonstrated in a build that exists before M0, not asserted about a script M0
    creates.** The original wording made this circular: it required `scripts/build.sh` to pass the
    flag "at M0", while M0 itself does not start until this ADR is accepted. The testable form: R-19's
@@ -276,7 +281,8 @@ does not start.
 **A fourth thing that is not a condition but must be decided before M1:** whether the B-rep arm is
 written, ported (Option D) or linked (Option E). The research priced all three and the decision is
 not forced by this ADR — but taking Option D or E changes the licence position (MPL-2.0 file-level
-copyleft, **P-14**) and must be recorded as its own ADR rather than absorbed here.
+copyleft, **P-14**) and must be recorded as its own ADR rather than absorbed here. *Recorded
+31 October 2026:* Option D, in [ADR-0009](0009-port-cadkernel-as-the-b-rep-arm.md).
 
 ## Sources
 
