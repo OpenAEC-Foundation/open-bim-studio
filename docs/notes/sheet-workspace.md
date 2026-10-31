@@ -22,16 +22,30 @@ uses the same retained drawing data as individual sheets; offscreen cards are
 culled. Double-click a sheet to open it. Middle drag pans and the wheel zooms
 about the pointer. **Fit sheet** resets the camera.
 
-On an individual sheet, click a viewport to select it. Drag it to move it;
-Ctrl-drag previews a copy. **Move viewport** and **Copy viewport** allow a picked
-destination; Escape cancels. **Delete viewport** removes the placement, keeping
-the model view. Title types are **Title**, **Title + line**, and **No title**.
-The second includes the viewport number and a horizontal title line.
+A plan, section or schedule is placed by dragging its row from the project
+browser onto an open sheet (#128). While it is dragged, its frame follows the
+pointer as it will land: a drawing's edges or middle line up with another
+viewport's within 8 pixels, else its centre lands on the sheet's 5 mm grid; a
+schedule's top left corner lands on the grid. A view already on a sheet is
+refused with a message naming that sheet, since a view sits on one sheet; a
+schedule may stand on many, its view made with the first placement. A row
+pressed and released without dragging opens the view, as a click does.
 
-Double-click a plan viewport to activate its model for editing. Click outside
-or use **Deactivate** to return to paper editing. Section activation opens the
-linked section in its own tab. Schedule activation and the full set of in-place
-section editing tools remain follow-up work.
+On an individual sheet, click a viewport to select it. Drag it to move it;
+Ctrl-drag previews a copy; G and C pick a destination; Escape cancels, and
+lets go of the selected viewport. Delete removes the placement, keeping the
+model view. The selected viewport carries its own actions instead of ribbon
+buttons (#112): its properties show its view, scale and **Title type** (a menu:
+**Title**, **Title + line**, **No title**; the second includes the viewport
+number and a horizontal title line), and its context menu (right click) and
+the floating toolbar offer Activate, Open view, the title types, Move, Copy
+and Delete. The View tab's Viewport chooser keeps only All sheets and Fit sheet.
+
+Double-click a plan viewport, or Activate it, to edit its model. Escape (with
+nothing selected and no tool running), a click outside, or Deactivate on the
+floating toolbar or context menu returns to paper editing. Section activation
+opens the linked section in its own tab. Schedule activation and the full set
+of in-place section editing tools remain follow-up work.
 
 Viewport copies reference the same model view. They are placements, not copied
 building geometry. Camera changes and drag previews do not edit the document;
@@ -90,7 +104,8 @@ The two changed SPIR-V assets were rebuilt using isolated DynLex `95d87e0e` plus
 this repository's shader extensions. Native app compilation still uses the
 previously working compiler; the upstream native compiler is not promoted.
 
-Commands **2270–2279** are reserved for images and sheet workspace operations.
+Commands **2270–2281** are reserved for images and sheet workspace operations
+(2280 activates the selected viewport, 2281 opens its view).
 Sheet viewport title settings use **2400600 + viewport index**, stored on the
 sheet. Index shifts on delete and copy preserve this metadata. No model-format
 version bump is needed.

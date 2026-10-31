@@ -95,17 +95,44 @@ function update bim sheet drag at {cad vector2:pixel} in {a pointer to a bim she
             set pointValue to the bim sheet point under pixel in (@intrinsic("dereference", workspace))
             set workspace's delta to the cad difference of pointValue and workspace's start
 
+# Viewport `index` activated (a double click on it, or Activate on the
+# selected viewport): a plan's linked model is edited in place on the
+# sheet until Esc, Deactivate or a click outside; a section opens.
+function activate bim sheet viewport {integer:index} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
+    execute:
+        set sheetFound to the bim sheet index of workspace's sheetId in editor's documentValue's current
+        if sheetFound's valid = false:
+            return nothing
+        set sheetValue to the item at sheetFound's position in (editor's documentValue's current's sheets's values)
+        if (index < 0) or (index >= (the length of (sheetValue's viewports's values))):
+            return nothing
+        set placed to the item at index in (sheetValue's viewports's values)
+        set viewFound to the bim view index of placed's viewId in editor's documentValue's current
+        if viewFound's valid = false:
+            return nothing
+        set viewValue to the item at viewFound's position in (editor's documentValue's current's views's values)
+        if viewValue's kind = bim plan view:
+            set workspace's restoreViewId to editor's planViewId
+            show bim editor plan view placed's viewId in editor
+            set workspace's selected to index
+            set workspace's active to index
+            set workspace's dragging to false
+            set editor's propertiesViewId to placed's viewId
+            set editor's message to the string form of "Viewport active: edit the linked model; Esc, Deactivate or a click outside returns to the sheet"
+        else if viewValue's kind = bim section view:
+            show bim editor section view placed's viewId in editor
+            set editor's propertiesViewId to placed's viewId
+            set editor's message to the string form of "Linked section activated"
+        else:
+            set editor's message to the string form of "A schedule on a sheet is not activated: open it from the project browser"
+
 function press bim sheet at {cad vector2:pixel} copying {boolean:copying} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
     execute:
         set pointValue to the bim sheet point under pixel in (@intrinsic("dereference", workspace))
         if workspace's placingViewId != the bim refused id:
-            begin bim transaction in (the address of (editor's documentValue))
-            set lookedAt to the bim model centre of view workspace's placingViewId in editor's documentValue's current
-            if place bim view workspace's placingViewId on sheet workspace's sheetId at pointValue looking at lookedAt in (the address of (editor's documentValue's current)):
-                commit bim transaction in (the address of (editor's documentValue))
-            else:
-                roll back bim transaction in (the address of (editor's documentValue))
+            set placing to workspace's placingViewId
             set workspace's placingViewId to the bim refused id
+            ignore (drop bim view placing at pixel in workspace for editor)
             return true
         if workspace's dragging and workspace's clickMove:
             finish bim sheet placement in workspace for editor
@@ -126,22 +153,7 @@ function press bim sheet at {cad vector2:pixel} copying {boolean:copying} in {a 
         set workspace's lastClick to now
         set workspace's lastPixel to pixel
         if doubleClicked:
-            set sheetFound to the bim sheet index of workspace's sheetId in editor's documentValue's current
-            set sheetValue to the item at sheetFound's position in (editor's documentValue's current's sheets's values)
-            set placed to the item at hit in (sheetValue's viewports's values)
-            set viewFound to the bim view index of placed's viewId in editor's documentValue's current
-            if viewFound's valid:
-                set viewValue to the item at viewFound's position in (editor's documentValue's current's views's values)
-                if viewValue's kind = bim plan view:
-                    set workspace's restoreViewId to editor's planViewId
-                    show bim editor plan view placed's viewId in editor
-                    set workspace's active to hit
-                    set editor's propertiesViewId to placed's viewId
-                    set editor's message to the string form of "Viewport active: edit the linked model; click outside or Deactivate to return to the sheet"
-                else if viewValue's kind = bim section view:
-                    show bim editor section view placed's viewId in editor
-                    set editor's propertiesViewId to placed's viewId
-                    set editor's message to the string form of "Linked section activated"
+            activate bim sheet viewport hit in workspace for editor
             return true
         set workspace's dragging to true
         set workspace's clickMove to false
@@ -158,6 +170,101 @@ function release bim sheet pointer in {a pointer to a bim sheet workspace record
             else:
                 set workspace's dragging to false
 
+# Activate on the selected viewport (its floating toolbar and context
+# menu), as a double click on it; Open view opens its view in a tab (the
+# window does that, holding the tabs).
+function bim activate viewport command:
+    replacement:
+        2280
+function bim open viewport view command:
+    replacement:
+        2281
+
+# ---------------------------------------------------------------- drop (#128)
+
+# A view dragged from the project browser and released at `pixel` over the
+# sheet: placed as one edit (`the bim drop of view`), lined up with the
+# other viewports within 8 pixels, and selected; refused with a message
+# for a view already on a sheet. Whether it was placed.
+local function finish bim view drop {a 64 bit integer:viewId} at {cad vector2:pixel} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
+    execute:
+        set pointValue to the bim sheet point under pixel in (@intrinsic("dereference", workspace))
+        set reach to 8.0 / (workspace's density * workspace's camera's zoom)
+        set target to the address of (editor's documentValue's current)
+        set outcome to the bim drop of view viewId on sheet workspace's sheetId at pointValue within reach in target
+        set viewName to the string form of "The view"
+        set viewFound to the bim view index of viewId in editor's documentValue's current
+        if viewFound's valid:
+            set viewName to (the item at viewFound's position in (editor's documentValue's current's views's values))'s name
+        if outcome = bim view dropped:
+            commit bim transaction in (the address of (editor's documentValue))
+            set sheetFound to the bim sheet index of workspace's sheetId in editor's documentValue's current
+            set sheetValue to the item at sheetFound's position in (editor's documentValue's current's sheets's values)
+            set workspace's selected to (the length of (sheetValue's viewports's values)) - 1
+            set workspace's dragging to false
+            select bim editor bim nothing picked numbered (the bim refused id) in editor
+            set editor's message to ((viewName + (the string form of " placed on sheet ")) + sheetValue's number) + (the string form of ": drag to move it, Esc lets go")
+            return true
+        roll back bim transaction in (the address of (editor's documentValue))
+        if outcome = bim view already on a sheet:
+            set elsewhere to the bim sheet index of (the bim sheet showing view viewId in editor's documentValue's current) in editor's documentValue's current
+            set sheetNumber to the string form of "another sheet"
+            if elsewhere's valid:
+                set sheetNumber to (the string form of "sheet ") + (the item at elsewhere's position in (editor's documentValue's current's sheets's values))'s number
+            set editor's message to ((viewName + (the string form of " is already on ")) + sheetNumber) + (the string form of ": a view sits on one sheet")
+        else:
+            set editor's message to the string form of "Not placed: drag a plan, section or schedule onto an open sheet"
+        return false
+
+function drop bim view {a 64 bit integer:viewId} at {cad vector2:pixel} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        return finish bim view drop viewId at pixel in workspace for editor
+
+# Schedule `scheduleCode` (named `title`) dragged from the browser: its view
+# is made the first time, in the same edit as its placement.
+function drop bim schedule {integer:scheduleCode} named {a string:title} at {cad vector2:pixel} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        set scheduleViewId to the made bim view of schedule scheduleCode named title in (the address of (editor's documentValue's current))
+        return finish bim view drop scheduleViewId at pixel in workspace for editor
+
+# The frame view `viewId` would take released at `pixel` (its outline
+# follows the pointer while it is dragged); not valid for none.
+function the bim drop frame of view {a 64 bit integer:viewId} at {cad vector2:pixel} in {bim sheet workspace record:workspace} for {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set sheetFound to the bim sheet index of workspace's sheetId in modelValue
+        if (sheetFound's valid = false) or ((the bim view index of viewId in modelValue)'s valid = false):
+            return @intrinsic("construct", a bim sheet frame record, false, a cad vector2 with x 0.0 and y 0.0, a cad vector2 with x 0.0 and y 0.0)
+        set sheetValue to the item at sheetFound's position in (modelValue's sheets's values)
+        set pointValue to the bim sheet point under pixel in workspace
+        set reach to 8.0 / (workspace's density * workspace's camera's zoom)
+        set placedCentre to the bim snapped centre of view viewId dropped at pointValue on sheetValue within reach in modelValue
+        return the bim frame of viewport (@intrinsic("construct", a bim viewport record, viewId, placedCentre, the bim model centre of view viewId in modelValue)) in modelValue
+
+# The outline of a schedule dragged over the sheet: 120 by 40 mm hanging
+# from its top left corner on the sheet grid.
+function the bim drop frame of schedule at {cad vector2:pixel} in {bim sheet workspace record:workspace}:
+    execute:
+        set corner to the bim sheet grid point near (the bim sheet point under pixel in workspace)
+        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x corner's x and y (corner's y - 40.0), a cad vector2 with x (corner's x + 120.0) and y corner's y)
+
+# The viewport chosen on the sheet shown, copied to `editor` for the
+# properties, the context menu and the floating toolbar (#112); none while
+# no sheet shows.
+function copy bim sheet viewport choice of {bim sheet workspace record:workspace} shown {boolean:sheetShown} to {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's sheetViewport to -1
+        set editor's sheetViewportActive to false
+        if sheetShown = false:
+            return nothing
+        if workspace's active >= 0:
+            set editor's sheetViewport to workspace's active
+            set editor's sheetViewportActive to true
+        else:
+            set editor's sheetViewport to workspace's selected
+
 # Window-level commands are consumed before the modelling tool dispatcher.
 function take bim sheet command {integer:code} at {cad vector2:pixel} in {a pointer to a bim sheet workspace record:workspace} for {a pointer to a bim editor record:editor}:
     execute:
@@ -167,11 +274,29 @@ function take bim sheet command {integer:code} at {cad vector2:pixel} in {a poin
         if code = 2278:
             deactivate bim sheet viewport in workspace for editor
             return true
-        if code = 256:
+        # Esc cancels a drag or a placement, then leaves an activated
+        # viewport (as Deactivate does) once the model has nothing selected
+        # and no tool running, then lets go of the selected viewport. A
+        # property being typed or chosen keeps its Esc.
+        if (code = 256) and (editor's propertyCode < 0):
             if workspace's dragging or (workspace's placingViewId != the bim refused id):
                 set workspace's dragging to false
                 set workspace's placingViewId to the bim refused id
                 return true
+            if workspace's active >= 0:
+                if (editor's selectionKind = bim nothing picked) and (editor's tool = bim select tool):
+                    deactivate bim sheet viewport in workspace for editor
+                    set editor's message to the string form of "Viewport deactivated"
+                    return true
+                return false
+            if workspace's selected >= 0:
+                set workspace's selected to -1
+                return true
+            return false
+        if code = bim activate viewport command:
+            if (workspace's active < 0) and (workspace's selected >= 0):
+                activate bim sheet viewport workspace's selected in workspace for editor
+            return true
         if workspace's active >= 0:
             return false
         if code = 2096:

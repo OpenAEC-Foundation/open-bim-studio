@@ -35,6 +35,15 @@ function the bim viewport title type of {integer:index} on {a 64 bit integer:she
             return chosen's value as an integer
         return 0
 
+# A title type's name, as the properties and the context menu show it.
+function the bim name of viewport title type {integer:style}:
+    execute:
+        if style = 1:
+            return the string form of "Title + line"
+        if style = 2:
+            return the string form of "No title"
+        return the string form of "Title"
+
 function set bim viewport {integer:index} on sheet {a 64 bit integer:sheetId} title type to {integer:style} in {a pointer to a bim model record:target}:
     execute:
         set found to the bim sheet index of sheetId in (@intrinsic("dereference", target))
@@ -83,3 +92,139 @@ function remove bim viewport {integer:index} on sheet {a 64 bit integer:sheetId}
         set bim setting (2400600 + (count - 1)) of sheetId to (0 as a 64 bit integer) keeping false in target
         note bim change of sheetId in target
         return true
+
+# ---------------------------------------------------------------- dropping a view (#128)
+
+# A view sits on one sheet, as in Revit; a schedule may stand on many.
+function bim view {a 64 bit integer:viewId} may repeat on sheets in {bim model record:modelValue}:
+    execute:
+        set viewFound to the bim view index of viewId in modelValue
+        if viewFound's valid = false:
+            return false
+        return (the item at viewFound's position in (modelValue's views's values))'s kind = bim schedule view
+
+# The sheet view `viewId` is placed on, or the refused id when it is on none.
+function the bim sheet showing view {a 64 bit integer:viewId} in {bim model record:modelValue}:
+    execute:
+        loop sheetCursor from 0 to the length of (modelValue's sheets's values):
+            set sheetValue to the item at sheetCursor in (modelValue's sheets's values)
+            loop placedCursor from 0 to the length of (sheetValue's viewports's values):
+                if (the item at placedCursor in (sheetValue's viewports's values))'s viewId = viewId:
+                    return sheetValue's id
+        return the bim refused id
+
+# The sheet's grid, in millimetres: a dropped view's centre, or a schedule's
+# top left corner, lands on it unless it lines up with another viewport.
+function the bim sheet grid step:
+    replacement:
+        5.0
+
+function the bim sheet grid point near {cad vector2:location}:
+    execute:
+        set stepSize to the bim sheet grid step
+        return a cad vector2 with x ((the floor of ((location's x / stepSize) + 0.5)) * stepSize) and y ((the floor of ((location's y / stepSize) + 0.5)) * stepSize)
+
+# `wanted` (a coordinate across or up) for a frame reaching `half` to
+# either side of it: moved by the least shift, within `reach`, that brings
+# its low edge, middle or high edge onto one of `lines`; else on the grid.
+local function the bim snapped coordinate {a 64 bit floating-point number:wanted} reaching {a 64 bit floating-point number:half} onto {a pointer to a list:lines} within {a 64 bit floating-point number:reach}:
+    execute:
+        set bestShift to 0.0
+        set aligned to false
+        loop lineCursor from 0 to the length of lines:
+            set lineValue to the item at lineCursor in lines
+            loop sideCursor from 0 to 3:
+                set own to wanted + (((sideCursor - 1) as a 64 bit floating-point number) * half)
+                set shift to lineValue - own
+                if (the absolute value of shift) <= reach:
+                    if (aligned = false) or ((the absolute value of shift) < (the absolute value of bestShift)):
+                        set bestShift to shift
+                        set aligned to true
+        if aligned:
+            return wanted + bestShift
+        set stepSize to the bim sheet grid step
+        return (the floor of ((wanted / stepSize) + 0.5)) * stepSize
+
+# Where view `viewId` dropped at `wanted` on `sheetValue` is centred: its
+# frame's edges or middle in line with another drawing's on the sheet
+# within `reach` millimetres, across and up each on their own; else on the
+# sheet grid. Schedules neither snap nor are snapped to: their frames are
+# their tables, not their views' extents.
+function the bim snapped centre of view {a 64 bit integer:viewId} dropped at {cad vector2:wanted} on {bim sheet record:sheetValue} within {a 64 bit floating-point number:reach} in {bim model record:modelValue}:
+    execute:
+        set shownExtent to the bim model extent of view viewId in modelValue
+        set factor to 1000.0 / (the bim scale of view viewId in modelValue)
+        set halfAcross to 0.0
+        set halfUp to 0.0
+        if shownExtent's valid:
+            set halfAcross to ((shownExtent's high's x - shownExtent's low's x) * factor) * 0.5
+            set halfUp to ((shownExtent's high's y - shownExtent's low's y) * factor) * 0.5
+        set acrossLines to an empty list of a 64 bit floating-point number
+        set upLines to an empty list of a 64 bit floating-point number
+        loop placedCursor from 0 to the length of (sheetValue's viewports's values):
+            set other to the item at placedCursor in (sheetValue's viewports's values)
+            if (bim view other's viewId may repeat on sheets in modelValue) = false:
+                set otherFrame to the bim frame of viewport other in modelValue
+                if otherFrame's valid:
+                    append otherFrame's low's x to acrossLines
+                    append ((otherFrame's low's x + otherFrame's high's x) * 0.5) to acrossLines
+                    append otherFrame's high's x to acrossLines
+                    append otherFrame's low's y to upLines
+                    append ((otherFrame's low's y + otherFrame's high's y) * 0.5) to upLines
+                    append otherFrame's high's y to upLines
+        set snappedAcross to the bim snapped coordinate wanted's x reaching halfAcross onto acrossLines within reach
+        set snappedUp to the bim snapped coordinate wanted's y reaching halfUp onto upLines within reach
+        free acrossLines
+        free upLines
+        return a cad vector2 with x snappedAcross and y snappedUp
+
+# What a drop of a view on a sheet came to.
+function bim view dropped:
+    replacement:
+        0
+function bim view already on a sheet:
+    replacement:
+        1
+function bim view drop refused:
+    replacement:
+        2
+
+# View `viewId` dropped on sheet `sheetId` at `wanted` (millimetres from the
+# sheet's lower left corner): a drawing centred there, snapped (`the bim
+# snapped centre of view`), a schedule with its top left corner on the
+# sheet grid. `bim view dropped` with the new viewport the sheet's last;
+# `bim view already on a sheet` for a view a viewport shows already (a view
+# sits on one sheet, a schedule may stand on many); `bim view drop refused`
+# for a missing sheet or view.
+function the bim drop of view {a 64 bit integer:viewId} on sheet {a 64 bit integer:sheetId} at {cad vector2:wanted} within {a 64 bit floating-point number:reach} in {a pointer to a bim model record:target}:
+    execute:
+        set sheetFound to the bim sheet index of sheetId in (@intrinsic("dereference", target))
+        if (sheetFound's valid = false) or ((the bim view index of viewId in (@intrinsic("dereference", target)))'s valid = false):
+            return bim view drop refused
+        set repeatable to bim view viewId may repeat on sheets in (@intrinsic("dereference", target))
+        if (repeatable = false) and ((the bim sheet showing view viewId in (@intrinsic("dereference", target))) != the bim refused id):
+            return bim view already on a sheet
+        set sheetValue to the item at sheetFound's position in (target's sheets's values)
+        set dropCentre to the bim sheet grid point near wanted
+        set lookedAt to a cad vector2 with x 0.0 and y 0.0
+        if repeatable = false:
+            set dropCentre to the bim snapped centre of view viewId dropped at wanted on sheetValue within reach in (@intrinsic("dereference", target))
+            set lookedAt to the bim model centre of view viewId in (@intrinsic("dereference", target))
+        if place bim view viewId on sheet sheetId at dropCentre looking at lookedAt in target:
+            return bim view dropped
+        return bim view drop refused
+
+# The schedule view of schedule `scheduleCode` (`the bim schedule name of`,
+# named `title`), made the first time it is asked for, as Place schedule
+# makes it.
+function the made bim view of schedule {integer:scheduleCode} named {a string:title} in {a pointer to a bim model record:target}:
+    execute:
+        loop viewCursor from 0 to the length of (target's views's values):
+            set viewValue to the item at viewCursor in (target's views's values)
+            if (viewValue's kind = bim schedule view) and (viewValue's detail = (scheduleCode as a 64 bit integer)):
+                return viewValue's id
+        set fresh to add bim view of kind bim schedule view named title on (the bim refused id) to target
+        set freshView to the item at (the bim view index of fresh in (@intrinsic("dereference", target)))'s position in (target's views's values)
+        set freshView's detail to scheduleCode as a 64 bit integer
+        store bim view freshView in target
+        return fresh
