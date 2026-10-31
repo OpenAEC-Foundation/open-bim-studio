@@ -1,0 +1,247 @@
+# SPDX-License-Identifier: MPL-2.0
+# Pile tip levels (issue #138): the design level a pile's toe reaches
+# (Dutch: paalpuntniveau, PPN), placed as an object of its own, a point on
+# the plan with a height in the project's height datum (NAP in the
+# Netherlands; `bim pile tip level record`, `records.dl`). Piles take their
+# toe from the tip level assigned to them, or else from the nearest one on
+# the plan: adding, moving, changing or removing a tip level moves the toes
+# of the piles it governs, so their lengths and the pile table follow. A pile
+# keeps its head; with no tip level in the model it keeps its length.
+#
+# The height datum: a tip level's `level` is a datum height; the model's
+# origin lies at `the bim project origin of`'s z in that datum (0 when the
+# project has no map position), so a level's project elevation is its
+# datum height less that.
+import lib/string.dl
+import bim/bim_model.dl
+import bim/bim_project_settings.dl
+
+# The element setting that assigns a pile its tip level: the tip level's id
+# (WERKBORD code reservations).
+function bim pile tip level setting:
+    replacement:
+        2401600
+
+function the bim pile tip level index of {a 64 bit integer:wanted} in {bim model record:modelValue}:
+    execute:
+        return the bim position of wanted among (modelValue's pileTipLevels's values)
+
+# The height the model's origin has in the project's height datum, metres.
+function the bim datum height of the origin in {bim model record:modelValue}:
+    execute:
+        return (the bim project origin of modelValue)'s z
+
+# Whether `linearValue` is a pile.
+function bim linear {bim linear record:linearValue} is a pile in {bim model record:modelValue}:
+    execute:
+        return (the bim type of linear linearValue in modelValue)'s role = bim pile role
+
+# The elevation of storey `levelId` above the project's zero, 0 when the
+# storey is gone.
+local function the bim pile storey elevation of {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        set found to the bim level index of levelId in modelValue
+        if found's valid = false:
+            return 0.0
+        return (the item at found's position in (modelValue's levels's values))'s elevation
+
+# The datum height of pile `linearValue`'s toe, its lower end.
+function the bim toe datum height of pile {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set lowerEnd to the minimum of linearValue's start's z and linearValue's finish's z
+        return ((the bim pile storey elevation of linearValue's levelId in modelValue) + lowerEnd) + (the bim datum height of the origin in modelValue)
+
+# The id of the tip level that governs pile `linearValue`: the one assigned
+# to it while it exists, else the nearest on the plan (the first of equals);
+# the bim refused id when the model has none.
+function the bim pile tip level of pile {bim linear record:linearValue} in {bim model record:modelValue}:
+    execute:
+        set assigned to the bim setting (bim pile tip level setting) of linearValue's id in modelValue
+        if assigned's found:
+            if (the bim pile tip level index of assigned's value in modelValue)'s valid:
+                return assigned's value
+        set lowerEnd to linearValue's start
+        if linearValue's finish's z < linearValue's start's z:
+            set lowerEnd to linearValue's finish
+        set chosen to the bim refused id
+        set nearest to 0.0
+        loop cursor from 0 to the length of (modelValue's pileTipLevels's values):
+            set tipLevel to the item at cursor in (modelValue's pileTipLevels's values)
+            set dx to tipLevel's location's x - lowerEnd's x
+            set dy to tipLevel's location's y - lowerEnd's y
+            set distance to (dx * dx) + (dy * dy)
+            if (chosen = the bim refused id) or (distance < nearest):
+                set chosen to tipLevel's id
+                set nearest to distance
+        return chosen
+
+# Every pile's toe at the tip level that governs it; a toe that would come
+# above its head stays where it is. The number of piles moved.
+function apply bim pile tip levels in {a pointer to a bim model record:target}:
+    execute:
+        set pileIds to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (target's linears's values):
+            set linearValue to the item at cursor in (target's linears's values)
+            if bim linear linearValue is a pile in (@intrinsic("dereference", target)):
+                append linearValue's id to pileIds
+        set moved to 0
+        loop cursor from 0 to the length of pileIds:
+            set found to the bim linear index of (the item at cursor in pileIds) in (@intrinsic("dereference", target))
+            set pileValue to the item at found's position in (target's linears's values)
+            set tipId to the bim pile tip level of pile pileValue in (@intrinsic("dereference", target))
+            if tipId != the bim refused id:
+                set tipLevel to the item at (the bim pile tip level index of tipId in (@intrinsic("dereference", target)))'s position in (target's pileTipLevels's values)
+                set wanted to (tipLevel's level - (the bim datum height of the origin in (@intrinsic("dereference", target)))) - (the bim pile storey elevation of pileValue's levelId in (@intrinsic("dereference", target)))
+                set head to the maximum of pileValue's start's z and pileValue's finish's z
+                set lowerEnd to the minimum of pileValue's start's z and pileValue's finish's z
+                if ((the absolute value of (wanted - lowerEnd)) > 1e-9) and (wanted < (head - 0.001)):
+                    set fromSpot to pileValue's start
+                    set toSpot to pileValue's finish
+                    if toSpot's z <= fromSpot's z:
+                        set toSpot to a cad vector3 with x toSpot's x, y toSpot's y and z wanted
+                    else:
+                        set fromSpot to a cad vector3 with x fromSpot's x, y fromSpot's y and z wanted
+                    if move bim linear pileValue's id to fromSpot and toSpot turned pileValue's angle in target:
+                        set moved to moved + 1
+        free pileIds
+        return moved
+
+# A tip level named `nameValue` at `spot` on the plan, at datum height
+# `levelValue`, its level from `sourceValue`; the piles follow.
+function add bim pile tip level named {a string:nameValue} at {cad vector2:spot} level {a 64 bit floating-point number:levelValue} from {a string:sourceValue} to {a pointer to a bim model record:target}:
+    execute:
+        set fresh to the bim new id in target
+        append (@intrinsic("construct", a bim pile tip level record, fresh, nameValue, spot, levelValue, sourceValue)) to (target's pileTipLevels's values)
+        note bim change of fresh in target
+        ignore apply bim pile tip levels in target
+        return fresh
+
+local function replace bim pile tip level {bim pile tip level record:revised} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim pile tip level index of revised's id in (@intrinsic("dereference", target))
+        set changed to the cad clone of target's pileTipLevels
+        replace item at index found's position in (changed's values) with revised
+        set target's pileTipLevels to changed
+        note bim change of revised's id in target
+        ignore apply bim pile tip levels in target
+
+# Tip level `tipId` moved to `spot`; the piles follow. False when it is gone.
+function move bim pile tip level {a 64 bit integer:tipId} to {cad vector2:spot} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim pile tip level index of tipId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set revised to the item at found's position in (target's pileTipLevels's values)
+        set revised's location to spot
+        replace bim pile tip level revised in target
+        return true
+
+# Tip level `tipId` at datum height `levelValue`; the piles follow.
+function set bim pile tip level {a 64 bit integer:tipId} to level {a 64 bit floating-point number:levelValue} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim pile tip level index of tipId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set revised to the item at found's position in (target's pileTipLevels's values)
+        set revised's level to levelValue
+        replace bim pile tip level revised in target
+        return true
+
+# Tip level `tipId` named `nameValue`, its level from `sourceValue`.
+function name bim pile tip level {a 64 bit integer:tipId} as {a string:nameValue} from {a string:sourceValue} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim pile tip level index of tipId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set revised to the item at found's position in (target's pileTipLevels's values)
+        set revised's name to nameValue
+        set revised's source to sourceValue
+        replace bim pile tip level revised in target
+        return true
+
+# Tip level `tipId` removed, with the assignments to it; its piles follow
+# the tip levels left (with none left they keep their lengths).
+function remove bim pile tip level {a 64 bit integer:tipId} from {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim pile tip level index of tipId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set changed to the cad clone of target's pileTipLevels
+        remove item found's position from (changed's values)
+        set target's pileTipLevels to changed
+        set assignedPiles to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (target's settings's values):
+            set entry to the item at cursor in (target's settings's values)
+            if (entry's code = (bim pile tip level setting)) and (entry's value = tipId):
+                append entry's elementId to assignedPiles
+        loop cursor from 0 to the length of assignedPiles:
+            set bim setting (bim pile tip level setting) of (the item at cursor in assignedPiles) to tipId keeping false in target
+        free assignedPiles
+        note bim change of tipId in target
+        ignore apply bim pile tip levels in target
+        return true
+
+# Pile `pileId` takes its toe from tip level `tipId`, or, for the bim refused
+# id, from the nearest again. False when the pile or the tip level is gone.
+function assign bim pile {a 64 bit integer:pileId} to tip level {a 64 bit integer:tipId} in {a pointer to a bim model record:target}:
+    execute:
+        set pileFound to the bim linear index of pileId in (@intrinsic("dereference", target))
+        if pileFound's valid = false:
+            return false
+        if (bim linear (the item at pileFound's position in (target's linears's values)) is a pile in (@intrinsic("dereference", target))) = false:
+            return false
+        set kept to tipId != the bim refused id
+        if kept and ((the bim pile tip level index of tipId in (@intrinsic("dereference", target)))'s valid = false):
+            return false
+        set bim setting (bim pile tip level setting) of pileId to tipId keeping kept in target
+        ignore apply bim pile tip levels in target
+        return true
+
+# The datum height a new tip level at `spot` starts at: the nearest tip
+# level's, else the toe of the nearest pile, else `fallback`.
+function the bim pile tip level suggested at {cad vector2:spot} in {bim model record:modelValue} or {a 64 bit floating-point number:fallback}:
+    execute:
+        set result to fallback
+        set nearest to -1.0
+        loop cursor from 0 to the length of (modelValue's pileTipLevels's values):
+            set tipLevel to the item at cursor in (modelValue's pileTipLevels's values)
+            set dx to tipLevel's location's x - spot's x
+            set dy to tipLevel's location's y - spot's y
+            set distance to (dx * dx) + (dy * dy)
+            if (nearest < 0.0) or (distance < nearest):
+                set nearest to distance
+                set result to tipLevel's level
+        if nearest >= 0.0:
+            return result
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            if bim linear linearValue is a pile in modelValue:
+                set dx to linearValue's start's x - spot's x
+                set dy to linearValue's start's y - spot's y
+                set distance to (dx * dx) + (dy * dy)
+                if (nearest < 0.0) or (distance < nearest):
+                    set nearest to distance
+                    set result to the bim toe datum height of pile linearValue in modelValue
+        return result
+
+# `value` with two decimals and its sign, as level marks write heights.
+function the bim signed level text of {a 64 bit floating-point number:value}:
+    execute:
+        set shown to value
+        if (the absolute value of value) < 0.005:
+            set shown to 0.0
+        set buffer to a new string buffer containing 32 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%+.2f", shown)
+        return the substring of buffer from 0 spanning written bytes
+
+# The marker text of `tipLevel` on the plan: "PPN -14.50 NAP" (its name,
+# its datum height, and the datum when the project has a map position).
+function the bim marker text of pile tip level {bim pile tip level record:tipLevel} in {bim model record:modelValue}:
+    execute:
+        set label to tipLevel's name
+        if (the length of label) = 0:
+            set label to the string form of "PPN"
+        set markerText to (label + (the string form of " ")) + (the bim signed level text of tipLevel's level)
+        if bim project modelValue is georeferenced:
+            set markerText to markerText + (the string form of " NAP")
+        return markerText
