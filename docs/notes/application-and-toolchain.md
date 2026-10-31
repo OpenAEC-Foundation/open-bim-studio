@@ -197,6 +197,11 @@ scheduled separately. The source revision alone is not binary provenance.
 The window is laid out in layout pixels and drawn at the display's scaling
 (`the ui scale of`, from GLFW's content scale); `OBS_UI_SCALE=2` forces a
 scale, for a check of the layout at 200% on any display.
+`OBS_CSG_DETAIL=1` opens the selected-component CSG inspector at startup for
+native integration checks. With no 3D pane visible it temporarily replaces
+the plan canvas; Properties and the explorer remain available. Escape or
+Connections → CSG detail closes it without clearing the selection.
+`OBS_MODEL_VIEW=1` starts on the 3D workspace tab for native model review.
 
 The build assembles `build/tree` (ignored by git) from the checkout's `lib/`, this
 overlay, the patch and the shaders; the checkout itself is not changed.

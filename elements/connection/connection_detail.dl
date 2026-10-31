@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: MPL-2.0
+# Renderer-neutral bounded assembly packet, in metres relative to a host origin.
+# Header: 64 numbers. Each part: 32 fastener parameters, placement at 32..43,
+# diameter 44, half sizes 45..47, section web/flange 48..49, owner slot 58,
+# shape kind 60 (0 fastener, 1 plate, 2 weld, 3 I, 4 RHS, 5 CHS, 6 box).
+import elements/connection/fastener_detail.dl
+import elements/connection/bim_connections.dl
+
+function an empty connection detail record:
+    execute:
+        set result to an empty list of a 64 bit floating-point number
+        loop slot from 0 to 64:
+            append 0.0 to result
+        return result
+
+function place connection detail {a pointer to a list:record} at {cad vector3:origin} across {cad vector3:across} up {cad vector3:up} along {cad vector3:along}:
+    execute:
+        replace item at index 32 in record with origin's x
+        replace item at index 33 in record with origin's y
+        replace item at index 34 in record with origin's z
+        replace item at index 35 in record with across's x
+        replace item at index 36 in record with across's y
+        replace item at index 37 in record with across's z
+        replace item at index 38 in record with up's x
+        replace item at index 39 in record with up's y
+        replace item at index 40 in record with up's z
+        replace item at index 41 in record with along's x
+        replace item at index 42 in record with along's y
+        replace item at index 43 in record with along's z
+
+function append connection detail record {a pointer to a list:record} to {a pointer to a list:packet}:
+    execute:
+        loop slot from 0 to 64:
+            append (the item at slot in record) to packet
+
+function the analytic assembly of connection {connection definition:spec} in {bim model record:modelValue}:
+    execute:
+        set packet to an empty connection detail record
+        set generated to the bim connection evaluation of spec in modelValue
+        set parts to the bim parts of connection spec in modelValue
+        set count to ((the length of (generated's fasteners's values)) + (the length of (parts's values))) + (the length of (spec's members's values))
+        if (generated's valid = false) or ((count < 1) or (count > 128)):
+            return packet
+        set primaryId to (the item at 0 in (spec's members's values))'s elementId
+        set primary to the item at (the bim linear index of primaryId in modelValue)'s position in (modelValue's linears's values)
+        set reference to (the bim frame of linear primary in modelValue)'s first
+        loop cursor from 0 to the length of (generated's fasteners's values):
+            set fastener to the item at cursor in (generated's fasteners's values)
+            if (the connection analytic detail issue of fastener) != (the string form of ""):
+                return packet
+            set record to the connection analytic detail parameters of fastener
+            loop slot from 32 to 64:
+                append 0.0 to record
+            set across to the cad cross of (the cad z axis) and fastener's axis
+            if (the cad length of across) < 0.000001:
+                set across to a cad vector3 with x 1.0, y 0.0 and z 0.0
+            else:
+                set across to across scaled by (1.0 / (the cad length of across))
+            place connection detail record at (the cad difference of fastener's origin and reference) across across up (the cad cross of fastener's axis and across) along fastener's axis
+            replace item at index 44 in record with fastener's diameter
+            loop additionCursor from 0 to the length of (spec's additions's values):
+                set addition to the item at additionCursor in (spec's additions's values)
+                if addition's key = fastener's sourceKey:
+                    replace item at index 45 in record with (addition's holeDiameter * 0.5)
+            if fastener's kind != 3:
+                loop memberCursor from 0 to the length of (spec's members's values):
+                    if (the item at memberCursor in (spec's members's values))'s elementId = fastener's memberId:
+                        replace item at index 58 in record with ((memberCursor + 1) as a 64 bit floating-point number)
+            append connection detail record record to packet
+            free record
+        loop cursor from 0 to ((the length of (parts's values)) + (the length of (spec's members's values))):
+            set element to primary
+            set profile to the bim type of linear primary in modelValue
+            set kind to 1
+            set memberSlot to 0
+            if cursor < (the length of (parts's values)):
+                set part to the item at cursor in (parts's values)
+                set element to part's element
+                set profile to part's kind
+                if profile's name = (the string form of "Fillet weld"):
+                    set kind to 2
+                else if profile's name != (the string form of "Connection plate"):
+                    set kind to 6
+            else:
+                set memberSlot to (cursor - (the length of (parts's values))) + 1
+                set member to the item at (memberSlot - 1) in (spec's members's values)
+                set element to the item at (the bim linear index of member's elementId in modelValue)'s position in (modelValue's linears's values)
+                set profile to the bim type of linear element in modelValue
+                set shape to the bim profile of linear type profile in modelValue
+                set kind to 6
+                if shape's kind = bim i shape profile:
+                    set kind to 3
+                else if shape's kind = bim rectangle hollow profile:
+                    set kind to 4
+                else if shape's kind = bim circle hollow profile:
+                    set kind to 5
+                else if (shape's kind != bim no profile) or profile's round:
+                    return packet
+                if (element's twist != 0.0) or ((element's taper's x != 1.0) or (element's taper's y != 1.0)):
+                    return packet
+            set record to an empty connection detail record
+            set frame to the bim frame of linear element in modelValue
+            set centre to the cad sum of frame's first and (frame's along scaled by (frame's length * 0.5))
+            place connection detail record at (the cad difference of centre and reference) across frame's widthAxis up frame's depthAxis along frame's along
+            replace item at index 45 in record with (profile's width * 0.5)
+            replace item at index 46 in record with (profile's depth * 0.5)
+            replace item at index 47 in record with (frame's length * 0.5)
+            replace item at index 58 in record with (memberSlot as a 64 bit floating-point number)
+            replace item at index 60 in record with (kind as a 64 bit floating-point number)
+            if memberSlot > 0:
+                set shape to the bim profile of linear type profile in modelValue
+                replace item at index 0 in record with shape's fillet
+                replace item at index 48 in record with shape's web
+                replace item at index 49 in record with shape's flange
+                set planeCount to 0
+                loop cutCursor from 0 to the length of (generated's voids's values):
+                    set cut to the item at cutCursor in (generated's voids's values)
+                    if (cut's kind = 0) and (cut's memberId = element's id):
+                        if planeCount >= 2:
+                            free record
+                            return packet
+                        set slot to 2 + (planeCount * 4)
+                        replace item at index slot in record with cut's direction's x
+                        replace item at index (slot + 1) in record with cut's direction's y
+                        replace item at index (slot + 2) in record with cut's direction's z
+                        replace item at index (slot + 3) in record with (the cad dot of (the cad difference of cut's origin and reference) and cut's direction)
+                        set planeCount to planeCount + 1
+                replace item at index 10 in record with (planeCount as a 64 bit floating-point number)
+            append connection detail record record to packet
+            free record
+        set low to a cad vector3 with x 1000000.0, y 1000000.0 and z 1000000.0
+        set high to low scaled by -1.0
+        loop cursor from 0 to count:
+            set base to 64 + (cursor * 64)
+            set extent to the square root of (((the item at (base + 45) in packet) * (the item at (base + 45) in packet)) + (((the item at (base + 46) in packet) * (the item at (base + 46) in packet)) + ((the item at (base + 47) in packet) * (the item at (base + 47) in packet))))
+            if (the item at (base + 60) in packet) = 0.0:
+                set extent to (the item at (base + 25) in packet) * (the item at (base + 44) in packet)
+            set x to the item at (base + 32) in packet
+            set y to the item at (base + 33) in packet
+            set z to the item at (base + 34) in packet
+            set low's x to the minimum of low's x and (x - extent)
+            set low's y to the minimum of low's y and (y - extent)
+            set low's z to the minimum of low's z and (z - extent)
+            set high's x to the maximum of high's x and (x + extent)
+            set high's y to the maximum of high's y and (y + extent)
+            set high's z to the maximum of high's z and (z + extent)
+        replace item at index 25 in packet with ((the maximum of (high's x - low's x) and (the maximum of (high's y - low's y) and (high's z - low's z))) * 1.2)
+        replace item at index 26 in packet with ((low's z + high's z) * 0.5)
+        replace item at index 30 in packet with ((low's x + high's x) * 0.5)
+        replace item at index 32 in packet with ((low's y + high's y) * 0.5)
+        replace item at index 31 in packet with (count as a 64 bit floating-point number)
+        return packet

@@ -152,7 +152,7 @@ Open BIM Studio is part of the [OpenAEC Foundation](https://github.com/OpenAEC-F
 
 ### Building and running
 
-To open a project, replace `--example` with its path: `bash ./build.sh run-dev /absolute/path/to/project.ifcxb`. The development executable is `$BIM_BUILD_DIR/open-bim-studio-dev`; `bash ./build.sh app` and `bash ./build.sh run --example` build and run the optimised application.
+To open a project, replace `--example` with its path: `bash ./build.sh run-dev /absolute/path/to/project.ifcxb`. The development executable is `$BIM_BUILD_DIR/open-bim-studio-dev`; `bash ./build.sh app` and `bash ./build.sh run --example` build and run the optimised application. `OBS_CSG_DETAIL=1` opens the experimental fastener CSG detail panel at startup; see [the fastener guide](docs/notes/fastener-components.md#csg-detail-in-obs).
 
 Instead of `DYNLEX_ROOT` you can save the compiler-checkout path on one line in `.dynlex-root.local` (ignored by Git; `DYNLEX_ROOT` wins). Record both the source commit and the compiler-binary hash when you report a build.
 

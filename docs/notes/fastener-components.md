@@ -112,10 +112,66 @@ The rounded rim is represented by two subtractive revolved circular-profile
 volumes (CSG primitive 6). Each cutting volume can be evaluated as an analytic
 B-rep. The kernel currently refuses their subtraction from the hexagonal stock
 with snag 1. Consequently rounding is experimental and is enabled only in the
-review probe, not in default catalogue definitions or the application build.
+review probe, not in default catalogue B-rep definitions. The separate CSG
+detail panel described below evaluates rounded surfaces directly.
 The rounded review must not be described as a validated exact final B-rep.
 
 The 120-variant review probe completed successfully, checking every display
 piece for closure and positive volume. The 16 default CSG, geometry and thread
 assertions still pass. These display checks do not resolve the exact boolean
 limitation above.
+
+
+## CSG detail in OBS
+
+The Connections ribbon has a **CSG detail** button beside **M8–M40 library**.
+Select a placed bolt, anchor, nut, washer or connection and open the detail. The normal Properties
+panel edits its existing shared type; make unique retains its existing meaning.
+Middle-drag within the detail to pan; right-drag or Shift+middle-drag to orbit.
+The wheel zooms around the pointer, including fractional trackpad scrolling.
+F fits the selected component while preserving orientation; + and - zoom about
+the centre. Escape or the same ribbon button closes the detail. A drag stays
+with the detail until release, even outside its bounds. Selecting another item
+resets the pan and zoom. Viewing does not create a model transaction.
+
+The detail reads the selected component's dimensions, pitch, thread extent,
+washer flags, nut count, grip and finish. It evaluates rounded solids directly
+per pixel, without generating a triangle boundary for this detail path. This is
+a component inspection panel: the normal whole-model viewport still uses its
+existing renderer. Straight, L, J and plate-ended anchors use the native bend,
+tail, nut and washer positions. Connections assemble their evaluated fasteners,
+plates, drilled holes, welds and participating members in one bounded packet
+(up to 128 parts). I, RHS, CHS and rectangular sections are supported; unsupported
+profiles and twisted/tapered members are refused explicitly. Connection detail
+uses Technical Colors: blue plates, orange welds and yellow fasteners. I-section
+root fillets are evaluated analytically in this panel; ordinary profile display
+still has its existing limitations.
+Rounded head/nut relief is derived from the catalogue dimensions; exact rounded
+B-rep export is still pending. Thread marks are helical lines, not cut teeth.
+
+Ownership, scope and the follow-up for whole-scene depth, selection and sections
+are recorded in [issue #77](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/77).
+The renderer's parameter block follows the existing element flags, with a
+separate batch and a lazily created pipeline; the normal scene parameters and
+element visibility limits remain unchanged. `OBS_CSG_DETAIL=1` opens the panel
+on startup for native integration checks.
+
+
+The `connection_gallery` fixture writes three native models beneath
+`build/connection-gallery`: the combined workbench, the full fastener library
+(120 catalogue types plus 15 assembled bolts), and ten applied connections.
+The latter includes five column bases, a wind-brace gusset, end plate, fin plate,
+double cleat and splice. The base-plate recipe accepts stiffener plates and welds
+after its mandatory plate and anchor group; it can be saved and reapplied as a
+connection type. Anchor holes cut the plate, not the column. Fillet-weld nominal
+size is the equal leg length; its exact solid and detail field use a triangular
+prism, with throat equal to leg divided by sqrt(2). Butt welds retain their
+rectangular section. The geometric distinction between leg and throat follows
+[TWI's fillet-weld terminology](https://www.twi-global.com/technical-knowledge/job-knowledge/design-part-1-090).
+These are illustrative modelling recipes, not a reproduction
+of a supplier's approved connection or a resistance calculation.
+
+The CHS gallery base explicitly leaves its circumferential weld pending. Straight
+beads on the corners of its bounding square would float away from the tube and
+are not generated. Straight gallery welds on flat sections are seated outside
+the adjoining faces, with the lower prism edge at the plate top.
