@@ -36,6 +36,11 @@ gets written to disk.
 Dutch domain terms that have no accurate English equivalent (for example names of national
 standards) are kept in Dutch and explained in `docs/vision/glossary.md`.
 
+One file is the exception: `README.nl.md`, the Dutch translation of `README.md` that the
+[OpenAEC README standard](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/templates/README-standaard.md)
+requires. Change both READMEs together; their images in `docs/images/readme/` are made by
+`tools/build_readme_images.py`, and `--check` verifies them.
+
 ## Naming rules — read carefully, this repository has an explicit exception
 
 The maintainer's global instructions prohibit naming commercial software products in repository
