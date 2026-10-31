@@ -3733,14 +3733,31 @@ function the bim plate type for role {integer:roleCode} of {bim editor record:ed
                 return planarType's id
         return the bim refused id
 
+# The top of a new plate of `roleCode` and planar type `typeId` on storey
+# `levelId`, above the storey's level: a floor at the level, a roof on top
+# of the storey's walls, a ceiling 0.3 m under the storey above.
+function the bim plate top of role {integer:roleCode} typed {a 64 bit integer:typeId} on {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        set typeFound to the bim wall type index of typeId in modelValue
+        set levelFound to the bim level index of levelId in modelValue
+        if (typeFound's valid = false) or (levelFound's valid = false):
+            return 0.0
+        set storeyHeight to (the item at levelFound's position in (modelValue's levels's values))'s height
+        if roleCode = bim roof planar role:
+            return storeyHeight + (the bim thickness of (the item at typeFound's position in (modelValue's wallTypes's values)))
+        if roleCode = bim ceiling planar role:
+            return storeyHeight - 0.3
+        return 0.0
+
 # A floor, roof or ceiling (`roleCode`) under the selected space, following
-# its outline, as one edit: a floor at the storey's level, a roof on top of
-# the storey's walls, a ceiling 0.3 m under the storey above.
+# its outline, as one edit (heights as `the bim plate top of role …`). With
+# no space selected the button draws instead: an empty boundary sketch for a
+# new plate opens on the active storey (#101).
 function add bim editor plate of role {integer:roleCode} under the selection in {a pointer to a bim editor record:editor}:
     execute:
         set chosen to the bim selected space of (@intrinsic("dereference", editor))
         if chosen's valid = false:
-            set editor's message to the string form of "Select a space first"
+            open bim editor new plate sketch of role roleCode in editor
             return nothing
         ensure bim plate types in editor
         set typeId to the bim plate type for role roleCode of (@intrinsic("dereference", editor))
@@ -3749,12 +3766,7 @@ function add bim editor plate of role {integer:roleCode} under the selection in 
         set levelFound to the bim level index of chosen's space's levelId in modelValue
         if (typeFound's valid = false) or (levelFound's valid = false):
             return nothing
-        set storeyHeight to (the item at levelFound's position in (modelValue's levels's values))'s height
-        set topValue to 0.0
-        if roleCode = bim roof planar role:
-            set topValue to storeyHeight + (the bim thickness of (the item at typeFound's position in (modelValue's wallTypes's values)))
-        if roleCode = bim ceiling planar role:
-            set topValue to storeyHeight - 0.3
+        set topValue to the bim plate top of role roleCode typed typeId on chosen's space's levelId in modelValue
         begin bim transaction in (the address of (editor's documentValue))
         set fresh to add bim plate typed typeId on chosen's space's levelId around (chosen's space's outline's values) at top topValue to (the address of (editor's documentValue's current))
         if fresh = the bim refused id:
@@ -7050,6 +7062,77 @@ function open bim editor boundary sketch in {a pointer to a bim editor record:ed
         if bim editor sketches upright (@intrinsic("dereference", editor)):
             set editor's message to (the string form of "Sketch mode (contour, in the 3D view): ") + (the bim sketch hint of (@intrinsic("dereference", editor)))
 
+# A sketch for a new plate rather than an existing one: `sketchHostKind`
+# holds this base plus the new plate's planar role (floor, roof, ceiling),
+# and `editSketchId` is the refused id.
+function bim new plate sketch base:
+    replacement:
+        900
+
+function bim editor sketches a new plate {bim editor record:editor}:
+    execute:
+        return (bim editor sketches a boundary editor) and (editor's sketchHostKind >= bim new plate sketch base)
+
+# Floor, Roof or Ceiling with no space selected (#101): an empty boundary
+# sketch on the active storey, the line tool ready; the sketch's tools draw
+# the outline and Tab makes the plate of `roleCode` from it.
+function open bim editor new plate sketch of role {integer:roleCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        select bim editor bim nothing picked numbered (the bim refused id) in editor
+        set editor's sketchHostKind to (bim new plate sketch base) + roleCode
+        set editor's sketchSegments to a cad topology list of a bim boundary segment record
+        set editor's sketchInView to false
+        set editor's sketchPending to a cad topology list of a cad vector2
+        set editor's sketchTool to bim sketch line tool
+        set editor's sketchPicked to -1
+        set editor's tool to bim select tool
+        set editor's editMode to true
+        set editor's editKind to bim boundary edit
+        set editor's editMesh to false
+        set editor's editSketchId to the bim refused id
+        set editor's editPicked to a cad topology list of an integer
+        set editor's partCode to -1
+        set editor's message to ((the string form of "New ") + (the bim name of planar role roleCode)) + ((the string form of ": draw its outline; ") + (the bim sketch hint of (@intrinsic("dereference", editor))))
+
+# Tab in a new plate's sketch: the plate, on the active storey at its role's
+# height, with the sketch's loop (run anticlockwise) as its outline and its
+# arcs kept, as one edit; refused, the sketch kept open, when the segments do
+# not make one closed loop.
+function make bim editor plate from sketch in {a pointer to a bim editor record:editor}:
+    execute:
+        set roleCode to editor's sketchHostKind - (bim new plate sketch base)
+        set chained to the bim anticlockwise boundary loop of (editor's sketchSegments's values)
+        if chained's valid = false:
+            set editor's message to ((the string form of "Sketch not finished: ") + chained's message) + (the string form of " (Esc Esc leaves without a plate)")
+            return nothing
+        ensure bim plate types in editor
+        set typeId to the bim plate type for role roleCode of (@intrinsic("dereference", editor))
+        set modelValue to editor's documentValue's current
+        if ((the bim wall type index of typeId in modelValue)'s valid = false) or ((the bim level index of editor's levelId in modelValue)'s valid = false):
+            set editor's message to the string form of "No plate type or storey for the new plate"
+            return nothing
+        set topValue to the bim plate top of role roleCode typed typeId on editor's levelId in modelValue
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim plate typed typeId on editor's levelId around (chained's corners's values) at top topValue to target
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Sketch not finished: the outline is not a valid plate (Esc Esc leaves without a plate)"
+            return nothing
+        keep bim boundary spans (chained's spans's values) of fresh in target
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's plateTypeId to typeId
+        set lineCount to 0
+        set arcCount to 0
+        loop cursor from 0 to the length of (editor's sketchSegments's values):
+            if (the item at cursor in (editor's sketchSegments's values))'s bulge = 0.0:
+                set lineCount to lineCount + 1
+            else:
+                set arcCount to arcCount + 1
+        leave bim editor boundary sketch in editor
+        select bim editor bim slab picked numbered fresh in editor
+        set editor's message to ((the bim name of planar role roleCode) + (the string form of " made: ")) + (((the string form of lineCount) + (the string form of " lines, ")) + ((the string form of arcCount) + (the string form of " arcs")))
+
 # Snap only to geometry in this host's sketch coordinates. Never reuse the
 # plan/model snap: its XY coordinates are unrelated to an upright wall face.
 function the bim sketch snap at {cad vector2:location} of {bim editor record:editor}:
@@ -7294,6 +7377,9 @@ function leave bim editor boundary sketch in {a pointer to a bim editor record:e
 # make one closed loop that does not cross itself.
 function finish bim editor boundary sketch in {a pointer to a bim editor record:editor}:
     execute:
+        if editor's sketchHostKind >= bim new plate sketch base:
+            make bim editor plate from sketch in editor
+            return nothing
         set plateId to editor's editSketchId
         begin bim transaction in (the address of (editor's documentValue))
         set refusal to the string form of ""
