@@ -4,8 +4,26 @@
 from the selected checkout, runs three headless checks, then produces a ZIP
 and MSI. It uploads artifacts only; it does not publish a release.
 
-The release candidate package version is **0.1.1**; the existing v0.1 source
-asset is only the compiler bootstrap input and is never overwritten.
+Release candidates use **YYYY.W.N**, selected once by
+`tools/release_version.py` from the checkout's tags. Both application workflows
+fetch complete tag history and choose the next unused sequence within the
+current UTC ISO week. Existing tags and releases are kept; the v0.1 source
+asset remains only the compiler bootstrap input.
+
+The application, ZIP, MSI filename and proposed tag share the full version,
+for example `2026.44.0` and `v2026.44.0`. MSI's internal ProductVersion uses
+`26.44.0` (year minus 2000), preserving ordering across years. Its major and
+minor fields are limited to 255 and its update field to 65535
+([Microsoft ProductVersion documentation](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)).
+Unsupported values fail before compilation or packaging. Explicit legacy
+versions remain accepted for reproducing historical packages. Packaging
+scripts require Python, already required by the Windows build.
+
+The version helper never creates a tag or publishes a release. Repeated
+candidate builds can share a proposed version until its release is tagged;
+the build's recorded source commit distinguishes those candidates. A release
+must use the proposed tag or provide its explicitly chosen version. The Linux
+installer already consumes that version through `BIM_VERSION`.
 
 ## Run prerequisites
 

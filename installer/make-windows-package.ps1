@@ -3,7 +3,7 @@
 # WiX Toolset 3 is on PATH (heat.exe, candle.exe, light.exe), an MSI
 # installer from `open-bim-studio.wxs`.
 #
-#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Repo <this repository> -Shaders <folder> -Output <folder> [-Version 0.1.1]
+#   make-windows-package.ps1 -Program build\open-bim-studio.exe -Repo <this repository> -Shaders <folder> -Output <folder> [-Version YYYY.W.N]
 #
 # -Program is the compiled ui/shell/main.dl; the DLLs the DynLex
 # compiler copied beside it (GLFW, FreeType, the Vulkan loader, the C++ and
@@ -22,7 +22,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $Repo,
     [Parameter(Mandatory = $true)] [string] $Shaders,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = "0.1.1",
+    [string] $Version = "",
     [switch] $RequireMsi,
     [string] $DependencyRoot = $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT,
     [string] $ToolchainRoot = $env:DYNLEX_WINDOWS_TOOLCHAIN_ROOT
@@ -31,6 +31,13 @@ $ErrorActionPreference = "Stop"
 
 $programPath = (Resolve-Path $Program).Path
 $repoPath = (Resolve-Path $Repo).Path
+$versionArguments = @('-B', (Join-Path $repoPath 'tools\release_version.py'), '--root', $repoPath, '--json')
+if ($Version) { $versionArguments += @('--version', $Version) }
+$versionJson = & python @versionArguments
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the package version.' }
+$releaseVersion = $versionJson | ConvertFrom-Json
+$Version = $releaseVersion.version
+$msiVersion = $releaseVersion.msi
 $shadersPath = (Resolve-Path $Shaders).Path
 New-Item -ItemType Directory -Force $Output | Out-Null
 $outputPath = (Resolve-Path $Output).Path
@@ -130,7 +137,7 @@ $files = Join-Path $work "files.wxs"
 & $heat.Source dir $stage -nologo -cg AppFiles -dr INSTALLFOLDER -ag -sfrag -srd -sreg -var var.StageDir -out $files
 if ($LASTEXITCODE -ne 0) { throw "heat.exe failed." }
 $product = Join-Path $PSScriptRoot "open-bim-studio.wxs"
-& $candle.Source -nologo -arch x64 "-dStageDir=$stage" "-dVersion=$Version" -out "$work\" $product $files
+& $candle.Source -nologo -arch x64 "-dStageDir=$stage" "-dVersion=$msiVersion" "-dDisplayVersion=$Version" -out "$work\" $product $files
 if ($LASTEXITCODE -ne 0) { throw "candle.exe failed." }
 $msi = Join-Path $outputPath "Open-BIM-Studio-$Version-windows-x64.msi"
 & $light.Source -nologo -out $msi (Join-Path $work "open-bim-studio.wixobj") (Join-Path $work "files.wixobj")

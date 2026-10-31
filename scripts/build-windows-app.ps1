@@ -2,7 +2,7 @@
 # Builds and packages Open BIM Studio on native Windows, after the fork's
 # scripts/install.ps1 and a compiler build in the fork checkout.
 #
-#   scripts/build-windows-app.ps1 -CompilerTree <fork checkout> -Repo <this repository> -Output <folder> [-Version 0.1.1]
+#   scripts/build-windows-app.ps1 -CompilerTree <fork checkout> -Repo <this repository> -Output <folder> [-Version YYYY.W.N]
 #
 # Programs compile from this repository's root, as build.sh does on Linux:
 # the compiler finds lib/ in its own checkout, imports such as model/x.dl
@@ -12,13 +12,18 @@ param(
     [Parameter(Mandatory = $true)] [string] $CompilerTree,
     [Parameter(Mandatory = $true)] [string] $Repo,
     [Parameter(Mandatory = $true)] [string] $Output,
-    [string] $Version = '0.1.1'
+    [string] $Version = ''
 )
 $ErrorActionPreference = 'Stop'
 # $IsWindows exists from PowerShell 6 on; Windows PowerShell 5.1 only runs on Windows.
 if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) { throw 'This script requires native Windows, not WSL.' }
 $treePath = (Resolve-Path $CompilerTree).Path
 $repoPath = (Resolve-Path $Repo).Path
+$versionArguments = @('-B', (Join-Path $repoPath 'tools\release_version.py'), '--root', $repoPath, '--json')
+if ($Version) { $versionArguments += @('--version', $Version) }
+$versionJson = & python @versionArguments
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the application version.' }
+$Version = ($versionJson | ConvertFrom-Json).version
 New-Item -ItemType Directory -Force $Output | Out-Null
 $outPath = (Resolve-Path $Output).Path
 $compiler = Join-Path $treePath 'build\dynlex.exe'
