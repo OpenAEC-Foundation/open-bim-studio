@@ -5,6 +5,22 @@ wordt in de bestaande Codex-sessie op computer 1 gecoördineerd.
 
 ## Startpunt en status
 
+### Current integration workflow — 31 October 2026
+
+The maintainer's current workflow for agents on computer 1 is direct
+integration on `main`: review and merge incoming pull requests where ready,
+but **do not create new pull requests for the agent's own work**. Commit and
+push tested changes to `main`, then build the integrated application. This
+supersedes the task-branch and pull-request procedure below for computer 1.
+
+Work through open issues from small, bounded fixes to larger changes. Close
+an issue only when its acceptance criteria have been checked; distinguish
+source review, headless tests, application builds and interactive checks.
+Restructure code when an integration problem requires it. Keep one DynLex
+compiler running per physical computer and preserve the maintainer's running
+application. Use a separate build directory for a replacement dev application
+while an earlier build is in use.
+
 De native BIM-modeller staat in de unitmappen in de root (`kernel/`, `model/`,
 `formats/`, `graphics/`, `editor/`, `app/`, `automation/`). De productlogica en
 geometrie worden in **DynLex** ontwikkeld. `build.sh` compileert vanuit de
