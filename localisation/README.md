@@ -48,7 +48,10 @@ bundles it. Windows uses the app-owned pinned `platform/windows/vcpkg.json` and
 include dependency notices. See the [HarfBuzz FreeType contract](https://harfbuzz.github.io/harfbuzz-hb-ft.html)
 and the [pinned vcpkg port](https://github.com/microsoft/vcpkg/blob/56bb2411609227288b70117ead2c47585ba07713/ports/harfbuzz/vcpkg.json).
 The native cache compares the full text, face and length, and is capped at 8 MiB.
-Faces keep their pixel sizes and remain alive for the application lifetime.
+Each shaping run is limited to 4096 UTF-8 bytes. Faces keep their pixel sizes
+and remain alive for the application lifetime. If the shaping service or Lao
+font is unavailable in a development environment, the interface uses English
+instead of showing unreadable Lao labels.
 
 ## Check
 
