@@ -20,6 +20,7 @@ import views/common/bim_crop.dl
 import views/drawings/bim_plan_presentation.dl
 import architectural/openings/bim_window_actions.dl
 import kernel/planar/triangulate2.dl
+import views/common/bim_category_tree.dl
 
 
 class:
@@ -276,7 +277,9 @@ function draw bim hatch of {a pointer to a list:piece} in {bim hatch band record
 
 # Cut faces as a drawing shows them, following `viewRules`: each visible
 # element's cut divided into its layers, filled and hatched by material, and
-# outlined; halftone categories drawn faint.
+# outlined; halftone categories drawn faint. What is shown, halftone, and
+# the cut lines' colour and weight follow the element's node of the
+# category tree (structural and non-structural floors and walls apart).
 function draw bim hatched cut faces of {bim view record:viewValue} for {bim editor record:editor} through {bim drawing transform record:transform} as section {boolean:asSection} following {bim view rules record:viewRules} on {a pointer to a bim canvas record:canvas}:
     execute:
         set modelValue to editor's documentValue's current
@@ -294,6 +297,11 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
         # joint): it is left out, so that joined walls read as one.
         set wallEdges to an empty list of a cad vector2
         set wallEdgeOwners to an empty list of an integer
+        # Outlines whose node overrides the cut lines, with each pair's
+        # colour and width, drawn after every fill.
+        set ownOutlines to an empty list of a cad vector2
+        set ownColours to an empty list of a 64 bit integer
+        set ownWidths to an empty list of a 64 bit floating-point number
         loop sourceCursor from 0 to the length of (viewValue's sources's values):
             set source to the item at sourceCursor in (viewValue's sources's values)
             if (the bim category of element source's id in modelValue) = bim wall category:
@@ -309,9 +317,15 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
             set elementCategory to the bim category of element source's id in modelValue
             set shown to true
             set isFaint to false
+            set cutColour to (-1) as a 64 bit integer
+            set cutWeight to (-1) as a 64 bit integer
             if elementCategory >= 0:
-                set shown to bim category elementCategory is visible in viewRules
-                set isFaint to bim category elementCategory is halftone in viewRules
+                set node to the bim node of element source's id by viewRules in modelValue
+                set shown to node's visible
+                set isFaint to node's halftone
+                set cutColour to node's cutColour
+                set cutWeight to node's cutWeight
+            set ownLines to (cutColour >= (0 as a 64 bit integer)) or (cutWeight >= (0 as a 64 bit integer))
             # Its phase: hidden, or existing and demolished work in halftone.
             set phaseLook to the bim phase look of element source's id in plan of editor
             if asSection:
@@ -349,6 +363,20 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
                                 append (a cad vector2 with x (edgeStart's x + (((edgeEnd's x - edgeStart's x) * position) / total)) and y (edgeStart's y + (((edgeEnd's y - edgeStart's y) * position) / total))) to faintOutlines
                                 append (a cad vector2 with x (edgeStart's x + (((edgeEnd's x - edgeStart's x) * ending) / total)) and y (edgeStart's y + (((edgeEnd's y - edgeStart's y) * ending) / total))) to faintOutlines
                                 set position to ending + 4.0
+                        else if ownLines:
+                            set lineColour to the bim pen colour 0, 0 and 0
+                            set lineWidth to the bim cut line width under drawingStandard
+                            if isFaint:
+                                set lineColour to the bim pen colour 150, 150 and 150
+                                set lineWidth to 1.0
+                            if cutColour >= (0 as a 64 bit integer):
+                                set lineColour to the bim pen colour (the bim halftone of channel (the bim red of colour cutColour) when isFaint), (the bim halftone of channel (the bim green of colour cutColour) when isFaint) and (the bim halftone of channel (the bim blue of colour cutColour) when isFaint)
+                            if cutWeight >= (0 as a 64 bit integer):
+                                set lineWidth to the bim pixel width of weight cutWeight
+                            append edgeStart to ownOutlines
+                            append edgeEnd to ownOutlines
+                            append lineColour to ownColours
+                            append lineWidth to ownWidths
                         else if isFaint:
                             append edgeStart to faintOutlines
                             append edgeEnd to faintOutlines
@@ -357,10 +385,37 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
                             append edgeEnd to outlines
         record bim strokes outlines coloured 0, 0 and 0 wide (the bim cut line width under drawingStandard) on canvas
         record bim strokes faintOutlines coloured 150, 150 and 150 wide 1.0 on canvas
+        record bim styled strokes ownOutlines coloured ownColours wide ownWidths on canvas
         free outlines
         free faintOutlines
+        free ownOutlines
+        free ownColours
+        free ownWidths
         free wallEdges
         free wallEdgeOwners
+
+# Records the strokes between the pixel pairs `pairs`, each pair in its
+# colour of `colourList` (packed, `the bim pen colour`) and its width of
+# `widthList`: one batch per colour and width.
+function record bim styled strokes {a pointer to a list:pairs} coloured {a pointer to a list:colourList} wide {a pointer to a list:widthList} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set recorded to an empty list of a boolean
+        loop cursor from 0 to the length of colourList:
+            append false to recorded
+        set batch to an empty list of a cad vector2
+        loop first from 0 to the length of colourList:
+            if (the item at first in recorded) = false:
+                set colourHere to the item at first in colourList
+                set widthHere to the item at first in widthList
+                clear batch
+                loop cursor from first to the length of colourList:
+                    if ((the item at cursor in recorded) = false) and (((the item at cursor in colourList) = colourHere) and ((the item at cursor in widthList) = widthHere)):
+                        replace item at index cursor in recorded with true
+                        append (the item at (cursor * 2) in pairs) to batch
+                        append (the item at ((cursor * 2) + 1) in pairs) to batch
+                record bim strokes batch coloured (the bim red of colour colourHere), (the bim green of colour colourHere) and (the bim blue of colour colourHere) wide widthHere on canvas
+        free batch
+        free recorded
 
 # Whether the edge from `first` to `second` is also an edge (either way
 # round, within 0.1 mm) of a source other than `owner` among `edgeList`
@@ -397,7 +452,7 @@ function the bim plan key of {bim editor record:editor} at {a 64 bit floating-po
                 set written to written + (the string form of "-")
             if rule's halftone:
                 set written to written + (the string form of "h")
-        return written
+        return written + (the bim node text of editor's planRules)
 
 # The visibility and halftone of every category in `viewRules`, as text.
 function the bim rule text of {bim view rules record:viewRules}:
@@ -1388,7 +1443,17 @@ function draw bim slabs of {bim editor record:editor} through {bim drawing trans
                 set slabValue to the item at cursor in (modelValue's slabs's values)
                 set plateCategory to the bim category of element slabValue's id in modelValue
                 set slabShown to (the bim phase look of element slabValue's id in plan of editor) != bim phase hidden look
-                if ((slabValue's levelId = editor's levelId) and (bim category plateCategory is visible in editor's planRules)) and slabShown:
+                set plateNode to the bim node of element slabValue's id by editor's planRules in modelValue
+                if ((slabValue's levelId = editor's levelId) and (bim category plateCategory is visible in editor's planRules)) and (slabShown and plateNode's visible):
+                    # Its projection lines' colour and weight, when its
+                    # node of the category tree overrides them.
+                    set edgeWidth to 1.0
+                    if plateNode's projectionWeight >= (0 as a 64 bit integer):
+                        set edgeWidth to the bim pixel width of weight plateNode's projectionWeight
+                    if plateNode's projectionColour >= (0 as a 64 bit integer):
+                        use vertex color red (the bim red of colour plateNode's projectionColour), green (the bim green of colour plateNode's projectionColour) and blue (the bim blue of colour plateNode's projectionColour) in frame
+                    else:
+                        use vertex color red 196, green 170 and blue 120 in frame
                     set dashed to (the bim role of plate slabValue in modelValue) != bim floor planar role
                     set holeRings to the bim plate holes of slabValue's id in modelValue
                     loop holeCursor from 0 to the length of holeRings:
@@ -1396,7 +1461,7 @@ function draw bim slabs of {bim editor record:editor} through {bim drawing trans
                         loop holeCorner from 0 to 4:
                             set holeHere to the bim pixel of (the item at holeCorner in holeRing) through transform
                             set holeNext to the bim pixel of (the item at (the remainder of (holeCorner + 1) divided by 4) in holeRing) through transform
-                            add bim stroke from holeHere to holeNext wide 1.0 in frame
+                            add bim stroke from holeHere to holeNext wide edgeWidth in frame
                     free bim plate holes holeRings
                     set count to the length of (slabValue's outline's values)
                     loop corner from 0 to count:
@@ -1407,10 +1472,10 @@ function draw bim slabs of {bim editor record:editor} through {bim drawing trans
                             set position to 0.0
                             loop while (total > 0.0) and (position < total):
                                 set ending to the minimum of (position + 8.0) and total
-                                add bim stroke from (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) wide 1.0 in frame
+                                add bim stroke from (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) wide edgeWidth in frame
                                 set position to ending + 4.0
                         else:
-                            add bim stroke from here to following wide 1.0 in frame
+                            add bim stroke from here to following wide edgeWidth in frame
             finish triangles in frame
         if chosen's valid = false:
             return nothing
