@@ -1,0 +1,1462 @@
+# SPDX-License-Identifier: MPL-2.0
+# A schedule written as SQL (#129): a small SELECT language evaluated here,
+# over one table of values, with no database. The model's tables are made
+# by `bim_schedule_query.dl`; this file knows only columns and cells.
+#
+#   SELECT [DISTINCT] item, ... FROM table [WHERE condition]
+#       [GROUP BY expression, ...] [HAVING condition]
+#       [ORDER BY expression [ASC|DESC], ...] [LIMIT n]
+#
+# An item is `*` or an expression with an optional `AS name`. Expressions
+# have numbers, 'texts', columns (a name, or a "quoted name", which the model
+# reads as a property of a property set), + - * / and || (joins text),
+# = <> != < <= > >=, LIKE (% and _, either case), IN (...), BETWEEN ... AND
+# ..., IS [NOT] NULL, NOT, AND, OR, the aggregates COUNT(*), COUNT, SUM, AVG,
+# MIN and MAX, and ROUND, ABS, UPPER, LOWER, LENGTH and COALESCE. Keywords
+# and column names are matched in either case.
+#
+# With an aggregate or GROUP BY the rows fold into groups (one group for the
+# whole table without GROUP BY); a plain column in a group reads its first
+# row. ORDER BY takes an expression, an output name (AS) or an output
+# number. NULL sorts first; a comparison with NULL is not true.
+#
+# A query never changes anything. A mistake is reported, with the character
+# where it was found, in the result's `message`; it never stops the program.
+import kernel/core/topology_list.dl
+import lib/std.dl
+import lib/string.dl
+import lib/text.dl
+
+# A value: nothing (NULL), an amount shown with `decimals` decimals, or words.
+class:
+    patterns:
+        [a|] bim query value record
+    members:
+        kind as an integer
+        amount as a 64 bit floating-point number
+        words as a string
+        decimals as an integer
+
+function bim query null kind:
+    replacement:
+        0
+function bim query amount kind:
+    replacement:
+        1
+function bim query words kind:
+    replacement:
+        2
+
+# A token of the query: a word (a keyword or a name), a "quoted name", a
+# 'text', a numeral or a symbol, from byte `position` to `finish`.
+class:
+    patterns:
+        [a|] bim query token record
+    members:
+        kind as an integer
+        spelling as a string
+        folded as a string
+        amount as a 64 bit floating-point number
+        decimals as an integer
+        position as an integer
+        finish as an integer
+
+function bim query end token:
+    replacement:
+        0
+function bim query word token:
+    replacement:
+        1
+function bim query quoted token:
+    replacement:
+        2
+function bim query literal token:
+    replacement:
+        3
+function bim query numeral token:
+    replacement:
+        4
+function bim query symbol token:
+    replacement:
+        5
+
+# A node of an expression: a constant, a name (resolved to `column`), an
+# operation on `left` and `right` (node indices, -1 for none), an aggregate
+# of `left` (-1 for COUNT(*)) or a function call.
+class:
+    patterns:
+        [a|] bim query node record
+    members:
+        kind as an integer
+        operation as a string
+        left as an integer
+        right as an integer
+        constant as a bim query value record
+        column as an integer
+        spelling as a string
+        folded as a string
+        quoted as a boolean
+        position as an integer
+
+function bim query constant node:
+    replacement:
+        1
+function bim query name node:
+    replacement:
+        2
+function bim query unary node:
+    replacement:
+        3
+function bim query binary node:
+    replacement:
+        4
+function bim query aggregate node:
+    replacement:
+        5
+function bim query call node:
+    replacement:
+        6
+
+# Everything about one query: its text and tokens, the statement parsed from
+# them, the table it reads (column names folded to lower case, their titles,
+# the cells row by row, `width` per row) and what went wrong first.
+class:
+    patterns:
+        [a|] bim query state record
+    members:
+        source as a string
+        tokens as the type of (a cad topology list of a bim query token record)
+        place as an integer
+        nodes as the type of (a cad topology list of a bim query node record)
+        failed as a boolean
+        message as a string
+        position as an integer
+        distinct as a boolean
+        # The select items (a node, or -1 for `*`) and their headers.
+        items as the type of (a cad topology list of an integer)
+        headers as the type of (a cad topology list of a string)
+        named as the type of (a cad topology list of a boolean)
+        tableName as a string
+        tableSpelling as a string
+        tablePosition as an integer
+        filter as an integer
+        groups as the type of (a cad topology list of an integer)
+        having as an integer
+        orders as the type of (a cad topology list of an integer)
+        descending as the type of (a cad topology list of a boolean)
+        limit as an integer
+        # The "quoted names" met, folded, and as written.
+        quotedNames as the type of (a cad topology list of a string)
+        quotedSpellings as the type of (a cad topology list of a string)
+        # The table.
+        columnNames as the type of (a cad topology list of a string)
+        columnTitles as the type of (a cad topology list of a string)
+        cells as the type of (a cad topology list of a bim query value record)
+        width as an integer
+        # The rows of each group, group after group.
+        members as the type of (a cad topology list of an integer)
+
+# The result: `headers` over rows of `width` cells as text, a column marked
+# `numeric` when every value in it is an amount; or, when not `valid`, the
+# `message` saying what is wrong and where.
+class:
+    patterns:
+        [a|] bim query table record
+    members:
+        valid as a boolean
+        message as a string
+        headers as the type of (a cad topology list of a string)
+        numeric as the type of (a cad topology list of a boolean)
+        cells as the type of (a cad topology list of a string)
+        width as an integer
+
+# ---------------------------------------------------------------- values
+
+function the bim query null:
+    execute:
+        return @intrinsic("construct", a bim query value record, bim query null kind, 0.0, the string form of "", 0)
+
+function a bim query amount {a 64 bit floating-point number:amountValue} with {integer:decimalCount} decimals:
+    execute:
+        return @intrinsic("construct", a bim query value record, bim query amount kind, amountValue, the string form of "", decimalCount as an integer)
+
+function a bim query words {a string:wordsValue}:
+    execute:
+        return @intrinsic("construct", a bim query value record, bim query words kind, 0.0, wordsValue, 0)
+
+function a bim query truth {boolean:condition}:
+    execute:
+        if condition:
+            return a bim query amount 1.0 with 0 decimals
+        return a bim query amount 0.0 with 0 decimals
+
+# `amountValue` printed with `decimalCount` decimals ("%.*f").
+function the bim query printed {a 64 bit floating-point number:amountValue} to {integer:decimalCount} decimals:
+    execute:
+        set places to decimalCount as a 32 bit integer
+        if places < 0:
+            set places to 0 as a 32 bit integer
+        if places > 9:
+            set places to 9 as a 32 bit integer
+        set buffer to a new string buffer containing 64 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 65 as a word sized unsigned integer, "%.*f", places, amountValue)
+        if (written < 0) or (written > 64):
+            return the string form of "?"
+        set printedText to the substring of buffer from 0 spanning written bytes
+        # No "-0.00": a negative amount that rounds to zero shows as zero.
+        if (the length of printedText) > 1:
+            if (the character at 0 in printedText) = 45:
+                set allZero to true
+                loop cursor from 1 to the length of printedText:
+                    set printedByte to the character at cursor in printedText
+                    if (printedByte != 48) and (printedByte != 46):
+                        set allZero to false
+                if allZero:
+                    return the substring of printedText from 1 spanning ((the length of printedText) - 1) bytes
+        return printedText
+
+# How a value shows in a cell: an amount with its decimals, words as they
+# are, NULL blank.
+function the bim query text of {bim query value record:shownValue}:
+    execute:
+        if shownValue's kind = bim query amount kind:
+            return the bim query printed shownValue's amount to (shownValue's decimals) decimals
+        if shownValue's kind = bim query words kind:
+            return shownValue's words
+        return the string form of ""
+
+# Words that read as a whole decimal number ("12", "-0.5", "1e3").
+class:
+    patterns:
+        [a|] bim query reading record
+    members:
+        valid as a boolean
+        amount as a 64 bit floating-point number
+
+function the bim query reading of {a string:wordsValue}:
+    execute:
+        set refused to @intrinsic("construct", a bim query reading record, false, 0.0)
+        set byteCount to the length of wordsValue
+        if (byteCount = 0) or (byteCount > 60):
+            return refused
+        loop cursor from 0 to byteCount:
+            set readByte to the character at cursor in wordsValue
+            set allowed to ((readByte >= 48) and (readByte <= 57)) or (((readByte = 43) or (readByte = 45)) or (((readByte = 46) or (readByte = 101)) or (readByte = 69)))
+            if allowed = false:
+                return refused
+        set terminated to a new string buffer containing byteCount bytes
+        copy wordsValue into (the data of terminated) at offset 0
+        store (0 as a byte) into the data of terminated at byteCount
+        set ending to (0 as a pointer to a byte)
+        set parsed to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of terminated, the address of ending)
+        if ending != ((the data of terminated) + byteCount):
+            return refused
+        if (parsed - parsed) != 0.0:
+            return refused
+        return @intrinsic("construct", a bim query reading record, true, parsed)
+
+# A value as an amount: an amount, or words that read as a number.
+function the bim query amount reading of {bim query value record:readValue}:
+    execute:
+        if readValue's kind = bim query amount kind:
+            return @intrinsic("construct", a bim query reading record, true, readValue's amount)
+        if readValue's kind = bim query words kind:
+            return the bim query reading of readValue's words
+        return @intrinsic("construct", a bim query reading record, false, 0.0)
+
+# Whether a value counts as true: a nonzero amount (or words reading as one).
+function bim query value {bim query value record:testedValue} holds:
+    execute:
+        set holdReading to the bim query amount reading of testedValue
+        if holdReading's valid:
+            return holdReading's amount != 0.0
+        return false
+
+# -1, 0 or 1 as `first` sorts before, with or after `second`: NULL first,
+# amounts by size (words reading as numbers too, against an amount), else
+# the texts byte by byte.
+function the bim query order of {bim query value record:first} against {bim query value record:second}:
+    execute:
+        if first's kind = bim query null kind:
+            if second's kind = bim query null kind:
+                return 0
+            return -1
+        if second's kind = bim query null kind:
+            return 1
+        if (first's kind = bim query amount kind) or (second's kind = bim query amount kind):
+            set firstReading to the bim query amount reading of first
+            set secondReading to the bim query amount reading of second
+            if firstReading's valid and secondReading's valid:
+                if firstReading's amount < secondReading's amount:
+                    return -1
+                if firstReading's amount > secondReading's amount:
+                    return 1
+                return 0
+        set firstText to the bim query text of first
+        set secondText to the bim query text of second
+        set shorter to the length of firstText
+        if (the length of secondText) < shorter:
+            set shorter to the length of secondText
+        loop cursor from 0 to shorter:
+            set firstLetter to the character at cursor in firstText
+            set secondLetter to the character at cursor in secondText
+            if firstLetter < secondLetter:
+                return -1
+            if firstLetter > secondLetter:
+                return 1
+        if (the length of firstText) < (the length of secondText):
+            return -1
+        if (the length of firstText) > (the length of secondText):
+            return 1
+        return 0
+
+# Whether `subject` matches the LIKE pattern `pattern` (% any run, _ one
+# character), in either case; iterative, with one backtracking point.
+function bim query text {a string:subject} is like {a string:pattern}:
+    execute:
+        set foldedSubject to the lowercase form of subject
+        set foldedPattern to the lowercase form of pattern
+        set subjectAt to 0
+        set patternAt to 0
+        set starAt to -1
+        set resumeAt to 0
+        set matching to true
+        loop while matching and (subjectAt < (the length of foldedSubject)):
+            set advanced to false
+            if patternAt < (the length of foldedPattern):
+                set patternLetter to the character at patternAt in foldedPattern
+                if patternLetter = 37:
+                    set starAt to patternAt
+                    set resumeAt to subjectAt
+                    set patternAt to patternAt + 1
+                    set advanced to true
+                else if (patternLetter = 95) or (patternLetter = (the character at subjectAt in foldedSubject)):
+                    set patternAt to patternAt + 1
+                    set subjectAt to subjectAt + 1
+                    set advanced to true
+            if advanced = false:
+                if starAt >= 0:
+                    set patternAt to starAt + 1
+                    set resumeAt to resumeAt + 1
+                    set subjectAt to resumeAt
+                else:
+                    set matching to false
+        if matching = false:
+            return false
+        set rest to true
+        loop cursor from patternAt to the length of foldedPattern:
+            if (the character at cursor in foldedPattern) != 37:
+                set rest to false
+        return rest
+
+# ---------------------------------------------------------------- tokens
+
+function bim query letter {integer:byteCode} starts a name:
+    execute:
+        return (((byteCode >= 65) and (byteCode <= 90)) or ((byteCode >= 97) and (byteCode <= 122))) or (byteCode = 95)
+
+function bim query letter {integer:byteCode} continues a name:
+    execute:
+        return (bim query letter byteCode starts a name) or ((byteCode >= 48) and (byteCode <= 57))
+
+function bim query letter {integer:byteCode} is a digit:
+    execute:
+        return (byteCode >= 48) and (byteCode <= 57)
+
+# The first mistake found is the one reported.
+function fail bim query {a pointer to a bim query state record:state} at {integer:where} saying {a string:complaint}:
+    execute:
+        if state's failed:
+            return nothing
+        set state's failed to true
+        set state's position to where
+        set state's message to complaint
+
+function add bim query token {integer:tokenKind} spelled {a string:spelledText} from {integer:start} to {integer:stop} into {a pointer to a bim query state record:state}:
+    execute:
+        append (@intrinsic("construct", a bim query token record, tokenKind, spelledText, the lowercase form of spelledText, 0.0, 0, start, stop)) to (state's tokens's values)
+
+# The query's text cut into tokens, ending with an end token.
+function cut bim query tokens in {a pointer to a bim query state record:state}:
+    execute:
+        set sourceText to state's source
+        set sourceLength to the length of sourceText
+        set cursor to 0
+        loop while (cursor < sourceLength) and (state's failed = false):
+            set leadByte to the character at cursor in sourceText
+            set start to cursor
+            if (leadByte = 32) or (((leadByte = 9) or (leadByte = 10)) or (leadByte = 13)):
+                set cursor to cursor + 1
+            else if (leadByte = 45) and ((cursor + 1) < sourceLength):
+                # "--" starts a comment to the end of the line; a lone minus
+                # is a symbol.
+                if (the character at (cursor + 1) in sourceText) = 45:
+                    set skipping to true
+                    loop while skipping:
+                        set cursor to cursor + 1
+                        if cursor >= sourceLength:
+                            set skipping to false
+                        else if (the character at cursor in sourceText) = 10:
+                            set skipping to false
+                else:
+                    add bim query token bim query symbol token spelled (the string form of "-") from start to (cursor + 1) into state
+                    set cursor to cursor + 1
+            else if bim query letter leadByte starts a name:
+                set scanning to true
+                loop while scanning:
+                    set cursor to cursor + 1
+                    if cursor >= sourceLength:
+                        set scanning to false
+                    else if (bim query letter (the character at cursor in sourceText) continues a name) = false:
+                        set scanning to false
+                add bim query token bim query word token spelled (the substring of sourceText from start spanning (cursor - start) bytes) from start to cursor into state
+            else if (bim query letter leadByte is a digit) or ((leadByte = 46) and ((cursor + 1) < sourceLength)):
+                set sawPoint to false
+                set fraction to 0
+                set scanning to true
+                loop while scanning:
+                    set here to the character at cursor in sourceText
+                    if bim query letter here is a digit:
+                        if sawPoint:
+                            set fraction to fraction + 1
+                        set cursor to cursor + 1
+                    else if (here = 46) and (sawPoint = false):
+                        set sawPoint to true
+                        set cursor to cursor + 1
+                    else:
+                        set scanning to false
+                    if cursor >= sourceLength:
+                        set scanning to false
+                set numeralText to the substring of sourceText from start spanning (cursor - start) bytes
+                set numeralReading to the bim query reading of numeralText
+                if numeralReading's valid = false:
+                    fail bim query state at start saying ((the string form of "not a number: ") + numeralText)
+                else:
+                    set decimalCount to 0
+                    if sawPoint:
+                        set decimalCount to 2
+                        if fraction > 2:
+                            set decimalCount to fraction
+                    append (@intrinsic("construct", a bim query token record, bim query numeral token, numeralText, numeralText, numeralReading's amount, decimalCount, start, cursor)) to (state's tokens's values)
+            else if (leadByte = 39) or (leadByte = 34):
+                # 'text' and "quoted name"; a doubled quote stands for itself.
+                set closing to leadByte
+                set collected to the string form of ""
+                set cursor to cursor + 1
+                set closed to false
+                loop while (cursor < sourceLength) and (closed = false):
+                    set here to the character at cursor in sourceText
+                    set doubled to false
+                    if (here = closing) and ((cursor + 1) < sourceLength):
+                        set doubled to (the character at (cursor + 1) in sourceText) = closing
+                    if here = closing:
+                        if doubled:
+                            set collected to collected + (the substring of sourceText from cursor spanning 1 bytes)
+                            set cursor to cursor + 2
+                        else:
+                            set closed to true
+                            set cursor to cursor + 1
+                    else:
+                        set collected to collected + (the substring of sourceText from cursor spanning 1 bytes)
+                        set cursor to cursor + 1
+                if closed = false:
+                    if leadByte = 39:
+                        fail bim query state at start saying (the string form of "a text is not closed with '")
+                    else:
+                        fail bim query state at start saying (the string form of "a quoted name is not closed with \"")
+                else if leadByte = 39:
+                    add bim query token bim query literal token spelled collected from start to cursor into state
+                else:
+                    add bim query token bim query quoted token spelled collected from start to cursor into state
+            else:
+                set width to 1
+                if (cursor + 1) < sourceLength:
+                    set following to the character at (cursor + 1) in sourceText
+                    if ((leadByte = 60) and ((following = 61) or (following = 62))) or (((leadByte = 62) or (leadByte = 33)) and (following = 61)):
+                        set width to 2
+                    if (leadByte = 124) and (following = 124):
+                        set width to 2
+                set symbolText to the substring of sourceText from start spanning width bytes
+                set known to ((((leadByte = 44) or (leadByte = 40)) or ((leadByte = 41) or (leadByte = 42))) or (((leadByte = 43) or (leadByte = 47)) or ((leadByte = 61) or (leadByte = 60)))) or (((leadByte = 62) or (leadByte = 59)) or (leadByte = 45))
+                if width = 2:
+                    set known to true
+                if known:
+                    add bim query token bim query symbol token spelled symbolText from start to (cursor + width) into state
+                    set cursor to cursor + width
+                else:
+                    fail bim query state at start saying ((the string form of "unexpected character ") + symbolText)
+        add bim query token bim query end token spelled (the string form of "") from sourceLength to sourceLength into state
+
+# ---------------------------------------------------------------- parsing
+
+# The token `ahead` places past the current one (the end token past the
+# last).
+function the bim query token {integer:skipCount} ahead in {a pointer to a bim query state record:state}:
+    execute:
+        set tokenList to state's tokens's values
+        set wanted to state's place + skipCount
+        if wanted >= (the length of tokenList):
+            set wanted to (the length of tokenList) - 1
+        return the item at wanted in tokenList
+
+function the bim query current token in {a pointer to a bim query state record:state}:
+    execute:
+        return the bim query token 0 ahead in state
+
+function bim query keyword {C string:wanted} is next in {a pointer to a bim query state record:state}:
+    execute:
+        set nextToken to the bim query current token in state
+        return (nextToken's kind = bim query word token) and (nextToken's folded = wanted)
+
+function bim query symbol {C string:wanted} is next in {a pointer to a bim query state record:state}:
+    execute:
+        set nextToken to the bim query current token in state
+        return (nextToken's kind = bim query symbol token) and (nextToken's spelling = wanted)
+
+function step bim query past token in {a pointer to a bim query state record:state}:
+    execute:
+        if state's place < ((the length of (state's tokens's values)) - 1):
+            set state's place to state's place + 1
+
+# Takes keyword `wanted` when it is next; whether it did.
+function take bim query keyword {C string:wanted} in {a pointer to a bim query state record:state}:
+    execute:
+        if bim query keyword wanted is next in state:
+            step bim query past token in state
+            return true
+        return false
+
+function take bim query symbol {C string:wanted} in {a pointer to a bim query state record:state}:
+    execute:
+        if bim query symbol wanted is next in state:
+            step bim query past token in state
+            return true
+        return false
+
+# How the current token reads in a complaint.
+function the bim query described token in {a pointer to a bim query state record:state}:
+    execute:
+        set nextToken to the bim query current token in state
+        if nextToken's kind = bim query end token:
+            return the string form of "the end of the query"
+        if nextToken's kind = bim query literal token:
+            return ((the string form of "'") + nextToken's spelling) + (the string form of "'")
+        if nextToken's kind = bim query quoted token:
+            return ((the string form of "\"") + nextToken's spelling) + (the string form of "\"")
+        return ((the string form of "'") + nextToken's spelling) + (the string form of "'")
+
+function expect bim query keyword {C string:wanted} in {a pointer to a bim query state record:state}:
+    execute:
+        if (take bim query keyword wanted in state) = false:
+            fail bim query state at ((the bim query current token in state)'s position) saying ((((the string form of "expected ") + (the uppercase form of wanted)) + (the string form of " but found ")) + (the bim query described token in state))
+
+function expect bim query symbol {C string:wanted} in {a pointer to a bim query state record:state}:
+    execute:
+        if (take bim query symbol wanted in state) = false:
+            fail bim query state at ((the bim query current token in state)'s position) saying ((((the string form of "expected ") + (the string form of wanted)) + (the string form of " but found ")) + (the bim query described token in state))
+
+# Words that are part of the language, never a column's name unquoted.
+function bim query word {a string:foldedWord} is reserved:
+    execute:
+        set reservedWord to (((foldedWord = "select") or (foldedWord = "from")) or ((foldedWord = "where") or (foldedWord = "group"))) or (((foldedWord = "by") or (foldedWord = "order")) or ((foldedWord = "having") or (foldedWord = "limit")))
+        set reservedWord to reservedWord or ((((foldedWord = "and") or (foldedWord = "or")) or ((foldedWord = "not") or (foldedWord = "as"))) or (((foldedWord = "asc") or (foldedWord = "desc")) or ((foldedWord = "is") or (foldedWord = "null"))))
+        return reservedWord or ((((foldedWord = "like") or (foldedWord = "in")) or ((foldedWord = "between") or (foldedWord = "distinct"))) or ((foldedWord = "true") or (foldedWord = "false")))
+
+function add bim query node {bim query node record:fresh} to {a pointer to a bim query state record:state}:
+    execute:
+        append fresh to (state's nodes's values)
+        return ((the length of (state's nodes's values)) - 1) as an integer
+
+function add bim query operation {a string:operationName} on {integer:leftIndex} and {integer:rightIndex} shaped {integer:nodeKind} at {integer:where} to {a pointer to a bim query state record:state}:
+    execute:
+        set fresh to @intrinsic("construct", a bim query node record, nodeKind, operationName, leftIndex, rightIndex, the bim query null, -1, the string form of "", the string form of "", false, where)
+        return add bim query node fresh to state
+
+function add bim query constant {bim query value record:constantValue} at {integer:where} to {a pointer to a bim query state record:state}:
+    execute:
+        set fresh to @intrinsic("construct", a bim query node record, bim query constant node, the string form of "", -1, -1, constantValue, -1, the string form of "", the string form of "", false, where)
+        return add bim query node fresh to state
+
+# A column named `spelling` (`isQuoted` for a "quoted name"); a quoted name is
+# remembered, for the model to add as a property column.
+function add bim query name {a string:spelledText} quoted {boolean:isQuoted} at {integer:where} to {a pointer to a bim query state record:state}:
+    execute:
+        set foldedName to the lowercase form of spelledText
+        if isQuoted:
+            if (state's quotedNames's values) does not contain foldedName:
+                append foldedName to (state's quotedNames's values)
+                append spelledText to (state's quotedSpellings's values)
+        set fresh to @intrinsic("construct", a bim query node record, bim query name node, the string form of "", -1, -1, the bim query null, -1, spelledText, foldedName, isQuoted, where)
+        return add bim query node fresh to state
+
+# expression := disjunction
+function the bim query expression parsed in {a pointer to a bim query state record:state}:
+    execute:
+        return the bim query disjunction parsed in state
+
+function the bim query disjunction parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set leftIndex to -1
+        set rightIndex to -1
+        set leftIndex to the bim query conjunction parsed in state
+        loop while (state's failed = false) and (bim query keyword "or" is next in state):
+            set where to (the bim query current token in state)'s position
+            step bim query past token in state
+            set rightIndex to the bim query conjunction parsed in state
+            set leftIndex to add bim query operation (the string form of "or") on leftIndex and rightIndex shaped bim query binary node at where to state
+        return leftIndex
+
+function the bim query conjunction parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set leftIndex to -1
+        set rightIndex to -1
+        set leftIndex to the bim query negation parsed in state
+        loop while (state's failed = false) and (bim query keyword "and" is next in state):
+            set where to (the bim query current token in state)'s position
+            step bim query past token in state
+            set rightIndex to the bim query negation parsed in state
+            set leftIndex to add bim query operation (the string form of "and") on leftIndex and rightIndex shaped bim query binary node at where to state
+        return leftIndex
+
+function the bim query negation parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set operandIndex to -1
+        if bim query keyword "not" is next in state:
+            set where to (the bim query current token in state)'s position
+            step bim query past token in state
+            set operandIndex to the bim query negation parsed in state
+            return add bim query operation (the string form of "not") on operandIndex and (-1) shaped bim query unary node at where to state
+        return the bim query comparison parsed in state
+
+# A comparison, LIKE, IN, BETWEEN or IS NULL after an operand, or the
+# operand alone. IN and BETWEEN become = and OR, >= and <=.
+function the bim query comparison parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set leftIndex to -1
+        set rightIndex to -1
+        set resultIndex to -1
+        set lowIndex to -1
+        set highIndex to -1
+        set aboveIndex to -1
+        set belowIndex to -1
+        set choiceIndex to -1
+        set equalIndex to -1
+        set leftIndex to the bim query sum parsed in state
+        if state's failed:
+            return leftIndex
+        set nextToken to the bim query current token in state
+        set where to nextToken's position
+        if nextToken's kind = bim query symbol token:
+            set symbolText to nextToken's spelling
+            set comparing to ((symbolText = "=") or (symbolText = "<>")) or (((symbolText = "!=") or (symbolText = "<")) or (((symbolText = "<=") or (symbolText = ">")) or (symbolText = ">=")))
+            if comparing:
+                step bim query past token in state
+                if symbolText = "!=":
+                    set symbolText to the string form of "<>"
+                set rightIndex to the bim query sum parsed in state
+                return add bim query operation symbolText on leftIndex and rightIndex shaped bim query binary node at where to state
+            return leftIndex
+        if take bim query keyword "is" in state:
+            set operationName to the string form of "is null"
+            if take bim query keyword "not" in state:
+                set operationName to the string form of "is not null"
+            expect bim query keyword "null" in state
+            return add bim query operation operationName on leftIndex and (-1) shaped bim query unary node at where to state
+        set negated to false
+        if bim query keyword "not" is next in state:
+            set afterNot to the bim query token 1 ahead in state
+            if (afterNot's kind = bim query word token) and (((afterNot's folded = "like") or (afterNot's folded = "in")) or (afterNot's folded = "between")):
+                step bim query past token in state
+                set negated to true
+        set resultIndex to leftIndex
+        if take bim query keyword "like" in state:
+            set rightIndex to the bim query sum parsed in state
+            set resultIndex to add bim query operation (the string form of "like") on leftIndex and rightIndex shaped bim query binary node at where to state
+        else if take bim query keyword "between" in state:
+            set lowIndex to the bim query sum parsed in state
+            expect bim query keyword "and" in state
+            set highIndex to the bim query sum parsed in state
+            set aboveIndex to add bim query operation (the string form of ">=") on leftIndex and lowIndex shaped bim query binary node at where to state
+            set belowIndex to add bim query operation (the string form of "<=") on leftIndex and highIndex shaped bim query binary node at where to state
+            set resultIndex to add bim query operation (the string form of "and") on aboveIndex and belowIndex shaped bim query binary node at where to state
+        else if take bim query keyword "in" in state:
+            expect bim query symbol "(" in state
+            set resultIndex to -1
+            set listing to state's failed = false
+            loop while listing:
+                set choiceIndex to the bim query sum parsed in state
+                set equalIndex to add bim query operation (the string form of "=") on leftIndex and choiceIndex shaped bim query binary node at where to state
+                if resultIndex < 0:
+                    set resultIndex to equalIndex
+                else:
+                    set resultIndex to add bim query operation (the string form of "or") on resultIndex and equalIndex shaped bim query binary node at where to state
+                if state's failed:
+                    set listing to false
+                else if (take bim query symbol "," in state) = false:
+                    set listing to false
+            expect bim query symbol ")" in state
+        else if negated:
+            fail bim query state at where saying (the string form of "expected LIKE, IN or BETWEEN after NOT")
+        if negated:
+            set resultIndex to add bim query operation (the string form of "not") on resultIndex and (-1) shaped bim query unary node at where to state
+        return resultIndex
+
+# sum := product ((+ | - | ||) product)*
+function the bim query sum parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set leftIndex to -1
+        set rightIndex to -1
+        set leftIndex to the bim query product parsed in state
+        set summing to true
+        loop while summing and (state's failed = false):
+            set nextToken to the bim query current token in state
+            if (nextToken's kind = bim query symbol token) and (((nextToken's spelling = "+") or (nextToken's spelling = "-")) or (nextToken's spelling = "||")):
+                step bim query past token in state
+                set rightIndex to the bim query product parsed in state
+                set leftIndex to add bim query operation (nextToken's spelling) on leftIndex and rightIndex shaped bim query binary node at (nextToken's position) to state
+            else:
+                set summing to false
+        return leftIndex
+
+# product := factor ((* | /) factor)*
+function the bim query product parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set leftIndex to -1
+        set rightIndex to -1
+        set leftIndex to the bim query factor parsed in state
+        set multiplying to true
+        loop while multiplying and (state's failed = false):
+            set nextToken to the bim query current token in state
+            if (nextToken's kind = bim query symbol token) and ((nextToken's spelling = "*") or (nextToken's spelling = "/")):
+                step bim query past token in state
+                set rightIndex to the bim query factor parsed in state
+                set leftIndex to add bim query operation (nextToken's spelling) on leftIndex and rightIndex shaped bim query binary node at (nextToken's position) to state
+            else:
+                set multiplying to false
+        return leftIndex
+
+# factor := - factor | primary
+function the bim query factor parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set operandIndex to -1
+        if bim query symbol "-" is next in state:
+            set where to (the bim query current token in state)'s position
+            step bim query past token in state
+            set operandIndex to the bim query factor parsed in state
+            return add bim query operation (the string form of "-") on operandIndex and (-1) shaped bim query unary node at where to state
+        if take bim query symbol "+" in state:
+            return the bim query factor parsed in state
+        return the bim query primary parsed in state
+
+function bim query word {a string:foldedWord} is an aggregate:
+    execute:
+        return (((foldedWord = "count") or (foldedWord = "sum")) or ((foldedWord = "avg") or (foldedWord = "min"))) or (foldedWord = "max")
+
+function bim query word {a string:foldedWord} is a function:
+    execute:
+        return (((foldedWord = "round") or (foldedWord = "abs")) or ((foldedWord = "upper") or (foldedWord = "lower"))) or (((foldedWord = "length") or (foldedWord = "coalesce")) or (foldedWord = "ifnull"))
+
+# primary := numeral | 'text' | NULL | TRUE | FALSE | name | "quoted name"
+#          | aggregate ( * | expression ) | function ( expression [, expression] )
+#          | ( expression )
+function the bim query primary parsed in {a pointer to a bim query state record:state}:
+    execute:
+        set innerIndex to -1
+        set argumentIndex to -1
+        set firstIndex to -1
+        set secondIndex to -1
+        if state's failed:
+            return -1
+        set nextToken to the bim query current token in state
+        set where to nextToken's position
+        if nextToken's kind = bim query numeral token:
+            step bim query past token in state
+            return add bim query constant (a bim query amount nextToken's amount with (nextToken's decimals) decimals) at where to state
+        if nextToken's kind = bim query literal token:
+            step bim query past token in state
+            return add bim query constant (a bim query words nextToken's spelling) at where to state
+        if nextToken's kind = bim query quoted token:
+            step bim query past token in state
+            return add bim query name nextToken's spelling quoted true at where to state
+        if take bim query symbol "(" in state:
+            set innerIndex to the bim query expression parsed in state
+            expect bim query symbol ")" in state
+            return innerIndex
+        if nextToken's kind = bim query word token:
+            set foldedWord to nextToken's folded
+            if foldedWord = "null":
+                step bim query past token in state
+                return add bim query constant (the bim query null) at where to state
+            if foldedWord = "true":
+                step bim query past token in state
+                return add bim query constant (a bim query truth true) at where to state
+            if foldedWord = "false":
+                step bim query past token in state
+                return add bim query constant (a bim query truth false) at where to state
+            set afterWord to the bim query token 1 ahead in state
+            set called to (afterWord's kind = bim query symbol token) and (afterWord's spelling = "(")
+            if called and (bim query word foldedWord is an aggregate):
+                step bim query past token in state
+                step bim query past token in state
+                set argumentIndex to -1
+                if (foldedWord = "count") and (bim query symbol "*" is next in state):
+                    step bim query past token in state
+                else:
+                    set argumentIndex to the bim query expression parsed in state
+                expect bim query symbol ")" in state
+                return add bim query operation foldedWord on argumentIndex and (-1) shaped bim query aggregate node at where to state
+            if called and (bim query word foldedWord is a function):
+                step bim query past token in state
+                step bim query past token in state
+                set firstIndex to the bim query expression parsed in state
+                set secondIndex to -1
+                if take bim query symbol "," in state:
+                    set secondIndex to the bim query expression parsed in state
+                expect bim query symbol ")" in state
+                set needsTwo to (foldedWord = "coalesce") or (foldedWord = "ifnull")
+                set allowsTwo to needsTwo or (foldedWord = "round")
+                if (secondIndex >= 0) and (allowsTwo = false):
+                    fail bim query state at where saying ((the uppercase form of foldedWord) + (the string form of " takes one value"))
+                if (secondIndex < 0) and needsTwo:
+                    fail bim query state at where saying ((the uppercase form of foldedWord) + (the string form of " takes two values"))
+                return add bim query operation foldedWord on firstIndex and secondIndex shaped bim query call node at where to state
+            if called:
+                fail bim query state at where saying ((the string form of "unknown function ") + (the uppercase form of foldedWord))
+                return -1
+            if (bim query word foldedWord is reserved) = false:
+                step bim query past token in state
+                return add bim query name nextToken's spelling quoted false at where to state
+        fail bim query state at where saying ((the string form of "expected a value but found ") + (the bim query described token in state))
+        return -1
+
+# The query text from byte `start` to the end of the last token taken.
+function the bim query spelling from {integer:start} in {a pointer to a bim query state record:state}:
+    execute:
+        if state's place = 0:
+            return the string form of ""
+        set lastToken to the item at (state's place - 1) in (state's tokens's values)
+        if lastToken's finish <= start:
+            return the string form of ""
+        return the substring of state's source from start spanning (lastToken's finish - start) bytes
+
+# The statement, from SELECT to the end.
+function parse bim query statement in {a pointer to a bim query state record:state}:
+    execute:
+        set itemIndex to -1
+        expect bim query keyword "select" in state
+        if take bim query keyword "distinct" in state:
+            set state's distinct to true
+        set listing to state's failed = false
+        loop while listing:
+            set start to (the bim query current token in state)'s position
+            if take bim query symbol "*" in state:
+                append (-1) to (state's items's values)
+                append (the string form of "*") to (state's headers's values)
+                append false to (state's named's values)
+            else:
+                set itemIndex to the bim query expression parsed in state
+                set header to the bim query spelling from start in state
+                set isNamed to false
+                if take bim query keyword "as" in state:
+                    set aliasToken to the bim query current token in state
+                    if ((aliasToken's kind = bim query word token) or (aliasToken's kind = bim query quoted token)) or (aliasToken's kind = bim query literal token):
+                        set header to aliasToken's spelling
+                        set isNamed to true
+                        step bim query past token in state
+                    else:
+                        fail bim query state at aliasToken's position saying ((the string form of "expected a name after AS but found ") + (the bim query described token in state))
+                append itemIndex to (state's items's values)
+                append header to (state's headers's values)
+                append isNamed to (state's named's values)
+            if state's failed:
+                set listing to false
+            else if (take bim query symbol "," in state) = false:
+                set listing to false
+        expect bim query keyword "from" in state
+        if state's failed:
+            return nothing
+        set tableToken to the bim query current token in state
+        if ((tableToken's kind = bim query word token) and ((bim query word tableToken's folded is reserved) = false)) or (tableToken's kind = bim query quoted token):
+            set state's tableName to tableToken's folded
+            set state's tableSpelling to tableToken's spelling
+            set state's tablePosition to tableToken's position
+            step bim query past token in state
+        else:
+            fail bim query state at tableToken's position saying ((the string form of "expected a table after FROM but found ") + (the bim query described token in state))
+            return nothing
+        if take bim query keyword "where" in state:
+            set state's filter to the bim query expression parsed in state
+        if take bim query keyword "group" in state:
+            expect bim query keyword "by" in state
+            set listing to state's failed = false
+            loop while listing:
+                append (the bim query expression parsed in state) to (state's groups's values)
+                if state's failed:
+                    set listing to false
+                else if (take bim query symbol "," in state) = false:
+                    set listing to false
+        if take bim query keyword "having" in state:
+            set state's having to the bim query expression parsed in state
+        if take bim query keyword "order" in state:
+            expect bim query keyword "by" in state
+            set listing to state's failed = false
+            loop while listing:
+                append (the bim query expression parsed in state) to (state's orders's values)
+                set downward to false
+                if take bim query keyword "desc" in state:
+                    set downward to true
+                else:
+                    ignore (take bim query keyword "asc" in state)
+                append downward to (state's descending's values)
+                if state's failed:
+                    set listing to false
+                else if (take bim query symbol "," in state) = false:
+                    set listing to false
+        if take bim query keyword "limit" in state:
+            set limitToken to the bim query current token in state
+            if (limitToken's kind = bim query numeral token) and (limitToken's decimals = 0):
+                set state's limit to limitToken's amount as an integer
+                step bim query past token in state
+            else:
+                fail bim query state at limitToken's position saying ((the string form of "expected a whole number after LIMIT but found ") + (the bim query described token in state))
+        ignore (take bim query symbol ";" in state)
+        if state's failed:
+            return nothing
+        set lastToken to the bim query current token in state
+        if lastToken's kind != bim query end token:
+            fail bim query state at lastToken's position saying ((the string form of "unexpected ") + (the bim query described token in state))
+
+# A query read from `sourceText`: its tokens and statement, or what is wrong
+# with it. The table is still empty; the model fills it (`add bim query
+# column`, `add bim query cell`) before `the bim query table evaluated from`.
+function a bim query read from {a string:sourceText}:
+    execute:
+        set preparedQuery to @intrinsic("construct", a bim query state record, sourceText, a cad topology list of a bim query token record, 0, a cad topology list of a bim query node record, false, the string form of "", 0, false, a cad topology list of an integer, a cad topology list of a string, a cad topology list of a boolean, the string form of "", the string form of "", 0, -1, a cad topology list of an integer, -1, a cad topology list of an integer, a cad topology list of a boolean, -1, a cad topology list of a string, a cad topology list of a string, a cad topology list of a string, a cad topology list of a string, a cad topology list of a bim query value record, 0, a cad topology list of an integer)
+        cut bim query tokens in (the address of preparedQuery)
+        if preparedQuery's failed = false:
+            parse bim query statement in (the address of preparedQuery)
+        return preparedQuery
+
+# ---------------------------------------------------------------- the table
+
+# A column of the table, before any cell.
+function add bim query column {a string:title} to {a pointer to a bim query state record:state}:
+    execute:
+        append (the lowercase form of title) to (state's columnNames's values)
+        append title to (state's columnTitles's values)
+        set state's width to the length of (state's columnNames's values)
+
+# The next cell, row after row.
+function add bim query cell {bim query value record:cellValue} to {a pointer to a bim query state record:state}:
+    execute:
+        append cellValue to (state's cells's values)
+
+function the bim query row count in {a pointer to a bim query state record:state}:
+    execute:
+        if state's width = 0:
+            return 0
+        return (the length of (state's cells's values)) / state's width
+
+# The column named `title` (either case), or -1.
+function the bim query column named {a string:title} in {a pointer to a bim query state record:state}:
+    execute:
+        set foldedTitle to the lowercase form of title
+        set found to -1
+        loop cursor from 0 to the length of (state's columnNames's values):
+            if (found < 0) and ((the item at cursor in (state's columnNames's values)) = foldedTitle):
+                set found to cursor
+        return found
+
+# Keeps only the rows whose column `title` reads `wanted` (either case).
+function keep bim query rows whose {a string:title} is {a string:wanted} in {a pointer to a bim query state record:state}:
+    execute:
+        set columnIndex to the bim query column named title in state
+        if columnIndex < 0:
+            return nothing
+        set foldedWanted to the lowercase form of wanted
+        set kept to a cad topology list of a bim query value record
+        set rowTotal to the bim query row count in state
+        loop rowCursor from 0 to rowTotal:
+            set probe to the item at ((rowCursor * state's width) + columnIndex) in (state's cells's values)
+            if (the lowercase form of (the bim query text of probe)) = foldedWanted:
+                loop columnCursor from 0 to state's width:
+                    append (the item at ((rowCursor * state's width) + columnCursor) in (state's cells's values)) to (kept's values)
+        set state's cells to kept
+
+# Drops the table (columns and cells), to fill it again.
+function clear bim query table in {a pointer to a bim query state record:state}:
+    execute:
+        set state's columnNames to a cad topology list of a string
+        set state's columnTitles to a cad topology list of a string
+        set state's cells to a cad topology list of a bim query value record
+        set state's width to 0
+
+# ---------------------------------------------------------------- evaluating
+
+# Names resolved to columns; `*` spread over every column. Unknown names fail.
+function resolve bim query names in {a pointer to a bim query state record:state}:
+    execute:
+        set nodeTotal to the length of (state's nodes's values)
+        loop cursor from 0 to nodeTotal:
+            set nodeValue to the item at cursor in (state's nodes's values)
+            if nodeValue's kind = bim query name node:
+                set columnIndex to the bim query column named nodeValue's spelling in state
+                if columnIndex < 0:
+                    fail bim query state at nodeValue's position saying ((((the string form of "no column ") + nodeValue's spelling) + (the string form of " in ")) + state's tableSpelling)
+                set nodeValue's column to columnIndex
+                replace item at index cursor in (state's nodes's values) with nodeValue
+        # `*` becomes one item per column.
+        set spreadItems to a cad topology list of an integer
+        set spreadHeaders to a cad topology list of a string
+        set spreadNamed to a cad topology list of a boolean
+        loop cursor from 0 to the length of (state's items's values):
+            set itemIndex to the item at cursor in (state's items's values)
+            if itemIndex < 0:
+                loop columnCursor from 0 to state's width:
+                    set columnTitle to the item at columnCursor in (state's columnTitles's values)
+                    set made to add bim query name columnTitle quoted false at 0 to state
+                    set madeNode to the item at made in (state's nodes's values)
+                    set madeNode's column to columnCursor
+                    replace item at index made in (state's nodes's values) with madeNode
+                    append made to (spreadItems's values)
+                    append columnTitle to (spreadHeaders's values)
+                    append false to (spreadNamed's values)
+            else:
+                append itemIndex to (spreadItems's values)
+                append (the item at cursor in (state's headers's values)) to (spreadHeaders's values)
+                append (the item at cursor in (state's named's values)) to (spreadNamed's values)
+        set state's items to spreadItems
+        set state's headers to spreadHeaders
+        set state's named to spreadNamed
+
+# Whether node `nodeIndex` holds an aggregate anywhere below it.
+function bim query node {integer:nodeIndex} aggregates in {a pointer to a bim query state record:state}:
+    execute:
+        if nodeIndex < 0:
+            return false
+        set nodeValue to the item at nodeIndex in (state's nodes's values)
+        if nodeValue's kind = bim query aggregate node:
+            return true
+        if bim query node nodeValue's left aggregates in state:
+            return true
+        return bim query node nodeValue's right aggregates in state
+
+# Rows `first` to `first + count` of the members list form a group; `row`
+# is the one its plain columns read (-1 for an empty group).
+class:
+    patterns:
+        [a|] bim query group record
+    members:
+        first as an integer
+        count as an integer
+        row as an integer
+
+# The value of node `nodeIndex` for `groupValue`.
+function the bim query result of node {integer:nodeIndex} in group {bim query group record:groupValue} over {a pointer to a bim query state record:state}:
+    execute:
+        if nodeIndex < 0:
+            return the bim query null
+        set nodeValue to the item at nodeIndex in (state's nodes's values)
+        set nodeKind to nodeValue's kind
+        set operationName to nodeValue's operation
+        if nodeKind = bim query constant node:
+            return nodeValue's constant
+        if nodeKind = bim query name node:
+            if (groupValue's row < 0) or (nodeValue's column < 0):
+                return the bim query null
+            return the item at ((groupValue's row * state's width) + nodeValue's column) in (state's cells's values)
+        if nodeKind = bim query aggregate node:
+            return the bim query aggregate operationName of nodeValue's left in group groupValue over state
+        set leftValue to the bim query result of node nodeValue's left in group groupValue over state
+        if nodeKind = bim query unary node:
+            if operationName = "-":
+                set leftReading to the bim query amount reading of leftValue
+                if leftReading's valid = false:
+                    return the bim query null
+                return a bim query amount (0.0 - leftReading's amount) with (leftValue's decimals) decimals
+            if operationName = "not":
+                if leftValue's kind = bim query null kind:
+                    return the bim query null
+                return a bim query truth ((bim query value leftValue holds) = false)
+            if operationName = "is null":
+                return a bim query truth (leftValue's kind = bim query null kind)
+            return a bim query truth (leftValue's kind != bim query null kind)
+        set rightValue to the bim query result of node nodeValue's right in group groupValue over state
+        if nodeKind = bim query call node:
+            return the bim query call operationName of leftValue and rightValue
+        if operationName = "and":
+            return a bim query truth ((bim query value leftValue holds) and (bim query value rightValue holds))
+        if operationName = "or":
+            return a bim query truth ((bim query value leftValue holds) or (bim query value rightValue holds))
+        if (leftValue's kind = bim query null kind) or (rightValue's kind = bim query null kind):
+            return the bim query null
+        if operationName = "||":
+            return a bim query words ((the bim query text of leftValue) + (the bim query text of rightValue))
+        if operationName = "like":
+            return a bim query truth (bim query text (the bim query text of leftValue) is like (the bim query text of rightValue))
+        if ((operationName = "+") or (operationName = "-")) or ((operationName = "*") or (operationName = "/")):
+            set leftReading to the bim query amount reading of leftValue
+            set rightReading to the bim query amount reading of rightValue
+            if (leftReading's valid = false) or (rightReading's valid = false):
+                return the bim query null
+            set places to leftValue's decimals
+            if rightValue's decimals > places:
+                set places to rightValue's decimals
+            if (leftValue's kind != bim query amount kind) or (rightValue's kind != bim query amount kind):
+                set places to 2
+            if operationName = "+":
+                return a bim query amount (leftReading's amount + rightReading's amount) with places decimals
+            if operationName = "-":
+                return a bim query amount (leftReading's amount - rightReading's amount) with places decimals
+            if operationName = "*":
+                return a bim query amount (leftReading's amount * rightReading's amount) with places decimals
+            if rightReading's amount = 0.0:
+                return the bim query null
+            if places < 2:
+                set places to 2
+            return a bim query amount (leftReading's amount / rightReading's amount) with places decimals
+        set ordering to the bim query order of leftValue against rightValue
+        if operationName = "=":
+            return a bim query truth (ordering = 0)
+        if operationName = "<>":
+            return a bim query truth (ordering != 0)
+        if operationName = "<":
+            return a bim query truth (ordering < 0)
+        if operationName = "<=":
+            return a bim query truth (ordering <= 0)
+        if operationName = ">":
+            return a bim query truth (ordering > 0)
+        return a bim query truth (ordering >= 0)
+
+# Aggregate `operationName` of node `argumentIndex` (-1 for COUNT(*)) over
+# the rows of `groupValue`; NULLs are skipped, and SUM, AVG, MIN and MAX of
+# no value are NULL.
+function the bim query aggregate {a string:operationName} of {integer:argumentIndex} in group {bim query group record:groupValue} over {a pointer to a bim query state record:state}:
+    execute:
+        if argumentIndex < 0:
+            return a bim query amount (groupValue's count as a 64 bit floating-point number) with 0 decimals
+        set counted to 0
+        set total to 0.0
+        set places to 0
+        set chosen to the bim query null
+        loop memberCursor from 0 to groupValue's count:
+            set memberRow to the item at (groupValue's first + memberCursor) in (state's members's values)
+            set single to @intrinsic("construct", a bim query group record, groupValue's first + memberCursor, 1, memberRow)
+            set memberValue to the bim query result of node argumentIndex in group single over state
+            if memberValue's kind != bim query null kind:
+                if operationName = "count":
+                    set counted to counted + 1
+                else if (operationName = "min") or (operationName = "max"):
+                    if chosen's kind = bim query null kind:
+                        set chosen to memberValue
+                    else:
+                        set ordering to the bim query order of memberValue against chosen
+                        if ((operationName = "min") and (ordering < 0)) or ((operationName = "max") and (ordering > 0)):
+                            set chosen to memberValue
+                else:
+                    set memberReading to the bim query amount reading of memberValue
+                    if memberReading's valid:
+                        set counted to counted + 1
+                        set total to total + memberReading's amount
+                        if memberValue's kind != bim query amount kind:
+                            set places to 2
+                        else if memberValue's decimals > places:
+                            set places to memberValue's decimals
+        if operationName = "count":
+            return a bim query amount (counted as a 64 bit floating-point number) with 0 decimals
+        if (operationName = "min") or (operationName = "max"):
+            return chosen
+        if counted = 0:
+            return the bim query null
+        if operationName = "avg":
+            if places < 2:
+                set places to 2
+            return a bim query amount (total / (counted as a 64 bit floating-point number)) with places decimals
+        return a bim query amount total with places decimals
+
+# Function `operationName` of its one or two values.
+function the bim query call {a string:operationName} of {bim query value record:firstValue} and {bim query value record:secondValue}:
+    execute:
+        if (operationName = "coalesce") or (operationName = "ifnull"):
+            if firstValue's kind = bim query null kind:
+                return secondValue
+            return firstValue
+        if firstValue's kind = bim query null kind:
+            return the bim query null
+        if operationName = "upper":
+            return a bim query words (the uppercase form of (the bim query text of firstValue))
+        if operationName = "lower":
+            return a bim query words (the lowercase form of (the bim query text of firstValue))
+        if operationName = "length":
+            return a bim query amount ((the length of (the bim query text of firstValue)) as a 64 bit floating-point number) with 0 decimals
+        set firstReading to the bim query amount reading of firstValue
+        if firstReading's valid = false:
+            return the bim query null
+        if operationName = "abs":
+            return a bim query amount (the absolute value of firstReading's amount) with (firstValue's decimals) decimals
+        # ROUND(x) to a whole number, ROUND(x, n) to n decimals (0 to 9).
+        set places to 0
+        if secondValue's kind != bim query null kind:
+            set placesReading to the bim query amount reading of secondValue
+            if placesReading's valid:
+                set places to placesReading's amount as an integer
+        if places < 0:
+            set places to 0
+        if places > 9:
+            set places to 9
+        set scale to 1.0
+        loop cursor from 0 to places:
+            set scale to scale * 10.0
+        set rounded to @intrinsic("call", "libc", "round", a 64 bit floating-point number, firstReading's amount * scale) / scale
+        return a bim query amount rounded with places decimals
+
+# The key a row's GROUP BY values make: each value's kind and text.
+function the bim query group key of row {integer:rowIndex} over {a pointer to a bim query state record:state}:
+    execute:
+        set joinedKey to the string form of ""
+        set single to @intrinsic("construct", a bim query group record, 0, 0, rowIndex)
+        loop cursor from 0 to the length of (state's groups's values):
+            set keyValue to the bim query result of node (the item at cursor in (state's groups's values)) in group single over state
+            set keyText to the bim query text of keyValue
+            if keyValue's kind = bim query amount kind:
+                set keyText to the bim query printed keyValue's amount to 9 decimals
+            set joinedKey to ((joinedKey + (the string form of (keyValue's kind))) + keyText) + (the string form of "\n")
+        return joinedKey
+
+# Whether output row `first` (of `stride` sort keys) sorts after `second`.
+function bim query sort keys at {integer:first} come after {integer:second} among {a pointer to a list:sortKeys} by {integer:stride} in {a pointer to a bim query state record:state}:
+    execute:
+        loop cursor from 0 to stride:
+            set ordering to the bim query order of (the item at ((first * stride) + cursor) in sortKeys) against (the item at ((second * stride) + cursor) in sortKeys)
+            if the item at cursor in (state's descending's values):
+                set ordering to 0 - ordering
+            if ordering != 0:
+                return ordering > 0
+        return false
+
+# The query run over its table: the result, or the failure.
+function the bim query table evaluated from {a pointer to a bim query state record:state}:
+    execute:
+        set made to @intrinsic("construct", a bim query table record, true, the string form of "", a cad topology list of a string, a cad topology list of a boolean, a cad topology list of a string, 0)
+        if state's failed = false:
+            resolve bim query names in state
+        if state's failed:
+            set made's valid to false
+            set made's message to ((the string form of "Error at character ") + (the string form of (state's position + 1))) + ((the string form of ": ") + state's message)
+            return made
+        set rowTotal to the bim query row count in state
+        set everyRow to @intrinsic("construct", a bim query group record, 0, 0, -1)
+        # WHERE: the rows kept, as members.
+        set kept to a cad topology list of an integer
+        loop rowCursor from 0 to rowTotal:
+            set single to @intrinsic("construct", a bim query group record, 0, 0, rowCursor)
+            set passes to true
+            if state's filter >= 0:
+                if bim query node state's filter aggregates in state:
+                    fail bim query state at 0 saying (the string form of "WHERE cannot use COUNT, SUM, AVG, MIN or MAX (use HAVING)")
+                    set passes to false
+                else:
+                    set passes to bim query value (the bim query result of node state's filter in group single over state) holds
+            if passes:
+                append rowCursor to (kept's values)
+        # The groups: GROUP BY, or one group of all rows when an item, HAVING
+        # or ORDER BY aggregates, or else one group per row.
+        set grouping to (the length of (state's groups's values)) > 0
+        set folding to grouping or (state's having >= 0)
+        loop cursor from 0 to the length of (state's items's values):
+            if bim query node (the item at cursor in (state's items's values)) aggregates in state:
+                set folding to true
+        loop cursor from 0 to the length of (state's orders's values):
+            if bim query node (the item at cursor in (state's orders's values)) aggregates in state:
+                set folding to true
+        set groupFirsts to a cad topology list of an integer
+        set groupCounts to a cad topology list of an integer
+        set members to a cad topology list of an integer
+        if grouping:
+            set groupKeys to a cad topology list of a string
+            set groupOfKept to a cad topology list of an integer
+            loop cursor from 0 to the length of (kept's values):
+                set rowGroupKey to the bim query group key of row (the item at cursor in (kept's values)) over state
+                set groupIndex to -1
+                loop keyCursor from 0 to the length of (groupKeys's values):
+                    if (groupIndex < 0) and ((the item at keyCursor in (groupKeys's values)) = rowGroupKey):
+                        set groupIndex to keyCursor
+                if groupIndex < 0:
+                    append rowGroupKey to (groupKeys's values)
+                    append 0 to (groupCounts's values)
+                    set groupIndex to (the length of (groupKeys's values)) - 1
+                append groupIndex to (groupOfKept's values)
+                replace item at index groupIndex in (groupCounts's values) with ((the item at groupIndex in (groupCounts's values)) + 1)
+            set offset to 0
+            loop cursor from 0 to the length of (groupCounts's values):
+                append offset to (groupFirsts's values)
+                set offset to offset + (the item at cursor in (groupCounts's values))
+            set filled to a cad topology list of an integer
+            loop cursor from 0 to the length of (groupCounts's values):
+                append 0 to (filled's values)
+            loop cursor from 0 to the length of (kept's values):
+                append 0 to (members's values)
+            loop cursor from 0 to the length of (kept's values):
+                set groupIndex to the item at cursor in (groupOfKept's values)
+                set slot to (the item at groupIndex in (groupFirsts's values)) + (the item at groupIndex in (filled's values))
+                replace item at index slot in (members's values) with (the item at cursor in (kept's values))
+                replace item at index groupIndex in (filled's values) with ((the item at groupIndex in (filled's values)) + 1)
+        else if folding:
+            set members to kept
+            append 0 to (groupFirsts's values)
+            append (the length of (kept's values)) to (groupCounts's values)
+        else:
+            set members to kept
+            loop cursor from 0 to the length of (kept's values):
+                append cursor to (groupFirsts's values)
+                append 1 to (groupCounts's values)
+        set state's members to members
+        # Each group's output values and sort keys, HAVING applied.
+        set itemCount to the length of (state's items's values)
+        set orderCount to the length of (state's orders's values)
+        set outputValues to a cad topology list of a bim query value record
+        set sortKeys to a cad topology list of a bim query value record
+        set outputCount to 0
+        loop groupCursor from 0 to the length of (groupFirsts's values):
+            set firstMember to the item at groupCursor in (groupFirsts's values)
+            set memberCount to the item at groupCursor in (groupCounts's values)
+            set representative to -1
+            if memberCount > 0:
+                set representative to the item at firstMember in (members's values)
+            set groupValue to @intrinsic("construct", a bim query group record, firstMember, memberCount, representative)
+            set included to true
+            if state's having >= 0:
+                set included to bim query value (the bim query result of node state's having in group groupValue over state) holds
+            if included:
+                set firstOutput to the length of (outputValues's values)
+                loop cursor from 0 to itemCount:
+                    append (the bim query result of node (the item at cursor in (state's items's values)) in group groupValue over state) to (outputValues's values)
+                loop cursor from 0 to orderCount:
+                    set orderIndex to the item at cursor in (state's orders's values)
+                    set orderNode to the item at orderIndex in (state's nodes's values)
+                    set outputColumn to -1
+                    # An output's name (AS) or number sorts by that output.
+                    if (orderNode's kind = bim query name node) and (orderNode's column < 0):
+                        loop itemCursor from 0 to itemCount:
+                            if (outputColumn < 0) and (the item at itemCursor in (state's named's values)):
+                                if (the lowercase form of (the item at itemCursor in (state's headers's values))) = orderNode's folded:
+                                    set outputColumn to itemCursor
+                    if (orderNode's kind = bim query constant node) and (orderNode's constant's kind = bim query amount kind):
+                        set ordinal to orderNode's constant's amount as an integer
+                        if (ordinal >= 1) and (ordinal <= itemCount):
+                            set outputColumn to ordinal - 1
+                    if outputColumn >= 0:
+                        append (the item at (firstOutput + outputColumn) in (outputValues's values)) to (sortKeys's values)
+                    else:
+                        append (the bim query result of node orderIndex in group groupValue over state) to (sortKeys's values)
+                set outputCount to outputCount + 1
+        if state's failed:
+            set made's valid to false
+            set made's message to ((the string form of "Error at character ") + (the string form of (state's position + 1))) + ((the string form of ": ") + state's message)
+            return made
+        # ORDER BY: a stable merge sort of the output rows.
+        set sequence to a cad topology list of an integer
+        set spare to a cad topology list of an integer
+        loop cursor from 0 to outputCount:
+            append cursor to (sequence's values)
+            append cursor to (spare's values)
+        if orderCount > 0:
+            set runLength to 1
+            loop while runLength < outputCount:
+                set runStart to 0
+                loop while runStart < outputCount:
+                    set middle to runStart + runLength
+                    if middle > outputCount:
+                        set middle to outputCount
+                    set runEnd to runStart + (runLength * 2)
+                    if runEnd > outputCount:
+                        set runEnd to outputCount
+                    set leftAt to runStart
+                    set rightAt to middle
+                    loop writeAt from runStart to runEnd:
+                        set takeLeft to leftAt < middle
+                        if takeLeft and (rightAt < runEnd):
+                            if bim query sort keys at (the item at leftAt in (sequence's values)) come after (the item at rightAt in (sequence's values)) among (sortKeys's values) by orderCount in state:
+                                set takeLeft to false
+                        if takeLeft:
+                            replace item at index writeAt in (spare's values) with (the item at leftAt in (sequence's values))
+                            set leftAt to leftAt + 1
+                        else:
+                            replace item at index writeAt in (spare's values) with (the item at rightAt in (sequence's values))
+                            set rightAt to rightAt + 1
+                    set runStart to runEnd
+                set swapped to sequence
+                set sequence to spare
+                set spare to swapped
+                set runLength to runLength * 2
+        # The cells as text; DISTINCT drops repeated rows; LIMIT cuts.
+        set made's width to itemCount
+        loop cursor from 0 to itemCount:
+            append (the item at cursor in (state's headers's values)) to (made's headers's values)
+            append true to (made's numeric's values)
+        set seen to a cad topology list of a string
+        set shownRows to 0
+        loop cursor from 0 to outputCount:
+            set outputRow to the item at cursor in (sequence's values)
+            set rowTexts to a cad topology list of a string
+            set rowKey to the string form of ""
+            loop itemCursor from 0 to itemCount:
+                set cellValue to the item at ((outputRow * itemCount) + itemCursor) in (outputValues's values)
+                set cellText to the bim query text of cellValue
+                append cellText to (rowTexts's values)
+                set rowKey to (rowKey + cellText) + (the string form of "\n")
+            set wanted to (state's limit < 0) or (shownRows < state's limit)
+            if wanted and state's distinct:
+                if (seen's values) contains rowKey:
+                    set wanted to false
+                else:
+                    append rowKey to (seen's values)
+            if wanted:
+                set shownRows to shownRows + 1
+                loop itemCursor from 0 to itemCount:
+                    append (the item at itemCursor in (rowTexts's values)) to (made's cells's values)
+                    set cellValue to the item at ((outputRow * itemCount) + itemCursor) in (outputValues's values)
+                    if cellValue's kind = bim query words kind:
+                        replace item at index itemCursor in (made's numeric's values) with false
+        return made
+
+# The number of rows of a result.
+function the bim query rows of {bim query table record:tableValue}:
+    execute:
+        if tableValue's width = 0:
+            return 0
+        return (the length of (tableValue's cells's values)) / tableValue's width
+
+# A field of comma-separated text: quoted when it holds a comma, a quote or
+# a line break.
+function the bim query csv field of {a string:fieldText}:
+    execute:
+        set needsQuotes to false
+        loop cursor from 0 to the length of fieldText:
+            set fieldByte to the character at cursor in fieldText
+            if ((fieldByte = 44) or (fieldByte = 34)) or ((fieldByte = 10) or (fieldByte = 13)):
+                set needsQuotes to true
+        if needsQuotes = false:
+            return fieldText
+        return ((the string form of "\"") + (fieldText with "\"" replaced by "\"\"")) + (the string form of "\"")
+
+# A result as comma-separated text with a header line; a failure as its
+# message.
+function the bim query csv of {bim query table record:tableValue}:
+    execute:
+        if tableValue's valid = false:
+            return tableValue's message + (the string form of "\n")
+        set csvText to the string form of ""
+        loop cursor from 0 to tableValue's width:
+            if cursor > 0:
+                set csvText to csvText + (the string form of ",")
+            set csvText to csvText + (the bim query csv field of (the item at cursor in (tableValue's headers's values)))
+        set csvText to csvText + (the string form of "\n")
+        set rowTotal to the bim query rows of tableValue
+        loop rowCursor from 0 to rowTotal:
+            loop cursor from 0 to tableValue's width:
+                if cursor > 0:
+                    set csvText to csvText + (the string form of ",")
+                set csvText to csvText + (the bim query csv field of (the item at ((rowCursor * tableValue's width) + cursor) in (tableValue's cells's values)))
+            set csvText to csvText + (the string form of "\n")
+        return csvText
