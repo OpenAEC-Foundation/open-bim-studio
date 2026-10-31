@@ -420,3 +420,14 @@ closed meshes, complete hall rendering and actual editor interaction.
 candidate benchmarking. Compiler-binary hashes must be recorded separately from
 the library checkout commit. Compiler regression checks and application GUI
 checks remain separate acceptance conditions. One compiler runs per machine.
+
+## DXF and DWG export — 2026-10-31
+
+Owner: Elize, computer 1 (Linux). Task branch: `mod/exchange-dxf-dwg/export`
+from `main` `19cdda7`. Scope: native R2000 DXF and DWG writers in
+`exchange/dxf_dwg` and the 2D/3D export builders in `ui/panels/bim_cad_export.dl`
+(see `docs/notes/dxf-dwg-export.md`). Reserved: commands **2442** (DWG/DXF 2D)
+and **2443** (DWG/DXF 3D). Outside the claimed modules, two small edits for
+their owners' review: the two handlers in `ui/shell/main.dl` (maintainer) and
+no kernel change — the SAT writer works from the fast kernel's polyhedra, not
+through `kernel/acis`.

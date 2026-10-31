@@ -89,7 +89,8 @@ These are implemented areas, not a claim that every combination is complete or v
 | **IFCX** (`.ifcx`, JSON) | Yes | Yes |
 | **IFC** (`.ifc`) | Yes | Yes |
 | **BIM text** (`.bim`) | Yes | Yes, used by fixtures and development tools |
-| **DXF** (`.dxf`) | As reference geometry | No |
+| **DXF** (`.dxf`) | As reference geometry | Yes, R2000: the active plan (2D) and the model (3D, with ACIS solids) |
+| **DWG** (`.dwg`) | As reference lines, through LibreDWG when it is installed | Yes, R2000, written natively: the same 2D plan and 3D model |
 | **PDF / SVG** | Drawing-import helpers | Yes, drawings and sheets |
 
 Supported IFC elements become editable native objects; other imported geometry stays read-only. DXF entity coverage is incomplete. The application cannot yet rebuild every source drawing or imported object as parametric geometry, so keep your source files when testing round trips. IFC/IFCX support is evolving and is not a certification claim.

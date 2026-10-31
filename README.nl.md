@@ -89,7 +89,8 @@ Dit zijn onderdelen die gebouwd zijn, geen bewering dat elke combinatie af of ge
 | **IFCX** (`.ifcx`, JSON) | Ja | Ja |
 | **IFC** (`.ifc`) | Ja | Ja |
 | **BIM-tekst** (`.bim`) | Ja | Ja, voor fixtures en ontwikkeltools |
-| **DXF** (`.dxf`) | Als referentiegeometrie | Nee |
+| **DXF** (`.dxf`) | Als referentiegeometrie | Ja, R2000: de actieve plattegrond (2D) en het model (3D, met ACIS-solids) |
+| **DWG** (`.dwg`) | Als referentielijnen, via LibreDWG als dat geïnstalleerd is | Ja, R2000, native geschreven: dezelfde 2D-plattegrond en hetzelfde 3D-model |
 | **PDF / SVG** | Hulpmiddelen voor tekeningimport | Ja, tekeningen en bladen |
 
 Ondersteunde IFC-elementen worden bewerkbare native objecten; andere geïmporteerde geometrie blijft alleen-lezen. DXF ondersteunt nog niet alle entiteiten. De applicatie kan nog niet elke brontekening of elk geïmporteerd object als parametrische geometrie opbouwen; bewaar dus je bronbestanden als je heen-en-terug test. IFC/IFCX-ondersteuning is in ontwikkeling en geen certificering.
