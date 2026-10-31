@@ -1,0 +1,411 @@
+# SPDX-License-Identifier: MPL-2.0
+# The 3D view's status indicator and its display choice, without drawing:
+# the frame meter (how fast the view draws), the renderer it draws with (a
+# GPU, or the CPU through a software Vulkan driver), the lines of the
+# indicator's details, and the display drop-down's choices and hits. The
+# drawing is in `bim_view_panel.dl`; this file stays small so its test
+# compiles quickly.
+import kernel/core/core.dl
+import lib/std.dl
+import lib/string.dl
+import lib/list.dl
+
+# ---------------------------------------------------------------- frame meter
+
+# The frames the window presented lately: when each was presented and the
+# work before presenting it (the CPU's), and the GPU's time for it, all in
+# microseconds. At most `the bim frame meter span` frames are kept.
+class:
+    patterns:
+        [a|] bim frame meter record
+    members:
+        stamps as the type of (an empty list of a 64 bit integer)
+        works as the type of (an empty list of a 64 bit integer)
+        gpuTimes as the type of (an empty list of a 64 bit integer)
+
+function a new bim frame meter:
+    execute:
+        return @intrinsic("construct", a bim frame meter record, an empty list of a 64 bit integer, an empty list of a 64 bit integer, an empty list of a 64 bit integer)
+
+function the bim frame meter span:
+    replacement:
+        60
+
+# The longest gap between two frames that still counts as drawing: the
+# window sleeps when nothing changes, and the time asleep is no frame time.
+function the bim frame gap limit:
+    replacement:
+        250000 as a 64 bit integer
+
+# A frame presented at `now`, after `work` microseconds of the CPU's work
+# and `gpuWork` of the GPU's (0 when the GPU does not report it).
+function note bim frame at {a 64 bit integer:now} working {a 64 bit integer:work} gpu {a 64 bit integer:gpuWork} in {a pointer to a bim frame meter record:meter}:
+    execute:
+        append now to (meter's stamps)
+        append work to (meter's works)
+        append gpuWork to (meter's gpuTimes)
+        loop while (the length of (meter's stamps)) > the bim frame meter span:
+            remove item 0 from (meter's stamps)
+            remove item 0 from (meter's works)
+            remove item 0 from (meter's gpuTimes)
+
+# The frames per second while the view draws, over the kept frames: the
+# gaps longer than `the bim frame gap limit` (the window asleep) left out.
+# 0 when no two frames followed each other.
+function the bim frames per second of {bim frame meter record:meter}:
+    execute:
+        set total to 0 as a 64 bit integer
+        set counted to 0
+        loop cursor from 1 to the length of (meter's stamps):
+            set gap to (the item at cursor in (meter's stamps)) - (the item at (cursor - 1) in (meter's stamps))
+            if (gap > (0 as a 64 bit integer)) and (gap <= the bim frame gap limit):
+                set total to total + gap
+                set counted to counted + 1
+        if counted = 0:
+            return 0
+        return ((((counted as a 64 bit floating-point number) * 1000000.0) / (total as a 64 bit floating-point number)) + 0.5) as an integer
+
+# The view drawing at all: the last frame within the gap limit of `now`.
+function the bim frame meter {bim frame meter record:meter} is drawing at {a 64 bit integer:now}:
+    execute:
+        if (the length of (meter's stamps)) = 0:
+            return false
+        return (now - (the last item of (meter's stamps))) <= the bim frame gap limit
+
+# The mean of the kept `times`, in microseconds (0 for none).
+local function the bim mean of frame times {a pointer to a list:times}:
+    execute:
+        if (the length of times) = 0:
+            return 0 as a 64 bit integer
+        set total to 0 as a 64 bit integer
+        loop cursor from 0 to the length of times:
+            set total to total + (the item at cursor in times)
+        return total / ((the length of times) as a 64 bit integer)
+
+function the bim frame work time of {bim frame meter record:meter}:
+    execute:
+        return the bim mean of frame times (meter's works)
+
+function the bim frame gpu time of {bim frame meter record:meter}:
+    execute:
+        return the bim mean of frame times (meter's gpuTimes)
+
+# `microseconds` as milliseconds with one decimal.
+local function the bim frame milliseconds text of {a 64 bit integer:microseconds}:
+    execute:
+        set tenths to (microseconds + (50 as a 64 bit integer)) / (100 as a 64 bit integer)
+        return ((the string form of (tenths / (10 as a 64 bit integer))) + (the string form of ".")) + (the string form of (the remainder of tenths divided by (10 as a 64 bit integer)))
+
+# ---------------------------------------------------------------- renderer
+
+# The kinds of device Vulkan reports (VkPhysicalDeviceType).
+function bim other device kind:
+    replacement:
+        0
+function bim integrated gpu kind:
+    replacement:
+        1
+function bim discrete gpu kind:
+    replacement:
+        2
+function bim virtual gpu kind:
+    replacement:
+        3
+function bim cpu device kind:
+    replacement:
+        4
+
+# Who renders on device kind `kindCode`: the CPU for a software rasteriser
+# (llvmpipe, lavapipe, SwiftShader report themselves as a CPU), else the GPU.
+function the bim renderer of device kind {integer:kindCode}:
+    execute:
+        if kindCode = bim cpu device kind:
+            return the string form of "CPU"
+        return the string form of "GPU"
+
+function the bim name of device kind {integer:kindCode}:
+    execute:
+        if kindCode = bim integrated gpu kind:
+            return the string form of "integrated GPU"
+        if kindCode = bim discrete gpu kind:
+            return the string form of "discrete GPU"
+        if kindCode = bim virtual gpu kind:
+            return the string form of "virtual GPU"
+        if kindCode = bim cpu device kind:
+            return the string form of "CPU, software rendering"
+        return the string form of "other device"
+
+# `bytes` of device memory as whole megabytes or gigabytes with one decimal;
+# "not reported" for none.
+function the bim memory text of {a 64 bit integer:bytes}:
+    execute:
+        if bytes <= (0 as a 64 bit integer):
+            return the string form of "not reported"
+        set megabytes to bytes / (1048576 as a 64 bit integer)
+        if megabytes < (1024 as a 64 bit integer):
+            return (the string form of megabytes) + (the string form of " MB")
+        set tenths to ((megabytes * (10 as a 64 bit integer)) + (512 as a 64 bit integer)) / (1024 as a 64 bit integer)
+        return (((the string form of (tenths / (10 as a 64 bit integer))) + (the string form of ".")) + (the string form of (the remainder of tenths divided by (10 as a 64 bit integer)))) + (the string form of " GB")
+
+# The indicator's caption: who renders and how fast, "GPU 60 fps"; "idle"
+# when no frame came lately or the window is about to sleep (`asleep`):
+# the rate counts while the view draws.
+function the bim view status caption of {bim frame meter record:meter} at {a 64 bit integer:now} on device kind {integer:kindCode} sleeping {boolean:asleep}:
+    execute:
+        set shown to (the bim renderer of device kind kindCode) + (the string form of " ")
+        set rate to the bim frames per second of meter
+        if (asleep or ((the bim frame meter meter is drawing at now) = false)) or (rate = 0):
+            return shown + (the string form of "idle")
+        if rate > 999:
+            set rate to 999
+        return (shown + (the string form of rate)) + (the string form of " fps")
+
+function the bim view status caption of {bim frame meter record:meter} at {a 64 bit integer:now} on device kind {integer:kindCode}:
+    execute:
+        return the bim view status caption of meter at now on device kind kindCode sleeping false
+
+# The lines of the indicator's details: the rate while the view draws, the
+# frame time, the device and its memory, and how long the editor took to
+# start (`startup`, "Ready in 812 ms (window 120, …)", its parts on a line
+# of their own; left out when empty).
+function the bim view status lines of {bim frame meter record:meter} at {a 64 bit integer:now} sleeping {boolean:asleep} device {a string:deviceName} kind {integer:kindCode} memory {a 64 bit integer:bytes} startup {a string:startup}:
+    execute:
+        set statusLines to an empty list of a string
+        set rate to the bim frames per second of meter
+        set rateText to (the string form of "Frame rate: ") + ((the string form of rate) + (the string form of " frames per second"))
+        if rate = 0:
+            set rateText to the string form of "Frame rate: idle (drawn when the view changes)"
+        else if asleep or ((the bim frame meter meter is drawing at now) = false):
+            set rateText to rateText + (the string form of " while drawing, idle now")
+        append rateText to statusLines
+        set frameText to (the string form of "Frame time: ") + ((the bim frame milliseconds text of (the bim frame work time of meter)) + (the string form of " ms CPU"))
+        set gpuWork to the bim frame gpu time of meter
+        if gpuWork > (0 as a 64 bit integer):
+            set frameText to frameText + ((the string form of ", ") + ((the bim frame milliseconds text of gpuWork) + (the string form of " ms GPU")))
+        append frameText to statusLines
+        append ((the string form of "Rendering: ") + ((the bim renderer of device kind kindCode) + (the string form of " (Vulkan)"))) to statusLines
+        set shownName to deviceName
+        if (the length of deviceName) = 0:
+            set shownName to the string form of "unknown"
+        append ((the string form of "Device: ") + ((shownName + (the string form of ", ")) + (the bim name of device kind kindCode))) to statusLines
+        append ((the string form of "Device memory: ") + (the bim memory text of bytes)) to statusLines
+        if (the length of startup) > 0:
+            set opening to -1
+            loop characterCursor from 0 to the length of startup:
+                if (opening < 0) and (((the character at characterCursor in startup) as an integer) = 40):
+                    set opening to characterCursor
+            if opening > 0:
+                append (the substring of startup from 0 spanning (opening - 1) bytes) to statusLines
+                append ((the string form of "  ") + (the substring of startup from opening spanning ((the length of startup) - opening) bytes)) to statusLines
+            else:
+                append startup to statusLines
+        return statusLines
+
+function the bim view status lines of {bim frame meter record:meter} at {a 64 bit integer:now} device {a string:deviceName} kind {integer:kindCode} memory {a 64 bit integer:bytes} startup {a string:startup}:
+    execute:
+        return the bim view status lines of meter at now sleeping false device deviceName kind kindCode memory bytes startup startup
+
+# ---------------------------------------------------------------- display choice
+
+# The display choices of a view's drop-down: a plan or section (`flat`)
+# offers its displays (`bim colour display` and on), the 3D view its view
+# modes (`bim shaded view mode` and on); a choice's index is its code.
+function the bim display choice count flat {boolean:isFlat}:
+    execute:
+        if isFlat:
+            return 3
+        return 4
+
+# The short name of choice `choice`, for the drop-down's button.
+function the bim display choice caption {integer:choice} flat {boolean:isFlat}:
+    execute:
+        if isFlat:
+            if choice = 1:
+                return the string form of "Hidden"
+            if choice = 2:
+                return the string form of "Wire"
+            return the string form of "Colour"
+        if choice = 1:
+            return the string form of "Edges"
+        if choice = 2:
+            return the string form of "Hidden"
+        if choice = 3:
+            return the string form of "Wire"
+        return the string form of "Shaded"
+
+# The longer name of choice `choice` and what it draws, for the menu.
+function the bim display choice name {integer:choice} flat {boolean:isFlat}:
+    execute:
+        if isFlat:
+            if choice = 1:
+                return the string form of "Hidden line"
+            if choice = 2:
+                return the string form of "Wireframe"
+            return the string form of "Colour"
+        if choice = 1:
+            return the string form of "Shaded with edges"
+        if choice = 2:
+            return the string form of "Hidden line"
+        if choice = 3:
+            return the string form of "Wireframe"
+        return the string form of "Shaded"
+
+function the bim display choice detail {integer:choice} flat {boolean:isFlat}:
+    execute:
+        if isFlat:
+            if choice = 1:
+                return the string form of "Cut faces hatched, black lines"
+            if choice = 2:
+                return the string form of "Outlines only"
+            return the string form of "Shaded, cut faces filled"
+        if choice = 1:
+            return the string form of "Shaded, outlines drawn"
+        if choice = 2:
+            return the string form of "White model, black lines"
+        if choice = 3:
+            return the string form of "Edges only, seen through"
+        return the string form of "Coloured faces, lit"
+
+# The display menu's size: its width, the height of its heading and of a row.
+function the bim display menu width:
+    replacement:
+        240.0
+function the bim display menu heading:
+    replacement:
+        40.0
+function the bim display menu row:
+    replacement:
+        40.0
+
+# The top of the display menu standing on `foot`.
+function the bim display menu top above {a 64 bit floating-point number:foot} flat {boolean:isFlat}:
+    execute:
+        return foot - ((the bim display menu heading) + ((the bim display menu row) * ((the bim display choice count flat isFlat) as a 64 bit floating-point number)))
+
+# The choice under `pixel` in the display menu at `left`, its foot at
+# `foot`, or -1 (the heading, or outside).
+function the bim display choice at {cad vector2:pixel} from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} flat {boolean:isFlat}:
+    execute:
+        set menuTop to the bim display menu top above foot flat isFlat
+        set rowsTop to menuTop + (the bim display menu heading)
+        if (((pixel's x < left) or (pixel's x >= (left + (the bim display menu width)))) or (pixel's y < rowsTop)) or (pixel's y >= foot):
+            return -1
+        set row to ((pixel's y - rowsTop) / (the bim display menu row)) as an integer
+        if (row < 0) or (row >= (the bim display choice count flat isFlat)):
+            return -1
+        return row
+
+# ---------------------------------------------------------------- the bar
+
+# The view bar's controls at its right end (the rest is `the bim view bar
+# hit at`): in a plan or section the display drop-down; in the 3D view the
+# status indicator at the corner and the display drop-down beside it. Each
+# as its left edge and width, from the bar's `right` end.
+function the bim view bar display left from {a 64 bit floating-point number:right} scaled {boolean:withScale}:
+    execute:
+        if withScale:
+            return right - 96.0
+        return right - 184.0
+
+function the bim view bar display width:
+    replacement:
+        92.0
+
+function the bim view bar status left from {a 64 bit floating-point number:right}:
+    execute:
+        return right - 88.0
+
+function the bim view bar status width:
+    replacement:
+        88.0
+
+# The bar's hit codes for these controls: the display drop-down, the status
+# indicator.
+function bim view bar display hit:
+    replacement:
+        22
+function bim view bar status hit:
+    replacement:
+        23
+
+# ---------------------------------------------------------------- sun panel
+
+# The 3D view's sun panel (opened from its graphics menu), standing on the
+# bar: a heading, the mode (a fixed angle, or a place and a time), a row a
+# value with its - and + steps, and at its foot where the sun stands. Fixed,
+# its rows are the azimuth and the altitude; by place and time, the
+# latitude, the longitude, the month, the day, the time and the clock's
+# offset from UTC (the fields of `step bim sun …`, `bim sun azimuth field`
+# and on).
+function the bim sun panel width:
+    replacement:
+        300.0
+function the bim sun panel heading:
+    replacement:
+        40.0
+function the bim sun panel mode height:
+    replacement:
+        40.0
+function the bim sun panel row:
+    replacement:
+        32.0
+function the bim sun panel foot height:
+    replacement:
+        52.0
+
+function the bim sun panel rows by location {boolean:byLocation}:
+    execute:
+        if byLocation:
+            return 6
+        return 2
+
+# The field of row `row`: the fixed angles are fields 0 and 1, the place and
+# time fields 2 to 7.
+function the bim sun panel field of row {integer:row} by location {boolean:byLocation}:
+    execute:
+        if byLocation:
+            return row + 2
+        return row
+
+function the bim sun panel top above {a 64 bit floating-point number:foot} by location {boolean:byLocation}:
+    execute:
+        set rowsHeight to (the bim sun panel row) * ((the bim sun panel rows by location byLocation) as a 64 bit floating-point number)
+        return foot - ((((the bim sun panel heading) + (the bim sun panel mode height)) + rowsHeight) + (the bim sun panel foot height))
+
+# The panel's hit codes: the mode, fixed or by place and time; a step of a
+# field is `bim sun panel step hit` plus twice the field, plus one for up.
+function bim sun panel fixed hit:
+    replacement:
+        1
+function bim sun panel location hit:
+    replacement:
+        2
+function bim sun panel step hit:
+    replacement:
+        100
+
+# What `pixel` hits in the sun panel at `left` standing on `foot`: -1
+# outside, 0 inside but on no control, else a hit code.
+function the bim sun panel hit at {cad vector2:pixel} from {a 64 bit floating-point number:left} above {a 64 bit floating-point number:foot} by location {boolean:byLocation}:
+    execute:
+        set panelTop to the bim sun panel top above foot by location byLocation
+        set panelRight to left + (the bim sun panel width)
+        if (((pixel's x < left) or (pixel's x >= panelRight)) or (pixel's y < panelTop)) or (pixel's y >= foot):
+            return -1
+        set modeTop to panelTop + (the bim sun panel heading)
+        if (pixel's y >= (modeTop + 4.0)) and (pixel's y < ((modeTop + (the bim sun panel mode height)) - 4.0)):
+            if (pixel's x >= (left + 10.0)) and (pixel's x < (left + 148.0)):
+                return bim sun panel fixed hit
+            if (pixel's x >= (left + 152.0)) and (pixel's x < (panelRight - 10.0)):
+                return bim sun panel location hit
+            return 0
+        set rowsTop to modeTop + (the bim sun panel mode height)
+        set rowIndex to (the floor of ((pixel's y - rowsTop) / (the bim sun panel row))) as an integer
+        if (rowIndex < 0) or (rowIndex >= (the bim sun panel rows by location byLocation)):
+            return 0
+        set field to the bim sun panel field of row rowIndex by location byLocation
+        if (pixel's x >= (panelRight - 76.0)) and (pixel's x < (panelRight - 46.0)):
+            return (bim sun panel step hit) + (2 * field)
+        if (pixel's x >= (panelRight - 40.0)) and (pixel's x < (panelRight - 10.0)):
+            return ((bim sun panel step hit) + (2 * field)) + 1
+        return 0
