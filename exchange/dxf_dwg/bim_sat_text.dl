@@ -1,0 +1,446 @@
+# SPDX-License-Identifier: MPL-2.0
+# ACIS SAT text of a closed planar polyhedron, the geometry of a 3DSOLID in
+# DXF and DWG. A translation of cadcodec's `build_planar_body`
+# (src/entities/acis/primitives.rs) and `SatWriter::write`
+# (src/entities/acis/writer.rs) at 70ac6da7cf149cea6398a3d8829dd5e48b485b96,
+# MPL-2.0, extended with holes: a face may have inner loops, which a wall
+# with a window needs.
+#
+# The text is SAT 4.0 (version 400), the schema R2000 reads; cadcodec lowers
+# classic SAT 7.0 to 4.0 the same way before it writes an R2000 DWG. Records
+# are numbered from 0 by their order: the body, a point and a vertex per
+# corner used, a straight curve and an edge per edge, a plane per face, the
+# coedges, the loops, the faces, the shell and the lump. Numbers are written
+# as cadcodec writes them (`format_float`): integers without a fraction,
+# magnitudes below 0.001 or from 1e15 in scientific notation with a
+# three-digit exponent, others in the fewest digits that read back exactly.
+#
+# A polyhedron that is not a closed 2-manifold (an edge not used by exactly
+# two loops, in opposite directions), or that has a degenerate loop, is
+# refused rather than written as a broken solid; the caller then writes a
+# mesh instead.
+import exchange/dxf_dwg/bim_cad_drawing.dl
+
+class:
+    patterns:
+        [a|] bim sat text result
+    members:
+        valid as a boolean
+        text as a string
+
+local function no bim sat text:
+    execute:
+        return @intrinsic("construct", a bim sat text result, false, the string form of "")
+
+# `value` in the fewest significant digits (1 to 17) of `style` ('g' or 'e')
+# that read back as `value`.
+local function the bim sat shortest {a 64 bit floating-point number:value} in style {integer:style}:
+    execute:
+        set buffer to a new string buffer containing 40 bytes
+        set written to 0
+        loop digits from 1 to 18:
+            if style = 101:
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.*e", digits - 1, value)
+            else:
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.*g", digits, value)
+            set back to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of buffer, 0 as a pointer to a byte)
+            if back = value:
+                return the substring of buffer from 0 spanning written bytes
+        return the substring of buffer from 0 spanning written bytes
+
+# `value` as cadcodec's `format_float` writes it.
+function the bim sat number of {a 64 bit floating-point number:value}:
+    execute:
+        if value = 0.0:
+            return the string form of "0"
+        set magnitude to value
+        if magnitude < 0.0:
+            set magnitude to 0.0 - value
+        if (magnitude < 1000000000000000.0) and (magnitude >= 0.001):
+            set whole to @intrinsic("call", "libc", "floor", a 64 bit floating-point number, value)
+            if whole = value:
+                set buffer to a new string buffer containing 24 bytes
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 25 as a word sized unsigned integer, "%.0f", value)
+                return the substring of buffer from 0 spanning written bytes
+            return the bim sat shortest value in style 103
+        if magnitude < 1000000000000000.0:
+            set whole to @intrinsic("call", "libc", "floor", a 64 bit floating-point number, value)
+            if whole = value:
+                set buffer to a new string buffer containing 24 bytes
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 25 as a word sized unsigned integer, "%.0f", value)
+                return the substring of buffer from 0 spanning written bytes
+        # Scientific: the shortest mantissa, its trailing zeros dropped, and
+        # the exponent signed with three digits.
+        set scientific to the bim sat shortest value in style 101
+        set marker to -1
+        loop cursor from 0 to the length of scientific:
+            if (the character at cursor in scientific) = 101:
+                set marker to cursor
+        if marker < 0:
+            return scientific
+        set mantissa to the substring of scientific from 0 spanning marker bytes
+        set exponent to 0
+        set negative to false
+        loop cursor from (marker + 1) to the length of scientific:
+            set code to the character at cursor in scientific
+            if code = 45:
+                set negative to true
+            else if (code >= 48) and (code <= 57):
+                set exponent to (exponent * 10) + (code - 48)
+        if negative:
+            set exponent to 0 - exponent
+        set hasPoint to false
+        loop cursor from 0 to the length of mantissa:
+            if (the character at cursor in mantissa) = 46:
+                set hasPoint to true
+        if hasPoint:
+            set kept to the length of mantissa
+            loop while (kept > 0) and ((the character at (kept - 1) in mantissa) = 48):
+                set kept to kept - 1
+            if (kept > 0) and ((the character at (kept - 1) in mantissa) = 46):
+                set kept to kept - 1
+            set mantissa to the substring of mantissa from 0 spanning kept bytes
+        set sign to the string form of "e+"
+        if exponent < 0:
+            set sign to the string form of "e-"
+            set exponent to 0 - exponent
+        set digits to the string form of exponent
+        loop while (the length of digits) < 3:
+            set digits to (the string form of "0") + digits
+        return (mantissa + sign) + digits
+
+local function the bim sat point text of {cad vector3:point}:
+    execute:
+        return ((the bim sat number of point's x) + (the string form of " ")) + (((the bim sat number of point's y) + (the string form of " ")) + (the bim sat number of point's z))
+
+local function the bim sat pointer {integer:index}:
+    execute:
+        return (the string form of "$") + (the string form of index)
+
+local function the bim sat difference of {cad vector3:first} and {cad vector3:second}:
+    execute:
+        return a cad vector3 with x (first's x - second's x), y (first's y - second's y) and z (first's z - second's z)
+
+local function the bim sat length of {cad vector3:value}:
+    execute:
+        return the square root of (((value's x * value's x) + (value's y * value's y)) + (value's z * value's z))
+
+# One undirected edge: its two corners in the direction it was first met,
+# its records, and the coedges that use it.
+class:
+    patterns:
+        [a|] bim sat edge record
+    members:
+        start as an integer
+        finish as an integer
+        curve as an integer
+        record as an integer
+        firstCoedge as an integer
+        secondCoedge as an integer
+        uses as an integer
+
+class:
+    patterns:
+        [a|] bim sat loop record
+    members:
+        face as an integer
+        first as an integer
+        count as an integer
+
+# The SAT text of `solid`. `forDwg` ends lines with CR LF and leaves out the
+# closing `End-of-ACIS-data` line, as DWG stores it; a DXF keeps both, with
+# plain LF.
+function the bim sat text of {bim cad solid record:solid} for dwg {boolean:forDwg}:
+    execute:
+        set positions to solid's positions's values
+        set encoded to solid's loops's values
+        set positionCount to the length of positions
+        if positionCount < 4:
+            return no bim sat text
+        # The loops: for each its face and its corners' place in `corners`.
+        set loops to an empty list of a bim sat loop record
+        set corners to an empty list of an integer
+        set faceLoops to an empty list of an integer
+        set faceCount to 0
+        set cursor to 0
+        set malformed to false
+        loop while (cursor < (the length of encoded)) and (malformed = false):
+            set loopCount to the item at cursor in encoded
+            set cursor to cursor + 1
+            if loopCount < 1:
+                set malformed to true
+            append (the length of loops) to faceLoops
+            loop loopCursor from 0 to loopCount:
+                if malformed = false:
+                    if cursor >= (the length of encoded):
+                        set malformed to true
+                if malformed = false:
+                    set cornerCount to the item at cursor in encoded
+                    set cursor to cursor + 1
+                    if (cornerCount < 3) or ((cursor + cornerCount) > (the length of encoded)):
+                        set malformed to true
+                    else:
+                        append (@intrinsic("construct", a bim sat loop record, faceCount, the length of corners, cornerCount)) to loops
+                        loop corner from 0 to cornerCount:
+                            set cornerIndex to the item at (cursor + corner) in encoded
+                            if (cornerIndex < 0) or (cornerIndex >= positionCount):
+                                set malformed to true
+                            append cornerIndex to corners
+                        set cursor to cursor + cornerCount
+            set faceCount to faceCount + 1
+        append (the length of loops) to faceLoops
+        if malformed or (faceCount < 4):
+            free loops
+            free corners
+            free faceLoops
+            return no bim sat text
+
+        # Record numbers: the body, then a point and a vertex per corner
+        # used, in the order of the positions.
+        set vertexRecord to an empty list of an integer
+        loop positionIndex from 0 to positionCount:
+            append -1 to vertexRecord
+        loop cornerIndex from 0 to the length of corners:
+            replace item at index (the item at cornerIndex in corners) in vertexRecord with 0
+        set next to 1
+        loop positionIndex from 0 to positionCount:
+            if (the item at positionIndex in vertexRecord) = 0:
+                replace item at index positionIndex in vertexRecord with (next + 1)
+                set next to next + 2
+
+        # The edges, each with its curve before it.
+        set edges to an empty list of a bim sat edge record
+        set coedgeEdge to an empty list of an integer
+        loop loopCursor from 0 to the length of loops:
+            set loopValue to the item at loopCursor in loops
+            loop corner from 0 to loopValue's count:
+                set fromCorner to the item at (loopValue's first + corner) in corners
+                set toCorner to the item at (loopValue's first + (the remainder of (corner + 1) divided by loopValue's count)) in corners
+                if fromCorner = toCorner:
+                    set malformed to true
+                set found to -1
+                loop edgeCursor from 0 to the length of edges:
+                    set candidate to the item at edgeCursor in edges
+                    if ((candidate's start = fromCorner) and (candidate's finish = toCorner)) or ((candidate's start = toCorner) and (candidate's finish = fromCorner)):
+                        set found to edgeCursor
+                if found < 0:
+                    append (@intrinsic("construct", a bim sat edge record, fromCorner, toCorner, next, next + 1, -1, -1, 0)) to edges
+                    set next to next + 2
+                    set found to (the length of edges) - 1
+                append found to coedgeEdge
+        set surfaceBase to next
+        set coedgeBase to surfaceBase + faceCount
+        set loopBase to coedgeBase + (the length of corners)
+        set faceBase to loopBase + (the length of loops)
+        set shellRecord to faceBase + faceCount
+        set lumpRecord to shellRecord + 1
+        set recordCount to lumpRecord + 1
+
+        # Each edge must have exactly two coedges, running opposite ways.
+        loop coedge from 0 to the length of coedgeEdge:
+            set edgeIndex to the item at coedge in coedgeEdge
+            set edgeValue to the item at edgeIndex in edges
+            if edgeValue's uses = 0:
+                set edgeValue's firstCoedge to coedge
+            else if edgeValue's uses = 1:
+                set edgeValue's secondCoedge to coedge
+            set edgeValue's uses to edgeValue's uses + 1
+            replace item at index edgeIndex in edges with edgeValue
+        loop edgeCursor from 0 to the length of edges:
+            set edgeValue to the item at edgeCursor in edges
+            if edgeValue's uses != 2:
+                set malformed to true
+            else:
+                set firstForward to bim sat coedge (edgeValue's firstCoedge) runs along edgeValue among loops and corners
+                set secondForward to bim sat coedge (edgeValue's secondCoedge) runs along edgeValue among loops and corners
+                if firstForward = secondForward:
+                    set malformed to true
+            set edgeLength to the bim sat length of (the bim sat difference of (the item at edgeValue's finish in positions) and (the item at edgeValue's start in positions))
+            if edgeLength < 0.000000000001:
+                set malformed to true
+
+        # The planes, from each face's outer loop (Newell's normal).
+        set normals to an empty list of a cad vector3
+        loop faceCursor from 0 to faceCount:
+            set outer to the item at (the item at faceCursor in faceLoops) in loops
+            set nx to 0.0
+            set ny to 0.0
+            set nz to 0.0
+            loop corner from 0 to outer's count:
+                set here to the item at (the item at (outer's first + corner) in corners) in positions
+                set there to the item at (the item at (outer's first + (the remainder of (corner + 1) divided by outer's count)) in corners) in positions
+                set nx to nx + ((here's y - there's y) * (here's z + there's z))
+                set ny to ny + ((here's z - there's z) * (here's x + there's x))
+                set nz to nz + ((here's x - there's x) * (here's y + there's y))
+            set size to the square root of (((nx * nx) + (ny * ny)) + (nz * nz))
+            if size < 0.000000000001:
+                set malformed to true
+                set size to 1.0
+            append (a cad vector3 with x (nx / size), y (ny / size) and z (nz / size)) to normals
+        if malformed:
+            free loops
+            free corners
+            free faceLoops
+            free vertexRecord
+            free edges
+            free coedgeEdge
+            free normals
+            return no bim sat text
+
+        set lineEnd to the string form of "\n"
+        if forDwg:
+            set lineEnd to the string form of "\r\n"
+        set parts to an empty list of a string
+        append (((the string form of "400 ") + (the string form of recordCount)) + ((the string form of " 1 0") + lineEnd)) to parts
+        append ((the string form of "15 Open BIM Studio 8 ACIS 4.0 24 Thu Jan 01 00:00:00 2023") + lineEnd) to parts
+        append ((the string form of "1 9.9999999999999995e-007 1e-010") + lineEnd) to parts
+        set ending to (the string form of " #") + lineEnd
+        append (((the string form of "body $-1 ") + (the bim sat pointer lumpRecord)) + ((the string form of " $-1 $-1") + ending)) to parts
+        # Points and vertices; a vertex names the first edge that uses it.
+        loop positionIndex from 0 to positionCount:
+            set vertexNumber to the item at positionIndex in vertexRecord
+            if vertexNumber >= 0:
+                append (((the string form of "point $-1 ") + (the bim sat point text of (the item at positionIndex in positions))) + ending) to parts
+                set firstEdge to -1
+                loop edgeCursor from 0 to the length of edges:
+                    set edgeValue to the item at edgeCursor in edges
+                    if (firstEdge < 0) and ((edgeValue's start = positionIndex) or (edgeValue's finish = positionIndex)):
+                        set firstEdge to edgeValue's record
+                append (((the string form of "vertex $-1 ") + (the bim sat pointer firstEdge)) + (((the string form of " ") + (the bim sat pointer (vertexNumber - 1))) + ending)) to parts
+        # Curves and edges.
+        loop edgeCursor from 0 to the length of edges:
+            set edgeValue to the item at edgeCursor in edges
+            set root to the item at edgeValue's start in positions
+            set direction to the bim sat difference of (the item at edgeValue's finish in positions) and root
+            set edgeLength to the bim sat length of direction
+            set unit to a cad vector3 with x (direction's x / edgeLength), y (direction's y / edgeLength) and z (direction's z / edgeLength)
+            append ((((the string form of "straight-curve $-1 ") + (the bim sat point text of root)) + ((the string form of " ") + (the bim sat point text of unit))) + ((the string form of " I I") + ending)) to parts
+            set recordLine to (the string form of "edge $-1 ") + (the bim sat pointer (the item at edgeValue's start in vertexRecord))
+            set recordLine to (recordLine + (the string form of " ")) + (the bim sat pointer (the item at edgeValue's finish in vertexRecord))
+            set recordLine to (recordLine + (the string form of " ")) + (the bim sat pointer (coedgeBase + edgeValue's firstCoedge))
+            set recordLine to (recordLine + (the string form of " ")) + (the bim sat pointer edgeValue's curve)
+            append ((recordLine + (the string form of " forward")) + ending) to parts
+        # Planes: rooted at the outer loop's first corner, u along its first side.
+        loop faceCursor from 0 to faceCount:
+            set outer to the item at (the item at faceCursor in faceLoops) in loops
+            set root to the item at (the item at outer's first in corners) in positions
+            set side to the bim sat difference of (the item at (the item at (outer's first + 1) in corners) in positions) and root
+            set normal to the item at faceCursor in normals
+            # u: the first side without its part along the normal.
+            set along to ((side's x * normal's x) + (side's y * normal's y)) + (side's z * normal's z)
+            set side to a cad vector3 with x (side's x - (along * normal's x)), y (side's y - (along * normal's y)) and z (side's z - (along * normal's z))
+            set sideLength to the bim sat length of side
+            set u to a cad vector3 with x (side's x / sideLength), y (side's y / sideLength) and z (side's z / sideLength)
+            set recordLine to ((the string form of "plane-surface $-1 ") + (the bim sat point text of root)) + ((the string form of " ") + (the bim sat point text of normal))
+            append (((recordLine + (the string form of " ")) + (the bim sat point text of u)) + ((the string form of " forward_v I I I I") + ending)) to parts
+        # Coedges, a ring per loop.
+        loop loopCursor from 0 to the length of loops:
+            set loopValue to the item at loopCursor in loops
+            loop corner from 0 to loopValue's count:
+                set coedge to loopValue's first + corner
+                set nextCoedge to loopValue's first + (the remainder of (corner + 1) divided by loopValue's count)
+                set previousCoedge to loopValue's first + (the remainder of ((corner + loopValue's count) - 1) divided by loopValue's count)
+                set edgeValue to the item at (the item at coedge in coedgeEdge) in edges
+                set partner to edgeValue's firstCoedge
+                if partner = coedge:
+                    set partner to edgeValue's secondCoedge
+                set sense to the string form of "reversed"
+                if bim sat coedge coedge runs along edgeValue among loops and corners:
+                    set sense to the string form of "forward"
+                set recordLine to ((the string form of "coedge $-1 ") + (the bim sat pointer (coedgeBase + nextCoedge))) + ((the string form of " ") + (the bim sat pointer (coedgeBase + previousCoedge)))
+                set recordLine to (recordLine + (the string form of " ")) + (the bim sat pointer (coedgeBase + partner))
+                set recordLine to ((recordLine + (the string form of " ")) + (the bim sat pointer edgeValue's record)) + ((the string form of " ") + sense)
+                append (((recordLine + (the string form of " ")) + (the bim sat pointer (loopBase + loopCursor))) + ((the string form of " $-1") + ending)) to parts
+        # Loops, chained per face.
+        loop loopCursor from 0 to the length of loops:
+            set loopValue to the item at loopCursor in loops
+            set nextLoop to -1
+            if (loopCursor + 1) < (the item at (loopValue's face + 1) in faceLoops):
+                set nextLoop to loopBase + (loopCursor + 1)
+            set recordLine to ((the string form of "loop $-1 ") + (the bim sat pointer nextLoop)) + ((the string form of " ") + (the bim sat pointer (coedgeBase + loopValue's first)))
+            append (((recordLine + (the string form of " ")) + (the bim sat pointer (faceBase + loopValue's face))) + ending) to parts
+        # Faces, chained in the shell.
+        loop faceCursor from 0 to faceCount:
+            set nextFace to -1
+            if (faceCursor + 1) < faceCount:
+                set nextFace to faceBase + (faceCursor + 1)
+            set recordLine to ((the string form of "face $-1 ") + (the bim sat pointer nextFace)) + ((the string form of " ") + (the bim sat pointer (loopBase + (the item at faceCursor in faceLoops))))
+            set recordLine to ((recordLine + (the string form of " ")) + (the bim sat pointer shellRecord)) + ((the string form of " $-1 ") + (the bim sat pointer (surfaceBase + faceCursor)))
+            append ((recordLine + (the string form of " forward single")) + ending) to parts
+        append ((((the string form of "shell $-1 $-1 $-1 ") + (the bim sat pointer faceBase)) + ((the string form of " $-1 ") + (the bim sat pointer lumpRecord))) + ending) to parts
+        append ((((the string form of "lump $-1 $-1 ") + (the bim sat pointer shellRecord)) + (the string form of " $0")) + ending) to parts
+        if forDwg = false:
+            append (the string form of "End-of-ACIS-data\n") to parts
+        set satText to parts joined with ""
+        free parts
+        free loops
+        free corners
+        free faceLoops
+        free vertexRecord
+        free edges
+        free coedgeEdge
+        free normals
+        return @intrinsic("construct", a bim sat text result, true, satText)
+
+# Whether coedge `coedge` runs from the edge's start to its finish.
+local function bim sat coedge {integer:coedge} runs along {bim sat edge record:edgeValue} among {a pointer to a list:loops} and {a pointer to a list:corners}:
+    execute:
+        loop loopCursor from 0 to the length of loops:
+            set loopValue to the item at loopCursor in loops
+            if (coedge >= loopValue's first) and (coedge < (loopValue's first + loopValue's count)):
+                set corner to coedge - loopValue's first
+                set fromCorner to the item at coedge in corners
+                set toCorner to the item at (loopValue's first + (the remainder of (corner + 1) divided by loopValue's count)) in corners
+                return (fromCorner = edgeValue's start) and (toCorner = edgeValue's finish)
+        return false
+
+# SAT text enciphered for a DXF group: printable characters from '@' to '_'
+# become 159 minus their code, other printable ones are XORed with 0x5F,
+# and a space follows each enciphered 'A' (which became '^'), as cadcodec's
+# `AcisData::encode_sat` writes it for ASCII DXF.
+function the bim dxf sat cipher of {a string:plain}:
+    execute:
+        set extra to 0
+        loop cursor from 0 to the length of plain:
+            if (the character at cursor in plain) = 65:
+                set extra to extra + 1
+        set coded to a new string buffer containing ((the length of plain) + extra) bytes
+        set place to 0
+        loop cursor from 0 to the length of plain:
+            set code to the character at cursor in plain
+            set result to code
+            if (code >= 64) and (code <= 95):
+                set result to 159 - code
+            else if (code > 32) and (code < 127):
+                set result to code bitwise xor 95
+            store (result as a byte) into the data of coded at place
+            set place to place + 1
+            if code = 65:
+                store (32 as a byte) into the data of coded at place
+                set place to place + 1
+        return coded
+
+# SAT text enciphered for a DWG: printable characters 33 to 126 become 159
+# minus their code (the substitution of LibreDWG's dwg.spec).
+function the bim dwg sat cipher of {a string:plain}:
+    execute:
+        set coded to a new string buffer containing (the length of plain) bytes
+        loop cursor from 0 to the length of plain:
+            set code to the character at cursor in plain
+            if (code >= 33) and (code <= 126):
+                set code to 159 - code
+            store (code as a byte) into the data of coded at cursor
+        return coded
+
+# Adds a solid of `positions` and the face loops `loops` (encoded as in
+# `bim cad solid record`) when its SAT text can be written; false, adding
+# nothing, when the polyhedron is refused.
+function add bim cad checked solid of {a pointer to a list:positions} with loops {a pointer to a list:loops} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        set trial to a new bim cad drawing
+        add bim cad solid of positions with loops loops on layer to (the address of trial)
+        set sat to the bim sat text of (the item at 0 in (trial's solids's values)) for dwg false
+        if sat's valid = false:
+            return false
+        add bim cad solid of positions with loops loops on layer to drawing
+        return true

@@ -1,0 +1,1349 @@
+# SPDX-License-Identifier: MPL-2.0
+# A `bim cad drawing record` written as an R2000 (AC1015) DWG, natively.
+# A translation of the R2000 path of cadcodec's DWG writer
+# (src/io/dwg/dwg_writer.rs `write_ac15`, the file header, header, classes,
+# handles and auxiliary header writers and the object writer under
+# src/io/dwg/dwg_stream_writers/ at 70ac6da7cf149cea6398a3d8829dd5e48b485b96,
+# MPL-2.0), for the objects a drawing holds. The header variables and the
+# dimension style are cadcodec's defaults for a new R2000 document, with
+# this drawing's handles, extents and metres ($INSUNITS 6).
+#
+# The file is, in this order: the file header with its six section
+# locators, the header variables, the classes (the dictionary with a
+# default and the layout), the free-space and template records, the
+# auxiliary header, the objects, the object map (handle to file offset)
+# and an empty preview. Every object is its bit stream (type, its size in
+# bits, its handle, no extended data, its data) with the handles it refers
+# to after its data, framed by its byte count and a CRC-16. The objects are
+# those of the DXF writer, with the same handles (`bim_cad_drawing.dl`),
+# plus the viewport entity header table that R2000 DWG has.
+#
+# Two choices differ from cadcodec, both to the letter of the format: an
+# object's handle references follow its data without padding between
+# them, at the bit its size field names; and a solid's SAT is written as
+# SAT 4.0 directly (`bim_sat_text.dl`) instead of lowered from 7.0.
+import exchange/dxf_dwg/bim_dwg_bits.dl
+import exchange/dxf_dwg/bim_sat_text.dl
+
+# The object types of R2000, fixed or (500 up) by class.
+function dwg text type:
+    replacement:
+        1
+function dwg block type:
+    replacement:
+        4
+function dwg block end type:
+    replacement:
+        5
+function dwg sequence end type:
+    replacement:
+        6
+function dwg vertex 3d type:
+    replacement:
+        11
+function dwg face vertex type:
+    replacement:
+        13
+function dwg face record type:
+    replacement:
+        14
+function dwg polyline 3d type:
+    replacement:
+        16
+function dwg line type:
+    replacement:
+        19
+function dwg polyface type:
+    replacement:
+        29
+function dwg solid 3d type:
+    replacement:
+        38
+function dwg dictionary type:
+    replacement:
+        42
+function dwg block control type:
+    replacement:
+        48
+function dwg block header type:
+    replacement:
+        49
+function dwg layer control type:
+    replacement:
+        50
+function dwg layer type:
+    replacement:
+        51
+function dwg style control type:
+    replacement:
+        52
+function dwg style type:
+    replacement:
+        53
+function dwg linetype control type:
+    replacement:
+        56
+function dwg linetype type:
+    replacement:
+        57
+function dwg view control type:
+    replacement:
+        60
+function dwg ucs control type:
+    replacement:
+        62
+function dwg viewport control type:
+    replacement:
+        64
+function dwg viewport type:
+    replacement:
+        65
+function dwg application control type:
+    replacement:
+        66
+function dwg application type:
+    replacement:
+        67
+function dwg dimension style control type:
+    replacement:
+        68
+function dwg dimension style type:
+    replacement:
+        69
+function dwg viewport entity control type:
+    replacement:
+        70
+function dwg multiline style type:
+    replacement:
+        73
+function dwg light polyline type:
+    replacement:
+        77
+function dwg placeholder type:
+    replacement:
+        80
+function dwg default dictionary class:
+    replacement:
+        500
+function dwg layout class:
+    replacement:
+        501
+
+# The objects written so far and where each starts in the objects section.
+class:
+    patterns:
+        [a|] bim dwg writer record
+    members:
+        objects as a bim dwg buffer record
+        handles as the type of (an empty list of an integer)
+        offsets as the type of (an empty list of an integer)
+
+# ---------------------------------------------------------------- objects
+
+# The start of every object: its type, a raw long for its size in bits
+# (patched when it is finished), its handle and no extended data. Returns
+# the bit where the size goes.
+local function begin dwg object {integer:kind} handle {integer:handleValue} in {a pointer to a bim dwg bits record:main}:
+    execute:
+        put dwg short kind into main
+        set sizeAt to the dwg bit position of main
+        put dwg raw long 0 into main
+        put dwg handle 0 value handleValue into main
+        put dwg short 0 into main
+        return sizeAt
+
+# The start of an object that is no entity: its owner, no reactors and no
+# extension dictionary.
+local function begin dwg {integer:kind} object {integer:handle} owned by {integer:owner} in {a pointer to a bim dwg bits record:main} and {a pointer to a bim dwg bits record:refs}:
+    execute:
+        set sizeAt to begin dwg object kind handle handle in main
+        put dwg handle 4 value owner into refs
+        put dwg long 0 into main
+        put dwg handle 3 value 0 into refs
+        return sizeAt
+
+# The start of an entity: no proxy graphics, its space (`mode` 2 model
+# space, 1 paper space, 0 owned by `owner`), no reactors, no extension
+# dictionary, its neighbours in its owner (implicit when they are the
+# handles either side of its own), colour, linetype, plot style and
+# lineweight by layer, on the layer with handle `layer`.
+local function begin dwg {integer:kind} entity {integer:handle} owned by {integer:owner} mode {integer:modeValue} on {integer:layer} after {integer:previous} before {integer:following} in {a pointer to a bim dwg bits record:main} and {a pointer to a bim dwg bits record:refs}:
+    execute:
+        set sizeAt to begin dwg object kind handle handle in main
+        put dwg bit false into main
+        put dwg 2 bits modeValue into main
+        if modeValue = 0:
+            put dwg handle 4 value owner into refs
+        put dwg long 0 into main
+        put dwg handle 3 value 0 into refs
+        set linked to (previous = (handle - 1)) and (following = (handle + 1))
+        put dwg bit linked into main
+        if linked = false:
+            put dwg handle 4 value previous into refs
+            put dwg handle 4 value following into refs
+        put dwg colour 256 into main
+        put dwg double 1.0 into main
+        put dwg handle 5 value layer into refs
+        put dwg 2 bits 0 into main
+        put dwg 2 bits 0 into main
+        put dwg short 0 into main
+        put dwg byte 29 into main
+        return sizeAt
+
+# Frames the object: its data, then its handle references from the bit its
+# size names; its byte count before it and its CRC after it.
+local function finish dwg object {integer:handle} sized at {integer:sizeAt} from {a pointer to a bim dwg bits record:main} and {a pointer to a bim dwg bits record:refs} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set combined to a new bim dwg bits
+        put dwg bits of (the value at main) into (the address of combined)
+        set dataBits to the dwg bit position of (the address of combined)
+        put dwg bits of (the value at refs) into (the address of combined)
+        pad dwg bits (the address of combined)
+        patch dwg raw long dataBits at bit sizeAt in (the address of combined)
+        set body to the dwg bytes of combined
+        set start to writer's objects's size
+        # MS: the byte count, 15 bits to a little-endian word.
+        set remaining to the length of body
+        set writing to true
+        loop while writing:
+            set word to remaining bitwise and 32767
+            set remaining to remaining shifted right by 15
+            if remaining > 0:
+                add dwg short (word + 32768) to (the address of (writer's objects))
+            else:
+                add dwg short word to (the address of (writer's objects))
+                set writing to false
+        add dwg bytes body to (the address of (writer's objects))
+        set crc to the dwg crc of (writer's objects) from start spanning ((writer's objects's size) - start) seeded (the dwg crc seed)
+        add dwg short crc to (the address of (writer's objects))
+        append handle to (writer's handles)
+        append start to (writer's offsets)
+        store (a new bim dwg bits) at main
+        store (a new bim dwg bits) at refs
+
+# A table control: its entries, soft-owned, after its counted ones.
+local function write dwg control {integer:kind} handle {integer:handleValue} counting {integer:count} entries {a pointer to a list:entriesValue} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg kind object handleValue owned by 0 in (the address of main) and (the address of refs)
+        if kind = dwg viewport entity control type:
+            put dwg short count into (the address of main)
+        else:
+            put dwg long count into (the address of main)
+        if kind = dwg dimension style control type:
+            put dwg byte 0 into (the address of main)
+        loop cursor from 0 to the length of entriesValue:
+            set entry to the item at cursor in entriesValue
+            set code to 2
+            if entry < 0:
+                set code to 3
+                set entry to 0 - entry
+            put dwg handle code value entry into (the address of refs)
+        finish dwg object handleValue sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+# The xref flags of a table entry (none).
+local function put dwg entry flags into {a pointer to a bim dwg bits record:main}:
+    execute:
+        put dwg bit false into main
+        put dwg short 0 into main
+        put dwg bit false into main
+
+local function write dwg controls of {bim cad drawing record:drawing} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        # Hard-owned entries are given negative.
+        set entries to an empty list of an integer
+        append (0 - (bim cad model space handle)) to entries
+        append (0 - (bim cad paper space handle)) to entries
+        write dwg control (dwg block control type) handle (bim cad block control handle) counting 0 entries entries into writer
+        clear entries
+        loop cursor from 0 to the length of (drawing's layers's values):
+            append (the bim cad handle of layer cursor) to entries
+        write dwg control (dwg layer control type) handle (bim cad layer control handle) counting (the length of entries) entries entries into writer
+        clear entries
+        append (bim cad standard style handle) to entries
+        write dwg control (dwg style control type) handle (bim cad style control handle) counting 1 entries entries into writer
+        clear entries
+        append (bim cad continuous linetype handle) to entries
+        append (0 - (bim cad by block linetype handle)) to entries
+        append (0 - (bim cad by layer linetype handle)) to entries
+        write dwg control (dwg linetype control type) handle (bim cad linetype control handle) counting 1 entries entries into writer
+        clear entries
+        write dwg control (dwg view control type) handle (bim cad view control handle) counting 0 entries entries into writer
+        write dwg control (dwg ucs control type) handle (bim cad ucs control handle) counting 0 entries entries into writer
+        append (bim cad active viewport handle) to entries
+        write dwg control (dwg viewport control type) handle (bim cad viewport control handle) counting 1 entries entries into writer
+        clear entries
+        append (bim cad acad application handle) to entries
+        write dwg control (dwg application control type) handle (bim cad application control handle) counting 1 entries entries into writer
+        clear entries
+        append (bim cad standard dimension style handle) to entries
+        write dwg control (dwg dimension style control type) handle (bim cad dimension style control handle) counting 1 entries entries into writer
+        clear entries
+        write dwg control (dwg viewport entity control type) handle (bim cad viewport entity control handle) counting 0 entries entries into writer
+        free entries
+
+local function write dwg linetype {a string:name} described {a string:description} handle {integer:handleValue} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg (dwg linetype type) object handleValue owned by (bim cad linetype control handle) in (the address of main) and (the address of refs)
+        put dwg text name into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg text description into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg byte 65 into (the address of main)
+        put dwg byte 0 into (the address of main)
+        # The text area of complex linetypes: 256 bytes, empty.
+        loop cursor from 0 to 256:
+            put dwg byte 0 into (the address of main)
+        put dwg handle 5 value 0 into (the address of refs)
+        finish dwg object handleValue sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+local function write dwg tables of {bim cad drawing record:drawing} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        # Layers.
+        loop cursor from 0 to the length of (drawing's layers's values):
+            set layer to the item at cursor in (drawing's layers's values)
+            set handle to the bim cad handle of layer cursor
+            set sizeAt to begin dwg (dwg layer type) object handle owned by (bim cad layer control handle) in (the address of main) and (the address of refs)
+            put dwg text (layer's name) into (the address of main)
+            put dwg entry flags into (the address of main)
+            # Lineweight default (31) and plotted.
+            put dwg short ((31 * 32) + 16) into (the address of main)
+            put dwg colour (layer's colour) into (the address of main)
+            put dwg handle 5 value 0 into (the address of refs)
+            put dwg handle 5 value (bim cad plot style placeholder handle) into (the address of refs)
+            put dwg handle 5 value (bim cad continuous linetype handle) into (the address of refs)
+            finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+        # The text style.
+        set sizeAt to begin dwg (dwg style type) object (bim cad standard style handle) owned by (bim cad style control handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "Standard") into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg double 1.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg byte 0 into (the address of main)
+        put dwg double 0.25 into (the address of main)
+        put dwg text (the string form of "txt") into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg handle 5 value 0 into (the address of refs)
+        finish dwg object (bim cad standard style handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        # Linetypes.
+        write dwg linetype (the string form of "ByBlock") described (the string form of "") handle (bim cad by block linetype handle) into writer
+        write dwg linetype (the string form of "ByLayer") described (the string form of "") handle (bim cad by layer linetype handle) into writer
+        write dwg linetype (the string form of "Continuous") described (the string form of "Solid line") handle (bim cad continuous linetype handle) into writer
+        # The active viewport, looking at the drawing from above.
+        set bounds to the bim cad extents of drawing
+        set middle to the cad zero vector3
+        set span to 10.0
+        if bounds's valid:
+            set middle to a cad vector3 with x ((bounds's low's x + bounds's high's x) / 2.0), y ((bounds's low's y + bounds's high's y) / 2.0) and z 0.0
+            set span to the maximum of (the maximum of (bounds's high's x - bounds's low's x) and (bounds's high's y - bounds's low's y)) and 1.0
+        set sizeAt to begin dwg (dwg viewport type) object (bim cad active viewport handle) owned by (bim cad viewport control handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "*Active") into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg double (span * 1.1) into (the address of main)
+        put dwg double ((span * 1.1) * 1.5) into (the address of main)
+        put dwg raw point (middle's x) (middle's y) into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg point 0.0 0.0 1.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg double 50.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg byte 0 into (the address of main)
+        put dwg raw point 0.0 0.0 into (the address of main)
+        put dwg raw point 1.0 1.0 into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg short 100 into (the address of main)
+        put dwg bit true into (the address of main)
+        put dwg bit true into (the address of main)
+        put dwg bit true into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg raw point 0.5 0.5 into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg short 0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg raw point 0.0 0.0 into (the address of main)
+        put dwg raw point 0.5 0.5 into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit true into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg point 1.0 0.0 0.0 into (the address of main)
+        put dwg point 0.0 1.0 0.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg short 0 into (the address of main)
+        put dwg handle 5 value 0 into (the address of refs)
+        put dwg handle 5 value 0 into (the address of refs)
+        put dwg handle 5 value 0 into (the address of refs)
+        finish dwg object (bim cad active viewport handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        # The application ACAD.
+        set sizeAt to begin dwg (dwg application type) object (bim cad acad application handle) owned by (bim cad application control handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "ACAD") into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg byte 0 into (the address of main)
+        put dwg handle 5 value 0 into (the address of refs)
+        finish dwg object (bim cad acad application handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        # The dimension style Standard: cadcodec's defaults.
+        set sizeAt to begin dwg (dwg dimension style type) object (bim cad standard dimension style handle) owned by (bim cad dimension style control handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "Standard") into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg standard dimension style into (the address of main) and (the address of refs)
+        finish dwg object (bim cad standard dimension style handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+local function put dwg standard dimension style into {a pointer to a bim dwg bits record:writer} and {a pointer to a bim dwg bits record:refs}:
+    execute:
+        put dwg text (the string form of "<>") into writer
+        put dwg text (the string form of "") into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.18 into writer
+        put dwg double 0.625 into writer
+        put dwg double 3.75 into writer
+        put dwg double 1.25 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg short 1 into writer
+        put dwg short 8 into writer
+        put dwg short 0 into writer
+        put dwg double 0.18 into writer
+        put dwg double 0.09 into writer
+        put dwg double 0.0 into writer
+        put dwg double 25.4 into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.625 into writer
+        put dwg double 0.0 into writer
+        put dwg bit false into writer
+        put dwg short 3 into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg colour 0 into writer
+        put dwg colour 0 into writer
+        put dwg colour 0 into writer
+        put dwg short 0 into writer
+        put dwg short 2 into writer
+        put dwg short 2 into writer
+        put dwg short 2 into writer
+        put dwg short 3 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 2 into writer
+        put dwg short 46 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg short 0 into writer
+        put dwg short 8 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg bit false into writer
+        put dwg short 3 into writer
+        put dwg short -2 into writer
+        put dwg short -2 into writer
+        put dwg bit false into writer
+        put dwg handle 5 value 0 into refs
+        put dwg handle 5 value (bim cad standard style handle) into refs
+        put dwg handle 5 value 0 into refs
+        put dwg handle 5 value 0 into refs
+        put dwg handle 5 value 0 into refs
+        put dwg handle 5 value 0 into refs
+
+# A block record over the entities from `first` to `last`, with its BLOCK,
+# ENDBLK and layout.
+local function write dwg block record {a string:name} handle {integer:handleValue} block {integer:blockValue} end {integer:ending} layout {integer:layoutValue} first {integer:firstValue} last {integer:lastValue} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg (dwg block header type) object handleValue owned by (bim cad block control handle) in (the address of main) and (the address of refs)
+        put dwg text name into (the address of main)
+        put dwg entry flags into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg bit false into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg byte 0 into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg long 0 into (the address of main)
+        put dwg handle 5 value 0 into (the address of refs)
+        put dwg handle 3 value blockValue into (the address of refs)
+        put dwg handle 4 value firstValue into (the address of refs)
+        put dwg handle 4 value lastValue into (the address of refs)
+        put dwg handle 3 value ending into (the address of refs)
+        put dwg handle 5 value layoutValue into (the address of refs)
+        finish dwg object handleValue sized at sizeAt from (the address of main) and (the address of refs) into writer
+        set spaceMode to 2
+        if handleValue = (bim cad paper space handle):
+            set spaceMode to 1
+        set sizeAt to begin dwg (dwg block type) entity blockValue owned by handleValue mode spaceMode on (the bim cad handle of layer 0) after 0 before 0 in (the address of main) and (the address of refs)
+        put dwg text name into (the address of main)
+        finish dwg object blockValue sized at sizeAt from (the address of main) and (the address of refs) into writer
+        set sizeAt to begin dwg (dwg block end type) entity ending owned by handleValue mode spaceMode on (the bim cad handle of layer 0) after 0 before 0 in (the address of main) and (the address of refs)
+        finish dwg object ending sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+# The handles of the entities model space holds directly, in order.
+local function the dwg top entities of {bim cad drawing record:drawing}:
+    execute:
+        set tops to an empty list of an integer
+        set handle to the bim cad first entity handle of drawing
+        loop cursor from 0 to the length of (drawing's lines's values):
+            append handle to tops
+            set handle to handle + 1
+        loop cursor from 0 to the length of (drawing's polylines's values):
+            append handle to tops
+            set handle to handle + (the bim cad handles of (the item at cursor in (drawing's polylines's values)))
+        loop cursor from 0 to the length of (drawing's texts's values):
+            append handle to tops
+            set handle to handle + 1
+        loop cursor from 0 to the length of (drawing's meshes's values):
+            append handle to tops
+            set handle to handle + (the bim cad handles of (the item at cursor in (drawing's meshes's values)))
+        loop cursor from 0 to the length of (drawing's solids's values):
+            append handle to tops
+            set handle to handle + 1
+        return tops
+
+local function the dwg entry {integer:index} of {a pointer to a list:tops}:
+    execute:
+        if (index < 0) or (index >= (the length of tops)):
+            return 0
+        return the item at index in tops
+
+local function write dwg entities of {bim cad drawing record:drawing} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set space to bim cad model space handle
+        set tops to the dwg top entities of drawing
+        set top to 0
+        loop cursor from 0 to the length of (drawing's lines's values):
+            set line to the item at cursor in (drawing's lines's values)
+            set handle to the item at top in tops
+            set sizeAt to begin dwg (dwg line type) entity handle owned by space mode 2 on (the bim cad handle of layer (line's layer)) after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+            set flat to (line's start's z = 0.0) and (line's finish's z = 0.0)
+            put dwg bit flat into (the address of main)
+            put dwg raw double (line's start's x) into (the address of main)
+            put dwg double (line's finish's x) against (line's start's x) into (the address of main)
+            put dwg raw double (line's start's y) into (the address of main)
+            put dwg double (line's finish's y) against (line's start's y) into (the address of main)
+            if flat = false:
+                put dwg raw double (line's start's z) into (the address of main)
+                put dwg double (line's finish's z) against (line's start's z) into (the address of main)
+            put dwg bit true into (the address of main)
+            put dwg bit true into (the address of main)
+            finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set top to top + 1
+        loop cursor from 0 to the length of (drawing's polylines's values):
+            set outline to the item at cursor in (drawing's polylines's values)
+            set points to outline's points's values
+            set handle to the item at top in tops
+            set layerHandle to the bim cad handle of layer (outline's layer)
+            set sizeAt to 0
+            if bim cad polyline outline is flat:
+                set sizeAt to begin dwg (dwg light polyline type) entity handle owned by space mode 2 on layerHandle after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+                set elevation to (the item at 0 in points)'s z
+                set flags to 0
+                if outline's closed:
+                    set flags to 512
+                if elevation != 0.0:
+                    set flags to flags + 8
+                put dwg short flags into (the address of main)
+                if elevation != 0.0:
+                    put dwg double elevation into (the address of main)
+                put dwg long (the length of points) into (the address of main)
+                put dwg raw double ((the item at 0 in points)'s x) into (the address of main)
+                put dwg raw double ((the item at 0 in points)'s y) into (the address of main)
+                loop corner from 1 to the length of points:
+                    put dwg double ((the item at corner in points)'s x) against ((the item at (corner - 1) in points)'s x) into (the address of main)
+                    put dwg double ((the item at corner in points)'s y) against ((the item at (corner - 1) in points)'s y) into (the address of main)
+                finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+            else:
+                set count to the length of points
+                set sizeAt to begin dwg (dwg polyline 3d type) entity handle owned by space mode 2 on layerHandle after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+                put dwg byte 0 into (the address of main)
+                if outline's closed:
+                    put dwg byte 1 into (the address of main)
+                else:
+                    put dwg byte 0 into (the address of main)
+                put dwg handle 4 value (handle + 1) into (the address of refs)
+                put dwg handle 4 value (handle + count) into (the address of refs)
+                put dwg handle 3 value ((handle + count) + 1) into (the address of refs)
+                finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+                loop corner from 0 to count:
+                    set vertex to (handle + 1) + corner
+                    set previous to vertex - 1
+                    if corner = 0:
+                        set previous to 0
+                    set following to vertex + 1
+                    if corner = (count - 1):
+                        set following to 0
+                    set sizeAt to begin dwg (dwg vertex 3d type) entity vertex owned by handle mode 0 on layerHandle after previous before following in (the address of main) and (the address of refs)
+                    put dwg byte 32 into (the address of main)
+                    put dwg point (the item at corner in points) into (the address of main)
+                    finish dwg object vertex sized at sizeAt from (the address of main) and (the address of refs) into writer
+                set ending to (handle + count) + 1
+                set sizeAt to begin dwg (dwg sequence end type) entity ending owned by handle mode 0 on layerHandle after 0 before 0 in (the address of main) and (the address of refs)
+                finish dwg object ending sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set top to top + 1
+        loop cursor from 0 to the length of (drawing's texts's values):
+            set label to the item at cursor in (drawing's texts's values)
+            set handle to the item at top in tops
+            set sizeAt to begin dwg (dwg text type) entity handle owned by space mode 2 on (the bim cad handle of layer (label's layer)) after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+            set position to label's position
+            # The alignment point: the insertion point for a centred text, none otherwise.
+            set flags to 0
+            if position's z = 0.0:
+                set flags to flags + 1
+            if label's centred = false:
+                set flags to flags + 2
+            set flags to flags + 4
+            if label's angle = 0.0:
+                set flags to flags + 8
+            set flags to flags + (16 + 32)
+            if label's centred = false:
+                set flags to flags + 64
+            set flags to flags + 128
+            put dwg byte flags into (the address of main)
+            if position's z != 0.0:
+                put dwg raw double (position's z) into (the address of main)
+            put dwg raw double (position's x) into (the address of main)
+            put dwg raw double (position's y) into (the address of main)
+            if label's centred:
+                put dwg double (position's x) against (position's x) into (the address of main)
+                put dwg double (position's y) against (position's y) into (the address of main)
+            put dwg bit true into (the address of main)
+            put dwg bit true into (the address of main)
+            if label's angle != 0.0:
+                put dwg raw double (label's angle) into (the address of main)
+            put dwg raw double (label's height) into (the address of main)
+            put dwg text (label's message) into (the address of main)
+            if label's centred:
+                put dwg short 1 into (the address of main)
+            put dwg handle 5 value (bim cad standard style handle) into (the address of refs)
+            finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set top to top + 1
+        loop cursor from 0 to the length of (drawing's meshes's values):
+            set meshValue to the item at cursor in (drawing's meshes's values)
+            set handle to the item at top in tops
+            set layerHandle to the bim cad handle of layer (meshValue's layer)
+            set positions to meshValue's positions's values
+            set faces to meshValue's faces's values
+            set faceCount to 0
+            set faceCursor to 0
+            loop while faceCursor < (the length of faces):
+                set faceCount to faceCount + 1
+                set faceCursor to faceCursor + ((the item at faceCursor in faces) + 1)
+            set owned to (the length of positions) + faceCount
+            set sizeAt to begin dwg (dwg polyface type) entity handle owned by space mode 2 on layerHandle after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+            put dwg short (the length of positions) into (the address of main)
+            put dwg short faceCount into (the address of main)
+            put dwg handle 4 value (handle + 1) into (the address of refs)
+            put dwg handle 4 value (handle + owned) into (the address of refs)
+            put dwg handle 3 value ((handle + owned) + 1) into (the address of refs)
+            finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+            loop corner from 0 to the length of positions:
+                set vertex to (handle + 1) + corner
+                set previous to vertex - 1
+                if corner = 0:
+                    set previous to 0
+                set following to vertex + 1
+                if (corner + 1) = owned:
+                    set following to 0
+                set sizeAt to begin dwg (dwg face vertex type) entity vertex owned by handle mode 0 on layerHandle after previous before following in (the address of main) and (the address of refs)
+                put dwg byte 192 into (the address of main)
+                put dwg point (the item at corner in positions) into (the address of main)
+                finish dwg object vertex sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set faceCursor to 0
+            set faceIndex to 0
+            loop while faceCursor < (the length of faces):
+                set count to the item at faceCursor in faces
+                set record to ((handle + 1) + (the length of positions)) + faceIndex
+                set previous to record - 1
+                if (faceIndex + (the length of positions)) = 0:
+                    set previous to 0
+                set following to record + 1
+                if ((faceIndex + (the length of positions)) + 1) = owned:
+                    set following to 0
+                set sizeAt to begin dwg (dwg face record type) entity record owned by handle mode 0 on layerHandle after previous before following in (the address of main) and (the address of refs)
+                loop corner from 0 to 4:
+                    if corner < count:
+                        put dwg short ((the item at (faceCursor + (corner + 1)) in faces) + 1) into (the address of main)
+                    else:
+                        put dwg short 0 into (the address of main)
+                finish dwg object record sized at sizeAt from (the address of main) and (the address of refs) into writer
+                set faceCursor to faceCursor + (count + 1)
+                set faceIndex to faceIndex + 1
+            set ending to (handle + owned) + 1
+            set sizeAt to begin dwg (dwg sequence end type) entity ending owned by handle mode 0 on layerHandle after 0 before 0 in (the address of main) and (the address of refs)
+            finish dwg object ending sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set top to top + 1
+        loop cursor from 0 to the length of (drawing's solids's values):
+            set solid to the item at cursor in (drawing's solids's values)
+            set handle to the item at top in tops
+            set sizeAt to begin dwg (dwg solid 3d type) entity handle owned by space mode 2 on (the bim cad handle of layer (solid's layer)) after (the dwg entry (top - 1) of tops) before (the dwg entry (top + 1) of tops) in (the address of main) and (the address of refs)
+            set sat to the bim sat text of solid for dwg true
+            set coded to the bim dwg sat cipher of sat's text
+            # Not empty; SAT text (version 1) in one block, then an empty one.
+            put dwg bit false into (the address of main)
+            put dwg bit true into (the address of main)
+            put dwg short 1 into (the address of main)
+            put dwg long (the length of coded) into (the address of main)
+            loop place from 0 to the length of coded:
+                put dwg byte (the bim cad byte at place in coded) into (the address of main)
+            put dwg long 0 into (the address of main)
+            # No wireframe; no further modeler data.
+            put dwg bit false into (the address of main)
+            put dwg bit true into (the address of main)
+            finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+            set top to top + 1
+        free tops
+
+local function write dwg dictionary {integer:handle} owner {integer:ownerValue} names {a pointer to a list:namesValue} targets {a pointer to a list:targetsValue} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg (dwg dictionary type) object handle owned by ownerValue in (the address of main) and (the address of refs)
+        put dwg long (the length of namesValue) into (the address of main)
+        put dwg short 1 into (the address of main)
+        put dwg byte 0 into (the address of main)
+        loop cursor from 0 to the length of namesValue:
+            put dwg text (the item at cursor in namesValue) into (the address of main)
+            put dwg handle 2 value (the item at cursor in targetsValue) into (the address of refs)
+        finish dwg object handle sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+# A layout with default plot settings over the block record `space`.
+local function write dwg layout {a string:name} handle {integer:handleValue} space {integer:spaceValue} order {integer:orderValue} into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg (dwg layout class) object handleValue owned by (bim cad layout dictionary handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg text (the string form of "none_device") into (the address of main)
+        if orderValue = 0:
+            put dwg short 1024 into (the address of main)
+        else:
+            put dwg short 0 into (the address of main)
+        loop margin from 0 to 6:
+            put dwg double 0.0 into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg short 1 into (the address of main)
+        put dwg short 0 into (the address of main)
+        put dwg short 5 into (the address of main)
+        loop corner from 0 to 4:
+            put dwg double 0.0 into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg double 1.0 into (the address of main)
+        put dwg double 1.0 into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg short 16 into (the address of main)
+        put dwg double 1.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg text name into (the address of main)
+        put dwg short orderValue into (the address of main)
+        put dwg short 1 into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg raw double 0.0 into (the address of main)
+        put dwg raw double 0.0 into (the address of main)
+        put dwg raw double 12.0 into (the address of main)
+        put dwg raw double 9.0 into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg point 1.0 0.0 0.0 into (the address of main)
+        put dwg point 0.0 1.0 0.0 into (the address of main)
+        put dwg double 0.0 into (the address of main)
+        put dwg short 0 into (the address of main)
+        put dwg point 0.0 0.0 0.0 into (the address of main)
+        put dwg point 12.0 9.0 0.0 into (the address of main)
+        put dwg handle 4 value spaceValue into (the address of refs)
+        put dwg handle 4 value 0 into (the address of refs)
+        put dwg handle 5 value 0 into (the address of refs)
+        put dwg handle 5 value 0 into (the address of refs)
+        finish dwg object handleValue sized at sizeAt from (the address of main) and (the address of refs) into writer
+
+local function write dwg objects into {a pointer to a bim dwg writer record:writer}:
+    execute:
+        set names to an empty list of a string
+        set targets to an empty list of an integer
+        append (the string form of "ACAD_GROUP") to names
+        append (bim cad group dictionary handle) to targets
+        append (the string form of "ACAD_LAYOUT") to names
+        append (bim cad layout dictionary handle) to targets
+        append (the string form of "ACAD_MLINESTYLE") to names
+        append (bim cad multiline style dictionary handle) to targets
+        append (the string form of "ACAD_PLOTSETTINGS") to names
+        append (bim cad plot settings dictionary handle) to targets
+        append (the string form of "ACAD_PLOTSTYLENAME") to names
+        append (bim cad plot style dictionary handle) to targets
+        write dwg dictionary (bim cad named objects handle) owner 0 names names targets targets into writer
+        clear names
+        clear targets
+        write dwg dictionary (bim cad group dictionary handle) owner (bim cad named objects handle) names names targets targets into writer
+        append (the string form of "Standard") to names
+        append (bim cad multiline style handle) to targets
+        write dwg dictionary (bim cad multiline style dictionary handle) owner (bim cad named objects handle) names names targets targets into writer
+        clear names
+        clear targets
+        append (the string form of "Layout1") to names
+        append (bim cad paper layout handle) to targets
+        append (the string form of "Model") to names
+        append (bim cad model layout handle) to targets
+        write dwg dictionary (bim cad layout dictionary handle) owner (bim cad named objects handle) names names targets targets into writer
+        clear names
+        clear targets
+        write dwg dictionary (bim cad plot settings dictionary handle) owner (bim cad named objects handle) names names targets targets into writer
+        free names
+        free targets
+        # The plot style names, with Normal as their default.
+        set main to a new bim dwg bits
+        set refs to a new bim dwg bits
+        set sizeAt to begin dwg (dwg default dictionary class) object (bim cad plot style dictionary handle) owned by (bim cad named objects handle) in (the address of main) and (the address of refs)
+        put dwg long 1 into (the address of main)
+        put dwg short 1 into (the address of main)
+        put dwg byte 0 into (the address of main)
+        put dwg text (the string form of "Normal") into (the address of main)
+        put dwg handle 2 value (bim cad plot style placeholder handle) into (the address of refs)
+        put dwg handle 5 value (bim cad plot style placeholder handle) into (the address of refs)
+        finish dwg object (bim cad plot style dictionary handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        set sizeAt to begin dwg (dwg placeholder type) object (bim cad plot style placeholder handle) owned by (bim cad plot style dictionary handle) in (the address of main) and (the address of refs)
+        finish dwg object (bim cad plot style placeholder handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        # The multiline style Standard: two lines half a unit either side.
+        set sizeAt to begin dwg (dwg multiline style type) object (bim cad multiline style handle) owned by (bim cad multiline style dictionary handle) in (the address of main) and (the address of refs)
+        put dwg text (the string form of "Standard") into (the address of main)
+        put dwg text (the string form of "") into (the address of main)
+        put dwg short 0 into (the address of main)
+        put dwg colour 256 into (the address of main)
+        put dwg double 1.5707963267948966 into (the address of main)
+        put dwg double 1.5707963267948966 into (the address of main)
+        put dwg byte 2 into (the address of main)
+        put dwg double 0.5 into (the address of main)
+        put dwg colour 256 into (the address of main)
+        put dwg short 32767 into (the address of main)
+        put dwg double -0.5 into (the address of main)
+        put dwg colour 256 into (the address of main)
+        put dwg short 32767 into (the address of main)
+        finish dwg object (bim cad multiline style handle) sized at sizeAt from (the address of main) and (the address of refs) into writer
+        write dwg layout (the string form of "Model") handle (bim cad model layout handle) space (bim cad model space handle) order 0 into writer
+        write dwg layout (the string form of "Layout1") handle (bim cad paper layout handle) space (bim cad paper space handle) order 1 into writer
+
+# ---------------------------------------------------------------- sections
+
+# The header variables: cadcodec's defaults for a new R2000 document, with
+# this drawing's handles, extents and units.
+local function put dwg header variables seed {integer:seedValue} from {cad vector3:low} to {cad vector3:high} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg double 412148564080.0 into writer
+        put dwg double 1.0 into writer
+        put dwg double 1.0 into writer
+        put dwg double 1.0 into writer
+        put dwg text (the string form of "m") into writer
+        put dwg text (the string form of "") into writer
+        put dwg text (the string form of "") into writer
+        put dwg text (the string form of "") into writer
+        put dwg long 24 into writer
+        put dwg long 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg bit true into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg short 1 into writer
+        put dwg short 3020 into writer
+        put dwg short 2 into writer
+        put dwg short 4 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 1 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 8 into writer
+        put dwg short 6 into writer
+        put dwg short 6 into writer
+        put dwg short 6 into writer
+        put dwg short 6 into writer
+        put dwg short 6 into writer
+        put dwg short 6 into writer
+        put dwg short 3 into writer
+        put dwg short 70 into writer
+        put dwg short 0 into writer
+        put dwg short 64 into writer
+        put dwg short 4 into writer
+        put dwg short 0 into writer
+        put dwg short 50 into writer
+        put dwg double 1.0 into writer
+        put dwg double 2.5 into writer
+        put dwg double 0.05 into writer
+        put dwg double 0.1 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.5 into writer
+        put dwg double 1.0 into writer
+        put dwg double 1.0 into writer
+        put dwg text (the string form of "") into writer
+        put dwg long 2461345 into writer
+        put dwg long 0 into writer
+        put dwg long 2461345 into writer
+        put dwg long 0 into writer
+        put dwg long 0 into writer
+        put dwg long 0 into writer
+        put dwg long 0 into writer
+        put dwg long 0 into writer
+        put dwg colour 256 into writer
+        put dwg handle 0 value seedValue into writer
+        put dwg handle 5 value (the bim cad handle of layer 0) into writer
+        put dwg handle 5 value (bim cad standard style handle) into writer
+        put dwg handle 5 value (bim cad by layer linetype handle) into writer
+        put dwg handle 5 value (bim cad standard dimension style handle) into writer
+        put dwg handle 5 value (bim cad multiline style handle) into writer
+        put dwg double 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 100000000000000000000.0 100000000000000000000.0 100000000000000000000.0 into writer
+        put dwg point -100000000000000000000.0 -100000000000000000000.0 -100000000000000000000.0 into writer
+        put dwg raw point 0.0 0.0 into writer
+        put dwg raw point 0.0 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 1.0 0.0 0.0 into writer
+        put dwg point 0.0 1.0 0.0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg short 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point low into writer
+        put dwg point high into writer
+        put dwg raw point 0.0 0.0 into writer
+        put dwg raw point 0.0 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 1.0 0.0 0.0 into writer
+        put dwg point 0.0 1.0 0.0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg short 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg point 0.0 0.0 0.0 into writer
+        put dwg text (the string form of "") into writer
+        put dwg text (the string form of "") into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.18 into writer
+        put dwg double 0.0625 into writer
+        put dwg double 0.38 into writer
+        put dwg double 0.18 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 0.0 into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit true into writer
+        put dwg bit true into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg double 0.18 into writer
+        put dwg double 0.09 into writer
+        put dwg double 0.0 into writer
+        put dwg double 25.4 into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.0 into writer
+        put dwg double 1.0 into writer
+        put dwg double 0.09 into writer
+        put dwg double 0.0 into writer
+        put dwg bit false into writer
+        put dwg short 2 into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg colour 0 into writer
+        put dwg colour 0 into writer
+        put dwg colour 0 into writer
+        put dwg short 0 into writer
+        put dwg short 4 into writer
+        put dwg short 4 into writer
+        put dwg short 2 into writer
+        put dwg short 4 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 2 into writer
+        put dwg short 46 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg bit false into writer
+        put dwg bit false into writer
+        put dwg short 1 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg short 0 into writer
+        put dwg bit false into writer
+        put dwg short 3 into writer
+        put dwg handle 5 value (bim cad standard style handle) into writer
+        put dwg handle 5 value 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg handle 5 value 0 into writer
+        put dwg short -2 into writer
+        put dwg short -2 into writer
+        put dwg handle 3 value (bim cad block control handle) into writer
+        put dwg handle 3 value (bim cad layer control handle) into writer
+        put dwg handle 3 value (bim cad style control handle) into writer
+        put dwg handle 3 value (bim cad linetype control handle) into writer
+        put dwg handle 3 value (bim cad view control handle) into writer
+        put dwg handle 3 value (bim cad ucs control handle) into writer
+        put dwg handle 3 value (bim cad viewport control handle) into writer
+        put dwg handle 3 value (bim cad application control handle) into writer
+        put dwg handle 3 value (bim cad dimension style control handle) into writer
+        put dwg handle 3 value (bim cad viewport entity control handle) into writer
+        put dwg handle 5 value (bim cad group dictionary handle) into writer
+        put dwg handle 5 value (bim cad multiline style dictionary handle) into writer
+        put dwg handle 3 value (bim cad named objects handle) into writer
+        put dwg short 1 into writer
+        put dwg short 70 into writer
+        put dwg text (the string form of "") into writer
+        put dwg text (the string form of "") into writer
+        put dwg handle 5 value (bim cad layout dictionary handle) into writer
+        put dwg handle 5 value (bim cad plot settings dictionary handle) into writer
+        put dwg handle 5 value (bim cad plot style dictionary handle) into writer
+        put dwg long 10781 into writer
+        put dwg short 6 into writer
+        put dwg short 0 into writer
+        put dwg text (the string form of "") into writer
+        put dwg text (the string form of "") into writer
+        put dwg handle 5 value (bim cad paper space handle) into writer
+        put dwg handle 5 value (bim cad model space handle) into writer
+        put dwg handle 5 value (bim cad by layer linetype handle) into writer
+        put dwg handle 5 value (bim cad by block linetype handle) into writer
+        put dwg handle 5 value (bim cad continuous linetype handle) into writer
+        put dwg short -1 into writer
+        put dwg short -1 into writer
+        put dwg short -1 into writer
+        put dwg short -1 into writer
+
+# A section between its sentinels: its size, its data and their CRC.
+local function add dwg section {a string:data} between {a string:opening} and {a string:closing} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        add dwg hex opening to buffer
+        set start to buffer's size
+        add dwg long (the length of data) to buffer
+        add dwg bytes data to buffer
+        add dwg short (the dwg crc of (the value at buffer) from start spanning (buffer's size - start) seeded (the dwg crc seed)) to buffer
+        add dwg hex closing to buffer
+
+# The object map: per handle (ascending) the change in handle and in file
+# offset from the one before, in chunks of at most 2032 bytes, each with its
+# size before it and its CRC after it, most significant byte first.
+local function the dwg object map of {bim dwg writer record:writer} at {integer:objectsAt}:
+    execute:
+        set buffer to a new bim dwg buffer
+        set chunkStart to 0
+        add dwg byte 0 to (the address of buffer)
+        add dwg byte 0 to (the address of buffer)
+        set previousHandle to 0
+        set previousPlace to 0
+        set count to the length of (writer's handles)
+        # The objects were written in handle order but for the sub-entities;
+        # sort the pairs by handle.
+        set order to an empty list of an integer
+        loop cursor from 0 to count:
+            append cursor to order
+        set sorting to true
+        loop while sorting:
+            set sorting to false
+            loop cursor from 1 to count:
+                set left to the item at (cursor - 1) in order
+                set right to the item at cursor in order
+                if (the item at left in (writer's handles)) > (the item at right in (writer's handles)):
+                    replace item at index (cursor - 1) in order with right
+                    replace item at index cursor in order with left
+                    set sorting to true
+        loop cursor from 0 to count:
+            set index to the item at cursor in order
+            set handle to the item at index in (writer's handles)
+            set place to (the item at index in (writer's offsets)) + objectsAt
+            set entry to (the dwg modular unsigned (handle - previousHandle)) + (the dwg modular signed (place - previousPlace))
+            if ((buffer's size - chunkStart) + (the length of entry)) > 2032:
+                close dwg map chunk from chunkStart in (the address of buffer)
+                set chunkStart to buffer's size
+                add dwg byte 0 to (the address of buffer)
+                add dwg byte 0 to (the address of buffer)
+                set entry to (the dwg modular unsigned handle) + (the dwg modular signed place)
+            add dwg bytes entry to (the address of buffer)
+            set previousHandle to handle
+            set previousPlace to place
+        close dwg map chunk from chunkStart in (the address of buffer)
+        set chunkStart to buffer's size
+        add dwg byte 0 to (the address of buffer)
+        add dwg byte 0 to (the address of buffer)
+        close dwg map chunk from chunkStart in (the address of buffer)
+        free order
+        return the dwg bytes of buffer
+
+local function close dwg map chunk from {integer:start} in {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        set length to buffer's size - start
+        store (((length shifted right by 8) bitwise and 255) as a byte) into the data of (buffer's bytes) at start
+        store ((length bitwise and 255) as a byte) into the data of (buffer's bytes) at (start + 1)
+        set crc to the dwg crc of (the value at buffer) from start spanning length seeded (the dwg crc seed)
+        add dwg byte (crc shifted right by 8) to buffer
+        add dwg byte crc to buffer
+
+# A modular char of `value`, seven bits to a byte, the high bit continuing.
+local function the dwg modular unsigned {integer:value}:
+    execute:
+        set parts to a new bim dwg buffer
+        set rest to value
+        loop while rest >= 128:
+            add dwg byte ((rest bitwise and 127) + 128) to (the address of parts)
+            set rest to rest shifted right by 7
+        add dwg byte rest to (the address of parts)
+        return the dwg bytes of parts
+
+# The same signed: the last byte's bit 6 is the sign.
+local function the dwg modular signed {integer:value}:
+    execute:
+        set parts to a new bim dwg buffer
+        set rest to value
+        set sign to 0
+        if value < 0:
+            set rest to 0 - value
+            set sign to 64
+        loop while rest >= 64:
+            add dwg byte ((rest bitwise and 127) + 128) to (the address of parts)
+            set rest to rest shifted right by 7
+        add dwg byte (rest + sign) to (the address of parts)
+        return the dwg bytes of parts
+
+local function the dwg auxiliary header seed {integer:seedValue}:
+    execute:
+        set writer to a new bim dwg bits
+        put dwg byte 255 into (the address of writer)
+        put dwg byte 119 into (the address of writer)
+        put dwg byte 1 into (the address of writer)
+        put dwg raw short 23 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw long 1 into (the address of writer)
+        put dwg raw long -1 into (the address of writer)
+        put dwg raw short 1 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw short 23 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw short 23 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw short 5 into (the address of writer)
+        put dwg raw short 2195 into (the address of writer)
+        put dwg raw short 5 into (the address of writer)
+        put dwg raw short 2195 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw short 1 into (the address of writer)
+        loop cursor from 0 to 5:
+            put dwg raw long 0 into (the address of writer)
+        # Created and updated: 31 October 2026, as Julian day and milliseconds.
+        put dwg raw long 2461345 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw long 2461345 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw long seedValue into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw short 0 into (the address of writer)
+        put dwg raw short 1 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw long 0 into (the address of writer)
+        put dwg raw long 1 into (the address of writer)
+        loop cursor from 0 to 4:
+            put dwg raw long 0 into (the address of writer)
+        return the dwg bytes of writer
+
+local function add dwg class {integer:number} named {a string:dxfName} as {a string:className} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg short number into writer
+        put dwg short 0 into writer
+        put dwg text (the string form of "ObjectDBX Classes") into writer
+        put dwg text className into writer
+        put dwg text dxfName into writer
+        put dwg bit false into writer
+        # An object, not an entity.
+        put dwg short 499 into writer
+
+local function add dwg locator {integer:number} at {integer:place} sized {integer:size} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        add dwg byte number to buffer
+        add dwg long place to buffer
+        add dwg long size to buffer
+
+# The DWG bytes of `drawing`.
+function the bim dwg of {bim cad drawing record:drawing}:
+    execute:
+        set writer to @intrinsic("construct", a bim dwg writer record, a new bim dwg buffer, an empty list of an integer, an empty list of an integer)
+        write dwg controls of drawing into (the address of writer)
+        write dwg tables of drawing into (the address of writer)
+        set tops to the dwg top entities of drawing
+        set first to 0
+        set last to 0
+        if (the length of tops) > 0:
+            set first to the item at 0 in tops
+            set last to the last item of tops
+        free tops
+        write dwg block record (the string form of "*Model_Space") handle (bim cad model space handle) block (bim cad model block handle) end (bim cad model block end handle) layout (bim cad model layout handle) first first last last into (the address of writer)
+        write dwg block record (the string form of "*Paper_Space") handle (bim cad paper space handle) block (bim cad paper block handle) end (bim cad paper block end handle) layout (bim cad paper layout handle) first 0 last 0 into (the address of writer)
+        write dwg entities of drawing into (the address of writer)
+        write dwg objects into (the address of writer)
+        set seed to the bim cad handle seed of drawing
+
+        set bounds to the bim cad extents of drawing
+        set low to a cad vector3 with x 100000000000000000000.0, y 100000000000000000000.0 and z 100000000000000000000.0
+        set high to a cad vector3 with x -100000000000000000000.0, y -100000000000000000000.0 and z -100000000000000000000.0
+        if bounds's valid:
+            set low to bounds's low
+            set high to bounds's high
+        set headerBits to a new bim dwg bits
+        put dwg header variables seed seed from low to high into (the address of headerBits)
+        pad dwg bits (the address of headerBits)
+        set headerSection to a new bim dwg buffer
+        add dwg section (the dwg bytes of headerBits) between (the string form of "CF7B1F23FDDE38A95F7C68B84E6D335F") and (the string form of "3084E0DC0221C756A0839747B192CCA0") to (the address of headerSection)
+        set classBits to a new bim dwg bits
+        add dwg class (dwg default dictionary class) named (the string form of "ACDBDICTIONARYWDFLT") as (the string form of "AcDbDictionaryWithDefault") into (the address of classBits)
+        add dwg class (dwg layout class) named (the string form of "LAYOUT") as (the string form of "AcDbLayout") into (the address of classBits)
+        pad dwg bits (the address of classBits)
+        set classSection to a new bim dwg buffer
+        add dwg section (the dwg bytes of classBits) between (the string form of "8DA1C4B8C4A9F8C5C0DCF45FE7CFB68A") and (the string form of "725E3B473B56073A3F230BA018304975") to (the address of classSection)
+        set freeSpace to a new bim dwg buffer
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long (the length of (writer's handles)) to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg byte 4 to (the address of freeSpace)
+        add dwg long 50 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long 100 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long 512 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        add dwg long -1 to (the address of freeSpace)
+        add dwg long 0 to (the address of freeSpace)
+        # The template: no description, metric.
+        set template to a new bim dwg buffer
+        add dwg short 0 to (the address of template)
+        add dwg short 1 to (the address of template)
+        set auxiliary to the dwg auxiliary header seed seed
+        set objects to the dwg bytes of (writer's objects)
+        set preview to a new bim dwg buffer
+        add dwg hex (the string form of "1F256D07D43628289D57CA3F9D44102B") to (the address of preview)
+        add dwg long 1 to (the address of preview)
+        add dwg byte 0 to (the address of preview)
+        add dwg hex (the string form of "E0DA92F82BC9D7D762A835C062BBEFD4") to (the address of preview)
+
+        # Where each section lands after the 0x61 bytes of file header.
+        set headerAt to 97
+        set classesAt to headerAt + headerSection's size
+        set freeSpaceAt to classesAt + classSection's size
+        set templateAt to freeSpaceAt + freeSpace's size
+        set auxiliaryAt to templateAt + template's size
+        set objectsAt to auxiliaryAt + (the length of auxiliary)
+        set handleMap to the dwg object map of writer at objectsAt
+        set mapAt to objectsAt + (the length of objects)
+        set previewAt to mapAt + (the length of handleMap)
+
+        set file to a new bim dwg buffer
+        add dwg bytes (the string form of "AC1015") to (the address of file)
+        loop cursor from 0 to 5:
+            add dwg byte 0 to (the address of file)
+        add dwg byte 15 to (the address of file)
+        add dwg byte 1 to (the address of file)
+        add dwg long previewAt to (the address of file)
+        add dwg byte 27 to (the address of file)
+        add dwg byte 25 to (the address of file)
+        add dwg short 30 to (the address of file)
+        add dwg long 6 to (the address of file)
+        add dwg locator 0 at headerAt sized (headerSection's size) to (the address of file)
+        add dwg locator 1 at classesAt sized (classSection's size) to (the address of file)
+        add dwg locator 2 at mapAt sized (the length of handleMap) to (the address of file)
+        add dwg locator 3 at freeSpaceAt sized (freeSpace's size) to (the address of file)
+        add dwg locator 4 at templateAt sized (template's size) to (the address of file)
+        add dwg locator 5 at auxiliaryAt sized (the length of auxiliary) to (the address of file)
+        add dwg short (the dwg crc of file from 0 spanning (file's size) seeded (the dwg crc seed)) to (the address of file)
+        add dwg hex (the string form of "95A04E2899821AE55E41E05F9D3A4D00") to (the address of file)
+        add dwg bytes (the dwg bytes of headerSection) to (the address of file)
+        add dwg bytes (the dwg bytes of classSection) to (the address of file)
+        add dwg bytes (the dwg bytes of freeSpace) to (the address of file)
+        add dwg bytes (the dwg bytes of template) to (the address of file)
+        add dwg bytes auxiliary to (the address of file)
+        add dwg bytes objects to (the address of file)
+        add dwg bytes handleMap to (the address of file)
+        add dwg bytes (the dwg bytes of preview) to (the address of file)
+        free (writer's handles)
+        free (writer's offsets)
+        return the dwg bytes of file

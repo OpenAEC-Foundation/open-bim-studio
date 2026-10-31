@@ -1,0 +1,482 @@
+# SPDX-License-Identifier: MPL-2.0
+# A CAD drawing as DXF and DWG hold it, apart from either file format: layers
+# and model-space entities in metres, Z up. `bim_dxf_write.dl` and
+# `bim_dwg_write.dl` write the same drawing, so a DXF and a DWG of one export
+# hold the same entities with the same handles.
+#
+# - Lines and polylines carry 3D points. A polyline whose points all lie at
+#   one height in XY is written as an LWPOLYLINE at that elevation, any
+#   other as a 3D POLYLINE.
+# - A text stands at its insertion point, `height` metres high, turned by
+#   `angle` radians; a centred text is anchored at its middle.
+# - A mesh is a polyface mesh: its positions and its faces, each a ring of
+#   three or four positions.
+# - A solid is a 3DSOLID: a closed planar polyhedron (`bim_sat_text.dl`)
+#   whose ACIS text is made when the file is written.
+import lib/std.dl
+import lib/string.dl
+import lib/text.dl
+import kernel/core/core.dl
+import kernel/core/topology_list.dl
+
+class:
+    patterns:
+        [a|] bim cad layer record
+    members:
+        name as a string
+        # The AutoCAD colour index (1 red, 2 yellow, 3 green, 4 cyan,
+        # 5 blue, 6 magenta, 7 white or black, 8 and 9 greys, up to 255).
+        colour as an integer
+
+class:
+    patterns:
+        [a|] bim cad line record
+    members:
+        layer as an integer
+        start as a cad vector3
+        finish as a cad vector3
+
+class:
+    patterns:
+        [a|] bim cad polyline record
+    members:
+        layer as an integer
+        closed as a boolean
+        points as the type of (a cad topology list of a cad vector3)
+
+class:
+    patterns:
+        [a|] bim cad text record
+    members:
+        layer as an integer
+        position as a cad vector3
+        height as a 64 bit floating-point number
+        angle as a 64 bit floating-point number
+        centred as a boolean
+        message as a string
+
+# `faces` holds for each face its corner count (3 or 4), then that many
+# indices into `positions`.
+class:
+    patterns:
+        [a|] bim cad mesh record
+    members:
+        layer as an integer
+        positions as the type of (a cad topology list of a cad vector3)
+        faces as the type of (a cad topology list of an integer)
+
+# A closed polyhedron of planar faces. `loops` holds for each face its loop
+# count, then per loop its corner count and that many indices into
+# `positions`; a face's first loop is its outer boundary, wound
+# anticlockwise seen from outside, the others are its holes.
+class:
+    patterns:
+        [a|] bim cad solid record
+    members:
+        layer as an integer
+        positions as the type of (a cad topology list of a cad vector3)
+        loops as the type of (a cad topology list of an integer)
+
+class:
+    patterns:
+        [a|] bim cad drawing record
+    members:
+        layers as the type of (a cad topology list of a bim cad layer record)
+        lines as the type of (a cad topology list of a bim cad line record)
+        polylines as the type of (a cad topology list of a bim cad polyline record)
+        texts as the type of (a cad topology list of a bim cad text record)
+        meshes as the type of (a cad topology list of a bim cad mesh record)
+        solids as the type of (a cad topology list of a bim cad solid record)
+
+# A drawing with only layer 0, which every DXF and DWG has.
+function a new bim cad drawing:
+    execute:
+        set made to @intrinsic("construct", a bim cad drawing record, a cad topology list of a bim cad layer record, a cad topology list of a bim cad line record, a cad topology list of a bim cad polyline record, a cad topology list of a bim cad text record, a cad topology list of a bim cad mesh record, a cad topology list of a bim cad solid record)
+        append (@intrinsic("construct", a bim cad layer record, the string form of "0", 7)) to (made's layers's values)
+        return made
+
+# A layer name as DXF and DWG accept it: the characters
+# `< > / \ " : ; ? * | = '` and control characters become `_`.
+function the bim cad layer name of {a string:wanted}:
+    execute:
+        set parts to an empty list of a string
+        loop cursor from 0 to the length of wanted:
+            set code to the bim cad byte at cursor in wanted
+            set refused to (code < 32) or (code = 127)
+            if (((code = 60) or (code = 62)) or ((code = 47) or (code = 92))) or (((code = 34) or (code = 58)) or ((code = 59) or (code = 63))):
+                set refused to true
+            if (((code = 42) or (code = 124)) or ((code = 61) or (code = 39))) or (code = 96):
+                set refused to true
+            set letter to a new string buffer containing 1 bytes
+            if refused:
+                store (95 as a byte) into the data of letter at 0
+            else:
+                store (code as a byte) into the data of letter at 0
+            append letter to parts
+        set cleaned to parts joined with ""
+        free parts
+        if (the length of cleaned) = 0:
+            return the string form of "0"
+        return cleaned
+
+# The index of the layer named `wanted` (cleaned as above), added with
+# `colour` when the drawing has no such layer yet. Names compare without
+# regard to case, as AutoCAD compares them.
+function the bim cad layer {a string:wanted} coloured {integer:colour} in {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        set name to the bim cad layer name of wanted
+        set wantedUpper to the bim cad folded name of name
+        loop cursor from 0 to the length of (drawing's layers's values):
+            if (the bim cad folded name of ((the item at cursor in (drawing's layers's values))'s name)) = wantedUpper:
+                return cursor
+        append (@intrinsic("construct", a bim cad layer record, name, colour)) to (drawing's layers's values)
+        return (the length of (drawing's layers's values)) - 1
+
+function the bim cad folded name of {a string:name}:
+    execute:
+        set upper to a new string buffer containing (the length of name) bytes
+        loop cursor from 0 to the length of name:
+            set code to the character at cursor in name
+            if (code >= 97) and (code <= 122):
+                set code to code - 32
+            store (code as a byte) into the data of upper at cursor
+        return upper
+
+function add bim cad line from {cad vector3:start} to {cad vector3:finish} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        append (@intrinsic("construct", a bim cad line record, layer, start, finish)) to (drawing's lines's values)
+
+# Adds a polyline through `points` (a list of cad vector3), closed or open;
+# fewer than two points add nothing.
+function add bim cad polyline through {a pointer to a list:points} closed {boolean:closed} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        if (the length of points) < 2:
+            return nothing
+        set made to @intrinsic("construct", a bim cad polyline record, layer, closed, a cad topology list of a cad vector3)
+        loop cursor from 0 to the length of points:
+            append (the item at cursor in points) to (made's points's values)
+        append made to (drawing's polylines's values)
+
+function add bim cad text {a string:message} at {cad vector3:position} high {a 64 bit floating-point number:height} turned {a 64 bit floating-point number:angle} centred {boolean:centred} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        if (the length of message) = 0:
+            return nothing
+        append (@intrinsic("construct", a bim cad text record, layer, position, height, angle, centred, message)) to (drawing's texts's values)
+
+# Adds a mesh of the triangles `triangles` (three indices each) into
+# `positions`; an empty one adds nothing. A polyface counts its vertices in
+# 16 bits, so a mesh of more than 30000 positions is split into meshes of
+# at most that many, each with the positions its triangles use.
+function add bim cad mesh of {a pointer to a list:positions} with triangles {a pointer to a list:triangles} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        if ((the length of positions) = 0) or ((the length of triangles) < 3):
+            return nothing
+        set renumbered to an empty list of an integer
+        loop cursor from 0 to the length of positions:
+            append -1 to renumbered
+        set made to @intrinsic("construct", a bim cad mesh record, layer, a cad topology list of a cad vector3, a cad topology list of an integer)
+        set cursor to 0
+        loop while (cursor + 2) < the length of triangles:
+            if ((the length of (made's positions's values)) + 3) > 30000:
+                append made to (drawing's meshes's values)
+                set made to @intrinsic("construct", a bim cad mesh record, layer, a cad topology list of a cad vector3, a cad topology list of an integer)
+                loop reset from 0 to the length of renumbered:
+                    replace item at index reset in renumbered with -1
+            append 3 to (made's faces's values)
+            loop corner from 0 to 3:
+                set original to the item at (cursor + corner) in triangles
+                if (the item at original in renumbered) < 0:
+                    replace item at index original in renumbered with (the length of (made's positions's values))
+                    append (the item at original in positions) to (made's positions's values)
+                append (the item at original in renumbered) to (made's faces's values)
+            set cursor to cursor + 3
+        append made to (drawing's meshes's values)
+        free renumbered
+
+# Adds a solid of `positions` and the face loops `loops` (encoded as in
+# `bim cad solid record`).
+function add bim cad solid of {a pointer to a list:positions} with loops {a pointer to a list:loops} on {integer:layer} to {a pointer to a bim cad drawing record:drawing}:
+    execute:
+        set made to @intrinsic("construct", a bim cad solid record, layer, a cad topology list of a cad vector3, a cad topology list of an integer)
+        loop cursor from 0 to the length of positions:
+            append (the item at cursor in positions) to (made's positions's values)
+        loop cursor from 0 to the length of loops:
+            append (the item at cursor in loops) to (made's loops's values)
+        append made to (drawing's solids's values)
+
+# The number of entities the drawing writes.
+function the bim cad entity count of {bim cad drawing record:drawing}:
+    execute:
+        set total to (the length of (drawing's lines's values)) + (the length of (drawing's polylines's values))
+        set total to total + ((the length of (drawing's texts's values)) + (the length of (drawing's meshes's values)))
+        return total + (the length of (drawing's solids's values))
+
+# Whether every point of `line` lies at the height of its first.
+function bim cad polyline {bim cad polyline record:line} is flat:
+    execute:
+        set height to (the item at 0 in (line's points's values))'s z
+        loop cursor from 1 to the length of (line's points's values):
+            set difference to ((the item at cursor in (line's points's values))'s z) - height
+            if (difference > 0.000000001) or (difference < -0.000000001):
+                return false
+        return true
+
+class:
+    patterns:
+        [a|] bim cad extents record
+    members:
+        valid as a boolean
+        low as a cad vector3
+        high as a cad vector3
+
+local function widen bim cad extents {a pointer to a bim cad extents record:bounds} by {cad vector3:point}:
+    execute:
+        if bounds's valid = false:
+            set bounds's valid to true
+            set bounds's low to point
+            set bounds's high to point
+            return nothing
+        set bounds's low to a cad vector3 with x (the minimum of (bounds's low's x) and (point's x)), y (the minimum of (bounds's low's y) and (point's y)) and z (the minimum of (bounds's low's z) and (point's z))
+        set bounds's high to a cad vector3 with x (the maximum of (bounds's high's x) and (point's x)), y (the maximum of (bounds's high's y) and (point's y)) and z (the maximum of (bounds's high's z) and (point's z))
+
+# The box around every point of the drawing; not valid for an empty one.
+function the bim cad extents of {bim cad drawing record:drawing}:
+    execute:
+        set bounds to @intrinsic("construct", a bim cad extents record, false, the cad zero vector3, the cad zero vector3)
+        loop cursor from 0 to the length of (drawing's lines's values):
+            set line to the item at cursor in (drawing's lines's values)
+            widen bim cad extents (the address of bounds) by (line's start)
+            widen bim cad extents (the address of bounds) by (line's finish)
+        loop cursor from 0 to the length of (drawing's polylines's values):
+            set outline to the item at cursor in (drawing's polylines's values)
+            loop corner from 0 to the length of (outline's points's values):
+                widen bim cad extents (the address of bounds) by (the item at corner in (outline's points's values))
+        loop cursor from 0 to the length of (drawing's texts's values):
+            widen bim cad extents (the address of bounds) by ((the item at cursor in (drawing's texts's values))'s position)
+        loop cursor from 0 to the length of (drawing's meshes's values):
+            set meshValue to the item at cursor in (drawing's meshes's values)
+            loop corner from 0 to the length of (meshValue's positions's values):
+                widen bim cad extents (the address of bounds) by (the item at corner in (meshValue's positions's values))
+        loop cursor from 0 to the length of (drawing's solids's values):
+            set solid to the item at cursor in (drawing's solids's values)
+            loop corner from 0 to the length of (solid's positions's values):
+                widen bim cad extents (the address of bounds) by (the item at corner in (solid's positions's values))
+        return bounds
+
+# ---------------------------------------------------------------- handles
+
+# The handles of the objects every drawing has, the same in DXF and DWG:
+# the table controls (1 to B), the named object dictionary and what it
+# holds (C to 13), the default table entries (14 to 1A), model and paper
+# space with their blocks and layouts (1B to 22), then a layer per entry
+# from 23 up and the entities after the layers.
+function bim cad block control handle:
+    replacement:
+        1
+function bim cad layer control handle:
+    replacement:
+        2
+function bim cad style control handle:
+    replacement:
+        3
+function bim cad linetype control handle:
+    replacement:
+        5
+function bim cad view control handle:
+    replacement:
+        6
+function bim cad ucs control handle:
+    replacement:
+        7
+function bim cad viewport control handle:
+    replacement:
+        8
+function bim cad application control handle:
+    replacement:
+        9
+function bim cad dimension style control handle:
+    replacement:
+        10
+function bim cad viewport entity control handle:
+    replacement:
+        11
+function bim cad named objects handle:
+    replacement:
+        12
+function bim cad group dictionary handle:
+    replacement:
+        13
+function bim cad multiline style dictionary handle:
+    replacement:
+        14
+function bim cad layout dictionary handle:
+    replacement:
+        15
+function bim cad plot settings dictionary handle:
+    replacement:
+        16
+function bim cad plot style dictionary handle:
+    replacement:
+        17
+function bim cad plot style placeholder handle:
+    replacement:
+        18
+function bim cad multiline style handle:
+    replacement:
+        19
+function bim cad by block linetype handle:
+    replacement:
+        20
+function bim cad by layer linetype handle:
+    replacement:
+        21
+function bim cad continuous linetype handle:
+    replacement:
+        22
+function bim cad standard style handle:
+    replacement:
+        23
+function bim cad acad application handle:
+    replacement:
+        24
+function bim cad standard dimension style handle:
+    replacement:
+        25
+function bim cad active viewport handle:
+    replacement:
+        26
+function bim cad model space handle:
+    replacement:
+        27
+function bim cad model block handle:
+    replacement:
+        28
+function bim cad model block end handle:
+    replacement:
+        29
+function bim cad model layout handle:
+    replacement:
+        30
+function bim cad paper space handle:
+    replacement:
+        31
+function bim cad paper block handle:
+    replacement:
+        32
+function bim cad paper block end handle:
+    replacement:
+        33
+function bim cad paper layout handle:
+    replacement:
+        34
+
+function the bim cad handle of layer {integer:layer}:
+    execute:
+        return 35 + layer
+
+# The handle of the drawing's first entity; entities follow in the order
+# lines, polylines, texts, meshes, solids, each taking the handles
+# `the bim cad handles of` counts.
+function the bim cad first entity handle of {bim cad drawing record:drawing}:
+    execute:
+        return 35 + (the length of (drawing's layers's values))
+
+# The handles a polyline takes: one when flat (an LWPOLYLINE), else the
+# POLYLINE, a VERTEX per point and its SEQEND.
+function the bim cad handles of {bim cad polyline record:line}:
+    execute:
+        if bim cad polyline line is flat:
+            return 1
+        return (the length of (line's points's values)) + 2
+
+# The handles a mesh takes: the POLYLINE, a VERTEX per position and per face,
+# and its SEQEND.
+function the bim cad handles of {bim cad mesh record:meshValue}:
+    execute:
+        set faces to 0
+        set cursor to 0
+        loop while cursor < (the length of (meshValue's faces's values)):
+            set faces to faces + 1
+            set cursor to cursor + ((the item at cursor in (meshValue's faces's values)) + 1)
+        return ((the length of (meshValue's positions's values)) + faces) + 2
+
+# The first handle no object of the drawing takes ($HANDSEED).
+function the bim cad handle seed of {bim cad drawing record:drawing}:
+    execute:
+        set next to (the bim cad first entity handle of drawing) + (the length of (drawing's lines's values))
+        loop cursor from 0 to the length of (drawing's polylines's values):
+            set next to next + (the bim cad handles of (the item at cursor in (drawing's polylines's values)))
+        set next to next + (the length of (drawing's texts's values))
+        loop cursor from 0 to the length of (drawing's meshes's values):
+            set next to next + (the bim cad handles of (the item at cursor in (drawing's meshes's values)))
+        return next + (the length of (drawing's solids's values))
+
+# `value` in hexadecimal capitals, as DXF writes a handle.
+function the bim cad hex of {integer:value}:
+    execute:
+        set buffer to a new string buffer containing 16 bytes
+        set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 17 as a word sized unsigned integer, "%X", value)
+        return the substring of buffer from 0 spanning written bytes
+
+# `value` in the fewest significant digits that read back exactly.
+function the bim cad number of {a 64 bit floating-point number:value}:
+    execute:
+        if value = 0.0:
+            return the string form of "0.0"
+        set buffer to a new string buffer containing 40 bytes
+        set written to 0
+        loop digits from 1 to 18:
+            set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 41 as a word sized unsigned integer, "%.*g", digits, value)
+            set back to @intrinsic("call", "libc", "strtod", a 64 bit floating-point number, the data of buffer, 0 as a pointer to a byte)
+            if back = value:
+                return the substring of buffer from 0 spanning written bytes
+        return the substring of buffer from 0 spanning written bytes
+
+# The byte at `index` in `message`, from 0 to 255.
+function the bim cad byte at {integer:index} in {a string:message}:
+    execute:
+        set raw to (the character at index in message) as an integer
+        if raw < 0:
+            return raw + 256
+        return raw
+
+# `message` for an R2000 file in code page 1252: printable ASCII as it is,
+# every other character from its UTF-8 as `\U+XXXX`, which AutoCAD shows as
+# that character; control characters become spaces.
+function the bim cad code page text of {a string:message}:
+    execute:
+        set parts to an empty list of a string
+        set cursor to 0
+        loop while cursor < (the length of message):
+            set byteValue to the bim cad byte at cursor in message
+            set width to 1
+            set point to byteValue
+            if (byteValue >= 192) and (byteValue < 224):
+                set width to 2
+                set point to byteValue - 192
+            else if (byteValue >= 224) and (byteValue < 240):
+                set width to 3
+                set point to byteValue - 224
+            else if byteValue >= 240:
+                set width to 4
+                set point to byteValue - 240
+            if (cursor + width) > (the length of message):
+                set width to 1
+                set point to 63
+            loop extra from 1 to width:
+                set following to the bim cad byte at (cursor + extra) in message
+                set point to (point * 64) + (following - 128)
+            if point >= 128:
+                set buffer to a new string buffer containing 16 bytes
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 17 as a word sized unsigned integer, "\\U+%04X", point)
+                append (the substring of buffer from 0 spanning written bytes) to parts
+            else if (point < 32) or (point = 127):
+                append (the string form of " ") to parts
+            else:
+                set letter to a new string buffer containing 1 bytes
+                store (point as a byte) into the data of letter at 0
+                append letter to parts
+            set cursor to cursor + width
+        set converted to parts joined with ""
+        free parts
+        return converted

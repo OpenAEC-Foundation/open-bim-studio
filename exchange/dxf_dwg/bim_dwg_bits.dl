@@ -1,0 +1,323 @@
+# SPDX-License-Identifier: MPL-2.0
+# The bit stream DWG is written in (R13 to R2000): bits filled from the most
+# significant end of each byte, with the compressed types the format uses
+# for its values. A translation of cadcodec's `DwgBitWriter`
+# (src/io/dwg/dwg_stream_writers/bit_writer.rs at
+# 70ac6da7cf149cea6398a3d8829dd5e48b485b96, MPL-2.0), limited to R2000:
+#
+#   B    one bit                        BB   two bits
+#   RC   a raw byte                     RS, RL, RD   raw little-endian short, long, double
+#   BS   bit short: 2 bits saying 0, 256, a byte or a raw short follows
+#   BL   bit long: 2 bits saying 0, a byte or a raw long follows
+#   BD   bit double: 2 bits saying 0.0, 1.0 or a raw double follows
+#   TV   text: its length as a BS, then its bytes in code page 1252
+#   H    handle: a byte of the reference code and the byte count, then
+#        the handle's bytes, most significant first
+#   CMC  a colour index, as a BS
+#
+# and the CRC-16 (CRC-16/ARC: polynomial 0xA001 reflected, the seed given)
+# that every section and object carries.
+import exchange/dxf_dwg/bim_cad_drawing.dl
+
+class:
+    patterns:
+        [a|] bim dwg bits record
+    members:
+        bytes as a string
+        # Whole bytes written to `bytes`.
+        size as an integer
+        # The byte being filled and how many of its bits are used.
+        last as an integer
+        shift as an integer
+
+function a new bim dwg bits:
+    execute:
+        return @intrinsic("construct", a bim dwg bits record, a new string buffer containing 256 bytes, 0, 0, 0)
+
+local function emit dwg byte {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if writer's size >= (the length of (writer's bytes)):
+            set grown to a new string buffer containing ((the length of (writer's bytes)) * 2) bytes
+            ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the data of grown, the data of (writer's bytes), (writer's size) as a word sized integer)
+            set writer's bytes to grown
+        store ((value bitwise and 255) as a byte) into the data of (writer's bytes) at (writer's size)
+        set writer's size to writer's size + 1
+
+# The number of bits written.
+function the dwg bit position of {a pointer to a bim dwg bits record:writer}:
+    execute:
+        return (writer's size * 8) + writer's shift
+
+function put dwg bit {boolean:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if value:
+            set writer's last to writer's last bitwise or (128 shifted right by writer's shift)
+        set writer's shift to writer's shift + 1
+        if writer's shift = 8:
+            emit dwg byte writer's last into writer
+            set writer's last to 0
+            set writer's shift to 0
+
+function put dwg 2 bits {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg bit ((value bitwise and 2) != 0) into writer
+        put dwg bit ((value bitwise and 1) != 0) into writer
+
+# RC: a raw byte at the current bit.
+function put dwg byte {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        set masked to value bitwise and 255
+        if writer's shift = 0:
+            emit dwg byte masked into writer
+            return nothing
+        emit dwg byte (writer's last bitwise or (masked shifted right by writer's shift)) into writer
+        set writer's last to (masked shifted left by (8 - writer's shift)) bitwise and 255
+
+function put dwg raw short {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg byte value into writer
+        put dwg byte (value shifted right by 8) into writer
+
+function put dwg raw long {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg byte value into writer
+        put dwg byte (value shifted right by 8) into writer
+        put dwg byte (value shifted right by 16) into writer
+        put dwg byte (value shifted right by 24) into writer
+
+function put dwg raw double {a 64 bit floating-point number:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        set copied to value
+        set pattern to the value at ((the address of copied) as a pointer to a 64 bit unsigned integer)
+        loop place from 0 to 8:
+            put dwg byte (((pattern shifted right by ((place * 8) as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+
+# BS.
+function put dwg short {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if value = 0:
+            put dwg 2 bits 2 into writer
+        else if (value > 0) and (value < 256):
+            put dwg 2 bits 1 into writer
+            put dwg byte value into writer
+        else if value = 256:
+            put dwg 2 bits 3 into writer
+        else:
+            put dwg 2 bits 0 into writer
+            put dwg raw short value into writer
+
+# BL.
+function put dwg long {integer:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if value = 0:
+            put dwg 2 bits 2 into writer
+        else if (value > 0) and (value < 256):
+            put dwg 2 bits 1 into writer
+            put dwg byte value into writer
+        else:
+            put dwg 2 bits 0 into writer
+            put dwg raw long value into writer
+
+# BD.
+function put dwg double {a 64 bit floating-point number:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if value = 0.0:
+            put dwg 2 bits 2 into writer
+        else if value = 1.0:
+            put dwg 2 bits 1 into writer
+        else:
+            put dwg 2 bits 0 into writer
+            put dwg raw double value into writer
+
+# 3BD.
+function put dwg point {a 64 bit floating-point number:x} {a 64 bit floating-point number:y} {a 64 bit floating-point number:z} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg double x into writer
+        put dwg double y into writer
+        put dwg double z into writer
+
+function put dwg point {cad vector3:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg point (value's x) (value's y) (value's z) into writer
+
+# 2RD.
+function put dwg raw point {a 64 bit floating-point number:x} {a 64 bit floating-point number:y} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg raw double x into writer
+        put dwg raw double y into writer
+
+# DD: a double against a default. cadcodec writes the default itself, in
+# the fewest bytes, when the value differs from it; the value's own bytes
+# when they share their high bytes with it.
+function put dwg double {a 64 bit floating-point number:value} against {a 64 bit floating-point number:default} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        if value = default:
+            put dwg 2 bits 0 into writer
+            return nothing
+        set rawValue to value
+        set rawDefault to default
+        set valueBits to the value at ((the address of rawValue) as a pointer to a 64 bit unsigned integer)
+        set defaultBits to the value at ((the address of rawDefault) as a pointer to a 64 bit unsigned integer)
+        set matching to 0
+        set place to 7
+        set scanning to true
+        loop while scanning and (place >= 0):
+            set shiftBy to (place * 8) as a 64 bit unsigned integer
+            if ((valueBits shifted right by shiftBy) bitwise and (255 as a 64 bit unsigned integer)) = ((defaultBits shifted right by shiftBy) bitwise and (255 as a 64 bit unsigned integer)):
+                set matching to matching + 1
+                set place to place - 1
+            else:
+                set scanning to false
+        if matching >= 4:
+            put dwg 2 bits 1 into writer
+            loop byteIndex from 0 to 4:
+                put dwg byte (((valueBits shifted right by ((byteIndex * 8) as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+        else if matching >= 2:
+            put dwg 2 bits 2 into writer
+            put dwg byte (((valueBits shifted right by (32 as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+            put dwg byte (((valueBits shifted right by (40 as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+            loop byteIndex from 0 to 4:
+                put dwg byte (((valueBits shifted right by ((byteIndex * 8) as a 64 bit unsigned integer)) bitwise and (255 as a 64 bit unsigned integer)) as an integer) into writer
+        else:
+            put dwg 2 bits 3 into writer
+            put dwg raw double value into writer
+
+# TV, in code page 1252 (`\U+XXXX` for characters beyond ASCII).
+function put dwg text {a string:value} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        set coded to the bim cad code page text of value
+        put dwg short (the length of coded) into writer
+        loop cursor from 0 to the length of coded:
+            put dwg byte (the bim cad byte at cursor in coded) into writer
+
+# H: `code` is the reference type (2 soft owner, 3 hard owner, 4 soft
+# pointer, 5 hard pointer, 0 the object's own handle).
+function put dwg handle {integer:code} value {integer:handle} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        set count to 0
+        set rest to handle
+        loop while rest > 0:
+            set count to count + 1
+            set rest to rest shifted right by 8
+        put dwg byte ((code * 16) + count) into writer
+        loop place from 0 to count:
+            put dwg byte (handle shifted right by (((count - 1) - place) * 8)) into writer
+
+# CMC (R2000): the colour index as a BS.
+function put dwg colour {integer:index} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        put dwg short index into writer
+
+# Fills the byte under way with zero bits.
+function pad dwg bits {a pointer to a bim dwg bits record:writer}:
+    execute:
+        loop while writer's shift > 0:
+            put dwg bit false into writer
+
+# Appends every bit of `source` (its whole bytes, then the bits of the byte
+# under way) to `writer`.
+function put dwg bits of {bim dwg bits record:source} into {a pointer to a bim dwg bits record:writer}:
+    execute:
+        loop cursor from 0 to source's size:
+            put dwg byte (the bim cad byte at cursor in (source's bytes)) into writer
+        loop place from 0 to source's shift:
+            put dwg bit (((source's last shifted left by place) bitwise and 128) != 0) into writer
+
+# Overwrites the 32 bits from bit `position` with `value` as a raw long; the
+# bits must all be in whole bytes already written.
+function patch dwg raw long {integer:value} at bit {integer:position} in {a pointer to a bim dwg bits record:writer}:
+    execute:
+        loop index from 0 to 32:
+            set byteValue to (value shifted right by ((index / 8) * 8)) bitwise and 255
+            set bitOn to (byteValue bitwise and (128 shifted right by (the remainder of index divided by 8))) != 0
+            set bitAt to position + index
+            set place to bitAt / 8
+            set mask to 128 shifted right by (the remainder of bitAt divided by 8)
+            set current to the bim cad byte at place in (writer's bytes)
+            if bitOn:
+                set current to current bitwise or mask
+            else:
+                set current to current bitwise and (255 - mask)
+            store (current as a byte) into the data of (writer's bytes) at place
+
+# The whole bytes written, as a string.
+function the dwg bytes of {bim dwg bits record:writer}:
+    execute:
+        return the substring of (writer's bytes) from 0 spanning (writer's size) bytes
+
+# ---------------------------------------------------------------- bytes
+
+# A growing byte string: the sections and the file are assembled in one.
+class:
+    patterns:
+        [a|] bim dwg buffer record
+    members:
+        bytes as a string
+        size as an integer
+
+function a new bim dwg buffer:
+    execute:
+        return @intrinsic("construct", a bim dwg buffer record, a new string buffer containing 1024 bytes, 0)
+
+function add dwg byte {integer:value} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        if buffer's size >= (the length of (buffer's bytes)):
+            set grown to a new string buffer containing ((the length of (buffer's bytes)) * 2) bytes
+            ignore @intrinsic("call", "libc", "memcpy", a pointer to a byte, the data of grown, the data of (buffer's bytes), (buffer's size) as a word sized integer)
+            set buffer's bytes to grown
+        store ((value bitwise and 255) as a byte) into the data of (buffer's bytes) at (buffer's size)
+        set buffer's size to buffer's size + 1
+
+function add dwg bytes {a string:value} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        loop cursor from 0 to the length of value:
+            add dwg byte (the bim cad byte at cursor in value) to buffer
+
+function add dwg short {integer:value} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        add dwg byte value to buffer
+        add dwg byte (value shifted right by 8) to buffer
+
+function add dwg long {integer:value} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        add dwg byte value to buffer
+        add dwg byte (value shifted right by 8) to buffer
+        add dwg byte (value shifted right by 16) to buffer
+        add dwg byte (value shifted right by 24) to buffer
+
+# Adds the 16 bytes written as hexadecimal in `hex` (a sentinel).
+function add dwg hex {a string:hex} to {a pointer to a bim dwg buffer record:buffer}:
+    execute:
+        set cursor to 0
+        loop while (cursor + 1) < (the length of hex):
+            add dwg byte (((the bim dwg hex digit (the character at cursor in hex)) * 16) + (the bim dwg hex digit (the character at (cursor + 1) in hex))) to buffer
+            set cursor to cursor + 2
+
+function the bim dwg hex digit {integer:code}:
+    execute:
+        if (code >= 48) and (code <= 57):
+            return code - 48
+        if (code >= 65) and (code <= 70):
+            return code - 55
+        return code - 87
+
+function the dwg bytes of {bim dwg buffer record:buffer}:
+    execute:
+        return the substring of (buffer's bytes) from 0 spanning (buffer's size) bytes
+
+# The CRC-16 of `count` bytes of `buffer` from `start`, from `seed`.
+function the dwg crc of {bim dwg buffer record:buffer} from {integer:start} spanning {integer:count} seeded {integer:seed}:
+    execute:
+        set running to seed
+        loop cursor from start to (start + count):
+            set running to running bitwise xor (the bim cad byte at cursor in (buffer's bytes))
+            loop round from 0 to 8:
+                if (running bitwise and 1) = 1:
+                    set running to (running shifted right by 1) bitwise xor 40961
+                else:
+                    set running to running shifted right by 1
+        return running
+
+function the dwg crc seed:
+    replacement:
+        49345
