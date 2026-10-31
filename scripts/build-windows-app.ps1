@@ -34,6 +34,8 @@ try {
     $stub = "# Written by scripts/build-windows-app.ps1: the self-test entry of ui/shell/main.dl.`n" +
         "function run bim app checks:`n    execute:`n        ignore 0`n"
     [IO.File]::WriteAllText((Join-Path $repoPath 'generated\self_test.dl'), $stub)
+    $env:BIM_VERSION = $Version
+    & python -B (Join-Path $repoPath 'tools\write_version.py') --root $repoPath --out (Join-Path $repoPath 'generated\version.dl')
     & python -B (Join-Path $repoPath 'tools\compose_modules.py') --root $repoPath --out (Join-Path $repoPath 'generated') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Composing the modules failed.' }
     & python -B tools\kernel_client.py --exposed kernel/api/exposed.dl --out kernel/api/client.dl | Out-Null

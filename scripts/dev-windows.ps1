@@ -40,6 +40,7 @@ New-Item -ItemType Directory -Force $out, (Join-Path $out 'kernel'), 'generated'
 if (-not (Test-Path 'generated\self_test.dl')) {
     [IO.File]::WriteAllText((Join-Path $repo 'generated\self_test.dl'), "# Written by scripts/dev-windows.ps1: the self-test entry of ui/shell/main.dl.`nfunction run bim app checks:`n    execute:`n        ignore 0`n")
 }
+& python -B tools\write_version.py --root $repo --out (Join-Path $repo 'generated\version.dl')
 & python -B tools\compose_modules.py --root $repo --out (Join-Path $repo 'generated') | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Composing the modules failed.' }
 & python -B tools\kernel_client.py --exposed kernel/api/exposed.dl --out kernel/api/client.dl | Out-Null

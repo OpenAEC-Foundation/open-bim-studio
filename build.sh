@@ -55,6 +55,10 @@ function run bim app checks:
         ignore 0
 STUB
 }
+# The version the application shows (issues #3 and #29).
+write_version() {
+    python3 -B tools/write_version.py --root "$here" --out generated/version.dl
+}
 # The bundle of the named tests as the body of `run bim app checks`.
 write_self_test_bundle() {
     mkdir -p generated
@@ -80,6 +84,7 @@ write_kernel_client() {
 generate() {
     write_platform
     write_self_test_stub
+    write_version
     write_composition
     write_kernel_client
     mkdir -p build/shaders "$out/shaders"
