@@ -23,6 +23,7 @@ reserved number for another function. Record new public command codes in advance
 |---|---|---|---|
 | **2228** | command | Bending schedule | PC1, `feature/steel-baseplates` (24 October) |
 | **2229** | command | Optional reinforcement diameter display | PC1, `feature/steel-baseplates` (24 October) |
+| **2240** | command | Pile tip level tool (Structural tab, Piles; issue #138) | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
 | **2270** | command | Linked PNG image import | PC1, image references (26 October) |
 | **2271–2279** | commands | Sheet board, viewport title types, move/copy/delete, deactivate, and fit | PC1, interactive sheets (26 October) |
 | **2313** | command | **Base plate** | PC1, `feature/steel-baseplates` (24 October) |
@@ -31,10 +32,12 @@ reserved number for another function. Record new public command codes in advance
 | **2350** | command | Fastener-library placement entry, if needed | `stagiairopenaec1`, `mod/elements-connection/fastener-components` (29 October) |
 | **2360** | command | Sketch Split | Computer 1, restructuring stage 1 (27 October) |
 | **27** | tool id | Sketch Split | Computer 1, restructuring stage 1 (27 October) |
+| **90** | tool id | Pile tip level tool | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
 | **2400100–2400105** | settings on the opening | Opening-detail settings | PC1, `feature/steel-baseplates` (24 October) |
 | **2400400** | view setting | Technical plan palette (unfilled room interiors, black room labels, blue plan grids) | PC1, plan presentation (24 October) |
 | **2400410** | setting | Grid head | PC1, sheet paper units (24 October) |
 | **2400600–2401599** | settings on the sheet | Viewport title type metadata | PC1, interactive sheets (26 October) |
+| **2401600** | setting on a pile | The pile tip level assigned to the pile (its id) | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
 | **12600–12604** | properties | Opening detail | PC1, `feature/steel-baseplates` (24 October) |
 | **12610** | property | Toggles the technical plan palette | PC1, plan presentation (24 October) |
 | **12611** | property | Grid head | PC1, sheet paper units (24 October) |
