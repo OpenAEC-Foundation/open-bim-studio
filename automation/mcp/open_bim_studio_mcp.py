@@ -631,12 +631,12 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("fit"))
 
 
-RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "Annotate", "View", "Manage", "Collaborate",
-               "Reinforcement", "Connections")
+RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "View", "Model", "Collaborate", "Reinforcement",
+               "Connections")
 
 
-@tool("ribbon_tab", "Show ribbon tab `index` (0 Home, 1 MEP, 2 Sketch, 3 Modify, 4 Annotate, 5 View, 6 Manage, "
-      "7 Collaborate, 8 Reinforcement, 9 Connections).", {"index": {"type": "integer"}}, ["index"])
+@tool("ribbon_tab", "Show ribbon tab `index` (0 Home, 1 MEP, 2 Sketch, 3 Modify, 4 View, 5 Model, "
+      "6 Collaborate, 7 Reinforcement, 8 Connections).", {"index": {"type": "integer"}}, ["index"])
 def tab_tool(arguments: dict) -> dict:
     index = int(arguments["index"])
     if not 0 <= index < len(RIBBON_TABS):
