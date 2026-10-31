@@ -18,6 +18,12 @@ including the rule that kept ADR-0004 proposed.
 
 ---
 
+## Post-evaluation evidence
+
+- [NVIDIA USD BRep](../brep/usd-brep.md), source review of a fixed October 2026
+  commit for #156: schema, included SMLib kernel and CPU tessellation. This
+  supplements the exchange prior art and does not revise the closed matrix.
+
 ## The rule
 
 No architecture decision is accepted until its evidence table (see the ADR template) points, for
