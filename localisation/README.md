@@ -56,7 +56,8 @@ instead of showing unreadable Lao labels.
 ## Check
 
 ```sh
-./build.sh bundle catalogues text_glyphs app_files
+./build.sh bundle catalogues text_glyphs lao_shaping
+./build.sh bundle interface_language app_files
 python3 tools/check_lao_shaping.py
 ./build.sh dev-test catalogues lao_shaping app_files
 ```
