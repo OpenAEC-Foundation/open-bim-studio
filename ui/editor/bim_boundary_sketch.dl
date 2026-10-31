@@ -576,3 +576,252 @@ function the bim boundary ellipse between {cad vector2:firstPoint} and {cad vect
         append (the bim boundary ellipse quarter from west to south around centre) to (pieces's values)
         append (the bim boundary ellipse quarter from south to east around centre) to (pieces's values)
         return pieces
+
+# ---------------------------------------------------------------- creation tool shapes (#101)
+
+# The unit direction of `run`, or along x when it has no length.
+local function the bim unit direction of {cad vector2:run}:
+    execute:
+        set runLength to the square root of ((run's x * run's x) + (run's y * run's y))
+        if runLength <= 1e-12:
+            return a cad vector2 with x 1.0 and y 0.0
+        return a cad vector2 with x (run's x / runLength) and y (run's y / runLength)
+
+# The bulge of the arc that leaves `fromPoint` along `tangent` and ends at
+# `toPoint` (the wall tool's tangent arc): 0 when `toPoint` lies straight
+# ahead. Positive to the right of the chord, as every bulge here.
+function the bim tangent arc bulge from {cad vector2:fromPoint} along {cad vector2:tangent} to {cad vector2:toPoint}:
+    execute:
+        set chord to a cad vector2 with x (toPoint's x - fromPoint's x) and y (toPoint's y - fromPoint's y)
+        set chordLength to the square root of ((chord's x * chord's x) + (chord's y * chord's y))
+        if chordLength <= 1e-9:
+            return 0.0
+        set chordWay to the bim unit direction of chord
+        set heading to the bim unit direction of tangent
+        set turn to (chordWay's x * heading's y) - (chordWay's y * heading's x)
+        set ahead to (chordWay's x * heading's x) + (chordWay's y * heading's y)
+        if (1.0 + ahead) <= 1e-9:
+            return 0.0
+        return 0.0 - (((chordLength * 0.5) * turn) / (1.0 + ahead))
+
+# Whether the tangent arc from `fromPoint` along `tangent` to `toPoint` has
+# a length and turns at most a half circle, as a wall's arc does.
+function bim tangent arc from {cad vector2:fromPoint} along {cad vector2:tangent} to {cad vector2:toPoint} stays within a half circle:
+    execute:
+        set chord to a cad vector2 with x (toPoint's x - fromPoint's x) and y (toPoint's y - fromPoint's y)
+        if (the square root of ((chord's x * chord's x) + (chord's y * chord's y))) <= the bim boundary tolerance:
+            return false
+        set chordWay to the bim unit direction of chord
+        set heading to the bim unit direction of tangent
+        return ((chordWay's x * heading's x) + (chordWay's y * heading's y)) >= -1e-9
+
+# The unit direction in which the arc from `fromPoint` to `toPoint` bulging
+# `rise` (a line for 0) runs on at `toPoint`.
+function the bim end direction of boundary arc from {cad vector2:fromPoint} to {cad vector2:toPoint} bulging {a 64 bit floating-point number:rise}:
+    execute:
+        set chord to a cad vector2 with x (toPoint's x - fromPoint's x) and y (toPoint's y - fromPoint's y)
+        set chordLength to the square root of ((chord's x * chord's x) + (chord's y * chord's y))
+        set chordWay to the bim unit direction of chord
+        if chordLength <= 1e-9:
+            return chordWay
+        set k to (2.0 * rise) / chordLength
+        set cosine to (1.0 - (k * k)) / (1.0 + (k * k))
+        set sine to (2.0 * k) / (1.0 + (k * k))
+        return a cad vector2 with x ((chordWay's x * cosine) - (chordWay's y * sine)) and y ((chordWay's x * sine) + (chordWay's y * cosine))
+
+# The unit direction in which that arc leaves `fromPoint`.
+function the bim start direction of boundary arc from {cad vector2:fromPoint} to {cad vector2:toPoint} bulging {a 64 bit floating-point number:rise}:
+    execute:
+        set chord to a cad vector2 with x (toPoint's x - fromPoint's x) and y (toPoint's y - fromPoint's y)
+        set chordLength to the square root of ((chord's x * chord's x) + (chord's y * chord's y))
+        set chordWay to the bim unit direction of chord
+        if chordLength <= 1e-9:
+            return chordWay
+        set k to (2.0 * rise) / chordLength
+        set cosine to (1.0 - (k * k)) / (1.0 + (k * k))
+        set sine to (2.0 * k) / (1.0 + (k * k))
+        return a cad vector2 with x ((chordWay's x * cosine) + (chordWay's y * sine)) and y ((chordWay's y * cosine) - (chordWay's x * sine))
+
+# Where two lines cross, each through a point along a run; `found` false
+# when they run parallel.
+class:
+    patterns:
+        [a|] bim line crossing record
+    members:
+        found as a boolean
+        point as a cad vector2
+
+local function the bim crossing of line from {cad vector2:firstPoint} along {cad vector2:firstRun} with line from {cad vector2:secondPoint} along {cad vector2:secondRun}:
+    execute:
+        set denominator to (firstRun's x * secondRun's y) - (firstRun's y * secondRun's x)
+        set firstLength to the square root of ((firstRun's x * firstRun's x) + (firstRun's y * firstRun's y))
+        set secondLength to the square root of ((secondRun's x * secondRun's x) + (secondRun's y * secondRun's y))
+        if (the absolute value of denominator) <= ((firstLength * secondLength) * 1e-9):
+            return @intrinsic("construct", a bim line crossing record, false, firstPoint)
+        set gapX to secondPoint's x - firstPoint's x
+        set gapY to secondPoint's y - firstPoint's y
+        set share to ((gapX * secondRun's y) - (gapY * secondRun's x)) / denominator
+        set crossed to a cad vector2 with x (firstPoint's x + (share * firstRun's x)) and y (firstPoint's y + (share * firstRun's y))
+        return @intrinsic("construct", a bim line crossing record, true, crossed)
+
+# The faces of straight walls picked one after another, on one side, as
+# sketch lines (Pick walls in a floor, roof or ceiling sketch, #101). A
+# wall and the next (and, from three walls on, the last and the first)
+# join when their centrelines cross within their two thicknesses of the
+# ends that face each other; their faces then run to where they cross. The
+# side is the inside of what the centrelines enclose, or, when they
+# enclose nothing, each wall's interior side (left of its start to its
+# finish). `starts` and `finishes` (cad vector2) and `thicknesses` hold one
+# entry per wall, in any order.
+function the bim inner face segments of walls from {a pointer to a list:starts} to {a pointer to a list:finishes} thick {a pointer to a list:thicknesses}:
+    execute:
+        set result to a cad topology list of a bim boundary segment record
+        set count to the length of starts
+        if count = 0:
+            return result
+        # The walls in the order they follow each other, whatever order they
+        # were picked in: from the first picked, each time the wall with an
+        # end nearest the free end of the last. Each runs toward the next
+        # one: `heads` the end it comes from, `tails` the end toward the
+        # next wall; turned when that is against its start to finish.
+        set heads to an empty list of a cad vector2
+        set tails to an empty list of a cad vector2
+        set turnedList to an empty list of a boolean
+        set breadths to an empty list of a 64 bit floating-point number
+        set used to an empty list of a boolean
+        loop cursor from 0 to count:
+            append false to used
+        set firstStart to the item at 0 in starts
+        set firstFinish to the item at 0 in finishes
+        # The first wall's tail: the end nearest another wall.
+        set startGap to -1.0
+        set finishGap to -1.0
+        loop cursor from 1 to count:
+            set otherStart to the item at cursor in starts
+            set otherFinish to the item at cursor in finishes
+            set gapHere to the minimum of (the cad distance from firstStart to otherStart) and (the cad distance from firstStart to otherFinish)
+            if (startGap < 0.0) or (gapHere < startGap):
+                set startGap to gapHere
+            set gapHere to the minimum of (the cad distance from firstFinish to otherStart) and (the cad distance from firstFinish to otherFinish)
+            if (finishGap < 0.0) or (gapHere < finishGap):
+                set finishGap to gapHere
+        set firstTurned to (count > 1) and (startGap < finishGap)
+        if firstTurned:
+            append firstFinish to heads
+            append firstStart to tails
+        else:
+            append firstStart to heads
+            append firstFinish to tails
+        append firstTurned to turnedList
+        append (the item at 0 in thicknesses) to breadths
+        replace item at index 0 in used with true
+        loop while (the length of heads) < count:
+            set freeEnd to the last item of tails
+            set chosen to -1
+            set chosenGap to 0.0
+            set chosenTurned to false
+            loop cursor from 0 to count:
+                set taken to the item at cursor in used
+                if taken = false:
+                    set toStart to the cad distance from freeEnd to (the item at cursor in starts)
+                    set toFinish to the cad distance from freeEnd to (the item at cursor in finishes)
+                    set gapHere to the minimum of toStart and toFinish
+                    if (chosen < 0) or (gapHere < chosenGap):
+                        set chosen to cursor
+                        set chosenGap to gapHere
+                        set chosenTurned to toFinish < toStart
+            if chosenTurned:
+                append (the item at chosen in finishes) to heads
+                append (the item at chosen in starts) to tails
+            else:
+                append (the item at chosen in starts) to heads
+                append (the item at chosen in finishes) to tails
+            append chosenTurned to turnedList
+            append (the item at chosen in thicknesses) to breadths
+            replace item at index chosen in used with true
+        free used
+        # Where each wall's centreline meets the next one's, when they join.
+        set joins to an empty list of a boolean
+        set corners to an empty list of a cad vector2
+        loop cursor from 0 to count:
+            set following to the remainder of (cursor + 1) divided by count
+            set meets to false
+            set corner to the item at cursor in tails
+            if ((cursor + 1) < count) or (count >= 3):
+                set reach to ((the item at cursor in breadths) + (the item at following in breadths)) + (the bim boundary tolerance)
+                set head to the item at cursor in heads
+                set tail to the item at cursor in tails
+                set nextHead to the item at following in heads
+                set nextTail to the item at following in tails
+                set crossing to the bim crossing of line from head along (a cad vector2 with x (tail's x - head's x) and y (tail's y - head's y)) with line from nextHead along (a cad vector2 with x (nextTail's x - nextHead's x) and y (nextTail's y - nextHead's y))
+                if crossing's found:
+                    if ((the cad distance from crossing's point to tail) <= reach) and ((the cad distance from crossing's point to nextHead) <= reach):
+                        set meets to true
+                        set corner to crossing's point
+            append meets to joins
+            append corner to corners
+        # The inside: the side the centrelines turn round.
+        set outline to an empty list of a cad vector2
+        loop cursor from 0 to count:
+            set previous to the remainder of ((cursor + count) - 1) divided by count
+            set enteringJoined to the item at previous in joins
+            if enteringJoined:
+                append (the item at previous in corners) to outline
+            else:
+                append (the item at cursor in heads) to outline
+            append (the item at cursor in corners) to outline
+        set enclosed to the bim signed area of outline
+        free outline
+        # Each face line: the centreline moved half the wall's thickness to
+        # the inside.
+        set shifts to an empty list of a cad vector2
+        loop cursor from 0 to count:
+            set head to the item at cursor in heads
+            set tail to the item at cursor in tails
+            set chordWay to the bim unit direction of (a cad vector2 with x (tail's x - head's x) and y (tail's y - head's y))
+            set side to 1.0
+            if enclosed < -1e-9:
+                set side to -1.0
+            set wasTurned to the item at cursor in turnedList
+            if ((the absolute value of enclosed) <= 1e-9) and wasTurned:
+                set side to -1.0
+            set half to ((the item at cursor in breadths) * 0.5) * side
+            append (a cad vector2 with x ((0.0 - chordWay's y) * half) and y (chordWay's x * half)) to shifts
+        loop cursor from 0 to count:
+            set previous to the remainder of ((cursor + count) - 1) divided by count
+            set following to the remainder of (cursor + 1) divided by count
+            set head to the item at cursor in heads
+            set tail to the item at cursor in tails
+            set shift to the item at cursor in shifts
+            set run to a cad vector2 with x (tail's x - head's x) and y (tail's y - head's y)
+            set faceHead to a cad vector2 with x (head's x + shift's x) and y (head's y + shift's y)
+            set faceStart to faceHead
+            set faceFinish to a cad vector2 with x (tail's x + shift's x) and y (tail's y + shift's y)
+            set enteringJoined to the item at previous in joins
+            if enteringJoined:
+                set previousHead to the item at previous in heads
+                set previousTail to the item at previous in tails
+                set previousShift to the item at previous in shifts
+                set previousFace to a cad vector2 with x (previousHead's x + previousShift's x) and y (previousHead's y + previousShift's y)
+                set entering to the bim crossing of line from previousFace along (a cad vector2 with x (previousTail's x - previousHead's x) and y (previousTail's y - previousHead's y)) with line from faceHead along run
+                if entering's found:
+                    set faceStart to entering's point
+            set leavingJoined to the item at cursor in joins
+            if leavingJoined:
+                set nextHead to the item at following in heads
+                set nextTail to the item at following in tails
+                set nextShift to the item at following in shifts
+                set nextFace to a cad vector2 with x (nextHead's x + nextShift's x) and y (nextHead's y + nextShift's y)
+                set leaving to the bim crossing of line from faceHead along run with line from nextFace along (a cad vector2 with x (nextTail's x - nextHead's x) and y (nextTail's y - nextHead's y))
+                if leaving's found:
+                    set faceFinish to leaving's point
+            if (bim boundary point faceStart meets faceFinish) = false:
+                append (the bim boundary line from faceStart to faceFinish) to (result's values)
+        free heads
+        free tails
+        free turnedList
+        free joins
+        free corners
+        free shifts
+        free breadths
+        return result
