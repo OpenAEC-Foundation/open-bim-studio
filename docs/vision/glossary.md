@@ -108,6 +108,15 @@ requests.
 frame schedules. Which convention or standard each refers to is still to be confirmed (issue #68);
 until then the terms are named, not defined.
 
+**VO, DO and TO** — the Dutch design phases a drawing is made for: *voorlopig ontwerp*
+(preliminary design), *definitief ontwerp* (final design) and *technisch ontwerp* (technical
+design). The drawing type library has a VO, DO and TO type beneath Structural plan and Floor
+plan (issue #123): VO with the main grids dimensioned and no tags, DO with types tagged,
+dimensions and level marks, TO adding what the technical design needs. Not to be confused with
+the phase filter (existing, new construction, demolition), which is about the works, not the
+design. Issue #125 proposes UO (*uitvoeringsontwerp*, execution design) as the third phase of
+building system representations; whether the two phase lists become one is open.
+
 See [`../domain/nl-standards.md`](../domain/nl-standards.md).
 
 ## Terms we avoid
