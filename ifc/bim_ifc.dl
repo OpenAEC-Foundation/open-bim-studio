@@ -343,8 +343,8 @@ local function write bim psets of {a 64 bit integer:elementId} for {integer:enti
                 write bim pset wantedSet of (owned's values) for entityNumber with writer
 
 # The properties of set `wantedSet` among `owned` written as one
-# IfcPropertySet defining entity `entityNumber`.
-local function write bim pset {a string:wantedSet} of {a pointer to a list:owned} for {integer:entityNumber} with {a pointer to a bim step writer record:writer}:
+# IfcPropertySet; its entity number.
+local function the bim pset entity {a string:wantedSet} of {a pointer to a list:owned} with {a pointer to a bim step writer record:writer}:
     execute:
         set propertyNumbers to an empty list of an integer
         loop entryCursor from 0 to the length of owned:
@@ -355,10 +355,80 @@ local function write bim pset {a string:wantedSet} of {a pointer to a list:owned
         set setBody to ((the string form of "IFCPROPERTYSET(") + (the bim global id for kind 50 of ((writer's nextEntity) as a 64 bit integer))) + (the string form of ",$,")
         set psetNumber to write bim entity ((((setBody + (the bim label text of wantedSet)) + (the string form of ",$,")) + (the bim ifc list of propertyNumbers)) + (the string form of ")")) to writer
         free propertyNumbers
+        return psetNumber
+
+# The same defining entity `entityNumber`.
+local function write bim pset {a string:wantedSet} of {a pointer to a list:owned} for {integer:entityNumber} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set psetNumber to the bim pset entity wantedSet of owned with writer
         set definedList to an empty list of an integer
         append entityNumber to definedList
         relate bim (the string form of "IFCRELDEFINESBYPROPERTIES") named 51 from psetNumber to definedList first false in writer
         free definedList
+
+# The property sets of type `typeId` written for its HasPropertySets, as
+# STEP's list of them, or $ when it has none: every set but the ones that
+# keep what IFC holds in attributes ("IFC attributes", "Type identity"),
+# such as a parametric profile's OpenAEC_ProfileParameters (issue #95).
+local function the bim type property sets of {a 64 bit integer:typeId} in {bim model record:modelValue} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set setNames to the bim property set names of typeId in modelValue
+        set owned to the bim properties of typeId in modelValue
+        set psetNumbers to an empty list of an integer
+        loop setCursor from 0 to the length of (setNames's values):
+            set wantedSet to the item at setCursor in (setNames's values)
+            if (wantedSet != (the string form of "IFC attributes")) and (wantedSet != (the string form of "Type identity")):
+                append (the bim pset entity wantedSet of (owned's values) with writer) to psetNumbers
+        set listText to the string form of "$"
+        if (the length of psetNumbers) > 0:
+            set listText to the bim ifc list of psetNumbers
+        free psetNumbers
+        return listText
+
+# A closed IfcPolyline through `ring`'s points (the first repeated last).
+local function the bim ifc closed polyline through {a pointer to a list:ring} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set pointList to the string form of ""
+        loop cursor from 0 to (the length of ring) + 1:
+            set pointNumber to the bim ifc point2 (the item at (the remainder of cursor divided by (the length of ring)) in ring) in writer
+            if cursor > 0:
+                set pointList to pointList + (the string form of ",")
+            set pointList to pointList + (the bim reference text of pointNumber)
+        return write bim entity (((the string form of "IFCPOLYLINE((") + pointList) + (the string form of "))")) to writer
+
+# The profile of `linearType` as an IFC profile definition named after the
+# type or its parametric profile (issue #95): its parametric profile (`bim_profiles.dl`), or its drawn
+# outline as an IfcArbitraryClosedProfileDef, with holes as an
+# IfcArbitraryProfileDefWithVoids. Its entity number.
+local function write bim profile of linear type {bim linear type record:linearType} in {bim model record:modelValue} with {a pointer to a bim step writer record:writer}:
+    execute:
+        set shapeProfile to the bim profile of linear type linearType in modelValue
+        # A parametric profile's own name (OpenAEC_ProfileParameters), else
+        # the type's.
+        set profileName to the bim property value (the string form of "ProfileName") of set (the string form of "OpenAEC_ProfileParameters") of linearType's id in modelValue
+        if (the length of profileName) = 0:
+            set profileName to linearType's name
+        set profileLabel to the bim label text of profileName
+        if shapeProfile's kind = bim arbitrary profile:
+            set outlinePoints to the bim profile outline of type linearType's id in modelValue
+            if (the length of outlinePoints) >= 3:
+                set outerCurve to the bim ifc closed polyline through outlinePoints with writer
+                free outlinePoints
+                set voidRings to the bim profile voids of type linearType's id in modelValue
+                set innerNumbers to an empty list of an integer
+                loop voidCursor from 0 to the length of voidRings:
+                    append (the bim ifc closed polyline through (the item at voidCursor in voidRings) with writer) to innerNumbers
+                    free (the item at voidCursor in voidRings)
+                free voidRings
+                set definition to (((the string form of "IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,") + profileLabel) + (the string form of ",")) + ((the bim reference text of outerCurve) + (the string form of ")"))
+                if (the length of innerNumbers) > 0:
+                    set definition to (((the string form of "IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,") + profileLabel) + (the string form of ",")) + ((((the bim reference text of outerCurve) + (the string form of ",")) + (the bim ifc list of innerNumbers)) + (the string form of ")"))
+                free innerNumbers
+                return write bim entity definition to writer
+            free outlinePoints
+            set shapeProfile's kind to bim no profile
+        set parametric to the bim ifc profile text of shapeProfile at (the string form of "$")
+        return write bim entity (parametric with (the string form of "(.AREA.,$,") replaced by (((the string form of "(.AREA.,") + profileLabel) + (the string form of ","))) to writer
 
 # The top constraint of wall `wallValue` (issue #107), when it has one,
 # as the application's own property set on entity `entityNumber`
@@ -518,12 +588,25 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
 
         # Linear and opening types use their actual IFC subtype. Door/window
         # types have four subtype attributes after IfcElementType's nine.
+        # Each with its profile in a material profile set (IFC4's way to give
+        # a type its profile and material) and its property sets, a
+        # parametric profile's OpenAEC_ProfileParameters among them.
         loop cursor from 0 to the length of (modelValue's linearTypes's values):
             set linearType to the item at cursor in (modelValue's linearTypes's values)
+            set profileNumber to write bim profile of linear type linearType in modelValue with w
+            set profileMaterial to write bim entity (((the string form of "IFCMATERIAL(") + (the bim label text of linearType's material)) + (the string form of ",$,$)")) to w
+            set materialProfile to write bim entity ((((the string form of "IFCMATERIALPROFILE(") + (the bim label text of linearType's name)) + (the string form of ",$,")) + ((((the bim reference text of profileMaterial) + (the string form of ",")) + (the bim reference text of profileNumber)) + (the string form of ",$,$)"))) to w
+            set profileSet to write bim entity ((((the string form of "IFCMATERIALPROFILESET(") + (the bim label text of linearType's name)) + (the string form of ",$,(")) + ((the bim reference text of materialProfile) + (the string form of "),$)"))) to w
+            set typePsets to the bim type property sets of linearType's id in modelValue with w
             set typeClass to (the uppercase form of (the bim ifc class of linear role linearType's role)) + (the string form of "TYPE(")
             set typeBody to (typeClass + (the bim global id for kind 5 of linearType's id)) + (the string form of ",$,")
             set linearPredefined to the bim kept predefined type of linearType's id in modelValue or (the string form of "NOTDEFINED")
-            append (write bim entity ((typeBody + (the bim label text of linearType's name)) + ((the string form of ",$,$,$,$,$,$,.") + (linearPredefined + (the string form of ".)")))) to w) to typeNumbers
+            set linearTypeNumber to write bim entity ((typeBody + (the bim label text of linearType's name)) + ((((the string form of ",$,$,") + typePsets) + (the string form of ",$,$,$,.")) + (linearPredefined + (the string form of ".)")))) to w
+            set linearTypeList to an empty list of an integer
+            append linearTypeNumber to linearTypeList
+            relate bim (the string form of "IFCRELASSOCIATESMATERIAL") named 23 from profileSet to linearTypeList first false in w
+            free linearTypeList
+            append linearTypeNumber to typeNumbers
             append linearType's id to exportTypeIds
         loop cursor from 0 to the length of (modelValue's openingTypes's values):
             set openingType to the item at cursor in (modelValue's openingTypes's values)

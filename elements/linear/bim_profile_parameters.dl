@@ -1,0 +1,546 @@
+# SPDX-License-Identifier: MPL-2.0
+# Parametric profiles (issue #95): a drawn profile whose outline and holes
+# are driven by named dimensions. The definition is an open IFC property set
+# of the linear type, OpenAEC_ProfileParameters (the OpenAEC_ prefix of
+# ADR-0010), documented in `elements/linear/profiles/README.md`:
+#
+#   ProfileName     IfcLabel   the profile's name
+#   ProfileSeries   IfcLabel   the series it belongs to ("" for none)
+#   <name>          IfcLengthMeasure  a parameter and its value (metres)
+#   <name>.Expression  IfcText  when the parameter follows the others: an
+#                               expression in them ("b*1.5", "(h-tf)/2")
+#   Outline         IfcText    the outline's points, "x,y; x,y; ...", each
+#                               coordinate an expression in the parameters
+#   Void1, Void2... IfcText    the holes' points, likewise
+#
+# Coordinates are metres from the element's axis, as an arbitrary profile's
+# (`bim_profiles.dl`). The evaluated outline and holes are kept as the type's
+# arbitrary profile, which every view, the sweep and the IFC export read: a
+# reader that does not know the set still gets the IfcArbitraryClosedProfileDef
+# (or IfcArbitraryProfileDefWithVoids). Changing a parameter evaluates the
+# set again (`regenerate bim profile of type`).
+import elements/linear/bim_profiles.dl
+import exchange/ifcx/bim_readings.dl
+
+function the bim profile parameter set:
+    replacement:
+        the string form of "OpenAEC_ProfileParameters"
+
+# A parameter: its name, value in metres and the expression that drives it
+# ("" when it is set by hand).
+class:
+    patterns:
+        [a|] bim profile parameter record
+    members:
+        name as a string
+        value as a 64 bit floating-point number
+        expression as a string
+
+function the bim profile parameter named {a string:parameterName} valued {a 64 bit floating-point number:parameterValue}:
+    execute:
+        return @intrinsic("construct", a bim profile parameter record, parameterName, parameterValue, the string form of "")
+
+function the bim profile parameter named {a string:parameterName} following {a string:expressionText}:
+    execute:
+        return @intrinsic("construct", a bim profile parameter record, parameterName, 0.0, expressionText)
+
+# ---------------------------------------------------------------- expressions
+
+local function bim profile letter {integer:octet}:
+    execute:
+        return (((octet >= 65) and (octet <= 90)) or ((octet >= 97) and (octet <= 122))) or (octet = 95)
+
+local function bim profile digit {integer:octet}:
+    execute:
+        return (octet >= 48) and (octet <= 57)
+
+# Whether `parameterName` can name a parameter: a letter or underscore, then
+# letters, digits or underscores; not one of the set's own property names.
+function bim profile parameter name {a string:parameterName} is valid:
+    execute:
+        if ((the length of parameterName) = 0) or ((the length of parameterName) > 32):
+            return false
+        if (bim profile letter ((the character at 0 in parameterName) as an integer)) = false:
+            return false
+        loop cursor from 1 to the length of parameterName:
+            set octet to (the character at cursor in parameterName) as an integer
+            if ((bim profile letter octet) = false) and ((bim profile digit octet) = false):
+                return false
+        if ((parameterName = (the string form of "Outline")) or (parameterName = (the string form of "ProfileName"))) or (parameterName = (the string form of "ProfileSeries")):
+            return false
+        return ((parameterName starts with "Void") and ((the length of parameterName) > 4)) = false
+
+local function the bim profile precedence of {integer:operatorCode}:
+    execute:
+        if (operatorCode = 42) or (operatorCode = 47):
+            return 2
+        if operatorCode = 117:
+            return 3
+        return 1
+
+# Applies the operator on top of `operators` to the values on top of
+# `operands`; false on a missing operand or a division by zero.
+local function reduce bim profile stack {a pointer to a list:operatorStack} using {a pointer to a list:valueStack}:
+    execute:
+        if ((the length of operatorStack) = 0) or ((the length of valueStack) = 0):
+            return false
+        set operatorCode to the item at ((the length of operatorStack) - 1) in operatorStack
+        remove item ((the length of operatorStack) - 1) from operatorStack
+        set rightValue to the item at ((the length of valueStack) - 1) in valueStack
+        remove item ((the length of valueStack) - 1) from valueStack
+        set resultValue to 0.0 - rightValue
+        if operatorCode != 117:
+            if (the length of valueStack) = 0:
+                return false
+            set leftValue to the item at ((the length of valueStack) - 1) in valueStack
+            remove item ((the length of valueStack) - 1) from valueStack
+            if operatorCode = 43:
+                set resultValue to leftValue + rightValue
+            else if operatorCode = 45:
+                set resultValue to leftValue - rightValue
+            else if operatorCode = 42:
+                set resultValue to leftValue * rightValue
+            else if operatorCode = 47:
+                if rightValue = 0.0:
+                    return false
+                set resultValue to leftValue / rightValue
+            else:
+                return false
+        if ((the absolute value of resultValue) <= 1000000.0) = false:
+            return false
+        append resultValue to valueStack
+        return true
+
+# The value of `expressionText` in the parameters `parameterList` (their
+# names and current values): numbers, parameter names, + - * /, unary minus
+# and brackets. Refused on any other text, an unknown name, unbalanced
+# brackets or a division by zero.
+function the bim profile expression {a string:expressionText} in {a pointer to a list:parameterList}:
+    execute:
+        set refusal to @intrinsic("construct", a bim real reading record, false, 0.0)
+        if ((the length of expressionText) = 0) or ((the length of expressionText) > 1024):
+            return refusal
+        set operatorStack to an empty list of an integer
+        set valueStack to an empty list of a 64 bit floating-point number
+        set expectingOperand to true
+        set fine to true
+        set scan to 0
+        loop while (scan < (the length of expressionText)) and fine:
+            set octet to (the character at scan in expressionText) as an integer
+            if ((octet = 32) or (octet = 9)) or ((octet = 10) or (octet = 13)):
+                set scan to scan + 1
+            else if expectingOperand:
+                if (octet = 45) or (octet = 43):
+                    if octet = 45:
+                        append 117 to operatorStack
+                    set scan to scan + 1
+                else if octet = 40:
+                    append 40 to operatorStack
+                    set scan to scan + 1
+                else if (bim profile digit octet) or (octet = 46):
+                    set start to scan
+                    set scanning to true
+                    loop while (scan < (the length of expressionText)) and scanning:
+                        set digitCode to (the character at scan in expressionText) as an integer
+                        set scanning to (bim profile digit digitCode) or (digitCode = 46)
+                        if scanning:
+                            set scan to scan + 1
+                    set numberReading to the bim real reading of (the substring of expressionText from start spanning (scan - start) bytes)
+                    set fine to numberReading's valid
+                    if fine:
+                        append numberReading's value to valueStack
+                        set expectingOperand to false
+                else if bim profile letter octet:
+                    set start to scan
+                    set scanning to true
+                    loop while (scan < (the length of expressionText)) and scanning:
+                        set nameCode to (the character at scan in expressionText) as an integer
+                        set scanning to (bim profile letter nameCode) or (bim profile digit nameCode)
+                        if scanning:
+                            set scan to scan + 1
+                    set wanted to the substring of expressionText from start spanning (scan - start) bytes
+                    set known to false
+                    loop parameterCursor from 0 to the length of parameterList:
+                        set candidate to the item at parameterCursor in parameterList
+                        if (known = false) and (candidate's name = wanted):
+                            append candidate's value to valueStack
+                            set known to true
+                    set fine to known
+                    set expectingOperand to false
+                else:
+                    set fine to false
+            else if octet = 41:
+                set opened to false
+                loop while ((the length of operatorStack) > 0) and (fine and (opened = false)):
+                    if (the item at ((the length of operatorStack) - 1) in operatorStack) = 40:
+                        remove item ((the length of operatorStack) - 1) from operatorStack
+                        set opened to true
+                    else:
+                        set fine to reduce bim profile stack operatorStack using valueStack
+                if opened = false:
+                    set fine to false
+                set scan to scan + 1
+            else if ((octet = 43) or (octet = 45)) or ((octet = 42) or (octet = 47)):
+                set stacking to true
+                loop while ((the length of operatorStack) > 0) and (fine and stacking):
+                    set stacked to the item at ((the length of operatorStack) - 1) in operatorStack
+                    if (stacked != 40) and ((the bim profile precedence of stacked) >= (the bim profile precedence of octet)):
+                        set fine to reduce bim profile stack operatorStack using valueStack
+                    else:
+                        set stacking to false
+                append octet to operatorStack
+                set expectingOperand to true
+                set scan to scan + 1
+            else:
+                set fine to false
+        if expectingOperand:
+            set fine to false
+        loop while ((the length of operatorStack) > 0) and fine:
+            if (the item at ((the length of operatorStack) - 1) in operatorStack) = 40:
+                set fine to false
+            else:
+                set fine to reduce bim profile stack operatorStack using valueStack
+        set result to refusal
+        if fine and ((the length of valueStack) = 1):
+            set result to @intrinsic("construct", a bim real reading record, true, the item at 0 in valueStack)
+        free operatorStack
+        free valueStack
+        return result
+
+# The points of `pointsText` ("x,y; x,y; ...") in `parameterList`; empty
+# when any point is refused.
+function the bim profile points of {a string:pointsText} in {a pointer to a list:parameterList}:
+    execute:
+        set ring to an empty list of a cad vector2
+        set pieces to pointsText split at ";"
+        set fine to true
+        loop cursor from 0 to the length of pieces:
+            set piece to (the item at cursor in pieces) trimmed
+            if (the length of piece) > 0:
+                set coordinates to piece split at ","
+                if (the length of coordinates) = 2:
+                    set across to the bim profile expression (the item at 0 in coordinates) in parameterList
+                    set along to the bim profile expression (the item at 1 in coordinates) in parameterList
+                    if across's valid and along's valid:
+                        append (a cad vector2 with x across's value and y along's value) to ring
+                    else:
+                        set fine to false
+                else:
+                    set fine to false
+                free coordinates
+        free pieces
+        if fine = false:
+            clear ring
+        return ring
+
+# ---------------------------------------------------------------- the set
+
+local function the bim profile expression name of {a string:parameterName}:
+    execute:
+        return parameterName + (the string form of ".Expression")
+
+# The parameters of linear type `typeId`, in the order the set gives them
+# (its length measures), each with its expression; none when it is not
+# parametric.
+function the bim profile parameters of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set parameterList to an empty list of a bim profile parameter record
+        loop cursor from 0 to the length of (modelValue's properties's values):
+            set entry to the item at cursor in (modelValue's properties's values)
+            if ((entry's elementId = typeId) and (entry's setName = (the bim profile parameter set))) and (entry's valueType = (the string form of "IFCLENGTHMEASURE")):
+                set storedReading to the bim real reading of entry's value
+                set parameterValue to 0.0
+                if storedReading's valid:
+                    set parameterValue to storedReading's value
+                set drivenBy to the bim property value (the bim profile expression name of entry's name) of set (the bim profile parameter set) of typeId in modelValue
+                append (@intrinsic("construct", a bim profile parameter record, entry's name, parameterValue, drivenBy)) to parameterList
+        return parameterList
+
+# Whether linear type `typeId` has a parametric profile (an outline in the
+# set).
+function bim linear type {a 64 bit integer:typeId} is parametric in {bim model record:modelValue}:
+    execute:
+        return (the length of (the bim property value (the string form of "Outline") of set (the bim profile parameter set) of typeId in modelValue)) > 0
+
+# The texts of the holes of type `typeId`'s parametric profile, in order.
+function the bim profile void texts of type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        set voidTexts to an empty list of a string
+        set voidNumber to 1
+        set searching to true
+        loop while searching:
+            set voidText to the bim property value ((the string form of "Void") + (the string form of voidNumber)) of set (the bim profile parameter set) of typeId in modelValue
+            if (the length of voidText) = 0:
+                set searching to false
+            else:
+                append voidText to voidTexts
+                set voidNumber to voidNumber + 1
+        return voidTexts
+
+# The parameters with their expressions evaluated, each on the values of
+# the others, pass after pass until nothing changes; false in `settled`
+# when an expression is refused or they do not settle (a cycle).
+class:
+    patterns:
+        [a|] bim profile evaluation record
+    members:
+        settled as a boolean
+        evaluatedParameters as the type of (an empty list of a bim profile parameter record)
+
+function the bim profile evaluation of {a pointer to a list:parameterList}:
+    execute:
+        set evaluated to an empty list of a bim profile parameter record
+        loop cursor from 0 to the length of parameterList:
+            append (the item at cursor in parameterList) to evaluated
+        set settled to false
+        set fine to true
+        set pass to 0
+        loop while ((settled = false) and fine) and (pass <= (the length of evaluated)):
+            set changed to false
+            loop cursor from 0 to the length of evaluated:
+                set parameterValue to the item at cursor in evaluated
+                if (the length of parameterValue's expression) > 0:
+                    set valueReading to the bim profile expression (parameterValue's expression) in evaluated
+                    if valueReading's valid:
+                        if (the absolute value of (valueReading's value - parameterValue's value)) > 0.0000000001:
+                            set changed to true
+                            set parameterValue's value to valueReading's value
+                            replace item at index cursor in evaluated with parameterValue
+                    else:
+                        set fine to false
+            set settled to changed = false
+            set pass to pass + 1
+        return @intrinsic("construct", a bim profile evaluation record, settled and fine, evaluated)
+
+# The bounding box of `ring`: its width (x) and depth (y).
+local function the bim profile extent of {a pointer to a list:ring}:
+    execute:
+        set lowest to the item at 0 in ring
+        set highest to the item at 0 in ring
+        loop cursor from 1 to the length of ring:
+            set corner to the item at cursor in ring
+            set lowest to a cad vector2 with x (the minimum of lowest's x and corner's x) and y (the minimum of lowest's y and corner's y)
+            set highest to a cad vector2 with x (the maximum of highest's x and corner's x) and y (the maximum of highest's y and corner's y)
+        return a cad vector2 with x (highest's x - lowest's x) and y (highest's y - lowest's y)
+
+# Whether `pointRing` has three points or more and encloses an area (more than
+# a square tenth of a millimetre).
+function bim profile ring {a pointer to a list:pointRing} encloses an area:
+    execute:
+        if (the length of pointRing) < 3:
+            return false
+        return (the absolute value of (the bim profile winding of pointRing)) > 0.00000002
+
+# Linear type `typeId`'s parametric profile evaluated again: the values of
+# the driven parameters written back, the outline and holes kept as its
+# arbitrary profile, its width and depth those of the outline's box (and a
+# name by the rules with them). False,
+# nothing changed, when an expression or a point is refused or the outline
+# or a hole encloses no area.
+function regenerate bim profile of type {a 64 bit integer:typeId} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim linear type index of typeId in (@intrinsic("dereference", target))
+        if (found's valid = false) or ((bim linear type typeId is parametric in (@intrinsic("dereference", target))) = false):
+            return false
+        set parameterList to the bim profile parameters of type typeId in (@intrinsic("dereference", target))
+        set evaluation to the bim profile evaluation of parameterList
+        free parameterList
+        if evaluation's settled = false:
+            free evaluation's evaluatedParameters
+            return false
+        set outlineRing to the bim profile points of (the bim property value (the string form of "Outline") of set (the bim profile parameter set) of typeId in (@intrinsic("dereference", target))) in (evaluation's evaluatedParameters)
+        set voidTexts to the bim profile void texts of type typeId in (@intrinsic("dereference", target))
+        set voidRings to an empty list of the type of (an empty list of a cad vector2)
+        set fine to bim profile ring outlineRing encloses an area
+        loop cursor from 0 to the length of voidTexts:
+            set voidRing to the bim profile points of (the item at cursor in voidTexts) in (evaluation's evaluatedParameters)
+            if (bim profile ring voidRing encloses an area) = false:
+                set fine to false
+            append voidRing to voidRings
+        free voidTexts
+        if fine:
+            loop cursor from 0 to the length of (evaluation's evaluatedParameters):
+                set parameterValue to the item at cursor in (evaluation's evaluatedParameters)
+                set bim property (parameterValue's name) of set (the bim profile parameter set) of typeId to (the bim profile number parameterValue's value) typed (the string form of "IFCLENGTHMEASURE") in target
+            set fine to give bim linear type typeId outline outlineRing voids voidRings in target
+        if fine:
+            set extent to the bim profile extent of outlineRing
+            set linearType to the item at found's position in (target's linearTypes's values)
+            if (extent's x > 0.0) and (extent's y > 0.0):
+                replace item at index found's position in (target's linearTypes's values) with (@intrinsic("construct", a bim linear type record, linearType's id, linearType's name, linearType's role, extent's x, extent's y, false, linearType's material))
+            loop linearCursor from 0 to the length of (target's linears's values):
+                set linearValue to the item at linearCursor in (target's linears's values)
+                if linearValue's typeId = typeId:
+                    note bim change of linearValue's id in target
+            # A name by the rules follows the new size.
+            name bim types by the rules in target
+            note bim change of typeId in target
+        free outlineRing
+        loop cursor from 0 to the length of voidRings:
+            free (the item at cursor in voidRings)
+        free voidRings
+        free evaluation's evaluatedParameters
+        return fine
+
+local function forget bim profile property {a string:propertyName} of type {a 64 bit integer:typeId} in {a pointer to a bim model record:target}:
+    execute:
+        set cursor to (the length of (target's properties's values)) - 1
+        loop while cursor >= 0:
+            set entry to the item at cursor in (target's properties's values)
+            if ((entry's elementId = typeId) and (entry's setName = (the bim profile parameter set))) and (entry's name = propertyName):
+                remove item cursor from (target's properties's values)
+            set cursor to cursor - 1
+
+# Linear type `typeId` made parametric: profile `profileName` of series
+# `seriesName`, parameters `parameterList` (valid, distinct names; values
+# in metres, or expressions), outline `outlineText` and holes `voidTexts`
+# ("x,y; x,y; ..."). The set it had before is replaced whole. False, the
+# type unchanged, when a name is refused or the profile does not evaluate.
+function make bim linear type {a 64 bit integer:typeId} parametric named {a string:profileName} in series {a string:seriesName} with {a pointer to a list:parameterList} outline {a string:outlineText} voids {a pointer to a list:voidTexts} in {a pointer to a bim model record:target}:
+    execute:
+        if (the bim linear type index of typeId in (@intrinsic("dereference", target)))'s valid = false:
+            return false
+        loop cursor from 0 to the length of parameterList:
+            set candidate to the item at cursor in parameterList
+            if (bim profile parameter name candidate's name is valid) = false:
+                return false
+            loop otherCursor from 0 to cursor:
+                if (the item at otherCursor in parameterList)'s name = candidate's name:
+                    return false
+        # Tried on its own first, so that a refused profile changes nothing.
+        set evaluation to the bim profile evaluation of parameterList
+        set trial to the bim profile points of outlineText in (evaluation's evaluatedParameters)
+        set fine to evaluation's settled and (bim profile ring trial encloses an area)
+        free trial
+        loop cursor from 0 to the length of voidTexts:
+            set trialVoid to the bim profile points of (the item at cursor in voidTexts) in (evaluation's evaluatedParameters)
+            if (bim profile ring trialVoid encloses an area) = false:
+                set fine to false
+            free trialVoid
+        free evaluation's evaluatedParameters
+        if fine = false:
+            return false
+        set cursor to (the length of (target's properties's values)) - 1
+        loop while cursor >= 0:
+            set entry to the item at cursor in (target's properties's values)
+            if (entry's elementId = typeId) and (entry's setName = (the bim profile parameter set)):
+                remove item cursor from (target's properties's values)
+            set cursor to cursor - 1
+        set bim property (the string form of "ProfileName") of set (the bim profile parameter set) of typeId to profileName typed (the string form of "IFCLABEL") in target
+        set bim property (the string form of "ProfileSeries") of set (the bim profile parameter set) of typeId to seriesName typed (the string form of "IFCLABEL") in target
+        loop cursor from 0 to the length of parameterList:
+            set parameterValue to the item at cursor in parameterList
+            set bim property (parameterValue's name) of set (the bim profile parameter set) of typeId to (the bim profile number parameterValue's value) typed (the string form of "IFCLENGTHMEASURE") in target
+            if (the length of parameterValue's expression) > 0:
+                set bim property (the bim profile expression name of parameterValue's name) of set (the bim profile parameter set) of typeId to parameterValue's expression typed (the string form of "IFCTEXT") in target
+        set bim property (the string form of "Outline") of set (the bim profile parameter set) of typeId to outlineText typed (the string form of "IFCTEXT") in target
+        loop cursor from 0 to the length of voidTexts:
+            set bim property ((the string form of "Void") + (the string form of (cursor + 1))) of set (the bim profile parameter set) of typeId to (the item at cursor in voidTexts) typed (the string form of "IFCTEXT") in target
+        return regenerate bim profile of type typeId in target
+
+# Parameter `parameterName` of type `typeId` given `parameterValue` (metres)
+# and the profile evaluated again. False, nothing changed, for an unknown
+# parameter, one an expression drives, or a value that breaks the profile.
+function set bim profile parameter {a string:parameterName} of type {a 64 bit integer:typeId} to {a 64 bit floating-point number:parameterValue} in {a pointer to a bim model record:target}:
+    execute:
+        set parameterList to the bim profile parameters of type typeId in (@intrinsic("dereference", target))
+        set known to false
+        set driven to false
+        loop cursor from 0 to the length of parameterList:
+            set candidate to the item at cursor in parameterList
+            if candidate's name = parameterName:
+                set known to true
+                set driven to (the length of candidate's expression) > 0
+        free parameterList
+        if (known = false) or driven:
+            return false
+        set previous to the bim property value parameterName of set (the bim profile parameter set) of typeId in (@intrinsic("dereference", target))
+        set bim property parameterName of set (the bim profile parameter set) of typeId to (the bim profile number parameterValue) typed (the string form of "IFCLENGTHMEASURE") in target
+        if regenerate bim profile of type typeId in target:
+            return true
+        set bim property parameterName of set (the bim profile parameter set) of typeId to previous typed (the string form of "IFCLENGTHMEASURE") in target
+        return false
+
+# Parameter `parameterName` of type `typeId` driven by `expressionText`, or
+# set by hand again when it is empty; the profile evaluated again. False,
+# nothing changed, for an unknown parameter or an expression that is refused
+# or makes a cycle.
+function set bim profile parameter {a string:parameterName} of type {a 64 bit integer:typeId} expression {a string:expressionText} in {a pointer to a bim model record:target}:
+    execute:
+        set parameterList to the bim profile parameters of type typeId in (@intrinsic("dereference", target))
+        set known to false
+        loop cursor from 0 to the length of parameterList:
+            if (the item at cursor in parameterList)'s name = parameterName:
+                set known to true
+        free parameterList
+        if known = false:
+            return false
+        set expressionKey to the bim profile expression name of parameterName
+        set previous to the bim property value expressionKey of set (the bim profile parameter set) of typeId in (@intrinsic("dereference", target))
+        if (the length of expressionText) = 0:
+            forget bim profile property expressionKey of type typeId in target
+            return true
+        set bim property expressionKey of set (the bim profile parameter set) of typeId to expressionText typed (the string form of "IFCTEXT") in target
+        if regenerate bim profile of type typeId in target:
+            return true
+        if (the length of previous) = 0:
+            forget bim profile property expressionKey of type typeId in target
+        else:
+            set bim property expressionKey of set (the bim profile parameter set) of typeId to previous typed (the string form of "IFCTEXT") in target
+        return false
+
+# A coefficient for an expression: six decimals, trailing zeros dropped.
+local function the bim profile coefficient text of {a 64 bit floating-point number:value}:
+    execute:
+        set numberText to the bim profile number value
+        set cut to the length of numberText
+        loop while (cut > 1) and ((the character at (cut - 1) in numberText) = 48):
+            set cut to cut - 1
+        if (the character at (cut - 1) in numberText) = 46:
+            set cut to cut - 1
+        set trimmedText to the substring of numberText from 0 spanning cut bytes
+        if trimmedText = (the string form of "-0"):
+            return the string form of "0"
+        return trimmedText
+
+local function the bim profile scaled text of {a pointer to a list:ring} across {a 64 bit floating-point number:widthValue} tall {a 64 bit floating-point number:depthValue}:
+    execute:
+        set pieces to an empty list of a string
+        loop cursor from 0 to the length of ring:
+            set corner to the item at cursor in ring
+            set xText to (the string form of "b*") + (the bim profile coefficient text of (corner's x / widthValue))
+            set yText to (the string form of "h*") + (the bim profile coefficient text of (corner's y / depthValue))
+            append ((xText + (the string form of ",")) + yText) to pieces
+        set joined to pieces joined with "; "
+        free pieces
+        return joined
+
+# Linear type `typeId`'s drawn profile (its arbitrary outline and holes)
+# saved as a parametric profile named `profileName`: two parameters, its
+# width b and depth h (the outline's box), every point scaling with them
+# from the axis. False when the type has no drawn outline.
+function save bim drawn profile of type {a 64 bit integer:typeId} as parametric named {a string:profileName} in {a pointer to a bim model record:target}:
+    execute:
+        set outlineRing to the bim profile outline of type typeId in (@intrinsic("dereference", target))
+        if (the length of outlineRing) < 3:
+            free outlineRing
+            return false
+        set extent to the bim profile extent of outlineRing
+        if (extent's x <= 0.0) or (extent's y <= 0.0):
+            free outlineRing
+            return false
+        set parameterList to an empty list of a bim profile parameter record
+        append (the bim profile parameter named (the string form of "b") valued (extent's x)) to parameterList
+        append (the bim profile parameter named (the string form of "h") valued (extent's y)) to parameterList
+        set outlineText to the bim profile scaled text of outlineRing across extent's x tall extent's y
+        set voidRings to the bim profile voids of type typeId in (@intrinsic("dereference", target))
+        set voidTexts to an empty list of a string
+        loop cursor from 0 to the length of voidRings:
+            append (the bim profile scaled text of (the item at cursor in voidRings) across extent's x tall extent's y) to voidTexts
+            free (the item at cursor in voidRings)
+        free voidRings
+        free outlineRing
+        set made to make bim linear type typeId parametric named profileName in series (the string form of "") with parameterList outline outlineText voids voidTexts in target
+        free parameterList
+        free voidTexts
+        return made

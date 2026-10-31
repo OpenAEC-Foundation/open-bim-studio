@@ -6,6 +6,8 @@ import ui/panels/bim_ui.dl
 import ui/properties/bim_type_menu.dl
 import ui/properties/bim_type_text.dl
 import ui/properties/bim_type_layers.dl
+import elements/linear/bim_profile_catalogue.dl
+import elements/linear/bim_profile_parameters.dl
 
 class:
     patterns:
@@ -65,6 +67,11 @@ class:
         sill as a 64 bit floating-point number
         round as a boolean
         layerCount as an integer
+        # A linear type of the Profiles tab: whether its profile is drawn
+        # (an arbitrary outline), and how many parameters drive it (-1 when
+        # it is not parametric, `bim_profile_parameters.dl`).
+        drawn as a boolean
+        parameterCount as an integer
 
 # `bim type manager command`, which opens this window: `bim_property_groups.dl`.
 
@@ -87,6 +94,29 @@ function bim opening family:
 function bim profile family:
     replacement:
         3
+
+# The catalogue's profiles on the Profiles tab's list (issue #95): this
+# base, far above any model id, plus the profile's catalogue key
+# (`bim_profile_catalogue.dl`). Such a row has family 3 and its series as
+# its role; the types of the project with a profile are group 0.
+function bim manager catalogue base:
+    replacement:
+        (4000 as a 64 bit integer) * (1000000000 as a 64 bit integer)
+
+function bim manager id {a 64 bit integer:entryId} is a catalogue profile:
+    execute:
+        return entryId >= (bim manager catalogue base)
+
+function the bim managed row of catalogue profile {bim catalogue profile record:catalogueProfile}:
+    execute:
+        set catalogueId to (bim manager catalogue base) + (the bim catalogue key of catalogueProfile)
+        set className to the bim name of profile kind catalogueProfile's kind round catalogueProfile's round
+        return @intrinsic("construct", a bim managed type record, catalogueId, 3, catalogueProfile's series, catalogueProfile's name, className, catalogueProfile's material, catalogueProfile's width, catalogueProfile's depth, 0.0, catalogueProfile's round, 0, false, -1)
+
+# The catalogue profile of list line `entryId`.
+function the bim manager catalogue profile of {a 64 bit integer:entryId}:
+    execute:
+        return the bim catalogue profile of key (entryId - (bim manager catalogue base))
 
 # `field` while the filter over the list takes the typed characters.
 function bim manager search field:
@@ -147,7 +177,23 @@ function the bim manager groups of family {integer:familyCode}:
         if familyCode = bim opening family:
             append 0 to familyGroups
             append 1 to familyGroups
+        if familyCode = bim profile family:
+            append 0 to familyGroups
+            set seriesList to the bim profile catalogue series
+            loop seriesCursor from 0 to the length of seriesList:
+                append (the item at seriesCursor in seriesList)'s code to familyGroups
+            free seriesList
         return familyGroups
+
+# The group of `row` in family `familyCode`: on the Profiles tab its
+# series, or 0 for a type of the project.
+function the bim manager group of {bim managed type record:row} in family {integer:familyCode}:
+    execute:
+        if familyCode = bim profile family:
+            if row's family = 3:
+                return row's role
+            return 0
+        return the bim manager group of row
 
 function the bim manager group of {bim managed type record:row}:
     execute:
@@ -159,6 +205,10 @@ function the bim manager group of {bim managed type record:row}:
 
 function the bim manager name of group {integer:groupCode} in family {integer:familyCode}:
     execute:
+        if familyCode = bim profile family:
+            if groupCode = 0:
+                return the string form of "In the project"
+            return (the bim catalogue series groupCode)'s name
         if familyCode = bim layered family:
             return the bim name of planar role groupCode
         if familyCode = bim opening family:
@@ -204,8 +254,12 @@ function the bim managed types in family {integer:familyCode} in {bim model reco
 
 function the bim managed type {a 64 bit integer:typeId} in family {integer:familyCode} in {bim model record:modelValue}:
     execute:
+        if (familyCode = bim profile family) and (bim manager id typeId is a catalogue profile):
+            set catalogueFound to the bim manager catalogue profile of typeId
+            if catalogueFound's found:
+                return the bim managed row of catalogue profile (catalogueFound's value)
         set rows to the bim managed types in family familyCode in modelValue
-        set result to @intrinsic("construct", a bim managed type record, the bim refused id, -1, -1, the string form of "", the string form of "", the string form of "", 0.0, 0.0, 0.0, false, 0)
+        set result to @intrinsic("construct", a bim managed type record, the bim refused id, -1, -1, the string form of "", the string form of "", the string form of "", 0.0, 0.0, 0.0, false, 0, false, -1)
         loop cursor from 0 to the length of rows:
             if (the item at cursor in rows)'s id = typeId:
                 set result to the item at cursor in rows
@@ -217,10 +271,12 @@ function the bim managed type {a 64 bit integer:typeId} in family {integer:famil
 # regard to case.
 function bim managed row {bim managed type record:row} passes {bim type manager record:stateValue} in {bim model record:modelValue}:
     execute:
-        if (stateValue's roleFilter >= 0) and ((the bim manager group of row) != stateValue's roleFilter):
+        if (stateValue's roleFilter >= 0) and ((the bim manager group of row in family stateValue's family) != stateValue's roleFilter):
             return false
         if (the length of stateValue's search) = 0:
             return true
+        if row's family = 3:
+            return bim catalogue name (row's name) answers (stateValue's search)
         set wanted to the lowercase form of stateValue's search
         if (the lowercase form of row's name) contains wanted:
             return true
@@ -261,6 +317,8 @@ function fold bim manager group {integer:groupCode} in {a pointer to a bim type 
 # group keeps its header and hides its types.
 function the bim type manager entries of {bim type manager record:stateValue} in {bim model record:modelValue}:
     execute:
+        if stateValue's family = bim profile family:
+            return the bim profile manager entries of stateValue in modelValue
         set listEntries to an empty list of a 64 bit integer
         set rows to the bim managed types in family stateValue's family in modelValue
         set groups to the bim manager groups of family stateValue's family
@@ -287,14 +345,65 @@ function the bim type manager entries of {bim type manager record:stateValue} in
         free rows
         return listEntries
 
-# How many types of group `groupCode` pass the filter, for its header.
+# The Profiles tab's lines: the project's profiled types, then every
+# series of the catalogue under its header, its profiles read only while
+# it is open. A search opens every series and keeps the ones it matches.
+function the bim profile manager entries of {bim type manager record:stateValue} in {bim model record:modelValue}:
+    execute:
+        set listEntries to an empty list of a 64 bit integer
+        set searching to (the length of stateValue's search) > 0
+        set projectRows to the bim managed types in family (bim profile family) in modelValue
+        set headerShown to false
+        loop cursor from 0 to the length of projectRows:
+            set row to the item at cursor in projectRows
+            if bim managed row row passes stateValue in modelValue:
+                if headerShown = false:
+                    append ((0 - 1) as a 64 bit integer) to listEntries
+                    set headerShown to true
+                if (bim manager group 0 is folded in stateValue) = false:
+                    append row's id to listEntries
+        free projectRows
+        set seriesList to the bim profile catalogue series
+        loop seriesCursor from 0 to the length of seriesList:
+            set seriesCode to (the item at seriesCursor in seriesList)'s code
+            set seriesFolded to (bim manager group seriesCode is folded in stateValue) and (searching = false)
+            if seriesFolded:
+                append ((0 - (seriesCode + 1)) as a 64 bit integer) to listEntries
+            else:
+                set seriesProfiles to the bim catalogue profiles of series seriesCode
+                set seriesHeader to searching = false
+                if seriesHeader:
+                    append ((0 - (seriesCode + 1)) as a 64 bit integer) to listEntries
+                loop cursor from 0 to the length of seriesProfiles:
+                    set row to the bim managed row of catalogue profile (the item at cursor in seriesProfiles)
+                    if bim managed row row passes stateValue in modelValue:
+                        if seriesHeader = false:
+                            append ((0 - (seriesCode + 1)) as a 64 bit integer) to listEntries
+                            set seriesHeader to true
+                        append row's id to listEntries
+                free seriesProfiles
+        free seriesList
+        return listEntries
+
+# How many types of group `groupCode` pass the filter, for its header; a
+# series of the catalogue counts its profiles (that match).
 local function the bim manager count of group {integer:groupCode} in {bim type manager record:stateValue} in {bim model record:modelValue}:
     execute:
+        if (stateValue's family = bim profile family) and (groupCode > 0):
+            if (the length of stateValue's search) = 0:
+                return (the bim catalogue series groupCode)'s count
+            set seriesProfiles to the bim catalogue profiles of series groupCode
+            set matching to 0
+            loop cursor from 0 to the length of seriesProfiles:
+                if bim managed row (the bim managed row of catalogue profile (the item at cursor in seriesProfiles)) passes stateValue in modelValue:
+                    set matching to matching + 1
+            free seriesProfiles
+            return matching
         set rows to the bim managed types in family stateValue's family in modelValue
         set countValue to 0
         loop cursor from 0 to the length of rows:
             set row to the item at cursor in rows
-            if ((the bim manager group of row) = groupCode) and (bim managed row row passes stateValue in modelValue):
+            if ((the bim manager group of row in family stateValue's family) = groupCode) and (bim managed row row passes stateValue in modelValue):
                 set countValue to countValue + 1
         free rows
         return countValue
@@ -420,33 +529,60 @@ function the bim managed types on tab {integer:tabIndex} in {bim model record:mo
                     set material to the string form of ""
                     if (the length of (planarType's layers's values)) > 0:
                         set material to (the item at 0 in (planarType's layers's values))'s material
-                    append (@intrinsic("construct", a bim managed type record, planarType's id, 0, planarType's role, planarType's name, (the bim ifc class of planar role planarType's role) + (the string form of "Type"), material, the bim thickness of planarType, 0.0, 0.0, false, the length of (planarType's layers's values))) to rows
+                    append (@intrinsic("construct", a bim managed type record, planarType's id, 0, planarType's role, planarType's name, (the bim ifc class of planar role planarType's role) + (the string form of "Type"), material, the bim thickness of planarType, 0.0, 0.0, false, the length of (planarType's layers's values), false, -1)) to rows
         if ((tabIndex >= 4) and (tabIndex <= 6)) or (tabIndex = 8):
             set wantedRole to bim column role
             if tabIndex = 5:
                 set wantedRole to bim beam role
             if tabIndex = 6:
                 set wantedRole to bim pile role
+            # The Profiles tab's types: a profile of a steel series or of
+            # the catalogue, or a drawn one; found in one pass over the
+            # settings.
+            set profiledIds to an empty list of a 64 bit integer
+            set drawnIds to an empty list of a 64 bit integer
+            if tabIndex = 8:
+                loop cursor from 0 to the length of (modelValue's settings's values):
+                    set entry to the item at cursor in (modelValue's settings's values)
+                    if (entry's code = (bim steel series setting)) or (entry's code = (bim profile catalogue setting)):
+                        append entry's elementId to profiledIds
+                    if (entry's code = (bim profile kind setting)) and (entry's value = ((bim arbitrary profile) as a 64 bit integer)):
+                        append entry's elementId to drawnIds
             loop cursor from 0 to the length of (modelValue's linearTypes's values):
                 set linearType to the item at cursor in (modelValue's linearTypes's values)
                 set fits to linearType's role = wantedRole
+                set drawnFlag to false
+                set parameterTotal to -1
                 if tabIndex = 8:
-                    set fits to (the bim setting (bim steel series setting) of linearType's id in modelValue)'s found
+                    set fits to false
+                    loop idCursor from 0 to the length of profiledIds:
+                        if (the item at idCursor in profiledIds) = linearType's id:
+                            set fits to true
+                    loop idCursor from 0 to the length of drawnIds:
+                        if (the item at idCursor in drawnIds) = linearType's id:
+                            set fits to true
+                            set drawnFlag to true
+                    if drawnFlag and (bim linear type linearType's id is parametric in modelValue):
+                        set parameterList to the bim profile parameters of type linearType's id in modelValue
+                        set parameterTotal to the length of parameterList
+                        free parameterList
                 if fits:
-                    append (@intrinsic("construct", a bim managed type record, linearType's id, 1, linearType's role, linearType's name, (the bim ifc class of linear role linearType's role) + (the string form of "Type"), linearType's material, linearType's width, linearType's depth, 0.0, linearType's round, 0)) to rows
+                    append (@intrinsic("construct", a bim managed type record, linearType's id, 1, linearType's role, linearType's name, (the bim ifc class of linear role linearType's role) + (the string form of "Type"), linearType's material, linearType's width, linearType's depth, 0.0, linearType's round, 0, drawnFlag, parameterTotal)) to rows
+            free profiledIds
+            free drawnIds
         if tabIndex = 7:
             loop cursor from 0 to the length of (modelValue's openingTypes's values):
                 set openingType to the item at cursor in (modelValue's openingTypes's values)
                 set className to the string form of "IfcWindowType"
                 if openingType's isDoor:
                     set className to the string form of "IfcDoorType"
-                append (@intrinsic("construct", a bim managed type record, openingType's id, 2, 0, openingType's name, className, the string form of "Frame", openingType's width, openingType's height, openingType's sill, openingType's isDoor, 0)) to rows
+                append (@intrinsic("construct", a bim managed type record, openingType's id, 2, 0, openingType's name, className, the string form of "Frame", openingType's width, openingType's height, openingType's sill, openingType's isDoor, 0, false, -1)) to rows
         return rows
 
 function the bim managed type {a 64 bit integer:typeId} on tab {integer:tabIndex} in {bim model record:modelValue}:
     execute:
         set rows to the bim managed types on tab tabIndex in modelValue
-        set result to @intrinsic("construct", a bim managed type record, the bim refused id, -1, -1, the string form of "", the string form of "", the string form of "", 0.0, 0.0, 0.0, false, 0)
+        set result to @intrinsic("construct", a bim managed type record, the bim refused id, -1, -1, the string form of "", the string form of "", the string form of "", 0.0, 0.0, 0.0, false, 0, false, -1)
         loop cursor from 0 to the length of rows:
             set row to the item at cursor in rows
             if row's id = typeId:
@@ -503,6 +639,17 @@ function the bim manager fields of {bim managed type record:row}:
     execute:
         set codes to an empty list of an integer
         append 0 to codes
+        if row's family = 3:
+            # A catalogue profile: its series and dimensions, read only.
+            append 12 to codes
+            append 13 to codes
+            append 2 to codes
+            append 3 to codes
+            append 9 to codes
+            append 10 to codes
+            append 11 to codes
+            append 15 to codes
+            return codes
         append 7 to codes
         if row's family = 1:
             append 1 to codes
@@ -515,6 +662,11 @@ function the bim manager fields of {bim managed type record:row}:
             append 4 to codes
         append 5 to codes
         append 6 to codes
+        # A drawn profile: made parametric, and its parameters (40 on).
+        if (row's family = 1) and row's drawn:
+            append 14 to codes
+            loop parameterIndex from 0 to row's parameterCount:
+                append (40 + parameterIndex) to codes
         return codes
 
 # The detail pane's geometry, in pixels from the window's top before the
@@ -849,6 +1001,8 @@ function set bim managed type {a 64 bit integer:typeId} on tab {integer:tabIndex
         loop cursor from 0 to the length of textValue:
             if (the bim manager octet at cursor in textValue) < 32:
                 return false
+        if fieldCode >= 40:
+            return set bim managed parameter (fieldCode - 40) of type typeId to textValue in editor
         set numericText to textValue
         if fieldCode = 6:
             set numericText to (numericText with "-" replaced by "") with " " replaced by ""
@@ -926,6 +1080,101 @@ function set bim managed type {a 64 bit integer:typeId} on tab {integer:tabIndex
         refresh bim editor editor
         return changed
 
+# Parameter `parameterIndex` of type `typeId`'s parametric profile given
+# `rawText`: a length in the project's unit, or "=" and an expression in
+# the other parameters (metres), or "=" alone to set it by hand again. One
+# edit; false, nothing changed, when it is refused.
+function set bim managed parameter {integer:parameterIndex} of type {a 64 bit integer:typeId} to {a string:rawText} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set parameterList to the bim profile parameters of type typeId in (@intrinsic("dereference", target))
+        if (parameterIndex < 0) or (parameterIndex >= (the length of parameterList)):
+            free parameterList
+            return false
+        set parameterName to (the item at parameterIndex in parameterList)'s name
+        free parameterList
+        begin bim transaction in (the address of (editor's documentValue))
+        set changed to false
+        if (the length of rawText) > 0:
+            if (the character at 0 in rawText) = 61:
+                set expressionText to (the substring of rawText from 1 spanning ((the length of rawText) - 1) bytes) trimmed
+                set changed to set bim profile parameter parameterName of type typeId expression expressionText in target
+            else:
+                set typedReading to the bim real reading of rawText
+                if typedReading's valid:
+                    set changed to set bim profile parameter parameterName of type typeId to (typedReading's value * (the bim metres per editor's lengthUnit)) in target
+        if changed:
+            note bim change of typeId in target
+            commit bim transaction in (the address of (editor's documentValue))
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+        refresh bim editor editor
+        return changed
+
+# Type `typeId`'s drawn profile saved as a parametric one (its width b and
+# depth h), as one edit.
+function make bim managed type {a 64 bit integer:typeId} parametric in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        if bim linear type typeId is parametric in (@intrinsic("dereference", target)):
+            return false
+        set found to the bim linear type index of typeId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set profileName to (the item at found's position in (target's linearTypes's values))'s name
+        begin bim transaction in (the address of (editor's documentValue))
+        if save bim drawn profile of type typeId as parametric named profileName in target:
+            note bim change of typeId in target
+            commit bim transaction in (the address of (editor's documentValue))
+            refresh bim editor editor
+            return true
+        roll back bim transaction in (the address of (editor's documentValue))
+        return false
+
+# The type of role `roleCode` for catalogue line `entryId`, made when the
+# model has none (one edit); the refused id when it cannot be.
+function add bim manager catalogue profile {a 64 bit integer:entryId} as role {integer:roleCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set catalogueFound to the bim manager catalogue profile of entryId
+        if catalogueFound's found = false:
+            return the bim refused id
+        set target to the address of (editor's documentValue's current)
+        set existing to the bim type of catalogue profile (catalogueFound's value) as role roleCode in (@intrinsic("dereference", target))
+        if existing != the bim refused id:
+            return existing
+        begin bim transaction in (the address of (editor's documentValue))
+        set fresh to add bim catalogue profile (catalogueFound's value) as role roleCode to target
+        if fresh = the bim refused id:
+            roll back bim transaction in (the address of (editor's documentValue))
+        else:
+            commit bim transaction in (the address of (editor's documentValue))
+        refresh bim editor editor
+        return fresh
+
+# The role a catalogue profile takes when it is added or applied: the
+# selected linear element's, else the role being drawn when it is a column
+# or a pile, else a beam.
+function the bim manager catalogue role for {bim editor record:editor}:
+    execute:
+        if editor's selectionKind = bim linear picked:
+            set memberFound to the bim linear index of editor's selectionId in editor's documentValue's current
+            if memberFound's valid:
+                set selectedType to the bim type of linear (the item at memberFound's position in (editor's documentValue's current's linears's values)) in editor's documentValue's current
+                if ((selectedType's role = bim column role) or (selectedType's role = bim beam role)) or (selectedType's role = bim pile role):
+                    return selectedType's role
+        if (editor's linearRole = bim column role) or (editor's linearRole = bim pile role):
+            return editor's linearRole
+        return bim beam role
+
+# The category a linear type of role `roleCode` is edited through.
+function the bim manager tab of linear role {integer:roleCode}:
+    execute:
+        if roleCode = bim beam role:
+            return 5
+        if roleCode = bim pile role:
+            return 6
+        return 4
+
 function change bim managed type {a 64 bit integer:typeId} layer {integer:layerIndex} by {integer:direction} in {a pointer to a bim editor record:editor}:
     execute:
         set target to the address of (editor's documentValue's current)
@@ -967,6 +1216,40 @@ function the bim managed field {integer:fieldCode} of {bim managed type record:r
     execute:
         if fieldCode = 0:
             return row's name
+        if (row's family = 3) and (fieldCode >= 9):
+            set catalogueFound to the bim manager catalogue profile of row's id
+            set catalogueProfile to catalogueFound's value
+            set seriesValue to the bim catalogue series row's role
+            if fieldCode = 12:
+                return (seriesValue's name + (the string form of ", ")) + seriesValue's title
+            if fieldCode = 13:
+                return seriesValue's standard
+            if fieldCode = 15:
+                set made to the bim type count of catalogue profile catalogueProfile in editor's documentValue's current
+                if made = 0:
+                    return the string form of "No; Add or Apply makes it a type"
+                return (the string form of made) + (the string form of " type(s) made from it")
+            set dimension to catalogueProfile's web
+            if fieldCode = 10:
+                set dimension to catalogueProfile's flange
+            if fieldCode = 11:
+                set dimension to catalogueProfile's fillet
+            return the bim metres text of (dimension / (the bim metres per editor's lengthUnit))
+        if fieldCode = 14:
+            set profileName to the bim property value (the string form of "ProfileName") of set (the bim profile parameter set) of row's id in editor's documentValue's current
+            if row's parameterCount < 0:
+                return the string form of "Drawn; click to make it parametric in its width b and depth h"
+            return (the string form of "Parametric: ") + profileName
+        if fieldCode >= 40:
+            set parameterList to the bim profile parameters of type row's id in editor's documentValue's current
+            set shown to the string form of ""
+            if (fieldCode - 40) < (the length of parameterList):
+                set parameterValue to the item at (fieldCode - 40) in parameterList
+                set shown to the bim metres text of (parameterValue's value / (the bim metres per editor's lengthUnit))
+                if (the length of parameterValue's expression) > 0:
+                    set shown to (shown + (the string form of "   = ")) + parameterValue's expression
+            free parameterList
+            return shown
         set material to row's material
         set widthValue to row's width
         if row's family = 0:
@@ -997,8 +1280,10 @@ function the bim managed field {integer:fieldCode} of {bim managed type record:r
 
 local function bim managed field {integer:fieldCode} is editable for {bim managed type record:row}:
     execute:
-        if row's id = the bim refused id:
+        if (row's id = the bim refused id) or (row's family = 3):
             return false
+        if fieldCode >= 40:
+            return row's parameterCount > (fieldCode - 40)
         if ((fieldCode = 1) and (row's family = 2)) or ((fieldCode = 3) and (row's family = 0)):
             return false
         if (fieldCode = 4) and (row's family != 2):
@@ -1212,6 +1497,8 @@ function the bim type manager action at {a 64 bit floating-point number:x} and {
                 set groups to the bim manager groups of family stateValue's family
                 set chipCount to (the length of groups) + 1
                 free groups
+                if stateValue's family = bim profile family:
+                    set chipCount to 1
                 if chipCount > 1:
                     set indexValue to ((px - 12.0) / (290.0 / (chipCount as a 64 bit floating-point number))) as an integer
                     if indexValue < chipCount:
@@ -1279,7 +1566,7 @@ local function click bim managed role of {bim managed type record:row} in {a poi
                 set state's message to the string form of "Role changed; the type keeps its build-up, settings and properties"
         if state's roleFilter >= 0:
             set changed to the bim managed type row's id in family state's family in editor's documentValue's current
-            if (the bim manager group of changed) != state's roleFilter:
+            if (the bim manager group of changed in family state's family) != state's roleFilter:
                 set state's roleFilter to -1
         refresh bim type manager state for (@intrinsic("dereference", editor))
         bring bim manager choice into view in state for (@intrinsic("dereference", editor))
@@ -1351,6 +1638,14 @@ function click bim type manager at {a 64 bit floating-point number:x} and {a 64 
             set state's replaceText to false
         if (actionValue >= 100) and (actionValue < 104):
             set state's family to actionValue - 100
+            # The Profiles tab opens with every series folded.
+            set state's collapsed to 0
+            if state's family = bim profile family:
+                set foldGroups to the bim manager groups of family state's family
+                loop foldCursor from 0 to the length of foldGroups:
+                    if (the item at foldCursor in foldGroups) > 0:
+                        fold bim manager group (the item at foldCursor in foldGroups) in state
+                free foldGroups
             set state's roleFilter to -1
             set state's chosenId to the bim refused id
             set state's scroll to 0
@@ -1381,10 +1676,16 @@ function click bim type manager at {a 64 bit floating-point number:x} and {a 64 
                     set state's picking to -1
                     set state's detailScroll to 0
             free entries
-        if (actionValue >= 200) and (actionValue < 209):
+        if (actionValue >= 200) and (actionValue < 300):
             set fieldCode to actionValue - 200
             set state's picking to -1
-            if fieldCode = 7:
+            if fieldCode = 14:
+                if row's parameterCount < 0:
+                    if make bim managed type row's id parametric in editor:
+                        set state's message to the string form of "Parametric profile: its width b and depth h drive every point"
+                    else:
+                        set state's message to the string form of "Not made parametric"
+            else if fieldCode = 7:
                 click bim managed role of row in state for editor
             else if fieldCode = 8:
                 toggle bim managed type row's id on tab state's tab in editor
@@ -1404,7 +1705,30 @@ function click bim type manager at {a 64 bit floating-point number:x} and {a 64 
             if insert bim type row's id layer of (the string form of "insulation") 0.1 after state's layer in editor:
                 set state's layer to state's layer + 1
                 set state's message to the string form of "Layer added under the chosen one"
-        if actionValue = -10:
+        if (actionValue = -10) and (row's family = 3):
+            set roleCode to the bim manager catalogue role for (@intrinsic("dereference", editor))
+            set madeId to add bim manager catalogue profile row's id as role roleCode in editor
+            if madeId = the bim refused id:
+                set state's message to the string form of "The profile could not be made a type"
+            else:
+                set state's family to bim profiled family
+                set state's chosenId to madeId
+                set state's roleFilter to -1
+                set state's search to the string form of ""
+                set state's message to ((row's name + (the string form of " is a ")) + (the bim name of linear role roleCode)) + (the string form of " type of the project")
+                refresh bim type manager state for (@intrinsic("dereference", editor))
+                bring bim manager choice into view in state for (@intrinsic("dereference", editor))
+        else if (actionValue = -13) and (row's family = 3):
+            set roleCode to the bim manager catalogue role for (@intrinsic("dereference", editor))
+            set madeId to add bim manager catalogue profile row's id as role roleCode in editor
+            if madeId = the bim refused id:
+                set state's message to the string form of "The profile could not be made a type"
+            else:
+                ignore apply bim managed type madeId on tab (the bim manager tab of linear role roleCode) in editor
+                set state's message to editor's message
+        else if ((actionValue = -11) or (actionValue = -12)) and (row's family = 3):
+            set state's message to the string form of "A catalogue profile is not copied or deleted; Add makes it a type of the project"
+        else if actionValue = -10:
             set addingTab to the bim manager adding tab of (@intrinsic("dereference", state))
             set state's chosenId to add bim managed type on tab addingTab in editor
             set state's family to the bim family of manager tab addingTab
@@ -1414,18 +1738,18 @@ function click bim type manager at {a 64 bit floating-point number:x} and {a 64 
             set state's message to the string form of "Type added without creating an instance"
             refresh bim type manager state for (@intrinsic("dereference", editor))
             bring bim manager choice into view in state for (@intrinsic("dereference", editor))
-        if actionValue = -11:
+        else if actionValue = -11:
             set state's chosenId to duplicate bim managed type state's chosenId on tab state's tab in editor
             set state's message to the string form of "Independent type copied, including properties and profile settings"
             refresh bim type manager state for (@intrinsic("dereference", editor))
             bring bim manager choice into view in state for (@intrinsic("dereference", editor))
-        if actionValue = -12:
+        else if actionValue = -12:
             if delete bim managed type state's chosenId on tab state's tab in editor:
                 set state's chosenId to the bim refused id
                 set state's message to the string form of "Unused type deleted"
             else:
                 set state's message to the string form of "Not deleted: this type is used by model elements or panels"
-        if actionValue = -13:
+        else if actionValue = -13:
             ignore apply bim managed type state's chosenId on tab state's tab in editor
             set state's message to editor's message
         refresh bim type manager state for (@intrinsic("dereference", editor))
@@ -1471,6 +1795,10 @@ local function draw bim manager swatch of {a string:materialName} at {a 64 bit f
 # The IFC type class of group `groupCode` in family `familyCode`.
 function the bim manager ifc class of group {integer:groupCode} in family {integer:familyCode}:
     execute:
+        if familyCode = bim profile family:
+            if groupCode = 0:
+                return the string form of "used or own"
+            return (the bim catalogue series groupCode)'s title
         if familyCode = bim layered family:
             return (the bim ifc class of planar role groupCode) + (the string form of "Type")
         if familyCode = bim opening family:
@@ -1512,9 +1840,33 @@ local function the bim manager field label {integer:fieldCode} of {bim managed t
             return the string form of "Sill"
         if fieldCode = 8:
             return the string form of "Shape"
+        if fieldCode = 9:
+            return the string form of "Web, wall"
+        if fieldCode = 10:
+            return the string form of "Flange"
+        if fieldCode = 11:
+            return the string form of "Fillet"
+        if fieldCode = 12:
+            return the string form of "Series"
+        if fieldCode = 13:
+            return the string form of "Standard"
+        if fieldCode = 14:
+            return the string form of "Profile"
+        if fieldCode = 15:
+            return the string form of "In the project"
         if fieldCode = 5:
             return the string form of "NL-SfB"
         return the string form of "OmniClass"
+
+# The name of parameter `parameterIndex` of `row`'s parametric profile.
+local function the bim manager parameter name {integer:parameterIndex} of {bim managed type record:row} in {bim model record:modelValue}:
+    execute:
+        set parameterList to the bim profile parameters of type row's id in modelValue
+        set parameterName to the string form of ""
+        if (parameterIndex >= 0) and (parameterIndex < (the length of parameterList)):
+            set parameterName to (the item at parameterIndex in parameterList)'s name
+        free parameterList
+        return parameterName
 
 # The small picture at the start of a line of the list: a layered type's
 # build-up in its materials' colours, a profile's outline, an opening.
@@ -1540,7 +1892,7 @@ local function draw bim managed glyph of {bim managed type record:row} in {bim m
         set shapeHeight to the maximum of 3.0 and (row's depth * scaleValue)
         set middleX to left + 20.0
         set middleY to top + 6.0
-        if row's family = 1:
+        if (row's family = 1) or (row's family = 3):
             set colour to the bim material colour of row's material
             if row's round:
                 set radius to shapeWidth * 0.5
@@ -1565,7 +1917,7 @@ local function the bim managed size text of {bim managed type record:row} in {bi
         if row's family = 0:
             return the bim length row's width in units editor's lengthUnit
         set widthText to the bim number row's width in units editor's lengthUnit
-        if (row's family = 1) and row's round:
+        if ((row's family = 1) or (row's family = 3)) and row's round:
             return (the string form of "D ") + widthText
         return (widthText + (the string form of "x")) + (the bim number row's depth in units editor's lengthUnit)
 
@@ -1573,20 +1925,34 @@ local function draw bim managed preview {bim managed type record:row} in {bim mo
     execute:
         set palette to the bim ui palette
         draw bim ui rectangle left top widthValue 88.0 painted palette's raised in frame
-        if row's family = 1:
-            set found to the bim linear type index of row's id in modelValue
-            if found's valid:
-                set linearType to the item at found's position in (modelValue's linearTypes's values)
-                set profile to the bim profile of linear type linearType in modelValue
-                set rings to the bim rings of profile profile at 32 round corners
-                if profile's kind = bim arbitrary profile:
-                    loop ringCursor from 0 to the length of rings:
-                        free (the item at ringCursor in rings)
-                    clear rings
-                    append (the bim profile outline of type row's id in modelValue) to rings
-                set scaleValue to the minimum of ((widthValue - 36.0) / (the maximum of 0.0001 and row's width)) and (64.0 / (the maximum of 0.0001 and row's depth))
-                set middleX to left + (widthValue * 0.5)
-                set middleY to top + 44.0
+        if (row's family = 1) or (row's family = 3):
+            # Its outline and holes as every view draws them (a drawn
+            # profile's from the axis), centred on their box.
+            set rings to an empty list of the type of (an empty list of a cad vector2)
+            if row's family = 3:
+                set catalogueFound to the bim manager catalogue profile of row's id
+                if catalogueFound's found:
+                    free rings
+                    set rings to the bim rings of profile (the bim profile of catalogue profile (catalogueFound's value)) at 32 round corners
+            else:
+                set found to the bim linear type index of row's id in modelValue
+                if found's valid:
+                    free rings
+                    set rings to the bim rings of linear type (the item at found's position in (modelValue's linearTypes's values)) in modelValue at 32 round corners
+            if (the length of rings) > 0:
+                set lowest to the item at 0 in (the item at 0 in rings)
+                set highest to lowest
+                loop ringCursor from 0 to the length of rings:
+                    set ring to the item at ringCursor in rings
+                    loop cursor from 0 to the length of ring:
+                        set corner to the item at cursor in ring
+                        set lowest to a cad vector2 with x (the minimum of lowest's x and corner's x) and y (the minimum of lowest's y and corner's y)
+                        set highest to a cad vector2 with x (the maximum of highest's x and corner's x) and y (the maximum of highest's y and corner's y)
+                set spanX to the maximum of 0.0001 and (highest's x - lowest's x)
+                set spanY to the maximum of 0.0001 and (highest's y - lowest's y)
+                set scaleValue to the minimum of ((widthValue - 36.0) / spanX) and (64.0 / spanY)
+                set middleX to (left + (widthValue * 0.5)) - (((lowest's x + highest's x) * 0.5) * scaleValue)
+                set middleY to (top + 44.0) + (((lowest's y + highest's y) * 0.5) * scaleValue)
                 loop ringCursor from 0 to the length of rings:
                     set ring to the item at ringCursor in rings
                     loop cursor from 0 to the length of ring:
@@ -1596,8 +1962,9 @@ local function draw bim managed preview {bim managed type record:row} in {bim mo
                         set a to the item at cursor in ring
                         set b to the item at next in ring
                         draw bim ui line from (middleX + (a's x * scaleValue)) (middleY - (a's y * scaleValue)) to (middleX + (b's x * scaleValue)) (middleY - (b's y * scaleValue)) wide 2.0 coloured palette's accentInk's red, palette's accentInk's green and palette's accentInk's blue in frame
-                    free ring
-                free rings
+            loop ringCursor from 0 to the length of rings:
+                free (the item at ringCursor in rings)
+            free rings
         if row's family = 2:
             set scaleValue to the minimum of ((widthValue - 36.0) / (the maximum of 0.0001 and row's width)) and (66.0 / (the maximum of 0.0001 and row's depth))
             set shapeWidth to row's width * scaleValue
@@ -1814,6 +2181,11 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
             set familyRows to the bim managed types in family familyCursor in modelValue
             set familyCount to the length of familyRows
             free familyRows
+            if familyCursor = bim profile family:
+                set seriesList to the bim profile catalogue series
+                loop seriesCursor from 0 to the length of seriesList:
+                    set familyCount to familyCount + (the item at seriesCursor in seriesList)'s count
+                free seriesList
             if familyCursor = state's family:
                 draw bim ui top rounded rectangle tabLeft (top + 38.0) 146.0 30.0 radius 4.0 painted palette's selected in frame
                 draw bim ui rectangle tabLeft (top + 66.0) 146.0 2.0 painted palette's accent in frame
@@ -1823,8 +2195,8 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
             draw bim manager label (the string form of familyCount) right at (tabLeft + 138.0) and (top + 58.0) using atlas painted palette's inkSecondary in frame
         draw bim ui line from (left + 10.0) (top + 68.0) to ((left + boxWidth) - 10.0) (top + 68.0) wide 1.0 coloured palette's border's red, palette's border's green and palette's border's blue in frame
         draw bim manager button (the string form of "Add") at (left + 12.0) and (top + 78.0) across 100.0 active true hovered (hovered = -10) using atlas in frame
-        draw bim manager button (the string form of "Duplicate") at (left + 118.0) and (top + 78.0) across 100.0 active (row's id != the bim refused id) hovered (hovered = -11) using atlas in frame
-        set canDelete to (row's id != the bim refused id) and ((the bim managed type use count of row's id in modelValue) = 0)
+        draw bim manager button (the string form of "Duplicate") at (left + 118.0) and (top + 78.0) across 100.0 active ((row's id != the bim refused id) and (row's family != 3)) hovered (hovered = -11) using atlas in frame
+        set canDelete to ((row's id != the bim refused id) and (row's family != 3)) and ((the bim managed type use count of row's id in modelValue) = 0)
         draw bim manager button (the string form of "Delete") at (left + 224.0) and (top + 78.0) across 100.0 active canDelete hovered (hovered = -12) using atlas in frame
         draw bim manager button (the string form of "Apply") at (left + 330.0) and (top + 78.0) across 100.0 active (row's id != the bim refused id) hovered (hovered = -13) using atlas in frame
         set familyNote to the string form of "Planar build-ups with a role: IfcWallType, IfcSlabType (FLOOR, ROOF), IfcCoveringType (CEILING)"
@@ -1833,11 +2205,13 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
         if state's family = bim opening family:
             set familyNote to the string form of "Windows and doors: IfcWindowType, IfcDoorType"
         if state's family = bim profile family:
-            set familyNote to the string form of "Profiled types with a catalogue steel profile"
+            set familyNote to the string form of "Every standard profile and the project's own; Add puts the chosen one in the project as a type"
         draw bim manager label familyNote at (left + 444.0) and (top + 97.0) ending ((left + boxWidth) - 20.0) using atlas painted palette's inkSecondary in frame
         # The role chips, the filter and the list.
         set groups to the bim manager groups of family state's family
         set chipCount to (the length of groups) + 1
+        if state's family = bim profile family:
+            set chipCount to 1
         if chipCount > 1:
             set chipWidth to 290.0 / (chipCount as a 64 bit floating-point number)
             loop chip from 0 to chipCount:
@@ -1858,7 +2232,7 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
                 set chipTextWidth to the bim text width of chipName in face (bim text small) of atlas
                 draw bim manager label chipName at (the maximum of (chipLeft + 8.0) and (chipLeft + ((chipWidth - chipTextWidth) * 0.5))) and (top + 134.0) ending ((chipLeft + chipWidth) - 4.0) using atlas painted ink in frame
         else:
-            draw bim manager label (the string form of "Steel series from the profile catalogue") at (left + 14.0) and (top + 134.0) ending (left + 300.0) using atlas painted palette's inkSecondary in frame
+            draw bim manager label (the string form of "Open a series, or type to search: HEA 2, CHS 114") at (left + 14.0) and (top + 134.0) ending (left + 300.0) using atlas painted palette's inkSecondary in frame
         draw bim ui rounded rectangle (left + 12.0) (top + 146.0) 290.0 24.0 radius 4.0 painted palette's raised in frame
         if state's field = bim manager search field:
             draw bim ui frame (left + 12.0) (top + 146.0) 290.0 24.0 coloured palette's accent's red, palette's accent's green and palette's accent's blue in frame
@@ -1931,11 +2305,14 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
             set summaryOrigin to 118.0 - shift
             if bim manager detail band at summaryOrigin tall 40.0 is visible in panelGeometry:
                 draw bim manager text row's name at (left + 320.0) and ((top + summaryOrigin) + 16.0) ending ((left + boxWidth) - 20.0) in face (bim text semibold) using atlas painted palette's ink in frame
-                set uses to the bim managed type use count of row's id in modelValue
                 set summary to row's ifcClass
                 if row's family = 0:
                     set summary to ((summary + (the string form of "   ")) + (the string form of row's layerCount)) + (the string form of " layers")
-                set summary to ((summary + (the string form of "   ")) + (the bim managed size text of row in editor)) + (((the string form of "   used by ") + (the string form of uses)) + (the string form of " model references"))
+                if row's family = 3:
+                    set summary to ((summary + (the string form of "   ")) + (the bim managed size text of row in editor)) + (the string form of "   from the profile catalogue")
+                else:
+                    set uses to the bim managed type use count of row's id in modelValue
+                    set summary to ((summary + (the string form of "   ")) + (the bim managed size text of row in editor)) + (((the string form of "   used by ") + (the string form of uses)) + (the string form of " model references"))
                 draw bim manager label summary at (left + 320.0) and ((top + summaryOrigin) + 34.0) ending ((left + boxWidth) - 20.0) using atlas painted palette's inkSecondary in frame
             if row's family != 0:
                 set previewOrigin to 164.0 - shift
@@ -1947,8 +2324,11 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
                 set fieldOrigin to (the bim manager field top of slot slot of row) - shift
                 if bim manager detail band at fieldOrigin tall 28.0 is visible in panelGeometry:
                     set fieldTop to top + fieldOrigin
-                    draw bim manager label (the bim manager field label fieldCode of row) at (left + 320.0) and (fieldTop + 19.0) ending (left + 435.0) using atlas painted palette's inkSecondary in frame
-                    set chooser to ((fieldCode = 7) or (fieldCode = 8)) or ((fieldCode = 1) and (row's family = 1))
+                    set fieldLabel to the bim manager field label fieldCode of row
+                    if fieldCode >= 40:
+                        set fieldLabel to the bim manager parameter name (fieldCode - 40) of row in modelValue
+                    draw bim manager label fieldLabel at (left + 320.0) and (fieldTop + 19.0) ending (left + 435.0) using atlas painted palette's inkSecondary in frame
+                    set chooser to ((fieldCode = 7) or (fieldCode = 8)) or (((fieldCode = 1) and (row's family = 1)) or ((fieldCode = 14) and (row's parameterCount < 0)))
                     set editable to (bim managed field fieldCode is editable for row) or chooser
                     if (fieldCode = 7) and (row's family != 2):
                         set editable to (the bim managed next role of row in modelValue) >= 0
@@ -1984,7 +2364,12 @@ function draw bim type manager {bim type manager record:stateValue} for {bim edi
             set footerOrigin to (the bim manager footer top of row) - shift
             if bim manager detail band at footerOrigin tall 18.0 is visible in panelGeometry:
                 set detail to (the string form of "Dimensions in ") + (the bim name of unit editor's lengthUnit)
-                set detail to detail + (the string form of ". Every element of this type follows its definition.")
+                if row's family = 3:
+                    set detail to detail + (the string form of ". Add makes it a type of the project; Apply also gives it to the selection.")
+                else if row's parameterCount >= 0:
+                    set detail to detail + (the string form of ". A parameter takes a length, or = and an expression in the others.")
+                else:
+                    set detail to detail + (the string form of ". Every element of this type follows its definition.")
                 draw bim manager label detail at (left + 320.0) and ((top + footerOrigin) + 14.0) ending ((left + boxWidth) - 20.0) using atlas painted palette's inkSecondary in frame
             if panelGeometry's detailLimit > 0.0:
                 set trackHeight to panelGeometry's bodyBottom - panelGeometry's bodyTop
