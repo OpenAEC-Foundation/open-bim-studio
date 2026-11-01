@@ -24,7 +24,18 @@ $triplet = 'x64-windows-static-crt'
 if ($LASTEXITCODE -ne 0) { throw 'HarfBuzz dependency installation failed.' }
 $packages = Join-Path $install $triplet
 New-Item -ItemType Directory -Force $Output | Out-Null
-Copy-Item (Join-Path $packages 'bin\*.dll') $Output -Force
+# Reuse the compiler's exact runtime bytes for shared dependencies. Both
+# manifests use the same baseline; copying rebuilt FreeType/Brotli DLLs
+# over them triggers the compiler's runtime collision protection.
+$compilerBin = Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT 'bin'
+foreach ($library in Get-ChildItem (Join-Path $packages 'bin') -Filter '*.dll' -File) {
+    $existing = Join-Path $compilerBin $library.Name
+    if (Test-Path $existing) {
+        Copy-Item $existing $Output -Force
+    } else {
+        Copy-Item $library.FullName $Output -Force
+    }
+}
 # Package notices alongside the compiler dependency notices.
 $share = Join-Path $env:DYNLEX_WINDOWS_DEPENDENCY_ROOT 'share'
 foreach ($package in Get-ChildItem (Join-Path $packages 'share') -Directory) {
