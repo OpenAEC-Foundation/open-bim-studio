@@ -73,7 +73,7 @@ try {
     $env:LIBRARY_PATH = "$outPath;$dependencyLib;$env:LIBRARY_PATH"
     $env:LIB = "$outPath;$dependencyLib;$env:LIB"
 
-    foreach ($name in 'link', 'mesh_round_trip', 'body_round_trip', 'construction_round_trip', 'wireframe_round_trip', 'ui_layout', 'plan_pan', 'text_glyphs', 'interface_language', 'png_library') {
+    foreach ($name in 'link', 'mesh_round_trip', 'body_round_trip', 'construction_round_trip', 'wireframe_round_trip', 'ui_layout', 'plan_pan', 'text_glyphs', 'text_atlas_paths', 'interface_language', 'png_library') {
         $program = "$outPath\check-$name.exe"
         $source = Get-ChildItem -Path $repoPath -Recurse -Filter "$name.dl" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]tests[\\/]' -and $_.FullName -notmatch '[\\/](tools|build|generated)[\\/]' -and $_.FullName -notmatch '[\\/]kernel[\\/](tests|reference)[\\/]' } | Select-Object -First 1
         if (-not $source) { throw "No */tests/$name.dl in the repository." }

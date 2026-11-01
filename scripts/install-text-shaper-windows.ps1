@@ -7,11 +7,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $tree = (Resolve-Path $CompilerTree).Path
 $repo = Split-Path $PSScriptRoot
-$vcpkg = Join-Path $tree '.cache\vcpkg\vcpkg.exe'
+$releaseLine = Get-Content (Join-Path $tree 'metadata\VCPKG_TOOLCHAIN') | Where-Object { $_ -match '^release ' } | Select-Object -First 1
+if (-not $releaseLine) { throw 'The compiler does not declare a pinned vcpkg release.' }
+$release = ($releaseLine -split '\s+')[1]
+$vcpkgRoot = Join-Path $tree ".cache\vcpkg\$release"
+$vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
 if (-not (Test-Path $vcpkg)) { throw 'Install the compiler dependencies first.' }
 $manifest = Join-Path $repo 'platform\windows'
 $expected = (Get-Content -Raw (Join-Path $manifest 'vcpkg.json') | ConvertFrom-Json).'builtin-baseline'
-$actual = (& git -C (Join-Path $tree '.cache\vcpkg') rev-parse HEAD).Trim()
+$actual = (& git -C $vcpkgRoot rev-parse HEAD).Trim()
 if ($actual -ne $expected) { throw "Expected pinned vcpkg $expected, found $actual." }
 $install = Join-Path $repo '.cache\text-shaper-windows'
 $triplet = 'x64-windows-static-crt'
