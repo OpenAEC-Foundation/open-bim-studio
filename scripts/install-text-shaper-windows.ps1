@@ -31,4 +31,4 @@ foreach ($package in Get-ChildItem (Join-Path $packages 'share') -Directory) {
         Copy-Item $notice $destination -Force
     }
 }
-if (-not (Test-Path (Join-Path $Output 'harfbuzz.dll'))) { throw 'harfbuzz.dll is missing.' }
+if (-not ((Test-Path (Join-Path $Output 'harfbuzz.dll')) -or (Test-Path (Join-Path $Output 'harfbuzz-0.dll')) -or (Test-Path (Join-Path $Output 'libharfbuzz-0.dll')))) { throw 'The HarfBuzz runtime DLL is missing.' }

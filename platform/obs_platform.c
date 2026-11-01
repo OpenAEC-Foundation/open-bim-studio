@@ -347,6 +347,7 @@ static int obs_hb_load(void) {
     if (obs_hb_state) return obs_hb_state > 0;
 #ifdef _WIN32
     HMODULE module = LoadLibraryW(L"harfbuzz.dll");
+    if (!module) module = LoadLibraryW(L"harfbuzz-0.dll");
     if (!module) module = LoadLibraryW(L"libharfbuzz-0.dll");
 #define OBS_HB_SYMBOL(field, name) do { \
     FARPROC symbol = GetProcAddress(module, name); \

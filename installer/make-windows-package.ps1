@@ -79,7 +79,7 @@ foreach ($name in "LiberationMono-Regular.ttf", "LICENSE-LiberationFonts") {
 $messages = Join-Path $stage "localisation\messages"
 New-Item -ItemType Directory -Force $messages | Out-Null
 Copy-Item (Join-Path $repoPath 'localisation\messages\*.json') $messages
-if (-not (Test-Path (Join-Path $stage 'bin\harfbuzz.dll'))) { throw 'Lao shaping requires harfbuzz.dll beside the application.' }
+if (-not ((Test-Path (Join-Path $stage 'bin\harfbuzz.dll')) -or (Test-Path (Join-Path $stage 'bin\harfbuzz-0.dll')) -or (Test-Path (Join-Path $stage 'bin\libharfbuzz-0.dll')))) { throw 'Lao shaping requires the HarfBuzz runtime DLL beside the application.' }
 
 # The notices: the application's and the bundled libraries' from
 # installer\licenses, every vcpkg package's copyright, llvm-mingw's licence.
