@@ -71,6 +71,58 @@ Reproduce with `build.sh probe native_instance_memory`, then
 build/tools/native_instance_memory --out build/native-instance-memory.json`.
 The measurement preserves the binary hash and synchronised phase samples.
 
+### Desktop orbit, 2 November 2026
+
+Measured on a Ryzen 7 9700X, 29 GiB RAM and RTX 5070 (12,227 MiB VRAM),
+NVIDIA driver 595.99.02, X11/XWayland desktop. The 1440 by 900 framebuffer
+includes the editor chrome. Each run fits the entire scene, then follows the
+same finite process-local camera trajectory for 15 seconds. No compiler ran
+during these measurements. All runs use `-O0 -g`, automatic device selection
+and explicit uncapped IMMEDIATE presentation (`OBS_UNCAPPED=1`, reported mode
+0, device kind 2). These are submitted frames, not monitor refresh rates or
+release-build results. Before/after screenshots were inspected for whole-scene
+fit; source hashes and zero undo steps were checked.
+
+| True component placements | Observed FPS | Presented p95 (ms) | GPU p95 (ms) | Peak process RSS (MiB) | API ready (s) |
+|---:|---:|---:|---:|---:|---:|
+| 100,000 | 178.1 | 7.150 | 4.305 | 617.6 | 3.852 |
+| 250,000 | 109.3 | 10.401 | 5.221 | 1,055.4 | 7.384 |
+| 500,000 | 59.8 | 17.560 | 8.552 | 1,811.5 | 14.647 |
+| 1,000,000 | 35.0 | 28.992 | 13.155 | 3,276.9 | 30.637 |
+
+Application source: `8d983a5`; binary SHA-256:
+`22835183d0ee410d2acd3b3491791b166a16b24ec2cea1ab6be077932f6077ba`.
+Inputs are the native six-definition workloads described in the benchmark
+note. One million is the largest tested workload, not an established hard
+limit. Only the 100,000-placement case meets the 120 FPS target in this series.
+Normal FIFO presentation was not measured in this series.
+
+The mixed showcase is a materially different workload: 8,117 placements,
+23 component definitions, 22 parametric systems and seven grids. On the
+identical legacy native input, ordered settings reduce API readiness from
+78.927 to 31.000 seconds, but moving-camera throughput stays at 1.87 versus
+1.93 FPS (presented p95 458.500 versus 454.768 ms). Both builds automatically
+select the same RTX 5070. This does **not** establish a renderer FPS benefit
+from the settings index. The earlier source is `9a7782d`, binary SHA-256
+`c147ce112b51fb71b66abe8b3de20104e7a1267d8e1cb17c7fae0fb020827266`.
+The shared input SHA-256 is
+`de2092d0eb4a55bbbc0d3bcac3ac8c5580916308bb80fd6f4817075749a08bc6`.
+
+Inspection identifies a separate candidate for measurement: grid-head
+occlusion invokes the exact picker over every shown mesh for each endpoint
+after camera motion. That picker classifies every mesh and tests its triangles
+without a spatial broad phase. Its cost is not represented by the grid-free
+component workload. A conservative cached bounds filter should be tested
+against unchanged exact picking before attributing the mixed-scene delay to
+GPU instancing.
+
+Reproduce with `orbit_components.py --desktop --internal-orbit-lib ...
+--seconds 15` and the generator commands in the benchmark note. Local ignored
+evidence is retained under `build/renderer-stress/indexed-{count}` and
+`settings-{before,after}-desktop`: raw frames, host timing samples, process
+memory, input/binary hashes and before/after images. The combined local report
+is `build/renderer-stress/indexed-orbit-report.md`.
+
 ## Strengths
 
 Native GPU sharing preserves independently addressable elements and already
@@ -93,9 +145,11 @@ not silently change fabrication or drawing geometry.
 
 ## Verdict
 
-Retain the existing instanced GPU path. First compare fitted 100k, 250k and
-500k native workloads with FIFO and explicit uncapped presentation, measuring
-CPU/GPU frame times, peak RSS and startup independently. Then prototype a CPU
+Retain the existing instanced GPU path. The fitted uncapped component series
+now reaches one million placements; the mixed showcase remains CPU-bound
+during camera motion. First validate a spatial broad phase for its grid-head
+queries and repeat the identical mixed-scene orbit. FIFO comparison remains
+unmeasured. Then prototype a CPU
 scene that keeps shared local geometry and placement transforms, and materialises
 only requested elements for precise picking and sections. Accept that change
 only if transformed vertices and independent selection remain equivalent and

@@ -24,6 +24,11 @@ including startup and construction, was 1.6387 seconds with linear lookup and
 0.00713 seconds with the index, about 230 times faster. This is a lookup
 measurement, not a renderer FPS result.
 
+On the mixed native showcase, sequential desktop runs with the same RTX 5070
+reduce API readiness from 78.927 to 31.000 seconds. Orbit remains about 2 FPS;
+the lookup speedup must not be presented as an equivalent frame-rate gain.
+See [the measured workload and build provenance](../research/native-component-rendering.md).
+
 ```sh
 ./build.sh probe setting_lookup
 build/tools/setting_lookup
