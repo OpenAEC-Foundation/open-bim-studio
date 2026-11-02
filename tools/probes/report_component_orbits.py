@@ -54,6 +54,7 @@ def main():
             f"- Build: {result.get('build_note', 'not recorded')}",
             f"- Motion: {result.get('motion_source', 'legacy/unrecorded')}",
             f"- Host recording/presentation p95: {milliseconds(result, 'host_record', 'p95_ms')} / {milliseconds(result, 'host_present', 'p95_ms')} ms.",
+            f"- Grid-head stage p95: {milliseconds(result, 'grid_heads', 'p95_ms')} ms; missing stage data remains unknown.",
             f"- API ready: {result['startup_seconds']:.3f} s; not a first-presentation measurement.",
             f"- Deferred-fit barrier: {result.get('fit_barrier', False)}; fit ready at {result.get('fit_ready_seconds', 'not recorded')} s.",
             f"- Binary SHA-256: `{result['binary_sha256']}`",

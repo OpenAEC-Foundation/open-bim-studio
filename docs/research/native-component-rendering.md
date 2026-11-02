@@ -124,6 +124,16 @@ initialisation. Thus the observed interval FPS above is conservative and is
 not a clean steady-orbit comparison. Frame p95 is much less affected, but a
 barrier-controlled rerun is required for the grid optimisation comparison.
 
+A disposable debugger run on `8d983a5` took 20 interrupted main-thread stack
+samples during the same finite orbit. The first eight were still inside
+`the bim camera fitting ...`; the following twelve were inside the exact picker
+called by `draw bim grids in view ...`. This is a sampled call-path observation,
+not a timing distribution: a compiler was active, the debugger interrupted
+execution and the sample is small. The ignored evidence is
+`build/renderer-stress/grid-stack-samples/{gdb.log,stacks.json}`. It supports
+adding the fit barrier and measuring the grid-head stage independently; it
+does not establish an optimisation speedup.
+
 Reproduce with `orbit_components.py --desktop --internal-orbit-lib ...
 --seconds 15` and the generator commands in the benchmark note. Local ignored
 evidence is retained under `build/renderer-stress/indexed-{count}` and
