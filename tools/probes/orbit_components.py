@@ -134,6 +134,11 @@ def main():
         if desktop:desktop.claim(app.pid,activate=not args.internal_orbit_lib)
         # Let the first 3D scene complete before measuring motion.
         api.request('fit',timeout=120)
+        # Fit is deferred to the next event-loop iteration. A subsequent API
+        # response is the barrier; a fixed delay alone can include a slow fit
+        # in the first measured frame of a mixed construction scene.
+        api.request('state',timeout=120)
+        ready_to_orbit=time.monotonic()-started
         time.sleep(3);offset=log.stat().st_size
         pointer=None if orbit_control else helper.Pointer(display)
         desktop.capture(out/'before.png') if desktop else ImageGrab.grab(xdisplay=display).save(out/'before.png')
@@ -201,7 +206,7 @@ def main():
             raise RuntimeError('model contains edits; keeping the owned desktop window open and rejecting this run')
         assert before['undoSteps']==after['undoSteps']==0
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
-        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'surface':'desktop' if desktop else 'Xvfb','motion_source':'process-local GLFW shim' if orbit_control else 'XTEST','input_shim_sha256':hashlib.sha256(shim_copy.read_bytes()).hexdigest() if args.internal_orbit_lib else None,'owned_pid':app.pid,'server_pid':server.pid if server else None,'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'host_record':quantiles('record_us',host_samples),'host_present':quantiles('present_us',host_samples),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED','VK_DRIVER_FILES','__NV_PRIME_RENDER_OFFLOAD','__VK_LAYER_NV_optimus']}}
+        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'fit_ready_seconds':ready_to_orbit,'fit_barrier':True,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'surface':'desktop' if desktop else 'Xvfb','motion_source':'process-local GLFW shim' if orbit_control else 'XTEST','input_shim_sha256':hashlib.sha256(shim_copy.read_bytes()).hexdigest() if args.internal_orbit_lib else None,'owned_pid':app.pid,'server_pid':server.pid if server else None,'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'host_record':quantiles('record_us',host_samples),'host_present':quantiles('present_us',host_samples),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED','VK_DRIVER_FILES','__NV_PRIME_RENDER_OFFLOAD','__VK_LAYER_NV_optimus']}}
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         if args.keep_open:
             (out/'handed-to-user').write_text(str(app.pid)+'\n')

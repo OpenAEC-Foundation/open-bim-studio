@@ -96,6 +96,10 @@ Inputs are the native six-definition workloads described in the benchmark
 note. One million is the largest tested workload, not an established hard
 limit. Only the 100,000-placement case meets the 120 FPS target in this series.
 Normal FIFO presentation was not measured in this series.
+These initial runs predate the deferred-fit API barrier. Their first recorded
+frame includes remaining transition work (notably 325.687 ms at one million
+placements); they should be repeated with the barrier before interpreting
+them as steady orbit throughput.
 
 The mixed showcase is a materially different workload: 8,117 placements,
 23 component definitions, 22 parametric systems and seven grids. On the
@@ -115,6 +119,10 @@ without a spatial broad phase. Its cost is not represented by the grid-free
 component workload. A conservative cached bounds filter should be tested
 against unchanged exact picking before attributing the mixed-scene delay to
 GPU instancing.
+The first mixed-scene samples include 2.4 to 2.7 seconds of deferred fit and
+initialisation. Thus the observed interval FPS above is conservative and is
+not a clean steady-orbit comparison. Frame p95 is much less affected, but a
+barrier-controlled rerun is required for the grid optimisation comparison.
 
 Reproduce with `orbit_components.py --desktop --internal-orbit-lib ...
 --seconds 15` and the generator commands in the benchmark note. Local ignored

@@ -55,6 +55,7 @@ def main():
             f"- Motion: {result.get('motion_source', 'legacy/unrecorded')}",
             f"- Host recording/presentation p95: {milliseconds(result, 'host_record', 'p95_ms')} / {milliseconds(result, 'host_present', 'p95_ms')} ms.",
             f"- API ready: {result['startup_seconds']:.3f} s; not a first-presentation measurement.",
+            f"- Deferred-fit barrier: {result.get('fit_barrier', False)}; fit ready at {result.get('fit_ready_seconds', 'not recorded')} s.",
             f"- Binary SHA-256: `{result['binary_sha256']}`",
             f"- Source model SHA-256: `{result['sha256']}`",
             f"- Raw evidence: `{path.parent.name}/results.json`, `before.png`, `after.png`.",

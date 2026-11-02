@@ -35,6 +35,9 @@ and after screenshots and raw samples, and checks the source file hash and undo
 count. Inspect the screenshots before accepting a run: builds predating the
 component fit correction leave component-only models close to the origin.
 Samples cover the moving-camera interval, excluding the final settling period.
+The helper waits for an API response after the deferred fit before starting
+its settling delay. A delay alone does not establish fit completion; older
+runs without `fit_barrier` can include that work in their first frame.
 
 For an explicit rendering-throughput measurement use `OBS_UNCAPPED=1`. The
 native context selects IMMEDIATE when the surface advertises it, otherwise
