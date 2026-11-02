@@ -61,3 +61,14 @@ Pattern references: [Wienerberger Netherlands](https://www.wienerberger.nl/infor
 [Wienerberger UK](https://www.wienerberger.co.uk/tips-and-advice/brickwork/how-do-i-choose-the-correct-brick-bonding-pattern.html),
 and the [Brick Development Association bond guide](https://www.brick.org.uk/uploads/downloads/brick-bonds.pdf).
 These describe the bond families; they do not validate this generated detail.
+
+The `systems_showcase` native test also retains `build/systems-showcase.bim`.
+Verify the generated facing-brick boxes independently of the pattern rules:
+
+```sh
+python3 pattern/common/tests/verify_masonry_gallery.py build/systems-showcase.bim
+```
+
+The diagnostic checks all 24 courses for intersecting brick volumes and checks
+that adjacent half-running courses have different perp-joint positions on both
+arms. It measures this explicit box fixture, not arbitrary curved masonry.
