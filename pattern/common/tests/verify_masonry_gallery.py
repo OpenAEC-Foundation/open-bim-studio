@@ -50,5 +50,17 @@ for course,items in sorted(courses.items()):
     assert joints,(course,'no half-running return joints')
     if previous is not None:assert not (joints&previous),(course,joints&previous)
     previous=joints
+# Check the field away from the quoin/closer detail for bonds requiring lap.
+for fields in instances:
+    component=components[int(fields[2])]
+    label=component['name']
+    if not label.endswith(' corner') or label in ('Stack corner','Block corner','Mixed deterministic corner'):continue
+    ox,oy=map(float,fields[4:6]);previous=None
+    for course,items in sorted(courses.items()):
+        joints={round(b[2][0],6) for b in items if abs(b[1][1]-oy)<1e-7 and ox+.4<b[2][0]<ox+2.189 and b[1][0]<ox+2.2}
+        assert joints,(label,course,'empty bond field')
+        if previous is not None:assert not (joints&previous),(label,course,'aligned field joints',joints&previous)
+        previous=joints
 print(f'PASS: {len(boxes)} brick boxes across {len(courses)} courses, 14 corner objects, no overlaps')
 print('PASS: half-running joints on both arms stagger on every neighbouring course')
+print('PASS: field joints lap in all eleven non-stack, non-block, non-mixed bonds')
