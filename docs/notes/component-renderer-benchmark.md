@@ -22,3 +22,23 @@ window for orbit automation. Never repurpose a maintainer's active model.
 The generator's speed is not a renderer FPS result. 120 FPS requires a frame
 budget of about 8.33 ms; report median and tail frame times rather than only
 an average.
+
+An owned Xvfb window can be measured without touching an active project:
+
+```sh
+python3 tools/probes/orbit_components.py --binary build/open-bim-studio \
+  --model build/components-100000.bim --out build/orbit-100000 --seconds 20
+```
+
+The helper fits the model, orbits with actual right-button input, retains before
+and after screenshots and raw samples, and checks the source file hash and undo
+count. Inspect the screenshots before accepting a run: builds predating the
+component fit correction leave component-only models close to the origin.
+Samples cover the moving-camera interval, excluding the final settling period.
+
+For an explicit rendering-throughput measurement use `OBS_UNCAPPED=1`. The
+native context selects IMMEDIATE when the surface advertises it, otherwise
+MAILBOX, otherwise FIFO. The normal editor keeps FIFO. `OBS_RENDERER` reports
+the actual GPU, device kind and selected Vulkan present mode (0 immediate,
+1 mailbox, 2 FIFO); `OBS_FRAME` also records the active tab kind. Xvfb results
+must not be treated as a refresh-rate measurement on the maintainer's desktop.

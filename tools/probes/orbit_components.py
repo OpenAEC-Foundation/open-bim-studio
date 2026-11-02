@@ -63,6 +63,7 @@ def main():
             status=Path(f'/proc/{app.pid}/status').read_text()
             memory.append({line.split(':')[0]:line.split(':')[1].strip() for line in status.splitlines() if line.startswith(('VmRSS:','VmHWM:'))})
             time.sleep(.025)
+        orbitElapsed=time.monotonic()-orbitStarted
         end_offset=log.stat().st_size
         pointer.xtst.XTestFakeButtonEvent(pointer.display,3,0,0);pointer.x11.XFlush(pointer.display)
         time.sleep(2);after=api.request('state',timeout=60)
@@ -77,7 +78,7 @@ def main():
             return {'samples':len(values),'p50_ms':statistics.median(values),'p95_ms':values[int((len(values)-1)*.95)],'p99_ms':values[int((len(values)-1)*.99)]}
         assert before['undoSteps']==after['undoSteps']==0
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
-        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':args.seconds,'viewport':[1440,900],'build_note':'Report compiler flags and GPU separately; presentation time is not only GPU time.','cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW']}}
+        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'build_note':'Report compiler flags and GPU separately; presentation time is not only GPU time.','cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED']}}
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps({k:result[k] for k in ['startup_seconds','cpu','presented','gpu','model_unchanged']}),flush=True)
     finally:
