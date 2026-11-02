@@ -46,6 +46,7 @@ def main():
             "", f"## {name}", "",
             f"- Renderer: {renderer}",
             f"- Viewport: {result['viewport']}",
+            f"- Build: {result.get('build_note', 'not recorded')}",
             f"- API ready: {result['startup_seconds']:.3f} s; not a first-presentation measurement.",
             f"- Binary SHA-256: `{result['binary_sha256']}`",
             f"- Source model SHA-256: `{result['sha256']}`",

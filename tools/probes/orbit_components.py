@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--model',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--seconds',type=float,default=20)
+    parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
     parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
     args=parser.parse_args();root=Path(__file__).resolve().parents[2]
@@ -78,6 +79,9 @@ def main():
         frames=[]
         for line in data.splitlines():
             if line.startswith('OBS_FRAME '):frames.append(dict(field.split('=',1) for field in line.split()[1:] if '=' in field))
+        active_kinds={frame['active_kind'] for frame in frames if 'active_kind' in frame}
+        if active_kinds and active_kinds!={'1'}:
+            raise RuntimeError(f'orbit left the 3D tab: {active_kinds}')
         def quantiles(field):
             values=sorted(float(frame[field])/1000 for frame in frames if field in frame)
             if not values:return None
@@ -105,7 +109,7 @@ def main():
             after=api.request('state',timeout=120)
         assert before['undoSteps']==after['undoSteps']==0
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
-        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'build_note':'Report compiler flags and GPU separately; presentation time is not only GPU time.','cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED']}}
+        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED']}}
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps({k:result[k] for k in ['startup_seconds','cpu','presented','gpu','model_unchanged']}),flush=True)
     finally:

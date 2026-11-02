@@ -17,10 +17,11 @@ orbit results to justify a renderer rewrite.
 ## What it is
 
 The native scene creates one local mesh per component definition, then stores
-transformed positions, normals and triangle lists for each placement in
+transformed positions for each placement in
 `elements/object/scene.dl`. `viewer/bim_native_instances.dl` recovers a rigid
 frame, hashes the local geometry and verifies matching vertices before sharing
-GPU prototypes. `ui/panels/bim_view_panel.dl` uploads instance transforms and
+GPU prototypes. Rigid placements now retain shared triangle indices; pure
+translations also retain shared normals. The lists use the kernel's reference-counted ownership. `ui/panels/bim_view_panel.dl` uploads instance transforms and
 retains independent element ordinals for picking and visibility.
 
 That Open's documented alternative organises visible geometry into tiles and
@@ -49,6 +50,26 @@ Do not compare an unfitted orbit, a synchronised presentation and an uncapped
 full-scene orbit as if they were the same workload. Record build flags, the
 actual selected device, presentation mode, raw timing samples and memory.
 No That Open benchmark was run for this note.
+
+A focused allocation probe retains 100,000 four-vertex native component meshes
+and then regroups them five times. Both builds use `-O0`; this Linux process
+measurement does not create a window or measure GPU rendering.
+
+| Phase | Copying normals/indices (KiB RSS) | Sharing normals/indices (KiB RSS) |
+|---|---:|---:|
+| Retained world meshes | 49,656 | 29,356 |
+| Fifth grouping pass | 60,632 | 40,336 |
+
+These are measured process RSS values, including runtime and list overhead;
+they are not sizes of the raw GPU buffers. The retained-mesh reduction is
+40.9%; the fifth-pass reduction is 33.5%. In both cases repeated grouping
+stabilises: automatic reference-counted cleanup rejects the hypothesis of a
+per-pass temporary-batch leak. Do not manually free those containers' raw lists.
+
+Reproduce with `build.sh probe native_instance_memory`, then
+`python3 tools/probes/measure_native_instance_memory.py --binary
+build/tools/native_instance_memory --out build/native-instance-memory.json`.
+The measurement preserves the binary hash and synchronised phase samples.
 
 ## Strengths
 
