@@ -122,7 +122,10 @@ def main():
         with log.open('w') as stream:
             launch=[str(binary),str(model),'--api',str(out/'api')]
             if not args.internal_orbit_lib:launch=['stdbuf','-oL']+launch
-            app=subprocess.Popen(launch,cwd=root,env=env,stdout=stream,stderr=stream)
+            # A handed-off editor must outlive the invoking terminal/process
+            # group; benchmark-only editors remain owned and are terminated.
+            app=subprocess.Popen(launch,cwd=root,env=env,stdout=stream,stderr=stream,
+                                 start_new_session=args.keep_open)
         api=mcp.Modeller();deadline=started+args.startup_timeout
         while time.monotonic()<deadline:
             if app.poll() is not None:raise RuntimeError(f'editor exited {app.returncode}; see {log}')

@@ -99,3 +99,7 @@ work; submitted FPS is not monitor refresh rate.
 native editor to a new IFCXB destination and refuses an existing destination.
 `--keep-open` is available for desktop handoff and leaves a marker preventing
 that evidence directory from being reused against a user's working window.
+
+A desktop handoff starts the editor in its own process session so it survives
+the invoking terminal/process group. Confirm the retained PID after the helper
+exits; a marker alone does not establish that the application is still alive.

@@ -75,71 +75,89 @@ The measurement preserves the binary hash and synchronised phase samples.
 
 Measured on a Ryzen 7 9700X, 29 GiB RAM and RTX 5070 (12,227 MiB VRAM),
 NVIDIA driver 595.99.02, X11/XWayland desktop. The 1440 by 900 framebuffer
-includes the editor chrome. Each run fits the entire scene, then follows the
-same finite process-local camera trajectory for 15 seconds. No compiler ran
-during these measurements. All runs use `-O0 -g`, automatic device selection
+includes the editor chrome. Each run fits the entire scene, waits for the
+subsequent API response to establish completion of the deferred fit, settles
+for three seconds, then follows the same finite process-local input trajectory
+for 15 seconds. No compiler ran during these measurements. Source hashes and
+zero undo steps were checked; fitted before/after screenshots were inspected.
+These are individual runs, not a repeated-run confidence interval.
+
+All runs use `-O0 -g`, automatic device selection without Vulkan loader filters,
 and explicit uncapped IMMEDIATE presentation (`OBS_UNCAPPED=1`, reported mode
 0, device kind 2). These are submitted frames, not monitor refresh rates or
-release-build results. Before/after screenshots were inspected for whole-scene
-fit; source hashes and zero undo steps were checked.
+release-build results. The frame preparation time includes prior GPU/fence/
+image-acquisition waits. Normal FIFO presentation was not measured here.
 
 | True component placements | Observed FPS | Presented p95 (ms) | GPU p95 (ms) | Peak process RSS (MiB) | API ready (s) |
 |---:|---:|---:|---:|---:|---:|
-| 100,000 | 178.1 | 7.150 | 4.305 | 617.6 | 3.852 |
-| 250,000 | 109.3 | 10.401 | 5.221 | 1,055.4 | 7.384 |
-| 500,000 | 59.8 | 17.560 | 8.552 | 1,811.5 | 14.647 |
-| 1,000,000 | 35.0 | 28.992 | 13.155 | 3,276.9 | 30.637 |
+| 100,000 | 180.5 | 7.194 | 4.424 | 618.4 | 3.831 |
+| 250,000 | 109.8 | 10.261 | 5.230 | 1,055.6 | 7.365 |
+| 500,000 | 60.6 | 17.469 | 8.605 | 1,811.8 | 14.507 |
+| 1,000,000 | 35.9 | 28.775 | 13.201 | 3,277.1 | 30.820 |
 
-Application source: `8d983a5`; binary SHA-256:
-`22835183d0ee410d2acd3b3491791b166a16b24ec2cea1ab6be077932f6077ba`.
+Application source: `293e172`; binary SHA-256:
+`bbc93e36880f26f71493f720832ba3e6af48aff4b3490238d28ffe33989cb3ee`.
 Inputs are the native six-definition workloads described in the benchmark
 note. One million is the largest tested workload, not an established hard
 limit. Only the 100,000-placement case meets the 120 FPS target in this series.
-Normal FIFO presentation was not measured in this series.
-These initial runs predate the deferred-fit API barrier. Their first recorded
-frame includes remaining transition work (notably 325.687 ms at one million
-placements); they should be repeated with the barrier before interpreting
-them as steady orbit throughput.
+API readiness is not first presentation or completed fit: the latter barrier
+arrived at 4.994, 8.588, 15.831 and 32.324 seconds respectively.
+
+### Mixed construction and grid-head occlusion
 
 The mixed showcase is a materially different workload: 8,117 placements,
-23 component definitions, 22 parametric systems and seven grids. On the
-identical legacy native input, ordered settings reduce API readiness from
-78.927 to 31.000 seconds, but moving-camera throughput stays at 1.87 versus
-1.93 FPS (presented p95 458.500 versus 454.768 ms). Both builds automatically
-select the same RTX 5070. This does **not** establish a renderer FPS benefit
-from the settings index. The earlier source is `9a7782d`, binary SHA-256
-`c147ce112b51fb71b66abe8b3de20104e7a1267d8e1cb17c7fae0fb020827266`.
-The shared input SHA-256 is
+23 component definitions, 22 parametric systems and seven grids. Its original
+label occlusion invoked the exact picker over every shown mesh for each grid
+endpoint after camera motion, classifying meshes and testing triangles without
+a spatial broad phase.
+
+The [cached bounds filter](../notes/grid-head-occlusion.md) retains the exact
+picker for candidate geometry, openings and spaces. Bounds follow the shown
+scene's invalidation key. The `ray_bounds` test compares 208 exact picks,
+including survey coordinates, and finite-distance occlusion decisions; `pick`
+and `plan_inset` also pass. At the initial fitted camera, the old and new
+3D-pane images are pixel-identical across 714,056 pixels. This verifies that
+view, not every possible camera or model.
+
+| Grid-head query | Observed FPS | Frame preparation p50 (ms) | Presented p95 (ms) | Peak process RSS (MiB) |
+|---|---:|---:|---:|---:|
+| Full exact scene, source `8d983a5` | 2.26 | 441.992 | 452.332 | 729.3 |
+| Cached candidate bounds, source `293e172` | 43.05 | 22.578 | 24.792 | 735.6 |
+
+This is about 19 times the submitted throughput on this mixed model; it still
+does not meet 120 FPS. The new grid-head stage has p50 4.457 ms and p95 4.636 ms.
+The old build did not log that stage separately. Do not attribute changes in
+GPU timing to a new geometry-sharing algorithm: this change filters CPU queries.
+API readiness is 30.878 versus 30.716 seconds; completed-fit barriers are
+34.468 versus 34.247 seconds. The shared native input SHA-256 is
 `de2092d0eb4a55bbbc0d3bcac3ac8c5580916308bb80fd6f4817075749a08bc6`.
+The earlier binary SHA-256 is
+`22835183d0ee410d2acd3b3491791b166a16b24ec2cea1ab6be077932f6077ba`.
 
-Inspection identifies a separate candidate for measurement: grid-head
-occlusion invokes the exact picker over every shown mesh for each endpoint
-after camera motion. That picker classifies every mesh and tests its triangles
-without a spatial broad phase. Its cost is not represented by the grid-free
-component workload. A conservative cached bounds filter should be tested
-against unchanged exact picking before attributing the mixed-scene delay to
-GPU instancing.
-The first mixed-scene samples include 2.4 to 2.7 seconds of deferred fit and
-initialisation. Thus the observed interval FPS above is conservative and is
-not a clean steady-orbit comparison. Frame p95 is much less affected, but a
-barrier-controlled rerun is required for the grid optimisation comparison.
+A separate initial load comparison measured ordered settings reducing API
+readiness from 78.927 to 31.000 seconds, on this same input and GPU. The linear
+settings source was `9a7782d`, binary SHA-256
+`c147ce112b51fb71b66abe8b3de20104e7a1267d8e1cb17c7fae0fb020827266`.
+That is a load-path benefit; it did not remove the per-frame exact grid queries.
 
-A disposable debugger run on `8d983a5` took 20 interrupted main-thread stack
-samples during the same finite orbit. The first eight were still inside
-`the bim camera fitting ...`; the following twelve were inside the exact picker
-called by `draw bim grids in view ...`. This is a sampled call-path observation,
-not a timing distribution: a compiler was active, the debugger interrupted
-execution and the sample is small. The ignored evidence is
-`build/renderer-stress/grid-stack-samples/{gdb.log,stacks.json}`. It supports
-adding the fit barrier and measuring the grid-head stage independently; it
-does not establish an optimisation speedup.
+Initial orbit runs using only a fixed settling delay accidentally included
+remaining deferred-fit work in their first recorded frame (2.4 to 2.7 seconds
+in the mixed model). Those interval FPS values are superseded by the
+barrier-controlled runs above. A disposable debugger run on `8d983a5` took
+20 interrupted main-thread samples: the first eight were still in camera fit,
+and the following twelve were in the exact picker called by grid-head drawing.
+A compiler was active and the debugger interrupted execution, so those stacks
+identify call paths rather than timing distributions. Their ignored evidence
+is `build/renderer-stress/grid-stack-samples/{gdb.log,stacks.json}`.
 
 Reproduce with `orbit_components.py --desktop --internal-orbit-lib ...
 --seconds 15` and the generator commands in the benchmark note. Local ignored
-evidence is retained under `build/renderer-stress/indexed-{count}` and
-`settings-{before,after}-desktop`: raw frames, host timing samples, process
+evidence is retained under `build/renderer-stress/stable-{count}` and
+`stable-{before,after}-grid-rays`: raw frames, host timing samples, process
 memory, input/binary hashes and before/after images. The combined local report
-is `build/renderer-stress/indexed-orbit-report.md`.
+is `build/renderer-stress/final-orbit-report.md`. The separate one-second
+`dev-handoff` acceptance run verifies that the editor survives the measurement
+process; it is excluded from the performance table.
 
 ## Strengths
 
@@ -163,13 +181,15 @@ not silently change fabrication or drawing geometry.
 
 ## Verdict
 
-Retain the existing instanced GPU path. The fitted uncapped component series
-now reaches one million placements; the mixed showcase remains CPU-bound
-during camera motion. First validate a spatial broad phase for its grid-head
-queries and repeat the identical mixed-scene orbit. FIFO comparison remains
-unmeasured. Then prototype a CPU
-scene that keeps shared local geometry and placement transforms, and materialises
-only requested elements for precise picking and sections. Accept that change
-only if transformed vertices and independent selection remain equivalent and
-measured memory falls on the same workload. This is a proposed next experiment,
-not a new settled architecture decision or a claim of 120 FPS.
+Retain the existing instanced GPU path and the validated grid-head bounds
+filter. The fitted uncapped series reaches one million placements at 35.9 FPS;
+the mixed showcase rises from 2.26 to 43.05 FPS while retaining exact candidate
+picking. 120 FPS is established only for the 100,000-placement synthetic case
+in this development-build series. FIFO comparison remains unmeasured.
+
+The next proposed experiment is a CPU scene that keeps shared local geometry
+and placement transforms, materialising only requested elements for precise
+picking and sections. Accept it only if transformed vertices, independent
+selection and revision invalidation remain equivalent and measured memory
+falls on the same workload. This is a proposed experiment, not a new settled
+architecture decision.

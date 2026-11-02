@@ -31,5 +31,8 @@ occlusion decisions and verifies the missing-index fallback. `pick` and
 This is a linear scan of cheap bounds followed by exact tests on candidates,
 not a BVH. It does not yet accelerate the editor's general selection queries.
 `OBS_PROFILE_FRAMES=1` adds `grid_heads_us` for the label stage, including a
-bounds rebuild when one is needed. Compare the identical mixed-showcase orbit
-before claiming a frame-rate benefit.
+bounds rebuild when one is needed. The measured mixed showcase rises from
+2.26 to 43.05 FPS during the same
+15-second input trajectory, with the initial fitted 3D pane pixel-identical.
+The grid-head stage has p95 4.636 ms. See
+[build provenance and limits](../research/native-component-rendering.md).
