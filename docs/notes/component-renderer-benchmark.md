@@ -42,3 +42,16 @@ MAILBOX, otherwise FIFO. The normal editor keeps FIFO. `OBS_RENDERER` reports
 the actual GPU, device kind and selected Vulkan present mode (0 immediate,
 1 mailbox, 2 FIFO); `OBS_FRAME` also records the active tab kind. Xvfb results
 must not be treated as a refresh-rate measurement on the maintainer's desktop.
+
+Collect multiple retained runs into a compact table without losing their raw
+samples:
+
+```sh
+python3 tools/probes/report_component_orbits.py \
+  build/orbit-100000/results.json build/orbit-250000/results.json \
+  --output build/component-orbit-report.md
+```
+
+The report retains model/binary hashes and peak process RSS, and explicitly
+labels legacy runs with missing device or FPS metadata. Review fitted before
+and after images; a table alone does not establish which geometry was visible.
