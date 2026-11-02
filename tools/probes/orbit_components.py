@@ -23,10 +23,16 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--seconds',type=float,default=20)
     parser.add_argument('--startup-timeout',type=float,default=300)
+    parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
     args=parser.parse_args();root=Path(__file__).resolve().parents[2]
     out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     assert not (out/'handed-to-user').exists()
     model=args.model.resolve();binary=args.binary.resolve()
+    native_copy=model.with_suffix('.ifcxb')
+    if args.save_copy and (model.suffix!='.bim' or native_copy.exists()):
+        raise ValueError('--save-copy requires a BIM source and a new IFCXB destination')
+    if not 0 < args.seconds <= 300:
+        raise ValueError('--seconds must be between 0 and 300')
     checksum=hashlib.sha256(model.read_bytes()).hexdigest()
     sys.path.insert(0,str(root/'automation/mcp'));import open_bim_studio_mcp as mcp
     spec=importlib.util.spec_from_file_location('obs_pointer',root/'tools/build_readme_images.py')
@@ -76,9 +82,30 @@ def main():
             values=sorted(float(frame[field])/1000 for frame in frames if field in frame)
             if not values:return None
             return {'samples':len(values),'p50_ms':statistics.median(values),'p95_ms':values[int((len(values)-1)*.95)],'p99_ms':values[int((len(values)-1)*.99)]}
+        if args.save_copy:
+            # This X server and its only application belong to this invocation.
+            # Ctrl+S uses the native editor writer and its derived IFCXB path.
+            pointer.x11.XKeysymToKeycode.argtypes=[ctypes.c_void_p,ctypes.c_ulong]
+            pointer.x11.XKeysymToKeycode.restype=ctypes.c_uint
+            pointer.xtst.XTestFakeKeyEvent.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_int,ctypes.c_ulong]
+            control=pointer.x11.XKeysymToKeycode(pointer.display,0xffe3)
+            letter=pointer.x11.XKeysymToKeycode(pointer.display,ord('s'))
+            for key,pressed in ((control,1),(letter,1),(letter,0),(control,0)):
+                pointer.xtst.XTestFakeKeyEvent(pointer.display,key,pressed,0)
+                pointer.x11.XFlush(pointer.display)
+                time.sleep(.1)
+            deadline=time.monotonic()+120
+            while not native_copy.exists() and time.monotonic()<deadline:
+                if app.poll() is not None:
+                    raise RuntimeError('editor exited while saving')
+                time.sleep(.5)
+            if not native_copy.exists():
+                raise TimeoutError('native IFCXB save did not complete')
+            # Wait for the writer to finish before returning the artifact.
+            after=api.request('state',timeout=120)
         assert before['undoSteps']==after['undoSteps']==0
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
-        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'build_note':'Report compiler flags and GPU separately; presentation time is not only GPU time.','cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED']}}
+        result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'build_note':'Report compiler flags and GPU separately; presentation time is not only GPU time.','cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED']}}
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps({k:result[k] for k in ['startup_seconds','cpu','presented','gpu','model_unchanged']}),flush=True)
     finally:
