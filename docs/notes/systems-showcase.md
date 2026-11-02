@@ -11,10 +11,12 @@ OBS_MODEL_VIEW=1 build/open-bim-studio build/systems-showcase.bim
 The building is 18 by 12 metres with levels at 0, 3.2, 6.4 and 9.6 metres.
 It contains 36 piles, twelve pile caps, foundation beams, a concrete frame, shared 600 mm PS
 beam/EPS floor units, precast floor/deck units, timber joists and OSB, three
-straight stairs in a 6 by 6 metre reservation, native hollow-core roof systems,
+straight stairs in a 6 by 6 metre reservation with landing strips on every
+level, native hollow-core roof systems with the stair opening,
 curtain walls, timber frames, masonry, zinc, timber and panel cladding and a
 suspended ceiling. Four plans, two sections, four elevations and two sheets
-are stored with the model. The exposed precast specimen beside the building
+are stored with the model. Floor tops and landings coincide with the storey
+datums; the roof system reference plane is half a plank depth below its datum. The exposed precast specimen beside the building
 shows nominal reinforcement positions; it is not a fabrication cage.
 
 There are 8,117 native component placements sharing 23 definitions and 22
