@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: MPL-2.0
+# Quarter-turn winders are generated from a stair's width and straight run.
+# Counts and handedness are persistent settings; no per-tread model objects.
+import bim/bim_model.dl
+
+function bim stair lower winder setting:
+    replacement:
+        2402000
+function bim stair upper winder setting:
+    replacement:
+        2402001
+function bim stair winder hand setting:
+    replacement:
+        2402002
+
+function set bim stair {a 64 bit integer:stairId} winders below {integer:lowerCount} above {integer:upperCount} handed {integer:handValue} in {a pointer to a bim model record:target}:
+    execute:
+        set found to the bim stair index of stairId in (@intrinsic("dereference", target))
+        if found's valid = false:
+            return false
+        set stairValue to the item at found's position in (target's stairs's values)
+        if ((lowerCount < 0) or (lowerCount > 8)) or ((upperCount < 0) or (upperCount > 8)):
+            return false
+        if ((handValue != -1) and (handValue != 1)) or ((lowerCount + upperCount) >= (stairValue's riserCount - 1)):
+            return false
+        set bim setting (bim stair lower winder setting) of stairId to (lowerCount as a 64 bit integer) keeping (lowerCount != 0) in target
+        set bim setting (bim stair upper winder setting) of stairId to (upperCount as a 64 bit integer) keeping (upperCount != 0) in target
+        set bim setting (bim stair winder hand setting) of stairId to (handValue as a 64 bit integer) keeping (((lowerCount + upperCount) > 0) and (handValue != 1)) in target
+        return true
+
+function the bim winders below {boolean:atFoot} stair {bim stair record:stairValue} in {bim model record:modelValue}:
+    execute:
+        set footCount to ((the bim setting (bim stair lower winder setting) of stairValue's id in modelValue)'s value) as an integer
+        set headCount to ((the bim setting (bim stair upper winder setting) of stairValue's id in modelValue)'s value) as an integer
+        # Imported/corrupted settings cannot produce a negative straight run.
+        if (((footCount < 0) or (footCount > 8)) or ((headCount < 0) or (headCount > 8))) or ((footCount + headCount) >= (stairValue's riserCount - 1)):
+            return 0
+        if atFoot:
+            return footCount
+        return headCount
+
+function the bim straight tread count of stair {bim stair record:stairValue} in {bim model record:modelValue}:
+    execute:
+        return ((stairValue's riserCount - 1) - (the bim winders below true stair stairValue in modelValue)) - (the bim winders below false stair stairValue in modelValue)
+
+function the bim going of stair {bim stair record:stairValue} in {bim model record:modelValue}:
+    execute:
+        return (the cad distance from stairValue's start to stairValue's finish) / ((the bim straight tread count of stair stairValue in modelValue) as a 64 bit floating-point number)
+
+class:
+    patterns:
+        [a|] bim winder tread record
+    members:
+        outline as the type of (a cad topology list of a cad vector2)
+        riser as an integer
+
+# Local across points right of the straight run, along points toward its head.
+local function the bim winder point across {a 64 bit floating-point number:crossOffset} along {a 64 bit floating-point number:pathOffset} for {bim stair record:stairValue} handed {a 64 bit floating-point number:handValue}:
+    execute:
+        set run to the cad distance from stairValue's start to stairValue's finish
+        set ux to (stairValue's finish's x - stairValue's start's x) / run
+        set uy to (stairValue's finish's y - stairValue's start's y) / run
+        return a cad vector2 with x ((stairValue's start's x + (ux * pathOffset)) + ((uy * crossOffset) * handValue)) and y ((stairValue's start's y + (uy * pathOffset)) - ((ux * crossOffset) * handValue))
+
+# Intersect a fan ray with the square, rather than approximate it by a circle.
+local function the bim winder boundary at {a 64 bit floating-point number:angle} below {boolean:atFoot} of {bim stair record:stairValue} handed {a 64 bit floating-point number:handValue}:
+    execute:
+        set sine to the sine of angle
+        set cosine to the cosine of angle
+        set divisor to the maximum of sine and cosine
+        set across to (stairValue's width * 0.5) - ((stairValue's width * sine) / divisor)
+        set along to (0.0 - (stairValue's width * cosine)) / divisor
+        if atFoot = false:
+            set across to (stairValue's width * 0.5) - ((stairValue's width * cosine) / divisor)
+            set along to (the cad distance from stairValue's start to stairValue's finish) + ((stairValue's width * sine) / divisor)
+        return the bim winder point across across along along for stairValue handed handValue
+
+function the bim winder treads of stair {bim stair record:stairValue} in {bim model record:modelValue}:
+    execute:
+        set result to a cad topology list of a bim winder tread record
+        set run to the cad distance from stairValue's start to stairValue's finish
+        if run < 1e-9:
+            return result
+        set handValue to 1.0
+        if (the bim setting (bim stair winder hand setting) of stairValue's id in modelValue)'s value = ((-1) as a 64 bit integer):
+            set handValue to -1.0
+        loop endIndex from 0 to 2:
+            set atFoot to endIndex = 0
+            set countValue to the bim winders below atFoot stair stairValue in modelValue
+            set pivotAlong to 0.0
+            set cornerAlong to 0.0 - stairValue's width
+            if atFoot = false:
+                set pivotAlong to run
+                set cornerAlong to run + stairValue's width
+            loop step from 0 to countValue:
+                set firstAngle to ((step as a 64 bit floating-point number) * 1.5707963267948966) / (countValue as a 64 bit floating-point number)
+                set secondAngle to (((step + 1) as a 64 bit floating-point number) * 1.5707963267948966) / (countValue as a 64 bit floating-point number)
+                set outlineValue to a cad topology list of a cad vector2
+                append (the bim winder point across (stairValue's width * 0.5) along pivotAlong for stairValue handed handValue) to (outlineValue's values)
+                append (the bim winder boundary at firstAngle below atFoot of stairValue handed handValue) to (outlineValue's values)
+                # The central tread crosses the square's outer corner.
+                if (firstAngle < (0.7853981633974483 - 1e-12)) and (secondAngle > (0.7853981633974483 + 1e-12)):
+                    append (the bim winder point across (0.0 - (stairValue's width * 0.5)) along cornerAlong for stairValue handed handValue) to (outlineValue's values)
+                append (the bim winder boundary at secondAngle below atFoot of stairValue handed handValue) to (outlineValue's values)
+                set riserNumber to step + 1
+                if atFoot = false:
+                    set riserNumber to (stairValue's riserCount - countValue) + step
+                append (@intrinsic("construct", a bim winder tread record, outlineValue, riserNumber)) to (result's values)
+        return result
