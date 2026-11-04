@@ -14,13 +14,27 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 typedef struct GLFWwindow GLFWwindow;
 static volatile uint64_t *control;
 static int initialised;
 static uint64_t command_start;
+static uint64_t input_start;
+static uint64_t reported_input;
+static uint64_t scroll_at;
+static uint64_t scroll_start;
+typedef void (*ScrollCallback)(GLFWwindow *, double, double);
+static ScrollCallback scroll_callback;
 __attribute__((constructor)) static void prepare_output(void) {
     if (getenv("OBS_ORBIT_CONTROL")) {
+#ifdef __linux__
+        /* Only the owning harness and its debugger children may inspect us. */
+        if (getenv("OBS_NAV_SAMPLE_STACKS"))
+            prctl(PR_SET_PTRACER, (unsigned long)getppid(), 0UL, 0UL, 0UL);
+#endif
         setvbuf(stdout, NULL, _IOLBF, 0);
         fprintf(stderr, "OBS_ORBIT_SHIM pid=%ld parent=%ld\n", (long)getpid(), (long)getppid());
     }
@@ -58,16 +72,43 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
     real(window, x, y); /* Retain the real input-query cost and side effects. */
     double elapsed;
     if (active(&elapsed)) {
-        *x = 850.0 + (int)(230.0 * sin(elapsed * .9));
-        *y = 450.0 + (int)(125.0 * sin(elapsed * .6));
+        unsigned mode = (unsigned)control[3];
+        *x = (mode == 1 || mode == 2 ? 650.0 : 850.0) +
+             (mode == 1 ? 0 : (int)(230.0 * sin(elapsed * .9)));
+        *y = 450.0 + (mode == 1 ? 0 : (int)(125.0 * sin(elapsed * .6)));
+        if (mode == 1 && scroll_callback) {
+            uint64_t now = now_ns();
+            if (scroll_start != control[0]) {
+                scroll_start = control[0];
+                scroll_at = 0;
+            }
+            if (now - scroll_at >= 50000000ULL) {
+                double steps = ((unsigned)(elapsed / 2.0) % 2) ? -.125 : .125;
+                scroll_at = input_start = now;
+                scroll_callback(window, 0, steps);
+                fprintf(stderr, "OBS_INPUT at_ns=%llu steps=%.3f\n",
+                        (unsigned long long)now, steps);
+            }
+        } else {
+            input_start = now_ns();
+        }
     }
+}
+ScrollCallback glfwSetScrollCallback(GLFWwindow *window, ScrollCallback callback) {
+    static ScrollCallback (*real)(GLFWwindow *, ScrollCallback);
+    if (!real) real = dlsym(RTLD_NEXT, "glfwSetScrollCallback");
+    scroll_callback = callback;
+    return real(window, callback);
 }
 int glfwGetMouseButton(GLFWwindow *window, int button) {
     static int (*real)(GLFWwindow *, int);
     if (!real) real = dlsym(RTLD_NEXT, "glfwGetMouseButton");
     int value = real(window, button);
     double elapsed;
-    if (button == 1 && active(&elapsed)) return 1;
+    if (active(&elapsed)) {
+        if (button == 1 && control[3] == 0) return 1;
+        if (button == 2 && (control[3] == 2 || control[3] == 3)) return 1;
+    }
     return value;
 }
 int vkBeginCommandBuffer(void *command, const void *info) {
@@ -90,6 +131,17 @@ int vkQueuePresentKHR(void *queue, const void *info) {
     uint64_t started = now_ns();
     int result = real(queue, info);
     double elapsed;
-    if (active(&elapsed)) fprintf(stderr,"OBS_HOST present_us=%llu\n",(unsigned long long)((now_ns()-started)/1000));
+    if (active(&elapsed)) {
+        uint64_t now = now_ns();
+        fprintf(stderr,"OBS_HOST present_us=%llu at_ns=%llu input_age_us=%llu\n",
+                (unsigned long long)((now-started)/1000),
+                (unsigned long long)now,
+                (unsigned long long)(input_start ? (now-input_start)/1000 : 0));
+        if (input_start && input_start != reported_input) {
+            fprintf(stderr,"OBS_HOST first_input_us=%llu\n",
+                    (unsigned long long)((now-input_start)/1000));
+            reported_input = input_start;
+        }
+    }
     return result;
 }

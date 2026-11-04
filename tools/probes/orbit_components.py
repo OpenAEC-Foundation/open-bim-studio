@@ -82,6 +82,8 @@ def main():
     parser.add_argument('--model',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--seconds',type=float,default=20)
+    parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d'],default='orbit')
+    parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
     parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
     parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
@@ -101,6 +103,8 @@ def main():
     if args.desktop and args.save_copy:raise ValueError('native copy saving uses the isolated Xvfb window')
     if args.desktop and not args.internal_orbit_lib:raise ValueError('--desktop requires --internal-orbit-lib; global input is limited to the owned Xvfb display')
     if args.keep_open and not args.desktop:raise ValueError('--keep-open requires --desktop')
+    if args.motion != 'orbit' and not args.internal_orbit_lib:
+        raise ValueError('additional motion modes require the process-local input shim')
     desktop=OwnedDesktopWindow(os.environ['DISPLAY']) if args.desktop else None
     server=None if args.desktop else subprocess.Popen(['Xvfb','-displayfd','1','-screen','0','1440x900x24','-nolisten','tcp'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
     handed_over=False
@@ -111,9 +115,16 @@ def main():
         env=os.environ.copy();env.pop('WAYLAND_DISPLAY',None)
         home=out/'home';home.mkdir(exist_ok=True)
         env.update(DISPLAY=display,HOME=str(home),XDG_SESSION_TYPE='x11',OBS_PROFILE_FRAMES='1',OBS_MODEL_VIEW='1',OBS_UI_SCALE='1')
+        if args.motion.endswith('plan'):
+            env.pop('OBS_MODEL_VIEW',None)
+        if args.sample_stacks:
+            if not 1 <= args.sample_stacks <= 20:
+                raise ValueError('--sample-stacks must be between 1 and 20')
+            env['OBS_NAV_SAMPLE_STACKS']='1'
         if args.internal_orbit_lib:
             control_stream=(out/'orbit-control').open('w+b')
-            control_stream.write(struct.pack('QQQQ',0,0,os.getpid(),0));control_stream.flush()
+            mode={'orbit':0,'zoom-plan':1,'pan-plan':2,'pan-3d':3}[args.motion]
+            control_stream.write(struct.pack('QQQQ',0,0,os.getpid(),mode));control_stream.flush()
             orbit_control=mmap.mmap(control_stream.fileno(),32)
             env['OBS_ORBIT_CONTROL']=str(out/'orbit-control')
             shim_copy=out/'orbit-input.so'
@@ -135,6 +146,7 @@ def main():
         else:raise TimeoutError('startup/API timeout')
         startup=time.monotonic()-started;print(f'API ready after {startup:.3f}s',flush=True)
         if desktop:desktop.claim(app.pid,activate=not args.internal_orbit_lib)
+        expected_kind='0' if args.motion.endswith('plan') else '1'
         # Let the first 3D scene complete before measuring motion.
         api.request('fit',timeout=120)
         # Fit is deferred to the next event-loop iteration. A subsequent API
@@ -151,7 +163,7 @@ def main():
         else:
             pointer.xtst.XTestFakeMotionEvent(pointer.display,-1,850+(desktop.x if desktop else 0),450+(desktop.y if desktop else 0),0)
             pointer.xtst.XTestFakeButtonEvent(pointer.display,3,1,0);pointer.x11.XFlush(pointer.display)
-        orbitStarted=time.monotonic();memory=[]
+        orbitStarted=time.monotonic();memory=[];stack_samples=0
         while time.monotonic()-orbitStarted<args.seconds:
             elapsed=time.monotonic()-orbitStarted
             if desktop and not orbit_control and not desktop.focused():raise RuntimeError('focus left owned client; orbit stopped')
@@ -159,6 +171,14 @@ def main():
             if not orbit_control:
                 pointer.xtst.XTestFakeMotionEvent(pointer.display,-1,x+(desktop.x if desktop else 0),y+(desktop.y if desktop else 0),0);pointer.x11.XFlush(pointer.display)
             if app.poll() is not None:raise RuntimeError('editor exited while orbiting')
+            if stack_samples < args.sample_stacks and elapsed >= (stack_samples+1)*args.seconds/(args.sample_stacks+1):
+                sampled=subprocess.run(['gdb','-nx','-q','-batch','-p',str(app.pid),
+                    '-ex','set pagination off','-ex','thread 1','-ex','bt 24','-ex','detach'],
+                    capture_output=True,text=True,timeout=20)
+                (out/f'stack-{stack_samples:02d}.txt').write_text(sampled.stdout+sampled.stderr)
+                if sampled.returncode:
+                    raise RuntimeError('GDB could not inspect the owned application; see stack sample')
+                stack_samples+=1
             status=Path(f'/proc/{app.pid}/status').read_text()
             memory.append({line.split(':')[0]:line.split(':')[1].strip() for line in status.splitlines() if line.startswith(('VmRSS:','VmHWM:'))})
             time.sleep(.025)
@@ -175,13 +195,16 @@ def main():
             if line.startswith('OBS_FRAME '):frames.append(dict(field.split('=',1) for field in line.split()[1:] if '=' in field))
         if not frames:raise RuntimeError('no moving-camera frames; measurement rejected')
         active_kinds={frame['active_kind'] for frame in frames if 'active_kind' in frame}
-        if active_kinds and active_kinds!={'1'}:
-            raise RuntimeError(f'orbit left the 3D tab: {active_kinds}')
+        if active_kinds != {expected_kind}:
+            raise RuntimeError(f'motion left its expected tab {expected_kind}: {active_kinds}')
+        input_events=[line for line in data.splitlines() if line.startswith('OBS_INPUT ')]
+        if args.motion=='zoom-plan' and not input_events:
+            raise RuntimeError('no wheel callbacks were delivered; measurement rejected')
         host_samples=[dict(field.split('=',1) for field in line.split()[1:] if '=' in field) for line in data.splitlines() if line.startswith('OBS_HOST ')]
         def quantiles(field,samples=frames):
             values=sorted(float(frame[field])/1000 for frame in samples if field in frame and (field!='gpu_us' or float(frame[field])>0))
             if not values:return None
-            return {'samples':len(values),'p50_ms':statistics.median(values),'p95_ms':values[int((len(values)-1)*.95)],'p99_ms':values[int((len(values)-1)*.99)]}
+            return {'samples':len(values),'p50_ms':statistics.median(values),'p95_ms':values[int((len(values)-1)*.95)],'p99_ms':values[int((len(values)-1)*.99)],'max_ms':max(values)}
         if args.save_copy:
             # This X server and its only application belong to this invocation.
             # Ctrl+S uses the native editor writer and its derived IFCXB path.
@@ -211,6 +234,20 @@ def main():
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
         result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'fit_ready_seconds':ready_to_orbit,'fit_barrier':True,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'surface':'desktop' if desktop else 'Xvfb','motion_source':'process-local GLFW shim' if orbit_control else 'XTEST','input_shim_sha256':hashlib.sha256(shim_copy.read_bytes()).hexdigest() if args.internal_orbit_lib else None,'owned_pid':app.pid,'server_pid':server.pid if server else None,'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'host_record':quantiles('record_us',host_samples),'host_present':quantiles('present_us',host_samples),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED','VK_DRIVER_FILES','__NV_PRIME_RENDER_OFFLOAD','__VK_LAYER_NV_optimus']}}
         result['grid_heads']=quantiles('grid_heads_us')
+        result['motion']=args.motion
+        result['plan']=quantiles('plan_us')
+        result['pointer']=quantiles('pointer_us')
+        result['meshing']=quantiles('meshing_us')
+        result['wheel_callbacks']=len(input_events)
+        result['rerecorded_frames']=sum(frame.get('rerecorded')=='true' for frame in frames)
+        result['first_input_to_present_submission']=quantiles('first_input_us',host_samples)
+        settle_data=log.read_bytes()[end_offset:].decode(errors='replace')
+        settle_frames=[dict(field.split('=',1) for field in line.split()[1:] if '=' in field)
+                       for line in settle_data.splitlines() if line.startswith('OBS_FRAME ')]
+        result['settle_plan']=quantiles('plan_us',settle_frames)
+        result['settle_rerecorded_frames']=sum(frame.get('rerecorded')=='true' for frame in settle_frames)
+        result['timing_valid']=not args.sample_stacks
+        result['stack_samples']=stack_samples
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         if args.keep_open:
             (out/'handed-to-user').write_text(str(app.pid)+'\n')
