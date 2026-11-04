@@ -46,6 +46,9 @@ of 2D instance rendering.
 - **Model:** generated public `systems-showcase-final.bim`, 22 systems,
   8,117 component placements, 23 component definitions, four levels.
 - **Viewport:** 1440 by 900 pixels; immediate presentation, `OBS_UNCAPPED=1`.
+- **Desktop mode:** `xrandr --current` reports HDMI-2 at 1920 by 1080,
+  59.96 Hz. Uncapped submission measures rendering capacity; it cannot establish
+  120 physically displayed refreshes per second in that configured mode.
 - **Method:** an owned disposable process uses a process-local GLFW input shim.
   The user's existing editor is left open. Source model hash and undo history
   must remain unchanged. Raw evidence stays under ignored `build/renderer-stress/`.
