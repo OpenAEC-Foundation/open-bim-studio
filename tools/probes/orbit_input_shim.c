@@ -28,10 +28,15 @@ static uint64_t scroll_at;
 static uint64_t scroll_start;
 static int custom_anchor;
 static double anchor_x,anchor_y;
+static double wheel_steps=.125;
+static int audit_events;
+static uint64_t event_at;
 typedef void (*ScrollCallback)(GLFWwindow *, double, double);
 static ScrollCallback scroll_callback;
 __attribute__((constructor)) static void prepare_output(void) {
     if (getenv("OBS_ORBIT_CONTROL")) {
+        audit_events=1;
+        fprintf(stderr,"OBS_EVENT_AUDIT threshold_us=100000\n");
 #ifdef __linux__
         /* Only the owning harness and its debugger children may inspect us. */
         if (getenv("OBS_NAV_SAMPLE_STACKS"))
@@ -44,6 +49,11 @@ __attribute__((constructor)) static void prepare_output(void) {
             anchor_x=strtod(point_x,&end_x);anchor_y=strtod(point_y,&end_y);
             custom_anchor=!*end_x && !*end_y && isfinite(anchor_x) && isfinite(anchor_y);
         }
+        const char *step_text=getenv("OBS_NAV_WHEEL_STEPS");
+        if(step_text) {
+            char *step_end;double parsed=strtod(step_text,&step_end);
+            if(!*step_end && isfinite(parsed) && parsed>0 && parsed<=2)wheel_steps=parsed;
+        }
         fprintf(stderr, "OBS_ORBIT_SHIM pid=%ld parent=%ld\n", (long)getpid(), (long)getppid());
     }
 }
@@ -51,6 +61,27 @@ static uint64_t now_ns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000ULL + (uint64_t)t.tv_nsec;
+}
+static void event_boundary(const char *stage) {
+    if(!audit_events)return;
+    uint64_t now=now_ns();
+    if(event_at && now-event_at>=100000000ULL)
+        fprintf(stderr,"OBS_EVENT_PUMP gap_us=%llu before_input=%d stage=%s\n",
+                (unsigned long long)((now-event_at)/1000),input_start==0,stage);
+    event_at=now;
+}
+void glfwPollEvents(void) {
+    static void (*real)(void);
+    if(!real)real=dlsym(RTLD_NEXT,"glfwPollEvents");
+    event_boundary("between_calls");real();event_boundary("poll_handler");
+}
+void glfwWaitEventsTimeout(double seconds) {
+    static void (*real)(double);
+    if(!real)real=dlsym(RTLD_NEXT,"glfwWaitEventsTimeout");
+    event_boundary("before_wait");real(seconds);
+    /* GLFW services events inside the wait; intentional sleeping is not a
+       blocked event loop. Start the next interval after it returns. */
+    if(audit_events)event_at=now_ns();
 }
 static int active(double *elapsed) {
     if (!initialised) {
@@ -96,7 +127,7 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
                 scroll_at = 0;
             }
             if (now - scroll_at >= 50000000ULL) {
-                double steps = ((unsigned)(elapsed / 2.0) % 2) ? -.125 : .125;
+                double steps = ((unsigned)(elapsed / 2.0) % 2) ? -wheel_steps : wheel_steps;
                 scroll_at = input_start = now;
                 scroll_callback(window, 0, steps);
                 fprintf(stderr, "OBS_INPUT at_ns=%llu steps=%.3f\n",

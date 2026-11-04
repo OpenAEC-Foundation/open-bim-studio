@@ -84,6 +84,7 @@ def main():
     parser.add_argument('--seconds',type=float,default=20)
     parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d','zoom-3d'],default='orbit')
     parser.add_argument('--wheel-point',nargs=2,type=float,metavar=('X','Y'),help='Client pixel anchor inside the intended pane, for a zoom workload.')
+    parser.add_argument('--wheel-steps',type=float,default=.125,help='Positive steps per wheel callback; use .5 for a stronger curved-detail closeup.')
     parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
     parser.add_argument('--sample-startup-stacks',type=int,default=0,help='Sample loading/first-frame work with GDB; timing is qualitative only.')
     parser.add_argument('--ribbon-setup',action='append',default=[],help='Run an existing ribbon command before fit, for example View/Tile.')
@@ -91,6 +92,8 @@ def main():
     parser.add_argument('--min-fps',type=float,default=0)
     parser.add_argument('--max-p95-ms',type=float,default=0)
     parser.add_argument('--require-retained-plan',action='store_true',help='Require zero recording during motion and after input stops.')
+    parser.add_argument('--require-resident-model',action='store_true',help='Require unchanged native mesh generation and upload counters during motion and settling.')
+    parser.add_argument('--max-startup-event-gap-ms',type=float,default=0,help='Reject a logged startup event-loop interval above this limit; requires the event-auditing shim.')
     parser.add_argument('--expect-walls',type=int,help='Reject a wrong or failed native fixture load before measuring.')
     parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
@@ -119,6 +122,10 @@ def main():
         raise ValueError('--require-retained-plan requires plan motion')
     if args.wheel_point and (not args.motion.startswith('zoom-') or not all(math.isfinite(v) for v in args.wheel_point) or not (0<=args.wheel_point[0]<1440 and 0<=args.wheel_point[1]<900)):
         raise ValueError('--wheel-point requires zoom motion and finite client coordinates within 1440x900')
+    if not math.isfinite(args.wheel_steps) or not 0<args.wheel_steps<=2:
+        raise ValueError('--wheel-steps must be positive and at most 2')
+    if not math.isfinite(args.max_startup_event_gap_ms) or args.max_startup_event_gap_ms<0:
+        raise ValueError('--max-startup-event-gap-ms must be finite and nonnegative')
     if args.fold_inset and (not args.internal_orbit_lib or args.motion.endswith('plan') or args.ribbon_setup):
         raise ValueError('--fold-inset requires the input shim and a standalone 3D view')
     desktop=OwnedDesktopWindow(os.environ['DISPLAY']) if args.desktop else None
@@ -132,6 +139,7 @@ def main():
         home=out/'home';home.mkdir(exist_ok=True)
         env.update(DISPLAY=display,HOME=str(home),XDG_SESSION_TYPE='x11',OBS_PROFILE_FRAMES='1',OBS_MODEL_VIEW='1',OBS_UI_SCALE='1')
         env.pop('OBS_NAV_ANCHOR_X',None);env.pop('OBS_NAV_ANCHOR_Y',None)
+        env['OBS_NAV_WHEEL_STEPS']=str(args.wheel_steps)
         if args.wheel_point:
             env['OBS_NAV_ANCHOR_X'],env['OBS_NAV_ANCHOR_Y']=map(str,args.wheel_point)
         # Pair the executable with its own shader build. A benchmark launched
@@ -299,6 +307,10 @@ def main():
         result['grid_heads']=quantiles('grid_heads_us')
         result['motion']=args.motion
         result['wheel_point']=args.wheel_point or ([650,450] if args.motion=='zoom-plan' else [850,450] if args.motion=='zoom-3d' else None)
+        result['wheel_steps']=args.wheel_steps if args.motion.startswith('zoom-') else None
+        event_gaps=[dict(field.split('=',1) for field in line.split()[1:]) for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_EVENT_PUMP ')]
+        startup_gaps=[int(row['gap_us'])/1000 for row in event_gaps if row['before_input']=='1']
+        result['startup_event_pump']={'enabled':bool(event_gaps) or 'OBS_EVENT_AUDIT threshold_us=100000' in log.read_text(errors='replace'),'maximum_logged_gap_ms':max(startup_gaps,default=0),'logging_threshold_ms':100,'scope':'time outside GLFW event handling or inside a poll handler; intentional GLFW event waits excluded; not a measured desktop ping response'}
         result['plan']=quantiles('plan_us')
         result['pointer']=quantiles('pointer_us')
         result['meshing']=quantiles('meshing_us')
@@ -310,6 +322,10 @@ def main():
                        for line in settle_data.splitlines() if line.startswith('OBS_FRAME ')]
         result['settle_plan']=quantiles('plan_us',settle_frames)
         result['settle_rerecorded_frames']=sum(frame.get('rerecorded')=='true' for frame in settle_frames)
+        resident_frames=frames+settle_frames
+        generations={row.get('mesh_generation') for row in resident_frames}
+        uploads={row.get('uploads') for row in resident_frames}
+        result['resident_model']={'mesh_generations':sorted(generations-{None}),'upload_counts':sorted(uploads-{None}),'complete_counters':bool(resident_frames) and None not in generations and None not in uploads}
         result['timing_valid']=not (args.sample_stacks or args.sample_startup_stacks)
         result['stack_samples']=stack_samples
         result['startup_stack_samples']=startup_samples
@@ -323,6 +339,10 @@ def main():
         result['frames_over_8_333ms']=sum(float(row.get('presented_us',0))>8333 for row in frames)
         result['frames_over_16_667ms']=sum(float(row.get('presented_us',0))>16667 for row in frames)
         failures=[]
+        if args.max_startup_event_gap_ms and (not result['startup_event_pump']['enabled'] or result['startup_event_pump']['maximum_logged_gap_ms']>args.max_startup_event_gap_ms):
+            failures.append('startup event-loop gap exceeds the limit, or event auditing is missing')
+        if args.require_resident_model and (not result['resident_model']['complete_counters'] or len(generations)!=1 or len(uploads)!=1):
+            failures.append('camera-only input or settling rebuilt or uploaded native geometry, or counters are missing')
         if args.require_retained_plan and (result['rerecorded_frames'] or result['settle_rerecorded_frames']):
             failures.append('camera-only input or settling recorded the plan')
         if args.min_fps and result['observed_fps']<args.min_fps:

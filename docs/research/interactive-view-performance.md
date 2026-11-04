@@ -340,6 +340,14 @@ Both model hashes and undo histories remain unchanged. Evidence:
 `lod-candidate-components-100000-zoom-3d/results.json` and
 `lod-candidate-showcase-zoom-3d/results.json`.
 
+A stronger two-second closeup uses 0.5 wheel steps per callback, four times the
+ordinary scenario, anchored at client point (650, 730). That candidate submits
+33.86 FPS, p95 26.534 ms and maximum 310.723 ms. The maximum meshing-stage sample
+is 26.535 ms. Source inspection shows that any changed detail mesh invalidates
+the complete native GPU upload; the additional CPU work is not separately timed
+here. The 310 ms frame must not be reported as 310 ms of kernel work. Evidence:
+`lod-candidate-showcase-strong-closeup/results.json`.
+
 A separate cylinder control prevents confusing the native seam's linear
 tolerance with chordal deflection. With radius 0.3 m and height 2 m, maximum
 angle 0.3 radians produces 372 vertices / 124 triangles at both 0.02 m and
@@ -355,6 +363,28 @@ linear-profile test separately proves actual camera-dependent refinement.
 Reproduce with `tools/probes/kernel_abi_timing.py --curve-tolerances`; evidence:
 `kernel-cylinder-controls/results.json`. The default wall/slice/volume probe was
 rerun successfully after adding this independent control.
+
+### Startup event handling control
+
+The validated first iteration takes 24.140 seconds to answer its initial API
+ping. A process-local GLFW audit records an 18,420.844 ms interval outside event
+handling, followed by 5,093.451 ms. These intervals exceed the locally configured
+5,000 ms desktop responsiveness check. This supports the blocked-loop explanation
+for the desktop warning; it is not a measured window-manager ping response.
+No global desktop setting was changed. The one-second orbit in this control run
+is excluded from the navigation acceptance matrix. Evidence:
+`resident-startup-baseline-events/results.json` and its raw event-pump log.
+
+The audit logs intervals of at least 100 ms and excludes time intentionally
+waiting inside `glfwWaitEventsTimeout`, which services events. An independent
+hidden-window native probe sleeps for 200 ms in application code, then measures
+200.220 ms of GLFW event waiting. Only the application interval is logged
+(200.061 ms). This checks the audit's distinction between blocking and waiting;
+it does not establish responsiveness of a new application build. Evidence:
+`event-audit-check/results.json`. The harness can require stable mesh/upload
+counters across camera input and settling, and can reject excessive audited
+startup intervals; missing counters or an unavailable audit also fail the
+respective check.
 
 ## Acceptance criteria
 
