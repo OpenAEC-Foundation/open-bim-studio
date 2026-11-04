@@ -182,6 +182,19 @@ the room overlapped by the local world-origin marker and all UI/view overlays
 were excluded. This checks these visible orthographic wall/window drawings under
 translation; it is not a full-window or arbitrary-coordinate correctness claim.
 
+### Repeated-component comparison
+
+An unsampled desktop orbit on the existing `2cf8267` build used
+`components-100000.bim`: 100,000 placements of six definitions across ten levels
+(SHA-256 `3bee500fe7b57f9999ce49ad471a90f4a45118ddddc53dc1e4e27de9335c7b35`).
+The 12-second run submitted 189.34 FPS, with presented-frame p95 5.973 ms and
+maximum 9.230 ms. Five of 2,273 frames exceeded 8.333 ms; none exceeded
+16.667 ms. Model hash and undo history stayed unchanged. Screenshots confirm the
+3D geometry is visible. This scene has no grids or visible plan inset, unlike
+the slower mixed-system fixture; it does not validate 100,000 cut results,
+interactive edits or plan/section completeness. Raw evidence is in
+`retention-baseline-100000-orbit/results.json`.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:
