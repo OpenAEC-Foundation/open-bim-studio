@@ -82,7 +82,7 @@ def main():
     parser.add_argument('--model',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--seconds',type=float,default=20)
-    parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d'],default='orbit')
+    parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d','zoom-3d'],default='orbit')
     parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
     parser.add_argument('--sample-startup-stacks',type=int,default=0,help='Sample loading/first-frame work with GDB; timing is qualitative only.')
     parser.add_argument('--ribbon-setup',action='append',default=[],help='Run an existing ribbon command before fit, for example View/Tile.')
@@ -128,6 +128,21 @@ def main():
         env=os.environ.copy();env.pop('WAYLAND_DISPLAY',None)
         home=out/'home';home.mkdir(exist_ok=True)
         env.update(DISPLAY=display,HOME=str(home),XDG_SESSION_TYPE='x11',OBS_PROFILE_FRAMES='1',OBS_MODEL_VIEW='1',OBS_UI_SCALE='1')
+        # Pair the executable with its own shader build. A benchmark launched
+        # from another checkout must not silently use that checkout's shaders.
+        shaders=binary.parent/'shaders'
+        if not (shaders/'canvas_vertex.spv').is_file():
+            raise RuntimeError('the measured binary needs its matching shaders directory')
+        runtime=out/'runtime';fonts=runtime/'fonts';fonts.mkdir(parents=True)
+        for font in (root/'ui/shell/fonts').iterdir():
+            if font.is_file():(fonts/font.name).symlink_to(font)
+        for name in ['NotoSans-Regular.ttf','NotoSans-Bold.ttf']:
+            source=Path('/usr/share/fonts/truetype/noto')/name
+            if source.exists() and not (fonts/name).exists():(fonts/name).symlink_to(source)
+        (runtime/'shaders').symlink_to(shaders,target_is_directory=True)
+        (runtime/'icons').symlink_to(root/'ui/shell/icons',target_is_directory=True)
+        (runtime/'import').symlink_to(root/'exchange/import',target_is_directory=True)
+        env['OPEN_BIM_STUDIO_HOME']=str(runtime)
         if args.motion.endswith('plan'):
             env.pop('OBS_MODEL_VIEW',None)
         if args.sample_stacks or args.sample_startup_stacks:
@@ -136,7 +151,7 @@ def main():
             env['OBS_NAV_SAMPLE_STACKS']='1'
         if args.internal_orbit_lib:
             control_stream=(out/'orbit-control').open('w+b')
-            mode={'orbit':0,'zoom-plan':1,'pan-plan':2,'pan-3d':3}[args.motion]
+            mode={'orbit':0,'zoom-plan':1,'pan-plan':2,'pan-3d':3,'zoom-3d':5}[args.motion]
             control_stream.write(struct.pack('QQQQ',0,0,os.getpid(),mode));control_stream.flush()
             orbit_control=mmap.mmap(control_stream.fileno(),32)
             env['OBS_ORBIT_CONTROL']=str(out/'orbit-control')
@@ -240,7 +255,7 @@ def main():
         if active_kinds != {expected_kind}:
             raise RuntimeError(f'motion left its expected tab {expected_kind}: {active_kinds}')
         input_events=[line for line in data.splitlines() if line.startswith('OBS_INPUT ')]
-        if args.motion=='zoom-plan' and not input_events:
+        if args.motion.startswith('zoom-') and not input_events:
             raise RuntimeError('no wheel callbacks were delivered; measurement rejected')
         host_samples=[dict(field.split('=',1) for field in line.split()[1:] if '=' in field) for line in data.splitlines() if line.startswith('OBS_HOST ')]
         def quantiles(field,samples=frames):
@@ -293,6 +308,8 @@ def main():
         result['startup_stack_samples']=startup_samples
         result['inset']=quantiles('inset_us')
         result['ribbon_setup']=args.ribbon_setup
+        result['shader_directory']=str(shaders)
+        result['canvas_vertex_sha256']=hashlib.sha256((shaders/'canvas_vertex.spv').read_bytes()).hexdigest()
         result['inset_folded_for_ablation']=args.fold_inset
         kernel_archive=binary.parent/'kernel/libobskernel.a'
         result['kernel_archive_sha256']=hashlib.sha256(kernel_archive.read_bytes()).hexdigest() if kernel_archive.exists() else None

@@ -79,9 +79,9 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
             return;
         }
         *x = (mode == 1 || mode == 2 ? 650.0 : 850.0) +
-             (mode == 1 ? 0 : (int)(230.0 * sin(elapsed * .9)));
-        *y = 450.0 + (mode == 1 ? 0 : (int)(125.0 * sin(elapsed * .6)));
-        if (mode == 1 && scroll_callback) {
+             (mode == 1 || mode == 5 ? 0 : (int)(230.0 * sin(elapsed * .9)));
+        *y = 450.0 + (mode == 1 || mode == 5 ? 0 : (int)(125.0 * sin(elapsed * .6)));
+        if ((mode == 1 || mode == 5) && scroll_callback) {
             uint64_t now = now_ns();
             if (scroll_start != control[0]) {
                 scroll_start = control[0];

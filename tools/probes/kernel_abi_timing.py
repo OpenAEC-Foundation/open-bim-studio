@@ -51,10 +51,13 @@ def main():
     parser.add_argument('--box-component-model',type=Path,help='Instead of walls, fold one native component made of additive axis-aligned boxes.')
     parser.add_argument('--component-id',type=int)
     parser.add_argument('--component-rounds',type=int,default=3)
+    parser.add_argument('--compare-component-meshes',action='store_true',help='Require identical component tessellation at 1 m and 0.2 mm tolerances.')
     args=parser.parse_args()
     if bool(args.box_component_model)!=(args.component_id is not None):
         raise ValueError('provide both --box-component-model and --component-id')
     if not 1<=args.component_rounds<=15:raise ValueError('--component-rounds must be between 1 and 15')
+    if args.compare_component_meshes and not args.box_component_model:
+        raise ValueError('--compare-component-meshes requires a native box component fixture')
     root=Path(__file__).resolve().parents[2]
     archive=args.archive.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     client=(root/'kernel/api/client.dl').read_text()
@@ -216,10 +219,32 @@ int main(void) {
     puts("]");
 }
 '''
+        comparison=''
+        if args.compare_component_meshes:
+            comparison=r'''static void compare_component_meshes(void *body) {
+    Mesh coarse={0},fine={0};mesh(body,.3,1.0,&coarse);mesh(body,.3,.0002,&fine);
+    int equal=coarse.positions->length==fine.positions->length && coarse.normals->length==fine.normals->length && coarse.triangles->length==fine.triangles->length;
+    if(equal) {
+        Vec3 *a=coarse.positions->data,*b=fine.positions->data;
+        for(int i=0;i<coarse.positions->length;++i)
+            if(!isfinite(a[i].x) || !isfinite(a[i].y) || !isfinite(a[i].z) || !isfinite(b[i].x) || !isfinite(b[i].y) || !isfinite(b[i].z) || fabs(a[i].x-b[i].x)>1e-12 || fabs(a[i].y-b[i].y)>1e-12 || fabs(a[i].z-b[i].z)>1e-12)equal=0;
+        a=coarse.normals->data;b=fine.normals->data;
+        for(int i=0;i<coarse.normals->length;++i)
+            if(!isfinite(a[i].x) || !isfinite(a[i].y) || !isfinite(a[i].z) || !isfinite(b[i].x) || !isfinite(b[i].y) || !isfinite(b[i].z) || fabs(a[i].x-b[i].x)>1e-12 || fabs(a[i].y-b[i].y)>1e-12 || fabs(a[i].z-b[i].z)>1e-12)equal=0;
+        Triangle *ta=coarse.triangles->data,*tb=fine.triangles->data;
+        for(int i=0;i<coarse.triangles->length;++i)
+            if(ta[i].first<0 || ta[i].second<0 || ta[i].third<0 || ta[i].first>=coarse.positions->length || ta[i].second>=coarse.positions->length || ta[i].third>=coarse.positions->length || ta[i].first!=tb[i].first || ta[i].second!=tb[i].second || ta[i].third!=tb[i].third)equal=0;
+    }
+    fprintf(stderr,"OBS_KERNEL_FIXED_MESH coarse_tolerance=1 fine_tolerance=0.0002 vertices=%d triangles=%d identical=%d\n",fine.positions->length,fine.triangles->length,equal);
+    free_mesh(&coarse);free_mesh(&fine);
+    if(!equal){fputs("faceted component tessellation depends on tolerance\n",stderr);exit(1);}
+}
+'''
+            body=body.replace('check_volume(folding,VOLUME);release','check_volume(folding,VOLUME);compare_component_meshes(folding);release')
         body=body.replace('BOXES',rows).replace('ROUNDS',str(args.component_rounds)).replace('UNION',union.group(1)).replace('VOLUME',format(volume,'.17g')).replace('ID',str(args.component_id))
         prefix=driver[:driver.index('static double timed_slice')]
         prefix=prefix.replace('return make(p,8,f,30,1e-7);','return make(p,8,f,30,1e-9);')
-        driver=prefix+body
+        driver=prefix+comparison+body
     source.write_text(driver)
     binary=out/'kernel-timing'
     command=['cc','-std=c11','-O2','-Wall','-Wextra',str(source),str(archive),'-lm','-o',str(binary)]
@@ -241,6 +266,8 @@ int main(void) {
             'slice_samples':slice_samples,
             'volume_samples':volume_samples,
             'component_fixture':fixture,
+            'fixed_mesh_samples':[dict(field.split('=',1) for field in line.split()[1:])
+                                  for line in run.stderr.splitlines() if line.startswith('OBS_KERNEL_FIXED_MESH ')],
             'correctness_scope':'valid bodies'+('/slices' if fixture is None else '')+', zero topology flaws, finite tessellation with bounded indices and analytic signed volumes within max(1e-6 m3, 1 ppm)'}
     (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
     if fixture:

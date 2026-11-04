@@ -139,6 +139,22 @@ not the product fix. The p95 acceptance limit still fails in this run. Evidence:
 `retention-baseline-folded-inset/results.json`; reproducible with the harness's
 `--fold-inset` option and process-local input shim.
 
+### Legacy 3D wheel baseline
+
+A separate four-second desktop wheel run on `293e172` submitted 26.85 FPS with
+presented-frame p95 45.532 ms. The meshing stage alone had median 20.139 ms,
+p95 25.625 ms and maximum 37.975 ms. The model and undo history stayed unchanged;
+53 wheel callbacks were delivered. This is a different workload from orbiting.
+The corresponding camera-tier refresh path did not change between `293e172` and
+`2cf8267`. These observations motivate a separate adaptive-geometry check rather
+than inferring wheel performance from the faster orbit case. Evidence:
+`legacy-3d-wheel-matched-assets/results.json`.
+
+New runs explicitly pair the executable with its build directory's shaders and
+record the canvas shader hash. An isolated runtime folder links the same font
+and icon assets; it prevents a run from silently loading another checkout's
+`build/shaders` through its current directory.
+
 ### First-frame observations
 
 The unsampled traces report 23.937 s for the first plan frame and 29.890 s for
@@ -242,6 +258,16 @@ extending the probe and passed. Evidence: `kernel-native-component-summary.json`
 the per-component result directories, and
 `kernel-abi-volume-regression-after-components/results.json`.
 
+The additional `--compare-component-meshes` check tessellates each of the 23
+definitions at linear tolerances of 1 m and 0.2 mm, with maximum angle 0.3 in
+both cases. Every pair has the same vertex/normal counts, positions and normals
+within 1e-12, and exactly the same triangle indices. Both finite-value and index
+bounds checks pass, alongside the independent volume check. This is measured
+evidence that these explicit faceted definitions need no camera-only remeshing;
+it is not a claim about cylinders, spheres or arbitrary sketch-backed components.
+Evidence: `kernel-component-lod-equivalence-summary.json` and its per-definition
+result directories.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:
@@ -254,6 +280,9 @@ These criteria are specified before the next implementation is measured:
    duration at most 8.33 ms. Record the maximum and frames over 16.67 ms as well.
 4. Check orthographic drawings, tiled view clipping and final idle appearance
    visually; performance obtained by dropping systems or cut geometry fails.
+   Fixed pixel stroke widths, lettering and selectable symbols must also stay
+   aligned after an asymmetric zoom ending in a closeup. Compare retained stroke
+   encoding to freshly drawn fixed-width geometry across multiple zoom scales.
 5. Run kernel operations separately, recording correctness and timing together.
    Do not infer the critical 100k-element edit criterion R-01 from this smaller
    mixed-system scene or from a camera-only benchmark.
