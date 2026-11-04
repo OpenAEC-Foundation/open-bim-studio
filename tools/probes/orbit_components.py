@@ -161,7 +161,13 @@ def main():
         while time.monotonic()<deadline:
             if app.poll() is not None:raise RuntimeError(f'editor exited {app.returncode}; see {log}')
             try:
-                api.connect(str(out/'api'));before=api.request('state',timeout=2);break
+                # connect() waits 15 s for its ping, hiding most startup work
+                # from the optional stack sampler. Use the same public folder
+                # transport with a bounded ping while this owned app starts.
+                if not (out/'api').is_dir():raise RuntimeError('API folder not created yet')
+                api.folder=out/'api'
+                api.request('ping',timeout=.25)
+                before=api.request('state',timeout=2);break
             except Exception:
                 if startup_samples < args.sample_startup_stacks and time.monotonic()-sampled_at >= 1:
                     sample_owned_stack('startup-stack',startup_samples)

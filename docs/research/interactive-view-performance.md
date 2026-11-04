@@ -146,6 +146,15 @@ search while computing system plan outlines. Two samples identify specific work;
 they do not establish percentages or which component accounts for all mesh time.
 The inset previously rebuilt these system outlines independently of the main plan.
 
+A later ten-sample startup trace used bounded API pings so sampling was no
+longer delayed by a 15-second connection timeout. Three stacks were in general
+BRep component folding, including camera fit and native scene creation. Seven
+were in derived-part connection searches reached from system meshing. These are
+qualitative stack counts, not time percentages; all timings from this sampled
+run are invalid. This identifies repeated all-pairs join searches as a specific
+next target alongside the one-off component folds. Evidence:
+`startup-profile-detailed/startup-stack-*.txt`.
+
 The local GNOME `org.gnome.mutter check-alive-timeout` setting is 5,000 ms. The
 application contains no matching unresponsive warning of its own. A blocked
 first frame of this duration is consistent with the desktop warning; that is an
