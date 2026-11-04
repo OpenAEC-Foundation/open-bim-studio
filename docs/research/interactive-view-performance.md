@@ -9,13 +9,16 @@ sections and 3D, and which measured costs belong to the CAD kernel?
 
 ## Summary
 
-The first validated resident-drawing iteration removes the measured post-input
-plan recording and reaches 241 FPS in mixed-system plan zoom and 200 FPS in 3D
-orbit. Native cavity walls also retain their drawing after input stops. Nine of
-ten navigation scenarios meet the FPS/p95 criteria; 3D wheel zoom still fails
-because its adaptive-geometry path repeatedly processes fixed component meshes.
-Initial loading remains slow. Kernel checks reproduce significant one-off costs
-without finding a geometry failure in the tested fixtures.
+The validated resident-geometry iteration reaches 204 FPS in mixed-system 3D
+wheel zoom and 189 FPS in a stronger closeup. All fourteen navigation scenarios
+meet the 120 submitted FPS / 8.333 ms p95 criteria, including a 100,000-placement
+model in plans and 3D. A separate Vulkan audit confirms 100,000 submitted
+instances in six indexed draws per frame. Camera motion and settling cause no
+native mesh generation or upload. Initial loading still blocks event processing
+for about 18 seconds in this iteration; the spatial join index remains a native
+candidate pending its startup measurements. The tested kernel fixtures reproduce
+one-off costs without a geometry failure. This is not a constant 120 FPS promise
+for every frame, edit or section.
 
 ## What it is
 
@@ -325,7 +328,7 @@ hardware maxima.
 
 ### Independent component and curved-detail controls
 
-The next native candidate classifies explicit faceted component definitions once
+An experimental native candidate classifies explicit faceted component definitions once
 and caches adaptive scene positions. In the 100,000-placement wheel scenario it
 submits 193.08 FPS, with presented p95 6.055 ms, maximum 7.163 ms and no frame over
 8.333 ms. Its meshing stage is at most 0.002 ms. This is evidence for this
@@ -386,6 +389,68 @@ counters across camera input and settling, and can reject excessive audited
 startup intervals; missing counters or an unavailable audit also fail the
 respective check.
 
+### Resident high-detail native geometry
+
+The subsequent validated application uses a fixed view-side tolerance of
+0.0001 m. Native round profiles retain their 12–256 segment bound, and the
+component BRep seam retains its angular control. The 0.1 mm value is a nominal
+chord target for native profiles, not a new kernel modelling tolerance or an
+unbounded guarantee at arbitrary magnification. Model edits, drag previews and
+reinforcement detail changes still derive geometry again. The native application
+no longer queues geometry or invalidates its complete GPU upload solely because
+the camera crosses a detail tier. Saved/exported model geometry remains separate
+from this derived display policy, following ADR-0013. The experimental per-camera
+queue filtering above is not the shipped application path.
+
+The native development build passes `resident_detail`, `component_solids` and
+`linear_joins`. The first check independently compares closed circular-column
+meshes with analytic polygon volumes at radii 0.005, 0.15, 1 and 10 m, including
+the existing segment cap. The kernel archive remains byte-identical to the
+previous iterations.
+
+| Desktop scenario | Submitted FPS | Presented p95 | Maximum frame |
+|---|---:|---:|---:|
+| Mixed systems: plan wheel | 246.09 | 4.023 ms | 7.595 ms |
+| Mixed systems: plan pan | 244.66 | 4.044 ms | 11.407 ms |
+| Mixed systems: focused plan closeup | 224.16 | 4.944 ms | 11.537 ms |
+| Mixed systems: strong 3D closeup | 189.24 | 5.575 ms | 21.129 ms |
+| Mixed systems: 3D orbit | 196.05 | 5.835 ms | 13.888 ms |
+| Mixed systems: 3D pan | 202.40 | 5.647 ms | 12.363 ms |
+| Mixed systems: 3D wheel | 203.85 | 5.610 ms | 11.610 ms |
+| Mixed systems: tiled plan wheel | 209.90 | 4.839 ms | 7.587 ms |
+| 400 cavity walls: plan wheel | 632.33 | 1.817 ms | 2.776 ms |
+| 400 cavity walls: plan pan | 718.98 | 1.515 ms | 2.541 ms |
+| 100,000-placement model: 3D wheel | 191.75 | 6.009 ms | 6.941 ms |
+| 100,000-placement model: plan wheel | 202.62 | 4.933 ms | 6.018 ms |
+| 100,000-placement model: plan pan | 201.50 | 4.971 ms | 6.352 ms |
+| 100,000-placement model: 3D orbit | 186.03 | 6.092 ms | 7.305 ms |
+
+All fourteen runs retain one mesh generation and one upload counter value during
+input and settling; plans also record no heavy drawing in either phase. Images
+were inspected for the enlarged round piles, model completeness, clipped tiled
+plan/3D panes and the dense component plan. The 100,000-placement fixture has ten
+storeys with 10,000 placements each; its plan rows show the active ground storey,
+not every storey superimposed. These plan results establish retained drawing
+performance, not hardware instancing of 2D cut prototypes or system sections.
+
+An additional native Vulkan call audit requires exactly 100,000 instances across
+indexed instanced draws in every measured command buffer: all 2,305 samples pass,
+using six draws each. That wheel run submits 192.04 FPS, p95 6.030 ms, maximum
+6.624 ms and no frame over 8.333 ms. This verifies actual submission cardinality
+rather than inferring it only from the source fixture. Evidence:
+`resident-validated-counted-100000/results.json`.
+
+The stronger 3D closeup still has seven of 380 frames above 16.667 ms. Those
+frames report GPU time 16.359–18.536 ms and meshing at most 0.001 ms; the precise
+GPU cause has not been isolated. They must not be hidden behind the aggregate
+FPS or described as eliminated latency. Sampled process high-water memory is
+725.23 MiB in that closeup versus 733.06 MiB in the earlier candidate. These are
+whole-process observations, not isolated per-prototype or GPU-memory costs.
+Initial API readiness and long startup event-loop intervals remain unresolved in
+this resident-geometry iteration. Evidence: `resident-validated-*/results.json`,
+paired images, source hashes under `resident-native-queue/`, and the executable,
+shader, kernel and input-shim hashes recorded per run.
+
 ## Acceptance criteria
 
 These criteria are specified before the next implementation is measured:
@@ -438,11 +503,12 @@ of sections, edits, exports or million-component models.
 
 ## Verdict
 
-Keep resident cut drawings, fixed pixel strokes, the GPU inset and conservative
-bounds queries. The measured plan, pan and orbit cases meet the FPS/p95 target;
-3D wheel zoom still fails its explicit acceptance check. Keep R-01 open. The next
-specific evidence needed is a native wheel run that excludes proven fixed
-component geometry from adaptive work while preserving curved refinement,
-responsive initial loading, and complete interactive system-section checks.
-The measurements do not justify changing general kernel algorithms solely to
-address camera navigation.
+Keep resident cut drawings, fixed pixel strokes, the GPU inset, conservative
+bounds queries and the fixed high-detail display policy. All fourteen measured
+navigation scenarios meet the FPS/p95 goal, with stable native mesh/upload
+counters and independently verified 100,000-instance GPU submission. Retain the
+recorded frame maxima: seven strong-closeup frames remain above 16.667 ms.
+Keep R-01 open. Specific missing evidence is responsive initial loading with the
+candidate join index, cheap large-model edits and complete interactive
+system-section checks. The current measurements do not justify changing general
+kernel mathematics to address camera navigation.

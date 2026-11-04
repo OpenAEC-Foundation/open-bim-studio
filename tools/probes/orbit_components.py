@@ -95,6 +95,7 @@ def main():
     parser.add_argument('--require-resident-model',action='store_true',help='Require unchanged native mesh generation and upload counters during motion and settling.')
     parser.add_argument('--max-startup-event-gap-ms',type=float,default=0,help='Reject a logged startup event-loop interval above this limit; requires the event-auditing shim.')
     parser.add_argument('--expect-walls',type=int,help='Reject a wrong or failed native fixture load before measuring.')
+    parser.add_argument('--expect-drawn-instances',type=int,help='Require this many instances across indexed instanced draw calls in every audited command buffer.')
     parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
     parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
@@ -305,6 +306,9 @@ def main():
         assert hashlib.sha256(model.read_bytes()).hexdigest()==checksum
         result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'fit_ready_seconds':ready_to_orbit,'fit_barrier':True,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'surface':'desktop' if desktop else 'Xvfb','motion_source':'process-local GLFW shim' if orbit_control else 'XTEST','input_shim_sha256':hashlib.sha256(shim_copy.read_bytes()).hexdigest() if args.internal_orbit_lib else None,'owned_pid':app.pid,'server_pid':server.pid if server else None,'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'host_record':quantiles('record_us',host_samples),'host_present':quantiles('present_us',host_samples),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED','VK_DRIVER_FILES','__NV_PRIME_RENDER_OFFLOAD','__VK_LAYER_NV_optimus']}}
         result['grid_heads']=quantiles('grid_heads_us')
+        instance_counts=[int(row['placed_instances']) for row in host_samples if 'placed_instances' in row]
+        instance_draws=[int(row['instanced_draws']) for row in host_samples if 'instanced_draws' in row]
+        result['indexed_instancing']={'enabled':'OBS_DRAW_AUDIT indexed_instances=enabled' in log.read_text(errors='replace'),'samples':len(instance_counts),'submitted_instances_min':min(instance_counts,default=0),'submitted_instances_max':max(instance_counts,default=0),'draw_calls_min':min(instance_draws,default=0),'draw_calls_max':max(instance_draws,default=0)}
         result['motion']=args.motion
         result['wheel_point']=args.wheel_point or ([650,450] if args.motion=='zoom-plan' else [850,450] if args.motion=='zoom-3d' else None)
         result['wheel_steps']=args.wheel_steps if args.motion.startswith('zoom-') else None
@@ -339,6 +343,8 @@ def main():
         result['frames_over_8_333ms']=sum(float(row.get('presented_us',0))>8333 for row in frames)
         result['frames_over_16_667ms']=sum(float(row.get('presented_us',0))>16667 for row in frames)
         failures=[]
+        if args.expect_drawn_instances is not None and (not result['indexed_instancing']['enabled'] or not instance_counts or any(count!=args.expect_drawn_instances for count in instance_counts)):
+            failures.append('indexed instanced draw count differs from the expected fixture, or the audit is missing')
         if args.max_startup_event_gap_ms and (not result['startup_event_pump']['enabled'] or result['startup_event_pump']['maximum_logged_gap_ms']>args.max_startup_event_gap_ms):
             failures.append('startup event-loop gap exceeds the limit, or event auditing is missing')
         if args.require_resident_model and (not result['resident_model']['complete_counters'] or len(generations)!=1 or len(uploads)!=1):

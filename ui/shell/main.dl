@@ -61,6 +61,7 @@ import ui/panels/bim_project_window.dl
 import kernel/planar/triangulate2.dl
 import ui/shell/bim_app_parts.dl
 import ui/shell/bim_plan_zoom.dl
+import viewer/bim_display_detail.dl
 import automation/bim_api.dl
 import ifc/bim_ifc_native.dl
 import ui/shell/bim_loading.dl
@@ -422,7 +423,6 @@ set meshedRevision to (-1) as a 64 bit integer
 # The rooms the 3D view shows, of the document revision `roomRevision`.
 set roomSpaces to a cad topology list of a bim space record
 set roomRevision to (-1) as a 64 bit integer
-set meshedTier to -1
 # How often the 3D view's model was written to the GPU, and how long the
 # last time took (shown in the status bar).
 set uploadCount to 0
@@ -436,14 +436,6 @@ set importUploadKey to the string form of "nothing uploaded"
 set nativeUploadKey to the string form of "nothing uploaded"
 set groundUploadKey to the string form of "nothing uploaded"
 set flagsKey to the string form of "nothing shown"
-# The round shapes queued to be meshed again for the zoom (their positions
-# among the sketch meshes, the largest on screen first), the next to take,
-# and how many to take at a time.
-set lodQueue to an empty list of an integer
-set zoomFixedIds to an empty list of a 64 bit integer
-set zoomFixedRevision to (-1) as a 64 bit integer
-set lodQueueNext to 0
-set lodChunk to 16
 set gpuScene to an empty bim gpu scene
 set cutMeshes to a cad topology list of a bim scene mesh record
 set cutSourceMeshes to a cad topology list of a bim scene mesh record
@@ -734,7 +726,7 @@ loop while window remains open:
     # display (vsync) otherwise. A thread's progress, a letter waiting for
     # its second and the automation API wake it a few times a second; work
     # queued (the zoom queue) keeps it drawing.
-    if (quietFrames >= 20) and (lodQueueNext >= (the length of lodQueue)):
+    if quietFrames >= 20:
         set keepAwake to importRunning or (editor's pendingLetter != 0)
         set idleFor to 1.0
         if importRunning:
@@ -3274,37 +3266,17 @@ loop while window remains open:
     set meshingStarted to 0 as a 64 bit integer
     if profileFrames:
         set meshingStarted to the bim microseconds now
-    # Round shapes are meshed for the 3D view's zoom: a chord leaves the
-    # true surface by at most half a pixel, in steps of a factor of 2, so
-    # zooming in adds segments and zooming out drops them.
-    set lodTier to 0
-    set lodTolerance to 1.0
-    set halfPixel to 0.5 / (the maximum of camera's viewScale and 1e-6)
-    loop while (lodTier < 24) and (lodTolerance > halfPixel):
-        set lodTolerance to lodTolerance * 0.5
-        set lodTier to lodTier + 1
-    # An edit or a drag meshes the model again at once. Zooming past a tier
-    # queues the round shapes to be meshed again (`the bim zoom queue of …`):
-    # each frame takes from the queue for at most 6 ms, those covering the
-    # most of the 3D view first, and the view shows what is made so far.
-    # Only meshes that come out different count as a change.
+    # Native display geometry uses a fixed high-detail policy. Camera motion
+    # changes transforms only, including closeups of round parts. Model edits
+    # and drag previews rebuild geometry; exports derive from the model.
     set modelChanged to ((editor's documentValue's revision != meshedRevision) or editor's dragging) or (rebarDetail != meshedRebarDetail)
     if modelChanged:
         set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
         set keptConnections to the bim connection cache of editor's documentValue's current following connectionSceneJournal since connectionSceneSeen among (sketchMeshes's values)
-        set sketchMeshes to the bim sketch meshes of editor's documentValue's current within lodTolerance reusing (keptConnections's values) with reinforcement detail rebarDetail
+        set sketchMeshes to the bim sketch meshes of editor's documentValue's current within (the bim resident display tolerance) reusing (keptConnections's values) with reinforcement detail rebarDetail
         set connectionSceneJournal to editor's documentValue's current's journal
         set connectionSceneSeen to the length of (connectionSceneJournal's values)
-        # Drag previews and display-detail changes keep the same revision.
-        # Classifying all system parts belongs to a committed model change.
-        if zoomFixedRevision != editor's documentValue's revision:
-            free zoomFixedIds
-            set zoomFixedIds to the bim zoom fixed system ids of editor's documentValue's current
-            set zoomFixedRevision to editor's documentValue's revision
         set meshedRebarDetail to rebarDetail
-        set meshedTier to lodTier
-        clear lodQueue
-        set lodQueueNext to 0
         loop cursor from 0 to the length of (sketchMeshes's values):
             append (the item at cursor in (sketchMeshes's values)) to (meshes's values)
         set meshedRevision to editor's documentValue's revision
@@ -3321,47 +3293,13 @@ loop while window remains open:
             set sheetFiles to export bim sheets of editor among (sketchMeshes's values) using typeface
             print ((the string form of "sheet files written: ") + (the string form of sheetFiles)) as a line
             request that window close
-    else if lodTier != meshedTier:
-        free lodQueue
-        set lodQueue to the bim zoom queue of (sketchMeshes's values) in viewLayout with camera keeping zoomFixedIds
-        set lodQueueNext to 0
-        set meshedTier to lodTier
-    if (modelChanged = false) and (lodQueueNext < (the length of lodQueue)):
-        set queueStarted to the bim microseconds now
-        set remade to an empty list of a 64 bit integer
-        set changedAny to false
-        loop while (lodQueueNext < (the length of lodQueue)) and (((the bim microseconds now) - queueStarted) < (6000 as a 64 bit integer)):
-            set chunkStarted to the bim microseconds now
-            set chunkEnd to the minimum of (lodQueueNext + lodChunk) and (the length of lodQueue)
-            loop queueCursor from lodQueueNext to chunkEnd:
-                append (the item at (the item at queueCursor in lodQueue) in (sketchMeshes's values))'s elementId to remade
-            set refreshed to the bim sketch meshes of editor's documentValue's current within lodTolerance reusing (sketchMeshes's values) refreshing remade with reinforcement detail meshedRebarDetail
-            loop queueCursor from lodQueueNext to chunkEnd:
-                set queued to the item at queueCursor in lodQueue
-                if (bim scene mesh (the item at queued in (refreshed's values)) repeats (the item at queued in (sketchMeshes's values))) = false:
-                    set changedAny to true
-            clear remade
-            set sketchMeshes to refreshed
-            set lodQueueNext to chunkEnd
-            # A chunk as large as about a quarter of the budget takes.
-            set chunkTook to (the bim microseconds now) - chunkStarted
-            if (chunkTook < (1500 as a 64 bit integer)) and (lodChunk < 256):
-                set lodChunk to lodChunk * 2
-            else if (chunkTook > (3000 as a 64 bit integer)) and (lodChunk > 1):
-                set lodChunk to lodChunk / 2
-        free remade
-        if changedAny:
-            set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
-            loop cursor from 0 to the length of (sketchMeshes's values):
-                append (the item at cursor in (sketchMeshes's values)) to (meshes's values)
-            set meshGeneration to meshGeneration + (1 as a 64 bit integer)
     set meshingMicros to 0 as a 64 bit integer
     if profileFrames:
         set meshingMicros to (the bim microseconds now) - meshingStarted
     # The meshes of the categories the 3D view shows; picking sees only these.
     # They are filtered again only when the meshes or the 3D view's rules
-    # change, and not while the zoom queue or a section box drag is under
-    # way (the GPU shows those through flags and the shaders' cut).
+    # change. A section box drag keeps the picking meshes while the GPU
+    # clips its display through flags and the shaders' cut.
     set shownKey to ((the string form of meshGeneration) + (the string form of " import ")) + ((the string form of importGeneration) + (the bim rule text of editor's modelRules))
     if storeyIsolated:
         set shownKey to (shownKey + (the string form of " storey ")) + (the bim exact text of isolatedStorey)
@@ -3384,7 +3322,7 @@ loop while window remains open:
     set wantedCutGeometry to (wantedCutGeometry + (the bim exact text of sectionBoxHigh's x)) + (the string form of ",")
     set wantedCutGeometry to (wantedCutGeometry + (the bim exact text of sectionBoxHigh's y)) + (the string form of ",")
     set wantedCutGeometry to wantedCutGeometry + (the bim exact text of sectionBoxHigh's z)
-    if (lodQueueNext < (the length of lodQueue)) or (boxDragFace >= 0):
+    if boxDragFace >= 0:
         set shownKey to shownMeshesKey
     else if sectionBoxOn:
         set shownKey to ((shownKey + (the string form of " box ")) + ((the string form of sectionBoxLow's x) + (the string form of sectionBoxLow's y))) + (((the string form of sectionBoxLow's z) + (the string form of sectionBoxHigh's x)) + ((the string form of sectionBoxHigh's y) + (the string form of sectionBoxHigh's z)))
@@ -3732,7 +3670,7 @@ loop while window remains open:
             set barOpen to bim view bar display hit
         if graphicsMenu = 7:
             set barOpen to bim view bar status hit
-        set statusCaption to the bim view status caption of frameMeter at (the bim microseconds now) on device kind gpuDeviceKind sleeping ((quietFrames >= 19) and (lodQueueNext >= (the length of lodQueue)))
+        set statusCaption to the bim view status caption of frameMeter at (the bim microseconds now) on device kind gpuDeviceKind sleeping (quietFrames >= 19)
         draw bim view bar ending at (layout's width - 8.0) and (viewLayout's bottom - 38.0) mode viewMode shadows shadowsOn boxed sectionBoxOn status statusCaption on device kind gpuDeviceKind open barOpen using typeface in frame
         set axesCaption to the string form of "Local"
         if appSettings's gizmoAxes = bim global gizmo axes:
@@ -4088,7 +4026,7 @@ loop while window remains open:
     if graphicsMenu = 8:
         draw bim sun panel of sunSetting from ((layout's width - 8.0) - (the bim sun panel width)) above (viewLayout's bottom - 38.0) using typeface in frame
     if graphicsMenu = 7:
-        set statusLines to the bim view status lines of frameMeter at (the bim microseconds now) sleeping ((quietFrames >= 19) and (lodQueueNext >= (the length of lodQueue))) device gpuDeviceName kind gpuDeviceKind memory gpuDeviceMemory startup startupMessage
+        set statusLines to the bim view status lines of frameMeter at (the bim microseconds now) sleeping (quietFrames >= 19) device gpuDeviceName kind gpuDeviceKind memory gpuDeviceMemory startup startupMessage
         draw bim view status details statusLines ending at (layout's width - 8.0) above (viewLayout's bottom - 38.0) using typeface in frame
         free statusLines
     # The chrome, over the edges of the panels; what a click there hits is
@@ -4220,8 +4158,8 @@ loop while window remains open:
         set profileText to (profileText + (the string form of " canvas_vertices=")) + (the string form of profileContext's canvasCount)
         set profileText to (profileText + (the string form of " draw_batches=")) + (the string form of (the length of (profileContext's batches)))
         set profileText to (profileText + (the string form of " meshing_us=")) + (the string form of meshingMicros)
-        set profileText to (profileText + (the string form of " zoom_pending=")) + (the string form of ((the length of lodQueue) - lodQueueNext))
-        set profileText to (profileText + (the string form of " zoom_fixed=")) + (the string form of (the length of zoomFixedIds))
+        set profileText to (profileText + (the string form of " mesh_generation=")) + (the string form of meshGeneration)
+        set profileText to (profileText + (the string form of " uploads=")) + (the string form of uploadCount)
         print profileText as a line
     # Whether anything happened this frame: input, an edit, the camera
     # still settling, a drag; twenty quiet frames in a row let the loop sleep.

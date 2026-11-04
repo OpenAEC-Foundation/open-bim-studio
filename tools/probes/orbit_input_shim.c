@@ -22,6 +22,7 @@ typedef struct GLFWwindow GLFWwindow;
 static volatile uint64_t *control;
 static int initialised;
 static uint64_t command_start;
+static uint64_t indexed_instances,indexed_instance_draws;
 static uint64_t input_start;
 static uint64_t reported_input;
 static uint64_t scroll_at;
@@ -37,6 +38,7 @@ __attribute__((constructor)) static void prepare_output(void) {
     if (getenv("OBS_ORBIT_CONTROL")) {
         audit_events=1;
         fprintf(stderr,"OBS_EVENT_AUDIT threshold_us=100000\n");
+        fprintf(stderr,"OBS_DRAW_AUDIT indexed_instances=enabled\n");
 #ifdef __linux__
         /* Only the owning harness and its debugger children may inspect us. */
         if (getenv("OBS_NAV_SAMPLE_STACKS"))
@@ -160,14 +162,25 @@ int vkBeginCommandBuffer(void *command, const void *info) {
     static int (*real)(void *, const void *);
     if (!real) real = dlsym(RTLD_NEXT, "vkBeginCommandBuffer");
     command_start = now_ns();
+    indexed_instances=indexed_instance_draws=0;
     return real(command, info);
+}
+void vkCmdDrawIndexed(void *command,uint32_t index_count,uint32_t instance_count,
+                      uint32_t first_index,int32_t vertex_offset,uint32_t first_instance) {
+    static void (*real)(void *,uint32_t,uint32_t,uint32_t,int32_t,uint32_t);
+    if(!real)real=dlsym(RTLD_NEXT,"vkCmdDrawIndexed");
+    if(instance_count>1) {
+        indexed_instances+=instance_count;
+        ++indexed_instance_draws;
+    }
+    real(command,index_count,instance_count,first_index,vertex_offset,first_instance);
 }
 int vkEndCommandBuffer(void *command) {
     static int (*real)(void *);
     if (!real) real = dlsym(RTLD_NEXT, "vkEndCommandBuffer");
     int result = real(command);
     double elapsed;
-    if (active(&elapsed)) fprintf(stderr,"OBS_HOST record_us=%llu\n",(unsigned long long)((now_ns()-command_start)/1000));
+    if (active(&elapsed)) fprintf(stderr,"OBS_HOST record_us=%llu placed_instances=%llu instanced_draws=%llu\n",(unsigned long long)((now_ns()-command_start)/1000),(unsigned long long)indexed_instances,(unsigned long long)indexed_instance_draws);
     return result;
 }
 int vkQueuePresentKHR(void *queue, const void *info) {
