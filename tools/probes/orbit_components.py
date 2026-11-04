@@ -86,6 +86,7 @@ def main():
     parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
     parser.add_argument('--sample-startup-stacks',type=int,default=0,help='Sample loading/first-frame work with GDB; timing is qualitative only.')
     parser.add_argument('--ribbon-setup',action='append',default=[],help='Run an existing ribbon command before fit, for example View/Tile.')
+    parser.add_argument('--fold-inset',action='store_true',help='Controlled ablation: fold the plan inset before measuring a standalone 3D view.')
     parser.add_argument('--min-fps',type=float,default=0)
     parser.add_argument('--max-p95-ms',type=float,default=0)
     parser.add_argument('--require-retained-plan',action='store_true',help='Require zero recording during motion and after input stops.')
@@ -115,6 +116,8 @@ def main():
         raise ValueError('debugger sampling cannot be used for quantitative acceptance checks')
     if args.require_retained_plan and not args.motion.endswith('plan'):
         raise ValueError('--require-retained-plan requires plan motion')
+    if args.fold_inset and (not args.internal_orbit_lib or args.motion.endswith('plan') or args.ribbon_setup):
+        raise ValueError('--fold-inset requires the input shim and a standalone 3D view')
     desktop=OwnedDesktopWindow(os.environ['DISPLAY']) if args.desktop else None
     server=None if args.desktop else subprocess.Popen(['Xvfb','-displayfd','1','-screen','0','1440x900x24','-nolisten','tcp'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
     handed_over=False
@@ -182,6 +185,16 @@ def main():
         # in the first measured frame of a mixed construction scene.
         api.request('state',timeout=120)
         ready_to_orbit=time.monotonic()-started
+        if args.fold_inset:
+            # This finite click only changes our owned process's GLFW queries.
+            # No desktop focus, cursor or input queue is changed.
+            struct.pack_into('Q',orbit_control,24,4)
+            struct.pack_into('Q',orbit_control,8,250000000)
+            struct.pack_into('Q',orbit_control,0,time.monotonic_ns())
+            time.sleep(.5)
+            struct.pack_into('Q',orbit_control,0,0)
+            struct.pack_into('Q',orbit_control,24,mode)
+            api.request('state',timeout=120)
         time.sleep(3);offset=log.stat().st_size
         pointer=None if orbit_control else helper.Pointer(display)
         desktop.capture(out/'before.png') if desktop else ImageGrab.grab(xdisplay=display).save(out/'before.png')
@@ -274,6 +287,7 @@ def main():
         result['startup_stack_samples']=startup_samples
         result['inset']=quantiles('inset_us')
         result['ribbon_setup']=args.ribbon_setup
+        result['inset_folded_for_ablation']=args.fold_inset
         kernel_archive=binary.parent/'kernel/libobskernel.a'
         result['kernel_archive_sha256']=hashlib.sha256(kernel_archive.read_bytes()).hexdigest() if kernel_archive.exists() else None
         result['frames_over_8_333ms']=sum(float(row.get('presented_us',0))>8333 for row in frames)

@@ -73,6 +73,11 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
     double elapsed;
     if (active(&elapsed)) {
         unsigned mode = (unsigned)control[3];
+        /* Controlled ablation: fold the inset in the fixed 1440x900 harness. */
+        if (mode == 4) {
+            *x = 310.0; *y = 650.0;
+            return;
+        }
         *x = (mode == 1 || mode == 2 ? 650.0 : 850.0) +
              (mode == 1 ? 0 : (int)(230.0 * sin(elapsed * .9)));
         *y = 450.0 + (mode == 1 ? 0 : (int)(125.0 * sin(elapsed * .6)));
@@ -106,6 +111,7 @@ int glfwGetMouseButton(GLFWwindow *window, int button) {
     int value = real(window, button);
     double elapsed;
     if (active(&elapsed)) {
+        if (button == 0 && control[3] == 4) return 1;
         if (button == 1 && control[3] == 0) return 1;
         if (button == 2 && (control[3] == 2 || control[3] == 3)) return 1;
     }

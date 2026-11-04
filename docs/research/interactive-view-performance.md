@@ -126,6 +126,16 @@ one was in the presentation driver. These counts are qualitative observations,
 not statistically reliable percentages. Timing from the debugger run is marked
 invalid. The unsampled 3D run above remains the quantitative baseline.
 
+An unsampled controlled comparison folded only the plan inset through its native
+UI before the same 12-second orbit. Screenshots confirm the inset is folded and
+the 3D building remains visible; model hash and undo history are unchanged. The
+existing build then submitted 133.56 FPS, with presented-frame p95 9.012 ms and
+maximum 13.574 ms. Grid-head visibility queries still took p95 4.422 ms. This
+supports retaining the inset on the GPU, but folding it is a diagnostic ablation,
+not the product fix. The p95 acceptance limit still fails in this run. Evidence:
+`retention-baseline-folded-inset/results.json`; reproducible with the harness's
+`--fold-inset` option and process-local input shim.
+
 ### First-frame observations
 
 The unsampled traces report 23.937 s for the first plan frame and 29.890 s for
