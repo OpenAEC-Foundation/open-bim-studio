@@ -5,7 +5,7 @@ sections and 3D, and which measured costs belong to the CAD kernel?
 
 **Status:** under review
 **Author:** OpenAEC contributors
-**Last updated:** 2026-11-04
+**Last updated:** 2026-11-05
 
 ## Summary
 
