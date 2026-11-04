@@ -9,16 +9,17 @@ sections and 3D, and which measured costs belong to the CAD kernel?
 
 ## Summary
 
-The validated resident-geometry iteration reaches 204 FPS in mixed-system 3D
-wheel zoom and 189 FPS in a stronger closeup. All fourteen navigation scenarios
-meet the 120 submitted FPS / 8.333 ms p95 criteria, including a 100,000-placement
-model in plans and 3D. A separate Vulkan audit confirms 100,000 submitted
-instances in six indexed draws per frame. Camera motion and settling cause no
-native mesh generation or upload. Initial loading still blocks event processing
-for about 18 seconds in this iteration; the spatial join index remains a native
-candidate pending its startup measurements. The tested kernel fixtures reproduce
-one-off costs without a geometry failure. This is not a constant 120 FPS promise
-for every frame, edit or section.
+The final native iteration meets the 120 submitted FPS / 8.333 ms p95 criteria
+in all fourteen navigation scenarios, including a 100,000-placement model in
+plans and 3D. A Vulkan audit verifies 100,000 submitted instances in six indexed
+draws per frame. Camera motion and settling cause no native mesh generation or
+upload. A conservative join index reduces mixed-scene plan API readiness from
+23.461 to 6.633 seconds; the same plan run's longest audited startup event-loop
+interval falls from 18.522 to 3.032 seconds. Final mixed-scene runs remain below
+3.056 seconds. Tested joins and compared images remain identical.
+The kernel archive is unchanged and the tested fixtures reproduce no geometry
+failure. GPU-timed outliers still reach about 22 ms: this is not a constant
+120 FPS promise for every frame, edit or section.
 
 ## What it is
 
@@ -451,6 +452,88 @@ this resident-geometry iteration. Evidence: `resident-validated-*/results.json`,
 paired images, source hashes under `resident-native-queue/`, and the executable,
 shader, kernel and input-shim hashes recorded per run.
 
+### Indexed joins and bounded startup event intervals
+
+The final native iteration adds a consecutive-range bounding hierarchy to
+`the bim connections of parts`. A box contains each candidate's axis plus a
+conservative profile/1 mm margin and a coordinate-scaled floating-point margin.
+Nonfinite input remains unbounded. Left-to-right traversal preserves original
+part order; the existing exact join tests still select the first match. The
+index is derived for one evaluation and is never stored in the native model.
+The window thread also processes GLFW events before and after its first-frame
+mesh derivation. No desktop timeout or global setting is changed.
+
+A headless reference compares every returned join field against the prior full
+pair traversal across four generated cases: local and survey coordinates,
+round/rectangular profiles, selected end treatments, multiple coincident
+matches, pipe exclusions, millimetre-boundary hits, curved/straight system parts
+sharing host IDs, degenerate axes and nonfinite dimensions. The native build
+passes `join_index`, `resident_detail` and `linear_joins`; `component_solids`
+passed in the preceding build and its component-module sources are unchanged.
+
+| Mixed-scene plan startup observation | Resident display only | With join index / event boundaries |
+|---|---:|---:|
+| Initial API readiness | 23.461 s | 6.633 s |
+| First plan frame, present-submit interval | 22.702 s | 5.856 s |
+| First-frame mesh stage | 15.764 s | 3.032 s |
+| First-frame plan stage | 4.553 s | 0.430 s |
+| Longest audited event interval in the same plan run | 18.522 s | 3.032 s |
+
+The 3D mixed-scene runs reach initial API readiness in 7.096–7.495 seconds.
+The maximum audited event interval across final mixed-scene runs is 3.056 s.
+All fourteen final runs pass the additional 5,000 ms audited startup-gap limit,
+with missing audits rejected. This measures intervals between event handling,
+not a window-manager ping/response exchange or physical input-to-photon latency.
+The remaining three-second computation interval still warrants finer task
+chunking. Both the locally rechecked desktop timeout (5,000 ms) and display mode
+(59.96 Hz) are unchanged.
+
+| Final desktop scenario | Submitted FPS | Presented p95 | Maximum frame |
+|---|---:|---:|---:|
+| Mixed systems: plan wheel | 243.14 | 4.071 ms | 9.914 ms |
+| Mixed systems: plan pan | 244.13 | 4.037 ms | 9.987 ms |
+| Mixed systems: focused plan closeup | 229.53 | 4.093 ms | 11.728 ms |
+| Mixed systems: strong 3D closeup | 196.19 | 5.514 ms | 11.423 ms |
+| Mixed systems: 3D orbit | 197.42 | 5.659 ms | 21.079 ms |
+| Mixed systems: 3D pan | 196.35 | 5.649 ms | 21.735 ms |
+| Mixed systems: 3D wheel | 198.76 | 5.643 ms | 13.988 ms |
+| Mixed systems: tiled plan wheel | 211.85 | 4.843 ms | 6.857 ms |
+| 400 cavity walls: plan wheel | 636.65 | 1.833 ms | 2.524 ms |
+| 400 cavity walls: plan pan | 714.04 | 1.589 ms | 2.059 ms |
+| 100,000-placement model: 3D wheel | 193.46 | 5.964 ms | 6.479 ms |
+| 100,000-placement model: plan wheel | 204.15 | 4.914 ms | 5.819 ms |
+| 100,000-placement model: plan pan | 203.60 | 4.894 ms | 6.272 ms |
+| 100,000-placement model: 3D orbit | 185.09 | 6.071 ms | 6.857 ms |
+
+All final runs preserve model hashes, undo histories, mesh generation and native
+upload counts during camera input and settling. The plan cases also perform
+zero heavy recordings. Both final 100,000-placement 3D runs submit exactly
+100,000 instances in six indexed draws per audited command buffer. Their plan
+counterparts show the active 10,000-placement storey of that ten-storey model.
+The final orbit and 3D pan runs each contain eight frames over 16.667 ms; retain
+those maxima rather than treating the p95 criterion as a per-frame guarantee.
+
+A pixel comparison before input covers mixed plans, mixed 3D, the cavity-wall
+plan and the component plan: 2,492,400 compared canvas pixels, zero changed
+pixels between the resident-only and indexed builds. This is a scoped visual
+regression check, not proof for every possible join or system section.
+Evidence: `join-index-image-equivalence.json`.
+
+An additional owned native editor adds a wall to a disposable copy of the mixed
+model, then performs undo, redo and undo. Wall counts follow 0/1/0/1/0; mesh
+generations advance through 2/3/4/5 and every change records the affected plan.
+The added wall changes 141 canvas pixels; final undo returns all compared canvas
+pixels exactly to their initial values. The copied source file remains unchanged
+and its undo stack is empty again. This verifies that camera reuse has not
+prevented edit/history invalidation. Evidence: `startup-edit-smoke/results.json`
+and its images. The original user's open model is not part of this test.
+
+The final kernel archive retains SHA-256
+`7b7edfbd081987bfe84949657b2056450b13a88154e49a96e922b0e08e6791c9`.
+Raw final traces are `startup-validated-*/results.json`; frozen source hashes
+and native test logs are under `startup-native-queue/`. The staged source tree
+was checked byte-for-byte against the tested native snapshot before integration.
+
 ## Acceptance criteria
 
 These criteria are specified before the next implementation is measured:
@@ -504,11 +587,13 @@ of sections, edits, exports or million-component models.
 ## Verdict
 
 Keep resident cut drawings, fixed pixel strokes, the GPU inset, conservative
-bounds queries and the fixed high-detail display policy. All fourteen measured
-navigation scenarios meet the FPS/p95 goal, with stable native mesh/upload
-counters and independently verified 100,000-instance GPU submission. Retain the
-recorded frame maxima: seven strong-closeup frames remain above 16.667 ms.
-Keep R-01 open. Specific missing evidence is responsive initial loading with the
-candidate join index, cheap large-model edits and complete interactive
-system-section checks. The current measurements do not justify changing general
-kernel mathematics to address camera navigation.
+bounds queries, the fixed high-detail display policy and the ordered join index.
+The fourteen final navigation scenarios meet the FPS/p95 goal, preserve native
+mesh/upload counters and independently verify 100,000-instance GPU submission.
+The reference model starts much sooner and keeps audited startup event intervals
+below the existing desktop timeout; edit/undo/redo invalidation is verified.
+Retain the recorded GPU-timed maxima of about 22 ms: constant 120 FPS for every
+frame has not been established. Keep R-01 open. Specific remaining work is cheap
+large-model edits, finer startup task chunking and complete interactive
+system-section rendering checks. The measurements support removing repeated
+work around the kernel, without changing its general mathematics.

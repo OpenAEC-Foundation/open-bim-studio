@@ -451,6 +451,94 @@ class:
         point as a cad vector3
         kind as an integer
 
+class:
+    patterns:
+        [a|] bim join bounds node record
+    members:
+        low as a cad vector3
+        high as a cad vector3
+        left as an integer
+        right as an integer
+        position as an integer
+
+class:
+    patterns:
+        [a|] bim part join index record
+    members:
+        nodes as the type of (a cad topology list of a bim join bounds node record)
+        root as an integer
+
+function bim join vector {cad vector3:location} is finite:
+    execute:
+        return (((the absolute value of location's x) <= 1.7976931348623157e308) and ((the absolute value of location's y) <= 1.7976931348623157e308)) and ((the absolute value of location's z) <= 1.7976931348623157e308)
+
+# Every exact join test below lies within this padded axis box: end hits
+# use 1 mm, body hits use the profile's side reach. The sum of half widths
+# bounds that reach for every direction. Nonfinite inputs remain unbounded.
+# Consecutive ranges preserve the existing first matching part, even when
+# several possible joins coincide. This index never chooses a joint itself.
+function the bim part join index of {a pointer to a list:partList} framed {a pointer to a list:frameList}:
+    execute:
+        set lookup to @intrinsic("construct", a bim part join index record, a cad topology list of a bim join bounds node record, -1)
+        set level to an empty list of an integer
+        set infinity to 1.0 / 0.0
+        loop memberCursor from 0 to the length of partList:
+            set memberValue to the item at memberCursor in partList
+            set memberFrame to the item at memberCursor in frameList
+            set padding to 0.001 + (((the absolute value of memberValue's kind's width) + (the absolute value of memberValue's kind's depth)) * 0.5)
+            set magnitude to the maximum of 1.0 and (the maximum of (the cad length of memberFrame's first) and (the cad length of memberFrame's last))
+            set padding to padding + (magnitude * 1e-12)
+            set lower to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+            set upper to a cad vector3 with x infinity, y infinity and z infinity
+            if ((bim join vector memberFrame's first is finite) and (bim join vector memberFrame's last is finite)) and ((the absolute value of padding) <= 1.7976931348623157e308):
+                set lower to a cad vector3 with x ((the minimum of memberFrame's first's x and memberFrame's last's x) - padding), y ((the minimum of memberFrame's first's y and memberFrame's last's y) - padding) and z ((the minimum of memberFrame's first's z and memberFrame's last's z) - padding)
+                set upper to a cad vector3 with x ((the maximum of memberFrame's first's x and memberFrame's last's x) + padding), y ((the maximum of memberFrame's first's y and memberFrame's last's y) + padding) and z ((the maximum of memberFrame's first's z and memberFrame's last's z) + padding)
+            append memberCursor to level
+            append (@intrinsic("construct", a bim join bounds node record, lower, upper, -1, -1, memberCursor)) to (lookup's nodes's values)
+        loop while (the length of level) > 1:
+            set nextLevel to an empty list of an integer
+            set nodeCursor to 0
+            loop while nodeCursor < (the length of level):
+                set left to the item at nodeCursor in level
+                if (nodeCursor + 1) < (the length of level):
+                    set right to the item at (nodeCursor + 1) in level
+                    set firstNode to the item at left in (lookup's nodes's values)
+                    set lastNode to the item at right in (lookup's nodes's values)
+                    set lower to a cad vector3 with x (the minimum of firstNode's low's x and lastNode's low's x), y (the minimum of firstNode's low's y and lastNode's low's y) and z (the minimum of firstNode's low's z and lastNode's low's z)
+                    set upper to a cad vector3 with x (the maximum of firstNode's high's x and lastNode's high's x), y (the maximum of firstNode's high's y and lastNode's high's y) and z (the maximum of firstNode's high's z and lastNode's high's z)
+                    append (the length of (lookup's nodes's values)) to nextLevel
+                    append (@intrinsic("construct", a bim join bounds node record, lower, upper, left, right, -1)) to (lookup's nodes's values)
+                else:
+                    append left to nextLevel
+                set nodeCursor to nodeCursor + 2
+            free level
+            set level to nextLevel
+        if (the length of level) = 1:
+            set lookup's root to the item at 0 in level
+        free level
+        return lookup
+
+function the bim join candidates near {cad vector3:spot} in {bim part join index record:lookup}:
+    execute:
+        set found to an empty list of an integer
+        set pending to an empty list of an integer
+        if lookup's root >= 0:
+            append lookup's root to pending
+        loop while (the length of pending) > 0:
+            set last to (the length of pending) - 1
+            set at to the item at last in pending
+            remove item last from pending
+            set node to the item at at in (lookup's nodes's values)
+            set outside to ((spot's x < node's low's x) or (spot's x > node's high's x)) or (((spot's y < node's low's y) or (spot's y > node's high's y)) or ((spot's z < node's low's z) or (spot's z > node's high's z)))
+            if outside = false:
+                if node's position >= 0:
+                    append node's position to found
+                else:
+                    append node's right to pending
+                    append node's left to pending
+        free pending
+        return found
+
 # The connections of the ends of `partList` (`bim stair part record`s: an
 # element and its type), with `frameList` their frames: each end meets the
 # first part it touches, end to end at an angle or on its body. Connecting
@@ -458,6 +546,7 @@ class:
 function the bim connections of parts {a pointer to a list:partList} framed {a pointer to a list:frameList} in {bim model record:modelValue}:
     execute:
         set connectionList to a cad topology list of a bim connection record
+        set joinIndex to the bim part join index of partList framed frameList
         loop cursor from 0 to the length of partList:
             set part to the item at cursor in partList
             set ownFrame to the item at cursor in frameList
@@ -471,10 +560,12 @@ function the bim connections of parts {a pointer to a list:partList} framed {a p
                         set outward to ownFrame's along
                     set chosen to the bim connection at end endCursor of part's element's id in modelValue
                     set met to false
-                    set otherCursor to 0
+                    set joinCandidates to the bim join candidates near spot in joinIndex
+                    set candidateCursor to 0
                     # The first matching part owns the join. Once found, stop
                     # visiting and copying all remaining part/frame records.
-                    loop while (otherCursor < (the length of partList)) and (met = false):
+                    loop while (candidateCursor < (the length of joinCandidates)) and (met = false):
+                        set otherCursor to the item at candidateCursor in joinCandidates
                         set other to the item at otherCursor in partList
                         set otherFrame to the item at otherCursor in frameList
                         if ((met = false) and (otherCursor != cursor)) and ((otherFrame's length > 1e-9) and ((bim role other's kind's role connects) = false)):
@@ -502,7 +593,8 @@ function the bim connections of parts {a pointer to a list:partList} framed {a p
                                 if (the cad length of beside) <= ((the bim side reach of other's kind framed otherFrame toward towardSide) + 0.001):
                                     set met to true
                                     append (@intrinsic("construct", a bim connection record, cursor, endCursor, otherCursor, -1, spot, the bim join of chosen against (bim automatic connection) toward end false ranked ownRank under otherRank)) to (connectionList's values)
-                        set otherCursor to otherCursor + 1
+                        set candidateCursor to candidateCursor + 1
+                    free joinCandidates
         return connectionList
 
 # The frames of `partList`, in order.
