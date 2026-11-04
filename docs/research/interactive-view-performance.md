@@ -175,6 +175,13 @@ came from an Xvfb functional run; its presentation FPS is not compared with the
 desktop measurements. This reproduces the post-scroll hitch with actual native
 walls, independently of the component-heavy showcase.
 
+The same fixture was regenerated at x = 500,000 m and y = 450,000 m. Both
+application loads confirmed 400 walls and 200 openings. A before-motion image
+comparison found zero changed pixels across 217,800 pixels in 99 room rectangles;
+the room overlapped by the local world-origin marker and all UI/view overlays
+were excluded. This checks these visible orthographic wall/window drawings under
+translation; it is not a full-window or arbitrary-coordinate correctness claim.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:
