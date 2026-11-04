@@ -12,7 +12,8 @@ sections and 3D, and which measured costs belong to the CAD kernel?
 Exploratory traces identify repeated plan recording as the main cost of the old
 plan zoom path. Retained replay removes that work during wheel input, but a
 172 ms recording after input stops remains outside the 8.33 ms frame budget.
-The mixed-system 3D scene also remains below target and needs separate profiling.
+The mixed-system 3D scene remains below target; stack samples identify CPU replay
+of its small plan inset as a repeated cost.
 
 ## What it is
 
@@ -70,6 +71,45 @@ undo histories were unchanged. The Xvfb smoke run verified input and cache
 behavior but is excluded from the desktop performance comparison because its
 presentation timing differed substantially.
 
+### Direct kernel seam probe
+
+The old and retained builds contain byte-identical kernel archives:
+`7b7edfbd081987bfe84949657b2056450b13a88154e49a96e922b0e08e6791c9`.
+There are no kernel source changes between the two application revisions.
+The observed plan speedup therefore does not require a kernel-library change.
+
+`tools/probes/kernel_abi_timing.py` links a small C driver against that existing
+archive, without invoking or changing the DynLex compiler. It only passes scalar
+values, an explicitly three-double Vec3 input and opaque body handles across the
+existing exposed seam. It releases every owned body. Each case constructs a
+6 by 0.36 by 3 m faceted wall and optionally performs one or four sequential
+rectangular through-opening differences. Each of 15 results is required to be
+non-null and have zero topology flaws; validation runs outside the timed region.
+
+| General BRep operation | Origin | Median | Observed p95 | Maximum |
+|---|---|---:|---:|---:|
+| Wall only | Local | 0.006 ms | 0.008 ms | 0.016 ms |
+| Wall + one opening | Local | 0.635 ms | 0.946 ms | 0.996 ms |
+| Wall + four openings | Local | 7.030 ms | 10.153 ms | 10.176 ms |
+| Wall only | Survey 500/450 km | 0.005 ms | 0.006 ms | 0.012 ms |
+| Wall + one opening | Survey 500/450 km | 0.913 ms | 0.936 ms | 0.938 ms |
+| Wall + four openings | Survey 500/450 km | 6.602 ms | 8.474 ms | 9.910 ms |
+
+This probe checks topology, not the resulting volume, slice geometry, tessellation
+or all application wall fast paths. It reproduces no kernel failure in those six
+cases and does not establish universal kernel correctness. Four general BRep
+booleans can exceed one 120 FPS frame budget even on this machine; model edits
+and camera-only frames must remain separate workloads.
+
+### Qualitative 3D stack samples
+
+Ten GDB samples from the owned disposable process found seven stacks in
+`replay bim canvas` and `add gpu vertex`, with the application call at the
+plan inset's CPU replay. Two samples were in grid-head ray candidate queries;
+one was in the presentation driver. These counts are qualitative observations,
+not statistically reliable percentages. Timing from the debugger run is marked
+invalid. The unsampled 3D run above remains the quantitative baseline.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:
@@ -110,9 +150,9 @@ of sections, edits, exports or million-component models.
 
 Remove the remaining camera-triggered plan recording, and profile the mixed-scene
 3D CPU path before changing kernel algorithms. Keep R-01 open. The missing
-specific evidence is the measured no-recording post-input path, sampled 3D call
-stacks, separate correct kernel-operation timings, and the repeated 120 FPS
-navigation checks including tiled sections.
+specific evidence is the measured no-recording post-input path, GPU retention of
+the plan inset, volume/slice correctness beyond the kernel seam topology check,
+and repeated 120 FPS navigation checks including tiled sections.
 
 ## Sources
 
