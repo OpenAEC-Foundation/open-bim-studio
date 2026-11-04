@@ -205,6 +205,31 @@ the slower mixed-system fixture; it does not validate 100,000 cut results,
 interactive edits or plan/section completeness. Raw evidence is in
 `retention-baseline-100000-orbit/results.json`.
 
+### Native component folding
+
+The C seam probe also accepts `--box-component-model MODEL --component-id ID`
+for native definitions consisting entirely of additive, unrotated boxes. It
+rejects other geometry rather than approximating it. It folds the boxes in file
+order using the application's 1e-9 m boolean tolerance. An independent coordinate
+cell sweep computes the analytic union volume, including overlaps.
+
+All 23 definitions in the mixed-system fixture passed three rounds each: valid
+bodies, zero topology flaws and 69 finite/index-bounded tessellation-volume
+checks. The largest volume error was 1.111e-16 m3. The 64-box exposed-reinforcement
+definition took median 1,608.049 ms to fold; the fourteen 24-box masonry corners
+took approximately 46.5–47.3 ms each. The sum of component medians was
+2,264.055 ms. These measurements include general BRep construction and unions,
+with validation and tessellation outside the timed fold; per-part diagnostic
+writes are included in the aggregate duration.
+
+This reproduces a significant one-off kernel cost with actual model definitions,
+but does not account for the full 15.580 s application meshing stage. Further
+stage measurements are needed before attributing its remainder. No geometry
+algorithm was changed. The original 450 wall/slice volume checks were rerun after
+extending the probe and passed. Evidence: `kernel-native-component-summary.json`,
+the per-component result directories, and
+`kernel-abi-volume-regression-after-components/results.json`.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:

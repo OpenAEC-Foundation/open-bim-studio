@@ -17,11 +17,44 @@ import resource
 import subprocess
 
 
+def box_component_fixture(model, component_id):
+    """Exact analytic union volume from an independent coordinate cell sweep."""
+    boxes=[];active=False
+    for line in model.read_text().splitlines():
+        fields=line.split()
+        if not fields:continue
+        if fields[0]=='component':active=int(fields[1])==component_id
+        if active and fields[0]=='solid':
+            if fields[1:3]!=['0','0'] or float(fields[9])!=0:
+                raise ValueError('component probe requires unrotated additive boxes')
+            box=tuple(float(value) for value in fields[3:9])
+            if any(size<=0 for size in box[3:]):raise ValueError('box dimensions must be positive')
+            boxes.append(box)
+    if not boxes:raise ValueError('component has no supported box solids')
+    axes=[sorted({value for box in boxes for value in (box[axis],box[axis]+box[axis+3])}) for axis in range(3)]
+    cells=(len(axes[0])-1)*(len(axes[1])-1)*(len(axes[2])-1)
+    if cells>1000000:raise ValueError('analytic cell sweep is too large')
+    volume=0.0
+    for x0,x1 in zip(axes[0],axes[0][1:]):
+        for y0,y1 in zip(axes[1],axes[1][1:]):
+            for z0,z1 in zip(axes[2],axes[2][1:]):
+                centre=((x0+x1)/2,(y0+y1)/2,(z0+z1)/2)
+                if any(all(box[axis]<=centre[axis]<=box[axis]+box[axis+3] for axis in range(3)) for box in boxes):
+                    volume+=(x1-x0)*(y1-y0)*(z1-z0)
+    return boxes,volume
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--box-component-model',type=Path,help='Instead of walls, fold one native component made of additive axis-aligned boxes.')
+    parser.add_argument('--component-id',type=int)
+    parser.add_argument('--component-rounds',type=int,default=3)
     args=parser.parse_args()
+    if bool(args.box_component_model)!=(args.component_id is not None):
+        raise ValueError('provide both --box-component-model and --component-id')
+    if not 1<=args.component_rounds<=15:raise ValueError('--component-rounds must be between 1 and 15')
     root=Path(__file__).resolve().parents[2]
     archive=args.archive.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     client=(root/'kernel/api/client.dl').read_text()
@@ -153,6 +186,40 @@ int main(void) {
 '''
     # The driver string is ordinary C; its JSON/diagnostic escapes are literal.
     driver=driver.replace('ALIASES',aliases).replace('DIFFERENCE',operation.group(1))
+    fixture=None
+    if args.box_component_model:
+        boxes,volume=box_component_fixture(args.box_component_model,args.component_id)
+        fixture={'model':str(args.box_component_model.resolve()),'model_sha256':hashlib.sha256(args.box_component_model.read_bytes()).hexdigest(),
+                 'component_id':args.component_id,'additive_boxes':len(boxes),'analytic_union_volume_m3':volume,'boolean_tolerance_m':1e-9}
+        union=re.search(r'function cad union operation:\s+replacement:\s+(\d+)',types)
+        if not union:raise RuntimeError('kernel union operation not found')
+        rows=',\n'.join('{'+','.join(format(value,'.17g') for value in box)+'}' for box in boxes)
+        body=r'''int main(void) {
+    const double boxes[][6]={BOXES};
+    puts("[");
+    for(int round=0;round<ROUNDS;++round) {
+        void *folding=NULL;uint64_t start=now();
+        for(size_t i=0;i<sizeof(boxes)/sizeof(boxes[0]);++i) {
+            const double *b=boxes[i];uint64_t step=now();
+            void *built=box(b[0],b[1],b[2],b[3],b[4],b[5]);require_body(built);
+            if(folding) {
+                void *joined=combine(folding,built,UNION,1e-9);
+                release(folding);release(built);require_body(joined);folding=joined;
+            } else folding=built;
+            fprintf(stderr,"OBS_KERNEL_COMPONENT_STEP round=%d part=%zu us=%.3f\n",round,i,(now()-step)/1000.0);
+        }
+        double elapsed=(now()-start)/1000.0;
+        if(flaws(folding)){fputs("component has topology flaws\n",stderr);return 1;}
+        check_volume(folding,VOLUME);release(folding);
+        printf("{\"component_id\":ID,\"round\":%d,\"microseconds\":%.3f,\"topology_flaws\":0}%s\n",round,elapsed,round+1==ROUNDS?"":",");
+    }
+    puts("]");
+}
+'''
+        body=body.replace('BOXES',rows).replace('ROUNDS',str(args.component_rounds)).replace('UNION',union.group(1)).replace('VOLUME',format(volume,'.17g')).replace('ID',str(args.component_id))
+        prefix=driver[:driver.index('static double timed_slice')]
+        prefix=prefix.replace('return make(p,8,f,30,1e-7);','return make(p,8,f,30,1e-9);')
+        driver=prefix+body
     source.write_text(driver)
     binary=out/'kernel-timing'
     command=['cc','-std=c11','-O2','-Wall','-Wextra',str(source),str(archive),'-lm','-o',str(binary)]
@@ -173,8 +240,12 @@ int main(void) {
             'compiler_command':command,'samples':json.loads(run.stdout),
             'slice_samples':slice_samples,
             'volume_samples':volume_samples,
-            'correctness_scope':'valid bodies/slices, zero topology flaws, finite tessellation with bounded indices and analytic signed volumes within max(1e-6 m3, 1 ppm)'}
+            'component_fixture':fixture,
+            'correctness_scope':'valid bodies'+('/slices' if fixture is None else '')+', zero topology flaws, finite tessellation with bounded indices and analytic signed volumes within max(1e-6 m3, 1 ppm)'}
     (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
+    if fixture:
+        print(json.dumps({'fixture':fixture,'samples':result['samples']}),flush=True)
+        return
     for item in result['samples']:
         values=sorted(item['microseconds'])
         print(json.dumps({'survey':item['survey'],'openings':item['openings'],
