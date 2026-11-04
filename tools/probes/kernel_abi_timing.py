@@ -52,12 +52,15 @@ def main():
     parser.add_argument('--component-id',type=int)
     parser.add_argument('--component-rounds',type=int,default=3)
     parser.add_argument('--compare-component-meshes',action='store_true',help='Require identical component tessellation at 1 m and 0.2 mm tolerances.')
+    parser.add_argument('--curve-tolerances',action='store_true',help='Measure native cylinder tessellation with independent angular and linear controls.')
     args=parser.parse_args()
     if bool(args.box_component_model)!=(args.component_id is not None):
         raise ValueError('provide both --box-component-model and --component-id')
     if not 1<=args.component_rounds<=15:raise ValueError('--component-rounds must be between 1 and 15')
     if args.compare_component_meshes and not args.box_component_model:
         raise ValueError('--compare-component-meshes requires a native box component fixture')
+    if args.curve_tolerances and args.box_component_model:
+        raise ValueError('--curve-tolerances and --box-component-model are separate probes')
     root=Path(__file__).resolve().parents[2]
     archive=args.archive.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     client=(root/'kernel/api/client.dl').read_text()
@@ -245,6 +248,45 @@ int main(void) {
         prefix=driver[:driver.index('static double timed_slice')]
         prefix=prefix.replace('return make(p,8,f,30,1e-7);','return make(p,8,f,30,1e-9);')
         driver=prefix+comparison+body
+    if args.curve_tolerances:
+        cylinder_symbol=symbol('the_obskernel_cylinder_body_at_')
+        declaration=f'extern void *cylinder(const Vec3 *,double,double) __asm__("{cylinder_symbol}");\n'
+        driver=driver[:driver.index('static double timed_slice')]+declaration+r'''int main(void) {
+    Vec3 base={0,0,0};void *body=cylinder(&base,.3,2);require_body(body);
+    if(flaws(body)){fputs("cylinder topology flaws\n",stderr);return 1;}
+    const double angles[]={.3,.05},tolerances[]={.02,.0002};int counts[2][2];
+    puts("[");
+    for(int a=0;a<2;++a)for(int t=0;t<2;++t) {
+        Mesh m={0};uint64_t start=now();mesh(body,angles[a],tolerances[t],&m);
+        double elapsed=(now()-start)/1000.0;
+        if(!m.positions || !m.normals || !m.triangles || m.positions->length<4 || m.triangles->length<4 || m.positions->length!=m.normals->length) {
+            fputs("missing curved tessellation\n",stderr);return 1;
+        }
+        Vec3 *p=m.positions->data,*n=m.normals->data;Triangle *tri=m.triangles->data;
+        for(int i=0;i<m.positions->length;++i) {
+            double radius=hypot(p[i].x,p[i].y);
+            int on_side=fabs(radius-.3)<1e-9 && p[i].z>=-1e-9 && p[i].z<=2+1e-9;
+            int on_cap=radius<=.3+1e-9 && (fabs(p[i].z)<1e-9 || fabs(p[i].z-2)<1e-9);
+            if(!isfinite(p[i].x) || !isfinite(p[i].y) || !isfinite(p[i].z) || !isfinite(n[i].x) || !isfinite(n[i].y) || !isfinite(n[i].z) || !(on_side || on_cap)) {
+                fputs("invalid cylinder vertex or normal\n",stderr);return 1;
+            }
+        }
+        for(int i=0;i<m.triangles->length;++i) {
+            Triangle v=tri[i];
+            if(v.first<0 || v.second<0 || v.third<0 || v.first>=m.positions->length || v.second>=m.positions->length || v.third>=m.positions->length) {
+                fputs("invalid curved triangle index\n",stderr);return 1;
+            }
+        }
+        counts[a][t]=m.triangles->length;
+        printf("{\"angle\":%.8g,\"linear_tolerance\":%.8g,\"vertices\":%d,\"triangles\":%d,\"microseconds\":%.3f}%s\n",angles[a],tolerances[t],m.positions->length,m.triangles->length,elapsed,a==1 && t==1?"":",");
+        free_mesh(&m);
+    }
+    puts("]");release(body);
+    for(int t=0;t<2;++t)if(counts[1][t]<=counts[0][t]) {
+        fputs("angular cylinder refinement failed\n",stderr);return 1;
+    }
+}
+'''
     source.write_text(driver)
     binary=out/'kernel-timing'
     command=['cc','-std=c11','-O2','-Wall','-Wextra',str(source),str(archive),'-lm','-o',str(binary)]
@@ -269,7 +311,12 @@ int main(void) {
             'fixed_mesh_samples':[dict(field.split('=',1) for field in line.split()[1:])
                                   for line in run.stderr.splitlines() if line.startswith('OBS_KERNEL_FIXED_MESH ')],
             'correctness_scope':'valid bodies'+('/slices' if fixture is None else '')+', zero topology flaws, finite tessellation with bounded indices and analytic signed volumes within max(1e-6 m3, 1 ppm)'}
+    if args.curve_tolerances:
+        result['correctness_scope']='zero cylinder topology flaws; finite boundary vertices/normals; bounded triangle indices; increased tessellation under tighter angular control; no analytic-volume assertion'
     (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
+    if args.curve_tolerances:
+        print(json.dumps(result['samples']),flush=True)
+        return
     if fixture:
         print(json.dumps({'fixture':fixture,'samples':result['samples']}),flush=True)
         return

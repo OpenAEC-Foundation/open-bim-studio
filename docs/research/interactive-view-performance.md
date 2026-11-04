@@ -323,6 +323,39 @@ recorded per run. A separate compiler and the existing user editor remained
 active, so these are observed development-build results rather than isolated
 hardware maxima.
 
+### Independent component and curved-detail controls
+
+The next native candidate classifies explicit faceted component definitions once
+and caches adaptive scene positions. In the 100,000-placement wheel scenario it
+submits 193.08 FPS, with presented p95 6.055 ms, maximum 7.163 ms and no frame over
+8.333 ms. Its meshing stage is at most 0.002 ms. This is evidence for this
+faceted fixture, not a bound for arbitrary curved components or edits.
+
+The same candidate still fails the mixed-system wheel test: 47.90 FPS, p95
+26.670 ms, maximum 29.198 ms. It retains 8,139 fixed IDs, but the remaining
+adaptive queue still reaches 142 meshes. Each refresh passes through the full
+scene dispatcher; meshing median is 20.469 ms and p95 24.502 ms. Removing fixed
+IDs from the priority queue alone does not remove this full-scene traversal.
+Both model hashes and undo histories remain unchanged. Evidence:
+`lod-candidate-components-100000-zoom-3d/results.json` and
+`lod-candidate-showcase-zoom-3d/results.json`.
+
+A separate cylinder control prevents confusing the native seam's linear
+tolerance with chordal deflection. With radius 0.3 m and height 2 m, maximum
+angle 0.3 radians produces 372 vertices / 124 triangles at both 0.02 m and
+0.0002 m linear tolerances. Reducing the angle to 0.05 radians produces 1,524
+vertices / 508 triangles at both linear tolerances. The four meshes have finite
+boundary vertices and normals, bounded triangle indices and a body with zero
+topology flaws. No analytic-volume claim is made for this curved tessellation.
+The kernel's `cad tessellation tolerance` has a separate optional chordal field;
+the application component seam currently supplies only angle and linear
+tolerance. The original test incorrectly expected linear tolerance alone to
+refine this cylinder. Curved components remain conservatively adaptive; a round
+linear-profile test separately proves actual camera-dependent refinement.
+Reproduce with `tools/probes/kernel_abi_timing.py --curve-tolerances`; evidence:
+`kernel-cylinder-controls/results.json`. The default wall/slice/volume probe was
+rerun successfully after adding this independent control.
+
 ## Acceptance criteria
 
 These criteria are specified before the next implementation is measured:
