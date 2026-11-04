@@ -89,6 +89,7 @@ def main():
     parser.add_argument('--min-fps',type=float,default=0)
     parser.add_argument('--max-p95-ms',type=float,default=0)
     parser.add_argument('--require-retained-plan',action='store_true',help='Require zero recording during motion and after input stops.')
+    parser.add_argument('--expect-walls',type=int,help='Reject a wrong or failed native fixture load before measuring.')
     parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
     parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
@@ -165,6 +166,9 @@ def main():
                 time.sleep(.5)
         else:raise TimeoutError('startup/API timeout')
         startup=time.monotonic()-started;print(f'API ready after {startup:.3f}s',flush=True)
+        (out/'initial-state.json').write_text(json.dumps(before,indent=2)+'\n')
+        if args.expect_walls is not None and before['walls']!=args.expect_walls:
+            raise RuntimeError(f'expected {args.expect_walls} native walls, loaded {before["walls"]}: {before.get("message", "")}')
         if desktop:desktop.claim(app.pid,activate=not args.internal_orbit_lib)
         for command in args.ribbon_setup:
             answer=api.request('ribbon',command,timeout=120)

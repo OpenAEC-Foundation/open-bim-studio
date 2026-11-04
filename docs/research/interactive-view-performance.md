@@ -95,9 +95,10 @@ non-null and have zero topology flaws; validation runs outside the timed region.
 | Wall + one opening | Survey 500/450 km | 0.913 ms | 0.936 ms | 0.938 ms |
 | Wall + four openings | Survey 500/450 km | 6.602 ms | 8.474 ms | 9.910 ms |
 
-This probe checks topology, not the resulting volume, slice geometry, tessellation
-or all application wall fast paths. It reproduces no kernel failure in those six
-cases and does not establish universal kernel correctness. Four general BRep
+That initial run checks topology, not the resulting volume or all application
+wall fast paths. It reproduces no kernel failure in those six cases and does not
+establish universal kernel correctness. A later volume/tessellation check is
+reported separately below. Four general BRep
 booleans can exceed one 120 FPS frame budget even on this machine; model edits
 and camera-only frames must remain separate workloads.
 
@@ -145,6 +146,35 @@ The acceptance harness was checked against `2cf8267` with
 `--motion zoom-plan --require-retained-plan`: it correctly rejected the one
 post-input recording, retained its results and closed only its owned test process.
 
+### Independent tessellation and volume validation
+
+A subsequent stricter run retained the topology/slice checks and tessellated all
+90 walls and all 360 slice halves. It validates finite vertices, triangle index
+bounds and signed triangle volume against independently computed rectangular
+solid/void volumes, with tolerance max(1e-6 m3, one part per million). All 450
+checks passed; the maximum volume error was 2.515e-10 m3. Mesh generation across
+these results had median 0.182 ms and observed maximum 0.717 ms.
+
+This extension uses the shared native Mesh record (three list pointers and an
+owner pointer), plain list headers and explicit sole-owner release. The archive's
+mesh stores were inspected at offsets 0, 8, 16 and 24, and the Vec3/Triangle/list
+layouts and ownership match `kernel/api/types.dl` and the compiler's `lib/list.dl`.
+C static assertions reject incompatible native sizes; this is a native x86-64
+diagnostic, not a new stable cross-language SDK. No compiler or kernel archive is
+modified. Analytic volumes are checked independently rather than taken from the
+same kernel mass-property implementation.
+
+### Native cavity-wall fixture
+
+`tools/probes/generate_native_walls.py --rooms 100` generates 400 four-layer
+walls with 200 hosted windows in editable BIM-SLICE format. The application API
+confirmed those exact counts and no undo entries. On `2cf8267`, first-frame mesh
+work took 102.945 ms and plan recording 317.552 ms. Camera motion used retained
+replay, but the post-input recording still took 319.479 ms. These stage timings
+came from an Xvfb functional run; its presentation FPS is not compared with the
+desktop measurements. This reproduces the post-scroll hitch with actual native
+walls, independently of the component-heavy showcase.
+
 ## Next-iteration acceptance criteria
 
 These criteria are specified before the next implementation is measured:
@@ -186,7 +216,7 @@ of sections, edits, exports or million-component models.
 Remove the remaining camera-triggered plan recording, and profile the mixed-scene
 3D CPU path before changing kernel algorithms. Keep R-01 open. The missing
 specific evidence is the measured no-recording post-input path, GPU retention of
-the plan inset, volume/slice correctness beyond the kernel seam topology check,
+the plan inset, further kernel cases beyond the rectangular wall/void fixtures,
 and repeated 120 FPS navigation checks including tiled sections.
 
 ## Sources
