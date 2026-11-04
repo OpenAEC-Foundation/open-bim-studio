@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MPL-2.0
 """Measure the built CAD kernel through its scalar/opaque-pointer C seam.
 
-Only Vec3 (three binary64 members) crosses as a concrete input record. Bodies
-stay opaque and every owned handle is released. No compiler checkout is changed.
+Vec3, Plane and the scalar/pointer slice result follow the shared kernel types.
+The native x86-64 slice field stores were checked against the archive as well.
+Bodies stay opaque; every owned handle is released. No compiler is changed.
 The check is non-null results and closed topology; it does not assert volumes.
 """
 import argparse
@@ -31,6 +32,7 @@ def main():
         'combine':symbol('the_obskernel_combination_of_'),
         'flaws':symbol('the_obskernel_flaw_count_of_'),
         'release':symbol('release_obskernel_body_'),
+        'slice':symbol('initialize_obskernel_plane_slice_'),
     }
     types=(root/'kernel/api/types.dl').read_text()
     operation=re.search(r'function cad difference operation:\s+replacement:\s+(\d+)',types)
@@ -40,15 +42,21 @@ def main():
         f'extern void *combine(void *,void *,int32_t,double) __asm__("{symbols["combine"]}");',
         f'extern int32_t flaws(void *) __asm__("{symbols["flaws"]}");',
         f'extern void release(void *) __asm__("{symbols["release"]}");',
+        f'extern void slice(void *,const Plane *,Slice *) __asm__("{symbols["slice"]}");',
     ])
     source=out/'kernel-timing.c'
     driver=r'''#define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 typedef struct { double x,y,z; } Vec3;
+typedef struct { Vec3 origin,xAxis,yAxis; } Plane;
+typedef struct { _Bool valid,divided; int32_t snag; void *negative,*positive; } Slice;
 _Static_assert(sizeof(Vec3)==24,"Vec3 ABI");
+_Static_assert(sizeof(Plane)==72,"Plane ABI");
+_Static_assert(sizeof(Slice)==24 && offsetof(Slice,snag)==4 && offsetof(Slice,negative)==8 && offsetof(Slice,positive)==16,"native slice ABI");
 ALIASES
 static uint64_t now(void) { struct timespec t; if(clock_gettime(CLOCK_MONOTONIC,&t))abort(); return (uint64_t)t.tv_sec*1000000000ULL+t.tv_nsec; }
 static void *box(double x,double y,double z,double a,double b,double c) {
@@ -57,6 +65,17 @@ static void *box(double x,double y,double z,double a,double b,double c) {
     return make(p,8,f,30,1e-7);
 }
 static void require_body(void *b) { if(!b){fputs("kernel returned no body\n",stderr);exit(1);} }
+static double timed_slice(void *wall,const Plane *plane) {
+    Slice cut={0}; uint64_t start=now(); slice(wall,plane,&cut); uint64_t elapsed=now()-start;
+    if(!cut.valid || !cut.divided || !cut.negative || !cut.positive) {
+        fprintf(stderr,"slice refused: valid=%d divided=%d snag=%d\n",cut.valid,cut.divided,cut.snag);
+        exit(1);
+    }
+    int bad=flaws(cut.negative)+flaws(cut.positive);
+    release(cut.negative);release(cut.positive);
+    if(bad){fputs("slice produced topology flaws\n",stderr);exit(1);}
+    return elapsed/1000.0;
+}
 int main(void) {
     puts("[");
     for(int far=0;far<2;++far) for(int holes=0;holes<=4;++holes) {
@@ -73,6 +92,12 @@ int main(void) {
             }
             uint64_t elapsed=now()-start;
             if(flaws(wall)!=0){fputs("kernel produced topology flaws\n",stderr);release(wall);return 1;}
+            Plane plan={{x,y,1.2},{1,0,0},{0,1,0}};
+            Plane section={{x+3,y,0},{0,1,0},{0,0,1}};
+            double plan_us=timed_slice(wall,&plan);
+            double section_us=timed_slice(wall,&section);
+            fprintf(stderr,"OBS_KERNEL_SLICE survey=%d openings=%d plane=plan us=%.3f\n",far,holes,plan_us);
+            fprintf(stderr,"OBS_KERNEL_SLICE survey=%d openings=%d plane=vertical us=%.3f\n",far,holes,section_us);
             release(wall);
             printf("%s%.3f",round?",":"",elapsed/1000.0);
         }
@@ -93,14 +118,25 @@ int main(void) {
     (out/'kernel-timing.out').write_text(run.stdout)
     (out/'kernel-timing.err').write_text(run.stderr)
     if run.returncode:raise RuntimeError('kernel timing/correctness check failed; see kernel-timing.err')
+    slice_samples=[dict(field.split('=',1) for field in line.split()[1:])
+                   for line in run.stderr.splitlines() if line.startswith('OBS_KERNEL_SLICE ')]
     result={'archive':str(archive),'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),
             'compiler_command':command,'samples':json.loads(run.stdout),
-            'correctness_scope':'non-null bodies and zero topology flaws; volumes not checked'}
+            'slice_samples':slice_samples,
+            'correctness_scope':'non-null bodies, valid divided plan/vertical slices, zero topology flaws; volumes not checked'}
     (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
     for item in result['samples']:
         values=sorted(item['microseconds'])
         print(json.dumps({'survey':item['survey'],'openings':item['openings'],
                           'p50_us':values[7],'p95_us':values[13],'max_us':values[-1]}),flush=True)
+    for survey in [0,1]:
+        for openings in [0,1,4]:
+            for plane in ['plan','vertical']:
+                values=sorted(float(row['us']) for row in slice_samples
+                              if row['survey']==str(survey) and row['openings']==str(openings) and row['plane']==plane)
+                if len(values)!=15:raise RuntimeError('missing kernel slice samples')
+                print(json.dumps({'survey':bool(survey),'openings':openings,'plane':plane,
+                                  'p50_us':values[7],'p95_us':values[13],'max_us':values[-1]}),flush=True)
 
 
 if __name__=='__main__':main()

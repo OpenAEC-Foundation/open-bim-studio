@@ -101,6 +101,21 @@ cases and does not establish universal kernel correctness. Four general BRep
 booleans can exceed one 120 FPS frame budget even on this machine; model edits
 and camera-only frames must remain separate workloads.
 
+### Plan and vertical slice checks
+
+The same C seam probe also constructs a horizontal plane at z = 1.2 m and a
+vertical plane at x = 3 m relative to each wall. It checks `valid`, `divided`,
+both returned body handles and zero topology flaws on each side, and releases
+both handles. The shared plain Slice layout was checked against the native
+archive's stores (valid/divided bytes 0/1, snag at 4, handles at 8/16) and guarded
+with C static assertions; no managed-list output layout is assumed.
+
+All 180 slices passed these checks. For the four-opening wall, median horizontal
+slice time was 9.355 ms locally and 9.356 ms at survey coordinates; the vertical
+slice medians were 3.953 and 3.947 ms. These operations alone can exceed the
+camera-frame budget and reinforce the need to reuse cuts. No volume or cap-area
+assertion is claimed by this probe.
+
 ### Qualitative 3D stack samples
 
 Ten GDB samples from the owned disposable process found seven stacks in
@@ -109,6 +124,26 @@ plan inset's CPU replay. Two samples were in grid-head ray candidate queries;
 one was in the presentation driver. These counts are qualitative observations,
 not statistically reliable percentages. Timing from the debugger run is marked
 invalid. The unsampled 3D run above remains the quantitative baseline.
+
+### First-frame observations
+
+The unsampled traces report 23.937 s for the first plan frame and 29.890 s for
+the first 3D frame. The plan trace attributes 15.580 s to meshing and 5.918 s to
+plan recording. Two qualitative startup samples reached general BRep boolean
+classification while folding a component, and the all-pairs derived-part join
+search while computing system plan outlines. Two samples identify specific work;
+they do not establish percentages or which component accounts for all mesh time.
+The inset previously rebuilt these system outlines independently of the main plan.
+
+The local GNOME `org.gnome.mutter check-alive-timeout` setting is 5,000 ms. The
+application contains no matching unresponsive warning of its own. A blocked
+first frame of this duration is consistent with the desktop warning; that is an
+inference, not an observed window-manager ping trace. No desktop-global setting
+was changed.
+
+The acceptance harness was checked against `2cf8267` with
+`--motion zoom-plan --require-retained-plan`: it correctly rejected the one
+post-input recording, retained its results and closed only its owned test process.
 
 ## Next-iteration acceptance criteria
 

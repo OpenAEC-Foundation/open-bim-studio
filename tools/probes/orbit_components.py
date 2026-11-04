@@ -84,6 +84,11 @@ def main():
     parser.add_argument('--seconds',type=float,default=20)
     parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d'],default='orbit')
     parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
+    parser.add_argument('--sample-startup-stacks',type=int,default=0,help='Sample loading/first-frame work with GDB; timing is qualitative only.')
+    parser.add_argument('--ribbon-setup',action='append',default=[],help='Run an existing ribbon command before fit, for example View/Tile.')
+    parser.add_argument('--min-fps',type=float,default=0)
+    parser.add_argument('--max-p95-ms',type=float,default=0)
+    parser.add_argument('--require-retained-plan',action='store_true',help='Require zero recording during motion and after input stops.')
     parser.add_argument('--build-note',default='Compiler flags not recorded; supply --build-note for performance comparisons.')
     parser.add_argument('--startup-timeout',type=float,default=300)
     parser.add_argument('--save-copy',action='store_true',help='Save a new IFCXB next to the generated BIM after measuring; refuse an existing destination.')
@@ -105,6 +110,10 @@ def main():
     if args.keep_open and not args.desktop:raise ValueError('--keep-open requires --desktop')
     if args.motion != 'orbit' and not args.internal_orbit_lib:
         raise ValueError('additional motion modes require the process-local input shim')
+    if (args.min_fps or args.max_p95_ms) and (args.sample_stacks or args.sample_startup_stacks):
+        raise ValueError('debugger sampling cannot be used for quantitative acceptance checks')
+    if args.require_retained_plan and not args.motion.endswith('plan'):
+        raise ValueError('--require-retained-plan requires plan motion')
     desktop=OwnedDesktopWindow(os.environ['DISPLAY']) if args.desktop else None
     server=None if args.desktop else subprocess.Popen(['Xvfb','-displayfd','1','-screen','0','1440x900x24','-nolisten','tcp'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
     handed_over=False
@@ -117,9 +126,9 @@ def main():
         env.update(DISPLAY=display,HOME=str(home),XDG_SESSION_TYPE='x11',OBS_PROFILE_FRAMES='1',OBS_MODEL_VIEW='1',OBS_UI_SCALE='1')
         if args.motion.endswith('plan'):
             env.pop('OBS_MODEL_VIEW',None)
-        if args.sample_stacks:
-            if not 1 <= args.sample_stacks <= 20:
-                raise ValueError('--sample-stacks must be between 1 and 20')
+        if args.sample_stacks or args.sample_startup_stacks:
+            if not 0 <= args.sample_stacks <= 20 or not 0 <= args.sample_startup_stacks <= 20:
+                raise ValueError('stack sample counts must be between 0 and 20')
             env['OBS_NAV_SAMPLE_STACKS']='1'
         if args.internal_orbit_lib:
             control_stream=(out/'orbit-control').open('w+b')
@@ -137,15 +146,30 @@ def main():
             # group; benchmark-only editors remain owned and are terminated.
             app=subprocess.Popen(launch,cwd=root,env=env,stdout=stream,stderr=stream,
                                  start_new_session=args.keep_open)
-        api=mcp.Modeller();deadline=started+args.startup_timeout
+        def sample_owned_stack(label,index):
+            sampled=subprocess.run(['gdb','-nx','-q','-batch','-p',str(app.pid),
+                '-ex','set pagination off','-ex','thread 1','-ex','bt 24','-ex','detach'],
+                capture_output=True,text=True,timeout=20)
+            (out/f'{label}-{index:02d}.txt').write_text(sampled.stdout+sampled.stderr)
+            if sampled.returncode:
+                raise RuntimeError('GDB could not inspect the owned application; see stack sample')
+        api=mcp.Modeller();deadline=started+args.startup_timeout;startup_samples=0;sampled_at=started
         while time.monotonic()<deadline:
             if app.poll() is not None:raise RuntimeError(f'editor exited {app.returncode}; see {log}')
             try:
                 api.connect(str(out/'api'));before=api.request('state',timeout=2);break
-            except Exception:time.sleep(.5)
+            except Exception:
+                if startup_samples < args.sample_startup_stacks and time.monotonic()-sampled_at >= 1:
+                    sample_owned_stack('startup-stack',startup_samples)
+                    startup_samples+=1;sampled_at=time.monotonic()
+                time.sleep(.5)
         else:raise TimeoutError('startup/API timeout')
         startup=time.monotonic()-started;print(f'API ready after {startup:.3f}s',flush=True)
         if desktop:desktop.claim(app.pid,activate=not args.internal_orbit_lib)
+        for command in args.ribbon_setup:
+            answer=api.request('ribbon',command,timeout=120)
+            if not answer.get('ok'):raise RuntimeError(f'ribbon setup failed: {command}')
+            api.request('state',timeout=120)
         expected_kind='0' if args.motion.endswith('plan') else '1'
         # Let the first 3D scene complete before measuring motion.
         api.request('fit',timeout=120)
@@ -172,12 +196,7 @@ def main():
                 pointer.xtst.XTestFakeMotionEvent(pointer.display,-1,x+(desktop.x if desktop else 0),y+(desktop.y if desktop else 0),0);pointer.x11.XFlush(pointer.display)
             if app.poll() is not None:raise RuntimeError('editor exited while orbiting')
             if stack_samples < args.sample_stacks and elapsed >= (stack_samples+1)*args.seconds/(args.sample_stacks+1):
-                sampled=subprocess.run(['gdb','-nx','-q','-batch','-p',str(app.pid),
-                    '-ex','set pagination off','-ex','thread 1','-ex','bt 24','-ex','detach'],
-                    capture_output=True,text=True,timeout=20)
-                (out/f'stack-{stack_samples:02d}.txt').write_text(sampled.stdout+sampled.stderr)
-                if sampled.returncode:
-                    raise RuntimeError('GDB could not inspect the owned application; see stack sample')
+                sample_owned_stack('stack',stack_samples)
                 stack_samples+=1
             status=Path(f'/proc/{app.pid}/status').read_text()
             memory.append({line.split(':')[0]:line.split(':')[1].strip() for line in status.splitlines() if line.startswith(('VmRSS:','VmHWM:'))})
@@ -246,9 +265,25 @@ def main():
                        for line in settle_data.splitlines() if line.startswith('OBS_FRAME ')]
         result['settle_plan']=quantiles('plan_us',settle_frames)
         result['settle_rerecorded_frames']=sum(frame.get('rerecorded')=='true' for frame in settle_frames)
-        result['timing_valid']=not args.sample_stacks
+        result['timing_valid']=not (args.sample_stacks or args.sample_startup_stacks)
         result['stack_samples']=stack_samples
+        result['startup_stack_samples']=startup_samples
+        result['inset']=quantiles('inset_us')
+        result['ribbon_setup']=args.ribbon_setup
+        kernel_archive=binary.parent/'kernel/libobskernel.a'
+        result['kernel_archive_sha256']=hashlib.sha256(kernel_archive.read_bytes()).hexdigest() if kernel_archive.exists() else None
+        result['frames_over_8_333ms']=sum(float(row.get('presented_us',0))>8333 for row in frames)
+        result['frames_over_16_667ms']=sum(float(row.get('presented_us',0))>16667 for row in frames)
+        failures=[]
+        if args.require_retained_plan and (result['rerecorded_frames'] or result['settle_rerecorded_frames']):
+            failures.append('camera-only input or settling recorded the plan')
+        if args.min_fps and result['observed_fps']<args.min_fps:
+            failures.append(f'FPS below {args.min_fps}')
+        if args.max_p95_ms and result['presented']['p95_ms']>args.max_p95_ms:
+            failures.append(f'p95 frame time above {args.max_p95_ms} ms')
+        result['acceptance_failures']=failures
         (out/'results.json').write_text(json.dumps(result,indent=2)+'\n')
+        if failures:raise RuntimeError('acceptance failed: '+'; '.join(failures))
         if args.keep_open:
             (out/'handed-to-user').write_text(str(app.pid)+'\n')
             handed_over=True
