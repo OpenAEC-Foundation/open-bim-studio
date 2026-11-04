@@ -26,6 +26,8 @@ static uint64_t input_start;
 static uint64_t reported_input;
 static uint64_t scroll_at;
 static uint64_t scroll_start;
+static int custom_anchor;
+static double anchor_x,anchor_y;
 typedef void (*ScrollCallback)(GLFWwindow *, double, double);
 static ScrollCallback scroll_callback;
 __attribute__((constructor)) static void prepare_output(void) {
@@ -36,6 +38,12 @@ __attribute__((constructor)) static void prepare_output(void) {
             prctl(PR_SET_PTRACER, (unsigned long)getppid(), 0UL, 0UL, 0UL);
 #endif
         setvbuf(stdout, NULL, _IOLBF, 0);
+        const char *point_x=getenv("OBS_NAV_ANCHOR_X"),*point_y=getenv("OBS_NAV_ANCHOR_Y");
+        if(point_x && point_y) {
+            char *end_x,*end_y;
+            anchor_x=strtod(point_x,&end_x);anchor_y=strtod(point_y,&end_y);
+            custom_anchor=!*end_x && !*end_y && isfinite(anchor_x) && isfinite(anchor_y);
+        }
         fprintf(stderr, "OBS_ORBIT_SHIM pid=%ld parent=%ld\n", (long)getpid(), (long)getppid());
     }
 }
@@ -78,9 +86,9 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
             *x = 310.0; *y = 650.0;
             return;
         }
-        *x = (mode == 1 || mode == 2 ? 650.0 : 850.0) +
+        *x = (custom_anchor ? anchor_x : (mode == 1 || mode == 2 ? 650.0 : 850.0)) +
              (mode == 1 || mode == 5 ? 0 : (int)(230.0 * sin(elapsed * .9)));
-        *y = 450.0 + (mode == 1 || mode == 5 ? 0 : (int)(125.0 * sin(elapsed * .6)));
+        *y = (custom_anchor ? anchor_y : 450.0) + (mode == 1 || mode == 5 ? 0 : (int)(125.0 * sin(elapsed * .6)));
         if ((mode == 1 || mode == 5) && scroll_callback) {
             uint64_t now = now_ns();
             if (scroll_start != control[0]) {

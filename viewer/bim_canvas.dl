@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
-# A recorded drawing: batches of coloured triangles and text labels in pixels,
-# replayed into a frame with an offset. The plan is recorded once and replayed
-# shifted while it is panned, so panning costs a replay, not a redraw; it is
-# recorded again only when the model, the storey, the zoom or the view rules
-# change.
+# A recorded drawing of coloured triangles and anchored text. Screen cuts can
+# stay resident on the GPU while the camera changes; pixel stroke widths and
+# lettering remain independent of model zoom. Paper/export callers retain their
+# own uniform drawing scale.
 import views/drawings/bim_text.dl
 import kernel/core/core.dl
 import viewer/vulkan/images.dl
@@ -17,6 +16,7 @@ class:
         green as an integer
         blue as an integer
         pixels as the type of (a cad topology list of a cad vector2)
+        stroked as a boolean
 
 class:
     patterns:
@@ -31,6 +31,7 @@ class:
         # Centred on `x`, else starting there.
         centred as a boolean
         angle as a 64 bit floating-point number
+        anchor as a cad vector2
 
 class:
     patterns:
@@ -134,7 +135,7 @@ function record bim triangles {a pointer to a list:pixels} coloured {integer:red
         set copied to a cad topology list of a cad vector2
         loop cursor from 0 to the length of pixels:
             append (the item at cursor in pixels) to (copied's values)
-        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, copied)) to (canvas's batches's values)
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, copied, false)) to (canvas's batches's values)
 
 # Records the strokes between the pixel pairs `pairs`, `breadth` pixels wide.
 function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, {integer:green} and {integer:blue} wide {a 64 bit floating-point number:breadth} on {a pointer to a bim canvas record:canvas}:
@@ -152,17 +153,17 @@ function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, 
             else:
                 append bim stroke quad from first to second wide lineBreadth into (quads's values)
             set cursor to cursor + 2
-        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads)) to (canvas's batches's values)
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads, true)) to (canvas's batches's values)
 
 # Records a label with its baseline starting at `x`, `y`.
 function record bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
     execute:
-        append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue, false, 0.0)) to (canvas's texts's values)
+        append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue, false, 0.0, (a cad vector2 with x x and y y))) to (canvas's texts's values)
 
 # The same, centred on `x`.
 function record bim centred text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
     execute:
-        append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue, true, 0.0)) to (canvas's texts's values)
+        append (@intrinsic("construct", a bim canvas text record, message, x, y, red, green, blue, true, 0.0, (a cad vector2 with x x and y y))) to (canvas's texts's values)
 
 # Draws `canvas` into `frame` moved by `dx`, `dy` pixels: every batch in the
 # order recorded, then every label.
@@ -170,7 +171,20 @@ function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit float
     execute:
         replay bim canvas canvas shifted by dx and dy lettering at 1.0 with atlas in frame
 
-function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} lettering at {a 64 bit floating-point number:letterScale} with {bim text atlas record:atlas} in {graphics frame:frame}:
+# Stroke quads have six corners; recover their centreline independently of
+# width. The retained shader scales this anchor and keeps its offset in pixels.
+function the bim stroke anchor of {a pointer to a list:pixels} at {integer:corner}:
+    execute:
+        set quadCorner to the remainder of corner divided by 6
+        set base to corner - quadCorner
+        set first to the item at base in pixels
+        set second to the item at (base + 1) in pixels
+        if ((quadCorner = 2) or (quadCorner = 3)) or (quadCorner = 5):
+            set first to the item at (base + 2) in pixels
+            set second to the item at (base + 5) in pixels
+        return a cad vector2 with x ((first's x + second's x) * 0.5) and y ((first's y + second's y) * 0.5)
+
+function replay bim canvas geometry {bim canvas record:canvas} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} keeping pixel widths {boolean:keepPixels} in {graphics frame:frame}:
     execute:
         # All flat triangles share a pipeline and clip. Colour is stored per
         # vertex: retain painter order in one draw, not one draw per colour
@@ -194,9 +208,45 @@ function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit float
             set cornerCount to the length of (batch's pixels's values)
             set cornerCount to cornerCount - (the remainder of cornerCount divided by 3)
             loop corner from 0 to cornerCount:
-                set pixel to the item at corner in (batch's pixels's values)
-                add a vertex at x (pixel's x + dx) and y (pixel's y + dy) to frame
+                set cornerPixel to the item at corner in (batch's pixels's values)
+                if keepPixels and batch's stroked:
+                    set origin to the bim stroke anchor of (batch's pixels's values) at corner
+                    add gpu canvas pixel vertex anchored at (origin's x + dx) and (origin's y + dy) offset by (cornerPixel's x - origin's x) and (cornerPixel's y - origin's y) in (the gpu context of frame's window)
+                else:
+                    add a vertex at x (cornerPixel's x + dx) and y (cornerPixel's y + dy) to frame
         finish triangles in frame
+
+function anchor bim canvas text since {integer:firstText} at {cad vector2:anchor} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        loop cursor from firstText to the length of (canvas's texts's values):
+            set label to the item at cursor in (canvas's texts's values)
+            set label's anchor to anchor
+            replace item at index cursor in (canvas's texts's values) with label
+
+# Lettering follows model anchors, with unscaled font size and local offsets.
+function the bim canvas text position of {bim canvas text record:label} scaled by {a 64 bit floating-point number:scale} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy}:
+    execute:
+        return a cad vector2 with x (((label's anchor's x * scale) + dx) + (label's x - label's anchor's x)) and y (((label's anchor's y * scale) + dy) + (label's y - label's anchor's y))
+
+function replay bim canvas lettering {bim canvas record:canvas} scaled by {a 64 bit floating-point number:scale} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} with {bim text atlas record:atlas} in {graphics frame:frame}:
+    execute:
+        loop cursor from 0 to the length of (canvas's texts's values):
+            set label to the item at cursor in (canvas's texts's values)
+            set faceIndex to bim text body
+            if (the length of atlas's faces) > (bim text drawing):
+                set faceIndex to bim text drawing
+            set position to the bim canvas text position of label scaled by scale shifted by dx and dy
+            set advance to 0.0
+            if label's centred:
+                set advance to (0.0 - (the bim text width of label's message in face faceIndex of atlas)) * 0.5
+            if label's angle = 0.0:
+                draw bim text label's message at (position's x + advance) and position's y in face faceIndex with atlas coloured label's red, label's green and label's blue in frame
+            else:
+                draw bim rotated text label's message at position's x and position's y offset advance turned label's angle scaled 1.0 in face faceIndex with atlas coloured label's red, label's green and label's blue in frame
+
+function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy} lettering at {a 64 bit floating-point number:letterScale} with {bim text atlas record:atlas} in {graphics frame:frame}:
+    execute:
+        replay bim canvas geometry canvas shifted by dx and dy keeping pixel widths false in frame
         loop cursor from 0 to the length of (canvas's texts's values):
             # Text in the drawing is lettered in the drawing face.
             set label to the item at cursor in (canvas's texts's values)
@@ -228,7 +278,7 @@ function the bim readable text angle from {cad vector2:first} to {cad vector2:la
 function record bim member tag {a string:message} at {cad vector2:anchor} along {cad vector2:first} to {cad vector2:last} on {a pointer to a bim canvas record:canvas}:
     execute:
         set textTurn to the bim readable text angle from first to last
-        append (@intrinsic("construct", a bim canvas text record, message, anchor's x, anchor's y, 0, 0, 0, true, textTurn)) to (canvas's texts's values)
+        append (@intrinsic("construct", a bim canvas text record, message, anchor's x, anchor's y, 0, 0, 0, true, textTurn, anchor)) to (canvas's texts's values)
 
 function record bim dimension text {a string:message} between {cad vector2:first} and {cad vector2:last} on {a pointer to a bim canvas record:canvas}:
     execute:
@@ -236,7 +286,7 @@ function record bim dimension text {a string:message} between {cad vector2:first
         set gap to 5.0 * (the bim symbol scale of (@intrinsic("dereference", canvas)))
         set x to ((first's x + last's x) * 0.5) + (gap * (the sine of textTurn))
         set y to ((first's y + last's y) * 0.5) - (gap * (the cosine of textTurn))
-        append (@intrinsic("construct", a bim canvas text record, message, x, y, 0, 0, 0, true, textTurn)) to (canvas's texts's values)
+        append (@intrinsic("construct", a bim canvas text record, message, x, y, 0, 0, 0, true, textTurn, (a cad vector2 with x x and y y))) to (canvas's texts's values)
 
 # A recorded depth-tested drawing: triangles in pixels with depth, each with
 # its own colour (packed as red * 65536 + green * 256 + blue). The 3D view is

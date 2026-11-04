@@ -83,6 +83,7 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--seconds',type=float,default=20)
     parser.add_argument('--motion',choices=['orbit','zoom-plan','pan-plan','pan-3d','zoom-3d'],default='orbit')
+    parser.add_argument('--wheel-point',nargs=2,type=float,metavar=('X','Y'),help='Client pixel anchor inside the intended pane, for a zoom workload.')
     parser.add_argument('--sample-stacks',type=int,default=0,help='Sample the owned app with GDB; rejects quantitative timing conclusions for this run.')
     parser.add_argument('--sample-startup-stacks',type=int,default=0,help='Sample loading/first-frame work with GDB; timing is qualitative only.')
     parser.add_argument('--ribbon-setup',action='append',default=[],help='Run an existing ribbon command before fit, for example View/Tile.')
@@ -116,6 +117,8 @@ def main():
         raise ValueError('debugger sampling cannot be used for quantitative acceptance checks')
     if args.require_retained_plan and not args.motion.endswith('plan'):
         raise ValueError('--require-retained-plan requires plan motion')
+    if args.wheel_point and (not args.motion.startswith('zoom-') or not all(math.isfinite(v) for v in args.wheel_point) or not (0<=args.wheel_point[0]<1440 and 0<=args.wheel_point[1]<900)):
+        raise ValueError('--wheel-point requires zoom motion and finite client coordinates within 1440x900')
     if args.fold_inset and (not args.internal_orbit_lib or args.motion.endswith('plan') or args.ribbon_setup):
         raise ValueError('--fold-inset requires the input shim and a standalone 3D view')
     desktop=OwnedDesktopWindow(os.environ['DISPLAY']) if args.desktop else None
@@ -128,6 +131,9 @@ def main():
         env=os.environ.copy();env.pop('WAYLAND_DISPLAY',None)
         home=out/'home';home.mkdir(exist_ok=True)
         env.update(DISPLAY=display,HOME=str(home),XDG_SESSION_TYPE='x11',OBS_PROFILE_FRAMES='1',OBS_MODEL_VIEW='1',OBS_UI_SCALE='1')
+        env.pop('OBS_NAV_ANCHOR_X',None);env.pop('OBS_NAV_ANCHOR_Y',None)
+        if args.wheel_point:
+            env['OBS_NAV_ANCHOR_X'],env['OBS_NAV_ANCHOR_Y']=map(str,args.wheel_point)
         # Pair the executable with its own shader build. A benchmark launched
         # from another checkout must not silently use that checkout's shaders.
         shaders=binary.parent/'shaders'
@@ -292,6 +298,7 @@ def main():
         result={'model':str(model),'sha256':checksum,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'startup_seconds':startup,'fit_ready_seconds':ready_to_orbit,'fit_barrier':True,'orbit_seconds':orbitElapsed,'observed_fps':len(frames)/orbitElapsed,'renderer':[line for line in log.read_text(errors='replace').splitlines() if line.startswith('OBS_RENDERER ')],'viewport':[1440,900],'surface':'desktop' if desktop else 'Xvfb','motion_source':'process-local GLFW shim' if orbit_control else 'XTEST','input_shim_sha256':hashlib.sha256(shim_copy.read_bytes()).hexdigest() if args.internal_orbit_lib else None,'owned_pid':app.pid,'server_pid':server.pid if server else None,'build_note':args.build_note,'active_kinds':sorted(active_kinds),'cpu':quantiles('cpu_us'),'presented':quantiles('presented_us'),'gpu':quantiles('gpu_us'),'host_record':quantiles('record_us',host_samples),'host_present':quantiles('present_us',host_samples),'frames':frames,'memory_samples':memory,'state_before':before,'state_after':after,'model_unchanged':True,'saved_copy':str(native_copy) if args.save_copy else None,'environment':{k:env.get(k) for k in ['VK_ICD_FILENAMES','MESA_VK_DEVICE_SELECT','DISPLAY','OBS_MODEL_VIEW','OBS_UNCAPPED','VK_DRIVER_FILES','__NV_PRIME_RENDER_OFFLOAD','__VK_LAYER_NV_optimus']}}
         result['grid_heads']=quantiles('grid_heads_us')
         result['motion']=args.motion
+        result['wheel_point']=args.wheel_point or ([650,450] if args.motion=='zoom-plan' else [850,450] if args.motion=='zoom-3d' else None)
         result['plan']=quantiles('plan_us')
         result['pointer']=quantiles('pointer_us')
         result['meshing']=quantiles('meshing_us')

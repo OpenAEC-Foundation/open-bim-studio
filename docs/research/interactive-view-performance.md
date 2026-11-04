@@ -9,11 +9,13 @@ sections and 3D, and which measured costs belong to the CAD kernel?
 
 ## Summary
 
-Exploratory traces identify repeated plan recording as the main cost of the old
-plan zoom path. Retained replay removes that work during wheel input, but a
-172 ms recording after input stops remains outside the 8.33 ms frame budget.
-The mixed-system 3D scene remains below target; stack samples identify CPU replay
-of its small plan inset as a repeated cost.
+The first validated resident-drawing iteration removes the measured post-input
+plan recording and reaches 241 FPS in mixed-system plan zoom and 200 FPS in 3D
+orbit. Native cavity walls also retain their drawing after input stops. Nine of
+ten navigation scenarios meet the FPS/p95 criteria; 3D wheel zoom still fails
+because its adaptive-geometry path repeatedly processes fixed component meshes.
+Initial loading remains slow. Kernel checks reproduce significant one-off costs
+without finding a geometry failure in the tested fixtures.
 
 ## What it is
 
@@ -32,8 +34,8 @@ of 2D instance rendering.
 | Criterion | Finding | Evidence type | Source / method |
 |---|---|---|---|
 | Camera-only plan motion | Old recording repeats every moving frame; retained replay avoids it during input | Measured | `OBS_FRAME plan_us/rerecorded/meshing_us` |
-| Work after input stops | The current retained implementation records once after settling, taking 171.959 ms | Measured | Last frames of `plan-after-retained/editor.log` |
-| Mixed-system 3D orbit | 43.29 submitted FPS, 23.706 ms p95 presented-frame duration | Measured | `navigation-3d-orbit/results.json` |
+| Work after input stops | `2cf8267` records once after settling, taking 171.959 ms; the validated resident iteration records none | Measured | `plan-after-retained/editor.log`, validated table below |
+| Mixed-system 3D orbit | 43.29 submitted FPS before the resident inset and bounds hierarchy; 199.76 FPS afterward | Measured | `navigation-3d-orbit/results.json`, validated table below |
 | 3D triangle regeneration during orbit | 0.001 ms p95 in the meshing stage | Measured | `meshing_us`; does not measure every possible kernel call |
 | Shared geometry, LOD and culling | Relevant techniques for large BIM scenes | Claimed by upstream documentation | [That Open Fragments](https://docs.thatopen.com/api/%40thatopen/fragments/globals) |
 | Indirect draw aggregation | Can reduce CPU draw submission overhead where supported | Claimed by upstream documentation | [Khronos multi-draw sample](https://docs.vulkan.org/samples/latest/samples/performance/multi_draw_indirect/README.html) |
@@ -268,12 +270,67 @@ it is not a claim about cylinders, spheres or arbitrary sketch-backed components
 Evidence: `kernel-component-lod-equivalence-summary.json` and its per-definition
 result directories.
 
-## Next-iteration acceptance criteria
+## Validated resident-drawing iteration
+
+The native build passes `plan_replay`, `system_plan_cache`, `ray_bounds`,
+`viewport_overlay` and `linear_joins` as embedded checks. `canvas_pixels` passes
+separately. The shader passes SPIR-V validation for Vulkan 1.2. A native Vulkan
+image test measures the retained stroke at exactly two pixels under 1x, 3x and
+10x zoom; the ordinary-scaling control measures 2, 6 and 20 pixels. The CPU test
+also compares retained encoding against freshly drawn fixed-width strokes at
+five scales from 0.01x to 50x.
+
+Heavy plan geometry remains resident. Lightweight annotations, room labels,
+grids and selection symbols follow the current camera with fixed pixel sizes.
+The inset has its own resident buffer, shares system outlines with the main plan,
+and clips its geometry and camera arrow to its interior. A balanced bounds
+hierarchy conservatively prunes grid-head visibility candidates while retaining
+scene order. The existing exact picker is unchanged.
+
+| Desktop scenario | Submitted FPS | Presented p95 | Maximum frame | Acceptance |
+|---|---:|---:|---:|---|
+| Mixed systems: plan wheel | 241.30 | 4.123 ms | 9.941 ms | Pass |
+| Mixed systems: plan pan | 240.77 | 4.092 ms | 10.070 ms | Pass |
+| Mixed systems: focused 2 s closeup | 227.44 | 4.181 ms | 10.453 ms | Pass |
+| Mixed systems: 3D orbit | 199.76 | 5.671 ms | 11.873 ms | Pass |
+| Mixed systems: 3D pan | 203.06 | 5.568 ms | 21.226 ms | Pass |
+| Mixed systems: 3D wheel | 47.56 | 26.141 ms | 40.572 ms | Fail |
+| Mixed systems: tiled plan wheel | 209.27 | 4.831 ms | 6.073 ms | Pass |
+| 400 cavity walls: plan wheel | 622.58 | 1.874 ms | 2.567 ms | Pass |
+| 400 cavity walls: plan pan | 719.17 | 1.478 ms | 4.740 ms | Pass |
+| 100,000 placements: 3D orbit | 188.98 | 5.986 ms | 7.346 ms | Pass |
+
+All plan cases record zero heavy drawings during input and after it stops, and
+model hashes and undo histories stay unchanged. On the cavity-wall wheel run,
+the post-input plan stage has p95 0.101 ms and maximum 0.159 ms, with zero
+recordings, instead of the former 319.479 ms recording. Mixed-scene 3D orbit has
+inset p95 0.047 ms and grid-head query p95 0.132 ms. Twelve of 2,398 orbit frames
+exceed 8.333 ms; none exceed 16.667 ms. The p95 goal is not a promise that every
+frame has the same duration.
+
+Before/after images were inspected for geometry, fixed-width closeup output,
+inset containment and separation of tiled plan/3D panes. The focused closeup uses
+client point (600, 650), inside the building; the tiled plan uses (350, 650),
+inside its left pane. An earlier closeup centered outside the cropped building
+is excluded from visual acceptance. These runs verify a tiled plan and 3D view,
+not interactive system sections. Initial mixed-scene API readiness remains
+approximately 24 seconds and is still an open responsiveness problem.
+
+Evidence: `retention-validated-*/results.json`, matching screenshots and
+`pixel-stroke-native-x11/results.json`. The source snapshot is based on `04c9577`
+with the validated performance patch; the executable and shader hashes are
+recorded per run. A separate compiler and the existing user editor remained
+active, so these are observed development-build results rather than isolated
+hardware maxima.
+
+## Acceptance criteria
 
 These criteria are specified before the next implementation is measured:
 
 1. On the same mixed-system model, camera-only plan zoom and pan must perform no
-   plan recording or triangle generation during input **or after input stops**.
+   heavy plan recording or model-triangle generation during input **or after
+   input stops**. Live UI/annotation drawing is measured separately from model
+   geometry reuse.
 2. Model, view-rule and cut-plane changes must still invalidate affected geometry;
    camera changes must preserve IDs, model data, selection and undo history.
 3. Each motion scenario must achieve at least 120 submitted FPS with p95 frame
@@ -307,14 +364,6 @@ and detail policy; otherwise geometry can stay correct while labels or line
 weights change unexpectedly. A faster plan alone does not establish performance
 of sections, edits, exports or million-component models.
 
-## Verdict
-
-Remove the remaining camera-triggered plan recording, and profile the mixed-scene
-3D CPU path before changing kernel algorithms. Keep R-01 open. The missing
-specific evidence is the measured no-recording post-input path, GPU retention of
-the plan inset, further kernel cases beyond the rectangular wall/void fixtures,
-and repeated 120 FPS navigation checks including tiled sections.
-
 ## Sources
 
 - [That Open Fragments API](https://docs.thatopen.com/api/%40thatopen/fragments/globals)
@@ -323,3 +372,14 @@ and repeated 120 FPS navigation checks including tiled sections.
 - Repository: `ui/shell/main.dl`, `ui/shell/bim_plan_zoom.dl`,
   `ui/panels/bim_plan_panel.dl`, `viewer/bim_native_instances.dl`,
   `tools/probes/orbit_components.py`, `tools/probes/orbit_input_shim.c`.
+
+## Verdict
+
+Keep resident cut drawings, fixed pixel strokes, the GPU inset and conservative
+bounds queries. The measured plan, pan and orbit cases meet the FPS/p95 target;
+3D wheel zoom still fails its explicit acceptance check. Keep R-01 open. The next
+specific evidence needed is a native wheel run that excludes proven fixed
+component geometry from adaptive work while preserving curved refinement,
+responsive initial loading, and complete interactive system-section checks.
+The measurements do not justify changing general kernel algorithms solely to
+address camera navigation.
