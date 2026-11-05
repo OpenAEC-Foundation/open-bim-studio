@@ -46,7 +46,7 @@ reserved number for another function. Record new public command codes in advance
 | **27** | tool id | Sketch Split | Computer 1, restructuring stage 1 (27 October) |
 | **90** | tool id | Pile tip level tool | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
 | **2400100–2400105** | settings on the opening | Opening-detail settings | PC1, `feature/steel-baseplates` (24 October) |
-| **2400400** | view setting | Technical plan palette (unfilled room interiors, black room labels, blue plan grids) | PC1, plan presentation (24 October) |
+| **2400400** | view setting | Technical plan palette: 1 technical (unfilled room interiors, black labels, black-and-white cuts), 0 model review, kept either way. Absent: technical for a plan with a drawing type, else model review. Sheet output is always technical. Grids are black under both palettes (blue grids dropped 5 November 2026) | PC1, plan presentation (24 October); default and value 0 by Computer 1, `mod/views/sheet-technical-output` (5 November 2026) |
 | **2400410** | setting | Grid head | PC1, sheet paper units (24 October) |
 | **2400600–2401599** | settings on the sheet | Viewport title type metadata | PC1, interactive sheets (26 October) |
 | **2401600** | setting on a pile | The pile tip level assigned to the pile (its id) | Computer 1, `mod/structural/pile-tip-levels` (31 October) |
