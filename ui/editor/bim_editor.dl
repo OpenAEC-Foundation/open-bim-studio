@@ -1972,12 +1972,12 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
         # Implemented plate commands must precede the unimplemented-command fallback.
         if code = 2382:
             if editor's selectionKind != bim slab picked:
-                set editor's message to the string form of "Select a roof or floor, then draw a vertical opening"
+                set editor's message to the string form of "Select a floor or roof, then draw its opening"
                 return nothing
             set editor's boundaryId to editor's selectionId
             set editor's tool to bim vertical opening tool
             set editor's moveStage to 0
-            set editor's message to the string form of "Vertical opening: click two plan corners; Esc cancels"
+            set editor's message to the string form of "Floor/roof opening: click two plan corners; Esc cancels"
             return nothing
         if code = 2080:
             add bim editor plate of role bim roof planar role under the selection in editor
@@ -2173,6 +2173,9 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             else if editor's selectionKind = bim space object picked:
                 set doomedKind to bim space object picked
                 set doomedId to editor's selectionId
+            else if editor's selectionKind = bim level picked:
+                delete bim editor level editor's selectionId in editor
+                return nothing
             else if editor's hoverWall != the bim refused id:
                 set doomedKind to bim wall picked
                 set doomedId to editor's hoverWall
@@ -2255,3 +2258,103 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 set editor's message to the string form of "Exported open-bim-studio.ifc"
             else:
                 set editor's message to the string form of "Export failed"
+
+# Whether level `levelId` holds nothing: no wall stands on it or is topped
+# by it, and no floor, roof, space, member, stair, railing, building system,
+# component, mesh, connection or bar is on it.
+function bim level {a 64 bit integer:levelId} is empty in {bim model record:modelValue}:
+    execute:
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if (wallValue's levelId = levelId) or (wallValue's topLevelId = levelId):
+                return false
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            if (the item at cursor in (modelValue's slabs's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+            if (the item at cursor in (modelValue's spaceObjects's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            if (the item at cursor in (modelValue's linears's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's stairs's values):
+            if (the item at cursor in (modelValue's stairs's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's railings's values):
+            if (the item at cursor in (modelValue's railings's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's curtains's values):
+            if (the item at cursor in (modelValue's curtains's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's instances's values):
+            if (the item at cursor in (modelValue's instances's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            if (the item at cursor in (modelValue's meshes's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's connections's values):
+            if (the item at cursor in (modelValue's connections's values))'s levelId = levelId:
+                return false
+        loop cursor from 0 to the length of (modelValue's reinforcements's values):
+            if (the item at cursor in (modelValue's reinforcements's values))'s levelId = levelId:
+                return false
+        return true
+
+# Whether a view of level `levelId` is placed on a sheet of `modelValue`.
+function bim level {a 64 bit integer:levelId} has a view on a sheet in {bim model record:modelValue}:
+    execute:
+        loop sheetCursor from 0 to the length of (modelValue's sheets's values):
+            set sheetValue to the item at sheetCursor in (modelValue's sheets's values)
+            loop portCursor from 0 to the length of (sheetValue's viewports's values):
+                set shownView to the bim view index of (the item at portCursor in (sheetValue's viewports's values))'s viewId in modelValue
+                if shownView's valid:
+                    if (the item at shownView's position in (modelValue's views's values))'s levelId = levelId:
+                        return true
+        return false
+
+# Delete on a selected level: an empty level goes, with its views, and the
+# storey below (or above) becomes the active one; a level with elements, a
+# view on a sheet, or the last level stays, and the message says why. One
+# undo step.
+function delete bim editor level {a 64 bit integer:levelId} in {a pointer to a bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set found to the bim level index of levelId in modelValue
+        if found's valid = false:
+            return nothing
+        set levelName to (the item at found's position in (modelValue's levels's values))'s name
+        if (the length of (modelValue's levels's values)) < 2:
+            set editor's message to (the string form of "Kept level ") + (levelName + (the string form of ": a model keeps at least one level"))
+            return nothing
+        if (bim level levelId is empty in modelValue) = false:
+            set editor's message to (the string form of "Kept level ") + (levelName + (the string form of ": elements stand on it; delete or move them first"))
+            return nothing
+        if bim level levelId has a view on a sheet in modelValue:
+            set editor's message to (the string form of "Kept level ") + (levelName + (the string form of ": a view of it is on a sheet"))
+            return nothing
+        set neighbour to the bim level next to levelId going up false in modelValue
+        if neighbour's valid = false:
+            set neighbour to the bim level next to levelId going up true in modelValue
+        set nextLevel to (the item at neighbour's position in (modelValue's levels's values))'s id
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set viewCursor to (the length of (target's views's values)) - 1
+        loop while viewCursor >= 0:
+            if (the item at viewCursor in (target's views's values))'s levelId = levelId:
+                note bim change of (the item at viewCursor in (target's views's values))'s id in target
+                remove item viewCursor from (target's views's values)
+            set viewCursor to viewCursor - 1
+        set levelCursor to (the length of (target's levels's values)) - 1
+        loop while levelCursor >= 0:
+            if (the item at levelCursor in (target's levels's values))'s id = levelId:
+                remove item levelCursor from (target's levels's values)
+            set levelCursor to levelCursor - 1
+        note bim change of levelId in target
+        refresh bim shared grid heights in target
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's levelId to nextLevel
+        set editor's selectionKind to bim nothing picked
+        set editor's selectionId to the bim refused id
+        follow bim editor storey in editor
+        set editor's viewsDirty to true
+        set editor's message to (the string form of "Level deleted: ") + (levelName + (the string form of " (Ctrl+Z restores it)"))

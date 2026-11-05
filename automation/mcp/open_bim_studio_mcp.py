@@ -640,12 +640,19 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("fit"))
 
 
-RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "View", "Model", "Collaborate", "Reinforcement",
-               "Connections")
+@tool("save", "Save the model to its file, as File > Save (Ctrl+S) does, on the window's next frame.")
+def save_tool(arguments: dict) -> dict:
+    return text_result(current_modeller().request("save"))
+
+
+# The tab codes of `ui/panels/bim_ui.dl`; the discipline (Discipline menu) decides which of them show.
+RIBBON_TABS = ("Home", "MEP", "Sketch", "Modify", "View", "Model", "Collaborate", "Concrete+Rebar",
+               "Structural Steel", "Wood/Steel Framing", "Fabrication", "Structural")
 
 
 @tool("ribbon_tab", "Show ribbon tab `index` (0 Home, 1 MEP, 2 Sketch, 3 Modify, 4 View, 5 Model, "
-      "6 Collaborate, 7 Reinforcement, 8 Connections).", {"index": {"type": "integer"}}, ["index"])
+      "6 Collaborate, 7 Concrete+Rebar, 8 Structural Steel, 9 Wood/Steel Framing, 10 Fabrication, "
+      "11 Structural).", {"index": {"type": "integer"}}, ["index"])
 def tab_tool(arguments: dict) -> dict:
     index = int(arguments["index"])
     if not 0 <= index < len(RIBBON_TABS):

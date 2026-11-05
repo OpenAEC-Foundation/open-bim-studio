@@ -25,7 +25,7 @@ or switch it on in the app: **Collaborate > API / MCP**.
 | `state` | tool, selection, message, storey, element counts, 3D cursor, `cursorFresh`, `editMode`, `sketching` |
 | `elements` | the model's elements by kind |
 | `buttons` | every ribbon button (also hidden discipline tabs and chooser rows): tab, group, label, key, code |
-| `ribbon [TAB/]LABEL` | clicks the button as the mouse would; the window runs it on its next frame (also window commands such as Tile, Export, panels). `Tab/Label` picks between equal labels, e.g. `View/Tile`, `Sketch/Delete` |
+| `ribbon [TAB/]LABEL` | clicks the button as the mouse would; the window runs it on its next frame (also window commands such as Tile, Export, panels). `Tab/Label` picks between equal labels, e.g. `View/Tile`, `Sketch/Delete`; `Tab/Group/Label` between equal labels on one tab, e.g. `Collaborate/Export: Open sheet/PDF`. An exact name wins over a label that only starts with it |
 | `button LABEL` | presses the button in the editor at once (tools only) |
 | `key CODE` | a key or command code, as typed |
 | `pointer X Y`, `click X Y` | the pointer to plan point X, Y in metres; a click there |
@@ -38,10 +38,11 @@ or switch it on in the app: **Collaborate > API / MCP**.
 | `types [TAB]`, `typeadd`, `typeduplicate`, `typeset`, `typeapply`, `typedelete` | the type library, as in the IfcTypes window |
 | `options` | tool, numeric input, ortho, modify and snap state |
 | `undo`, `redo` | one step |
-| `fit`, `tab N` | fit the views; show ribbon tab N |
+| `fit`, `tab N` | fit the views; show ribbon tab N (0 Home to 11 Structural) |
+| `save` | File > Save on the window's next frame, to the model's file |
 
 ## MCP server
 
-[`automation/mcp/open_bim_studio_mcp.py`](https://github.com/OpenAEC-Foundation/open-bim-studio/tree/main/automation/mcp) wraps the API as an MCP server for AI assistants. Its tools: `launch`, `connect`, `close`, `screenshot`, `state`, `elements`, `buttons`, `press_button` (uses `ribbon`, then returns the state), `key`, `click`, `move_pointer`, `select`, `properties`, `set_property`, `create_wall`, `create_floor`, `create_building_system`, `system_types`, `list_types`, `create_type`, `duplicate_type`, `set_type_field`, `apply_type`, `delete_type`, `tool_options`, `create_grid`, `repeat_grid`, `set_cursor`, `undo`, `redo`, `fit_view`, `ribbon_tab`, and `ui_window`, `ui_click`, `ui_move`, `ui_drag`, `ui_key`, `ui_type`, `ui_scroll`, which drive the window itself. `open_bim_studio_http.py` offers the same verbs over HTTP.
+[`automation/mcp/open_bim_studio_mcp.py`](https://github.com/OpenAEC-Foundation/open-bim-studio/tree/main/automation/mcp) wraps the API as an MCP server for AI assistants. Its tools: `launch`, `connect`, `close`, `screenshot`, `state`, `elements`, `buttons`, `press_button` (uses `ribbon`, then returns the state), `key`, `click`, `move_pointer`, `select`, `properties`, `set_property`, `create_wall`, `create_floor`, `create_building_system`, `system_types`, `list_types`, `create_type`, `duplicate_type`, `set_type_field`, `apply_type`, `delete_type`, `tool_options`, `create_grid`, `repeat_grid`, `set_cursor`, `undo`, `redo`, `fit_view`, `ribbon_tab`, `save`, and `ui_window`, `ui_click`, `ui_move`, `ui_drag`, `ui_key`, `ui_type`, `ui_scroll`, which drive the window itself. `open_bim_studio_http.py` offers the same verbs over HTTP.
 
 The plan to make this a documented, versioned interface is issue [#130](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/130).
