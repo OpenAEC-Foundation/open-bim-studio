@@ -300,6 +300,16 @@ function bim joint end {cad vector3:candidate} lies within {bim system part box 
             return false
         return (upward >= (partBox's low's y - 0.002)) and (upward <= (partBox's high's y + 0.002))
 
+# The same for a tilted system, its face rising `slopeSine` across the plan
+# per metre up it.
+function bim joint end {cad vector3:candidate} lies within {bim system part box record:partBox} of {bim curtain record:curtainValue} slanted {a 64 bit floating-point number:slopeSine}:
+    execute:
+        set placeOnFace to the bim system station of (a cad vector2 with x candidate's x and y candidate's y) on curtainValue
+        set upward to placeOnFace's y / (the maximum of 1e-9 and slopeSine)
+        if (placeOnFace's x < (partBox's low's x - 0.002)) or (placeOnFace's x > (partBox's high's x + 0.002)):
+            return false
+        return (upward >= (partBox's low's y - 0.002)) and (upward <= (partBox's high's y + 0.002))
+
 # The edges (pairs of model points) of the chosen mullion or transom of the
 # selected building system: every piece of it as the system's parts make it
 # (a mullion stopped by an opening's frame is still the one mullion), its
@@ -318,6 +328,8 @@ function the bim chosen joint edges of {bim editor record:editor}:
         set placedValue to (the bim placed system storedValue in modelValue)'s curtain
         set partBox to the bim system part box of placedValue coded editor's partCode in modelValue
         set levelLying to bim system storedValue's id lies level in modelValue
+        set slanting to (the bim system orientation of storedValue's id in modelValue) = bim tilted orientation
+        set slopeSine to the sine of (the bim system tilt of storedValue's id in modelValue)
         set wantedName to the string form of "Mullion"
         if editor's partCode >= 1000:
             set wantedName to the string form of "Transom"
@@ -325,8 +337,13 @@ function the bim chosen joint edges of {bim editor record:editor}:
         loop partCursor from 0 to the length of (curtainParts's values):
             set piece to the item at partCursor in (curtainParts's values)
             if piece's kind's name = wantedName:
-                if bim joint end (piece's element's start) lies within partBox of placedValue flat levelLying:
-                    if bim joint end (piece's element's finish) lies within partBox of placedValue flat levelLying:
+                set startWithin to bim joint end (piece's element's start) lies within partBox of placedValue flat levelLying
+                set finishWithin to bim joint end (piece's element's finish) lies within partBox of placedValue flat levelLying
+                if slanting:
+                    set startWithin to bim joint end (piece's element's start) lies within partBox of placedValue slanted slopeSine
+                    set finishWithin to bim joint end (piece's element's finish) lies within partBox of placedValue slanted slopeSine
+                if startWithin:
+                    if finishWithin:
                         set profileRings to the bim profile rings of (piece's element) as (piece's kind) in modelValue
                         set ringCount to (the length of profileRings) / 2
                         loop corner from 0 to ringCount:
@@ -1158,6 +1175,14 @@ function create bim editor similar in {a pointer to a bim editor record:editor}:
             if found's valid:
                 set editor's similarSystemId to editor's selectionId
                 set editor's systemTypeIndex to the bim system type index of editor's selectionId in modelValue
+                # Placed in the source's orientation, when it was chosen.
+                set editor's systemOrientation to -1
+                set sourceOrientation to the bim setting (bim system orientation setting) of editor's selectionId in modelValue
+                if sourceOrientation's found:
+                    set editor's systemOrientation to the bim system orientation of editor's selectionId in modelValue
+                    set sourceTilt to the bim setting (bim system tilt setting) of editor's selectionId in modelValue
+                    if sourceTilt's found:
+                        set editor's systemTilt to sourceTilt's value
                 set editor's partCode to -1
                 set editor's tool to bim curtain tool
                 set editor's message to the string form of "Create similar: building system of the same definition; click its start"
@@ -1207,6 +1232,44 @@ function bim system recipe command:
 function bim system recipe commands available:
     replacement:
         100
+
+# The Building System tool's orientation commands (the floating toolbar).
+function bim vertical system command:
+    replacement:
+        2370
+function bim horizontal system command:
+    replacement:
+        2371
+function bim tilted system command:
+    replacement:
+        2372
+
+# The Building System tool places upright, level or tilted
+# (`orientationCode`) from now on: level by an outline sketched on the
+# plan, otherwise by clicks.
+function choose bim editor system orientation {integer:orientationCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's systemOrientation to orientationCode
+        set editor's numeric to the string form of ""
+        if orientationCode = bim horizontal orientation:
+            if (bim editor sketches a new system (@intrinsic("dereference", editor))) = false:
+                open bim editor new system sketch in editor
+            return nothing
+        if bim editor sketches a new system (@intrinsic("dereference", editor)):
+            leave bim editor boundary sketch in editor
+        set editor's tool to bim curtain tool
+        set editor's moveStage to 0
+        set editor's message to the bim system placing hint of (@intrinsic("dereference", editor))
+
+# The pitch typed for tilted systems: `degrees` from level, kept between 1
+# and 89 (a pitch of 0 lies level, of 90 stands upright).
+function choose bim editor system pitch {a 64 bit floating-point number:degrees} in {a pointer to a bim editor record:editor}:
+    execute:
+        set pitchValue to the minimum of 89.0 and (the maximum of 1.0 and degrees)
+        set editor's systemTilt to (the floor of (((90.0 - pitchValue) * 1000.0) + 0.5)) as a 64 bit integer
+        set editor's message to the bim system placing hint of (@intrinsic("dereference", editor))
+        if editor's moveStage = 1:
+            set editor's message to ((the string form of "Tilted building system (pitch ") + (the bim pitch text of (the bim placing pitch of (@intrinsic("dereference", editor))))) + (the string form of "): click its end")
 
 function type bim editor key {integer:code} in {a pointer to a bim editor record:editor}:
     execute:
@@ -1427,6 +1490,13 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             if code < 1000:
                 type bim editor boundary key code in editor
                 return nothing
+            # A new building system's sketch stays open for Horizontal and
+            # for a recipe.
+            set recipeCode to (code >= bim system recipe command) and (code < ((bim system recipe command) + (bim system recipe commands available)))
+            if ((code = bim horizontal system command) or recipeCode) and (bim editor sketches a new system (@intrinsic("dereference", editor))):
+                if recipeCode:
+                    choose bim editor system type (code - (bim system recipe command)) in editor
+                return nothing
             leave bim editor boundary sketch in editor
         if editor's editMode:
             if (code = 258) or (code = bim escape key code):
@@ -1472,6 +1542,7 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 return nothing
             set typing to (((editor's tool = bim rotate tool) and (editor's moveStage >= 2)) or (editor's tool = bim offset tool)) or ((editor's tool = bim solid tool) and (editor's moveStage = 2))
             set typing to typing or (editor's tool = bim pile tip level tool)
+            set typing to typing or (bim editor types for a system (@intrinsic("dereference", editor)))
             if typing or ((editor's tool = bim wall tool) and editor's chainActive):
                 set character to a new string buffer containing 1 bytes
                 store (code as a byte) into the data of character at 0
@@ -1493,6 +1564,17 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
                 return nothing
             if editor's tool = bim pile tip level tool:
                 finish bim editor pile tip level typing in editor
+                return nothing
+            # The Building System tool: a tilted system's pitch before its
+            # line; a level or tilted system's span after it.
+            if bim editor types for a system (@intrinsic("dereference", editor)):
+                if (the length of editor's numeric) > 0:
+                    set typedValue to the bim numeric value of editor's numeric
+                    set editor's numeric to the string form of ""
+                    if editor's moveStage = 2:
+                        finish bim editor lying system rising (typedValue * (the bim metres per editor's lengthUnit)) in editor
+                    else:
+                        choose bim editor system pitch typedValue in editor
                 return nothing
             if ((editor's tool = bim solid tool) and (editor's moveStage = 2)) and ((the length of editor's numeric) > 0):
                 set typedRise to (the bim numeric value of editor's numeric) * (the bim metres per editor's lengthUnit)
@@ -1922,9 +2004,16 @@ function type bim editor key {integer:code} in {a pointer to a bim editor record
             return nothing
         if code = 2112:
             set editor's similarSystemId to the bim refused id
+            set editor's systemOrientation to -1
             set editor's tool to bim curtain tool
             set editor's moveStage to 0
             set editor's message to the string form of "Building system: click its start"
+            return nothing
+        # The Building System tool's orientation (its floating toolbar):
+        # upright by its line, level by its outline, tilted by its line and
+        # the side it rises to.
+        if (code >= bim vertical system command) and (code <= bim tilted system command):
+            choose bim editor system orientation (code - (bim vertical system command)) in editor
             return nothing
         if (code >= bim system recipe command) and (code < ((bim system recipe command) + (bim system recipe commands available))):
             set editor's selectionKind to bim nothing picked
