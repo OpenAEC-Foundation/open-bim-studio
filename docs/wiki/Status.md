@@ -1,13 +1,13 @@
 # Status
 
-**As of 31 October 2026, 18:20 (CET), `main` at `ae9ba9c`.** This page is updated by hand; the [issues](https://github.com/OpenAEC-Foundation/open-bim-studio/issues) and the commit log are the source of truth.
+**As of 5 November 2026, `main` after `c53760a`.** This page is updated by hand; the [issues](https://github.com/OpenAEC-Foundation/open-bim-studio/issues) and the commit log are the source of truth.
 
 ## Where we stand
 
 - `main` builds on Linux (`build.sh dev`, about 10 minutes) and the dev build starts with the example building.
 - The tests that cover each change pass on `main`; a small set of older tests is known to fail and is tracked.
 - Everything below has passed its tests, but most of it has **not yet been checked by eye in the running app**. That review is the next step; remarks go into issues.
-- 33 issues were closed on 31 October; 55 are open.
+- 33 issues were closed on 31 October and 9 more since; 49 are open.
 
 ## Finished on 31 October
 
@@ -51,28 +51,52 @@
 **Kernel**
 - Sweep and multi-segment swept blend in the kernel API (#141).
 
+## Since 31 October
+
+**Views, grids and levels**
+- Sheetviews: books of sheets with page numbering, a contents page and one PDF per book (#135; books generated from a rule still wait on assemblies, #134).
+- Grids: plus handles per side, a spacing pattern (4 x 5400), renumbering a direction, shared grid heights; straight IFC grid axes import as editable grids (#59, #60, #62 in part).
+- Levels as storeys relative to the project datum, with the datum height shown and a level's own outline kept (#64, #45).
+- Drawing types: area plans BVO, GO and VVO by NEN 2580 beneath Area plan, and a Fabrication Drawings branch (Steel, Precast Concrete, CLT, Wood/Steel Framing, Other) (#123).
+
+**Types and data**
+- Profile catalogue: every standard profile as data per series, browsable in the type window; parametric profiles in the open property set `OpenAEC_ProfileParameters`; IFC linear types carry their profile (#95 in part).
+- Schedules defined by SQL over the model: a query engine with tested parsing and column order (#129 in part).
+- Interface catalogues in UTF-8 with locale settings, and native text shaping tested for Lao (#157, #104 in part).
+
+**Modelling**
+- Stairs: quarter-turn winder layouts generated from the stair's parameters; property codes reserved for editable stair geometry (#145, #160 in progress).
+- Building systems: better selection, placing similar and picking in elevations; explicit placement commands reserved.
+
+**Performance and measurement**
+- Plan and 3D navigation measured stage by stage: the plan is replayed during wheel zoom and rebuilt when input settles, display geometry stays resident across zoom levels, shared component buffers, and a discrete GPU preferred. Stress models up to one million component instances, with recorded orbit timings.
+- Kernel checks of wall and slice volumes and general BRep wall booleans against independent analytic values.
+
+**Exchange and release**
+- The nine connection types round-trip through binary IFCX (#85).
+- Calendar versions (year.week) in every Windows build (#3).
+- Research note on USD BRep exchange (#156).
+
 ## In progress
 
 | Issue | Work |
 |---|---|
-| [#59](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/59)–[#61](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/61) | Grids: add lines with a plus handle and a spacing pattern, renumber and rename, better handles |
-| [#135](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/135) | Sheetviews: several sheets as one book, page numbering, exported together |
-| [#95](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/95) | Profiles: browse standard profiles, own and parametric profiles as IFC profile definitions |
+| [#145](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/145), [#160](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/160) | Stairs: editable stair geometry, winders, the stairwell reserved before the stair is generated |
+| — | Navigation speed in plan and 3D: measured per stage, with frame and cache budgets |
 
 ## Open, by area
 
 | Area | Issues |
 |---|---|
-| Views (rest) | #123 trade categories for MEP, Fabrication Drawings, area plans BVO/GO/VVO |
-| Modelling | #97 openings as one object with edge rules · #108 sloped work plane · #115 free geometry · #134 assemblies and groups · #145 stairs and stair cores · #146 standard object library |
-| Types and data | #93 classification per type · #95 profiles · #104 language and a complete Dutch version · #66 IFC first |
+| Views (rest) | #123 trade categories for MEP, the kinds of fabrication drawing, a project-wide current phase |
+| Modelling | #97 openings as one object with edge rules · #108 sloped work plane · #115 free geometry · #134 assemblies and groups · #145 stairs and stair cores · #160 stair generator · #146 standard object library |
+| Types and data | #93 classification per type · #95 profiles (drawing own profiles) · #104 language and a complete Dutch version · #66 IFC first · #161 IFCX model construction apart from its serialization |
 | Building systems | #30, #68–#72, #76, #125 |
-| Views and drawings | #56–#58 one view object and the structural plan · #59–#64 grids and levels · #65 georeferencing · #127 Drawing Rules preview · #129 schedules by SQL · #133 2D drafting sheet · #135 sheet books |
+| Views and drawings | #56–#58 one view object and the structural plan · #61–#63 grids and level extents · #65 georeferencing · #127 Drawing Rules preview · #129 schedules by SQL · #133 2D drafting sheet · #135 sheet books by rule |
 | Window and layout | #100 Blender-style areas · #111 windows and tabs |
-| Exchange and collaboration | #120 IFC Git and OpenAEC Cloud · #144 fabrication formats · #5 IFCCAD export · #85 connection gallery in .ifcxb |
+| Exchange and collaboration | #120 IFC Git and OpenAEC Cloud · #144 fabrication formats · #5 IFCCAD export · #77 analytic fastener detail |
 | Automation and AI | #130 API as a documented interface · #131 in-app DynLex chatbot · #132 several people in one model |
-| Release | #3 year.week versions for releases (the MSI needs a mapped version) · #39 installer signing |
-| Research and contributions | #156 NVIDIA usd-brep · #157 a Lao translation offer (waits on #104) |
+| Release | #39 installer signing · #162 licence review and REUSE lint in CI |
 
 ## Known gaps
 
