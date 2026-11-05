@@ -19,6 +19,8 @@
 #                                   window runs it on its next frame (also Tile,
 #                                   Export, panels); read state after it
 #     save                          File > Save on the window's next frame
+#     open NAME                     opens the plan, section or sheet so named
+#                                   (a sheet also by number) as its tab
 #     key CODE                      a key or command code, as typed
 #     pointer X Y                   the pointer to plan point X, Y (metres)
 #     click X Y                     the pointer there, pressed and released
@@ -58,6 +60,16 @@ class:
     members:
         verb as a string
         number as an integer
+        text as a string
+
+# What `open NAME` names: a plan (1), section (2) or sheet (3) and its id;
+# kind 0 when nothing is so named.
+class:
+    patterns:
+        [a|] bim api opened target record
+    members:
+        kind as an integer
+        id as a 64 bit integer
 
 # A quoted JSON string: escape quotes, backslashes and every control byte,
 # while preserving UTF-8 bytes unchanged.
@@ -856,6 +868,16 @@ function the bim api answer to {a string:content} for {a pointer to a bim editor
                 type bim editor key 89 in editor
             refresh bim editor editor
             set reply to the bim api state of (@intrinsic("dereference", editor))
+        if verb = (the string form of "open"):
+            set openTarget to the bim api opened target named (arguments joined with " ") in editor's documentValue's current
+            if openTarget's kind = 0:
+                set reply to the bim api failure saying (the string form of "no plan, section or sheet of that name")
+            else:
+                set members to an empty list of a string
+                append (the bim json member (the string form of "id") as (the string form of openTarget's id)) to members
+                append (the bim json member (the string form of "note") as (the bim json text of (the string form of "opens on the window's next frame"))) to members
+                set reply to the bim api success with members
+                free members
         if ((verb = (the string form of "fit")) or (verb = (the string form of "tab"))) or (verb = (the string form of "save")):
             # The window's own; it answers once it has done it.
             set members to an empty list of a string
@@ -867,6 +889,24 @@ function the bim api answer to {a string:content} for {a pointer to a bim editor
 
 # What the window does for request `content`: `fit` or `tab` (and its
 # number), or nothing (an empty verb).
+# The plan or section view named `wanted`, else the sheet numbered or named
+# so (case aside); kind 0 when there is none.
+function the bim api opened target named {a string:wanted} in {bim model record:modelValue}:
+    execute:
+        set lowered to the lowercase form of wanted
+        loop viewCursor from 0 to the length of (modelValue's views's values):
+            set viewValue to the item at viewCursor in (modelValue's views's values)
+            if (the lowercase form of viewValue's name) = lowered:
+                if viewValue's kind = bim plan view:
+                    return @intrinsic("construct", a bim api opened target record, 1, viewValue's id)
+                if viewValue's kind = bim section view:
+                    return @intrinsic("construct", a bim api opened target record, 2, viewValue's id)
+        loop sheetCursor from 0 to the length of (modelValue's sheets's values):
+            set sheetValue to the item at sheetCursor in (modelValue's sheets's values)
+            if ((the lowercase form of sheetValue's number) = lowered) or ((the lowercase form of sheetValue's name) = lowered):
+                return @intrinsic("construct", a bim api opened target record, 3, sheetValue's id)
+        return @intrinsic("construct", a bim api opened target record, 0, the bim refused id)
+
 function the bim api window part of {a string:content}:
     execute:
         set lines to content split at "\n"
@@ -890,15 +930,27 @@ function the bim api window part of {a string:content}:
             free labelWords
             free labelLines
             if pressedCode < 0:
-                return @intrinsic("construct", a bim api window record, the string form of "", 0)
-            return @intrinsic("construct", a bim api window record, the string form of "press", pressedCode)
+                return @intrinsic("construct", a bim api window record, the string form of "", 0, the string form of "")
+            return @intrinsic("construct", a bim api window record, the string form of "press", pressedCode, the string form of "")
+        # `open NAME`: the plan, section or sheet so named opens as its tab.
+        if verb = (the string form of "open"):
+            set openLines to content split at "\n"
+            set openWords to an empty list of a string
+            loop openCursor from 2 to the length of openLines:
+                set openLine to (the item at openCursor in openLines) with "\r" replaced by ""
+                if (the length of openLine) > 0:
+                    append openLine to openWords
+            set openName to openWords joined with " "
+            free openWords
+            free openLines
+            return @intrinsic("construct", a bim api window record, the string form of "open", 0, openName)
         # `save`: File > Save (Ctrl+S) on the window's next frame, to the
         # model's file (a model without one asks for a path).
         if verb = (the string form of "save"):
-            return @intrinsic("construct", a bim api window record, the string form of "press", 2175)
+            return @intrinsic("construct", a bim api window record, the string form of "press", 2175, the string form of "")
         if (verb != (the string form of "fit")) and (verb != (the string form of "tab")):
             set verb to the string form of ""
-        return @intrinsic("construct", a bim api window record, verb, number)
+        return @intrinsic("construct", a bim api window record, verb, number, the string form of "")
 
 # A completed request wakes the idle window. Only inspect `request`, never
 # the temporary file: clients publish a request by renaming it atomically.
@@ -920,7 +972,7 @@ function serve bim api in {a string:folder} for {a pointer to a bim editor recor
         set requestPath to folder + (the string form of "/request")
         set reading to the bim file content at requestPath
         if reading's valid = false:
-            return @intrinsic("construct", a bim api window record, the string form of "", 0)
+            return @intrinsic("construct", a bim api window record, the string form of "", 0, the string form of "")
         ignore @intrinsic("call", "libc", "remove", integer, the data of requestPath)
         set content to reading's text
         set lines to content split at "\n"

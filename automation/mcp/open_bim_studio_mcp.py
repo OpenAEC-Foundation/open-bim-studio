@@ -640,6 +640,13 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("fit"))
 
 
+@tool("open_view", "Open the plan or section view named `name`, or the sheet so numbered or named, as its tab "
+      "(as a click in the project browser), on the window's next frame.",
+      {"name": {"type": "string"}}, ["name"])
+def open_view_tool(arguments: dict) -> dict:
+    return text_result(current_modeller().request("open", arguments["name"]))
+
+
 @tool("save", "Save the model to its file, as File > Save (Ctrl+S) does, on the window's next frame.")
 def save_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("save"))

@@ -40,9 +40,10 @@ or switch it on in the app: **Collaborate > API / MCP**.
 | `undo`, `redo` | one step |
 | `fit`, `tab N` | fit the views; show ribbon tab N (0 Home to 11 Structural) |
 | `save` | File > Save on the window's next frame, to the model's file |
+| `open NAME` | opens the plan or section view so named, or the sheet so numbered or named, as its tab (as the project browser does) |
 
 ## MCP server
 
-[`automation/mcp/open_bim_studio_mcp.py`](https://github.com/OpenAEC-Foundation/open-bim-studio/tree/main/automation/mcp) wraps the API as an MCP server for AI assistants. Its tools: `launch`, `connect`, `close`, `screenshot`, `state`, `elements`, `buttons`, `press_button` (uses `ribbon`, then returns the state), `key`, `click`, `move_pointer`, `select`, `properties`, `set_property`, `create_wall`, `create_floor`, `create_building_system`, `system_types`, `list_types`, `create_type`, `duplicate_type`, `set_type_field`, `apply_type`, `delete_type`, `tool_options`, `create_grid`, `repeat_grid`, `set_cursor`, `undo`, `redo`, `fit_view`, `ribbon_tab`, `save`, and `ui_window`, `ui_click`, `ui_move`, `ui_drag`, `ui_key`, `ui_type`, `ui_scroll`, which drive the window itself. `open_bim_studio_http.py` offers the same verbs over HTTP.
+[`automation/mcp/open_bim_studio_mcp.py`](https://github.com/OpenAEC-Foundation/open-bim-studio/tree/main/automation/mcp) wraps the API as an MCP server for AI assistants. Its tools: `launch`, `connect`, `close`, `screenshot`, `state`, `elements`, `buttons`, `press_button` (uses `ribbon`, then returns the state), `key`, `click`, `move_pointer`, `select`, `properties`, `set_property`, `create_wall`, `create_floor`, `create_building_system`, `system_types`, `list_types`, `create_type`, `duplicate_type`, `set_type_field`, `apply_type`, `delete_type`, `tool_options`, `create_grid`, `repeat_grid`, `set_cursor`, `undo`, `redo`, `fit_view`, `ribbon_tab`, `save`, `open_view`, and `ui_window`, `ui_click`, `ui_move`, `ui_drag`, `ui_key`, `ui_type`, `ui_scroll`, which drive the window itself. `open_bim_studio_http.py` offers the same verbs over HTTP.
 
 The plan to make this a documented, versioned interface is issue [#130](https://github.com/OpenAEC-Foundation/open-bim-studio/issues/130).
