@@ -21,6 +21,10 @@ reserved number for another function. Record new public command codes in advance
 
 | Code / range | Kind | Reserved for | Reserved by (date) |
 |---|---|---|---|
+| **2461** | command | Exterior dimensions: three chains along the storey's outer walls (View > Annotate) | Computer 1, drawing quality (5 November 2026) |
+| **2460** | command | Room separator: draws room separation lines (Home > Plane > Spaces) | Computer 1, room separation (5 November 2026) |
+| **91** | tool id | Room separator | Computer 1, room separation (5 November 2026) |
+| **2402300** | setting on a line sketch | 1: the line bounds rooms as a wall does (room separation line) | Computer 1, room separation (5 November 2026) |
 | **2370–2371** | commands | Building system placement: vertical line and horizontal contour sketch | System placement (4 November 2026) |
 | **2402100** | setting on a building system | Explicit placement orientation: 0 vertical, 1 horizontal; recipe changes preserve it | System placement (4 November 2026) |
 | **2402000–2402002** | settings on a stair | Lower/upper quarter-turn winder counts and handedness | Reference dwelling (4 November 2026) |

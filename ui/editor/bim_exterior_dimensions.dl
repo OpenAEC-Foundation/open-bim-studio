@@ -1,0 +1,222 @@
+# SPDX-License-Identifier: MPL-2.0
+# Exterior dimension chains, as a Dutch floor plan has them along every
+# outer wall ("maatvoering buitenwerks"): outside the wall's outer face, from
+# corner to corner,
+# - the openings: every window and door edge in the wall;
+# - the walls: the faces of the inner walls that meet it;
+# - the whole: the outer corners alone.
+# Each step of a chain is an ordinary dimension between two features (a
+# wall face, a wall end, an opening edge), so the chains follow the model
+# when a wall or an opening moves.
+import ui/editor/bim_editor_core.dl
+
+# How far outside the outer face the three chains lie, in metres: 8, 14 and
+# 20 mm on paper at 1:100.
+function bim exterior chain offset {integer:chainIndex}:
+    execute:
+        if chainIndex = 0:
+            return 0.8
+        if chainIndex = 1:
+            return 1.4
+        return 2.0
+
+# A feature of a chain: its reference and where it lies along the wall.
+class:
+    patterns:
+        [a|] bim chain stop record
+    members:
+        reference as a bim reference record
+        along as a 64 bit floating-point number
+
+local function a bim chain stop of {a 64 bit integer:elementId} feature {integer:featureCode} at {a 64 bit floating-point number:station}:
+    execute:
+        return @intrinsic("construct", a bim chain stop record, @intrinsic("construct", a bim reference record, elementId, featureCode), station)
+
+local function the bim dot of {cad vector2:first} and {cad vector2:second}:
+    execute:
+        return (first's x * second's x) + (first's y * second's y)
+
+# Where feature `featureCode` of element `elementId` lies along the line from
+# `origin` in direction `along`; not a number when it does not resolve.
+local function the bim station of {a 64 bit integer:elementId} feature {integer:featureCode} from {cad vector2:origin} along {cad vector2:alongDir} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set anchor to the bim feature of (@intrinsic("construct", a bim reference record, elementId, featureCode)) in modelValue using index
+        if anchor's valid = false:
+            return 0.0 / 0.0
+        return the bim dot of (the cad difference of anchor's origin and origin) and alongDir
+
+# Whether the ray from `origin` along `heading` meets wall `wallValue`'s
+# centreline within 100 m.
+local function the bim ray from {cad vector2:origin} heading {cad vector2:heading} meets {bim wall record:wallValue}:
+    execute:
+        set run to the cad difference of wallValue's finish and wallValue's start
+        set denominator to (heading's x * run's y) - (heading's y * run's x)
+        if (the absolute value of denominator) < 1e-12:
+            return false
+        set offsetX to wallValue's start's x - origin's x
+        set offsetY to wallValue's start's y - origin's y
+        set rayReach to ((offsetX * run's y) - (offsetY * run's x)) / denominator
+        set segmentReach to ((offsetX * heading's y) - (offsetY * heading's x)) / denominator
+        return ((rayReach > 0.0) and (rayReach < 100.0)) and ((segmentReach >= 0.0) and (segmentReach <= 1.0))
+
+# Adds the stops of `stops` in order of `along` as a chain of dimensions
+# through the line `offsetDistance` outside the face at `faceOrigin`; the
+# number of dimensions made.
+local function add bim chain {a pointer to a list:stops} beside {cad vector2:faceOrigin} along {cad vector2:alongDir} outward {cad vector2:outwardDir} at {a 64 bit floating-point number:offsetDistance} to {a pointer to a bim model record:target}:
+    execute:
+        # Sorted by `along` (insertion: the chains are short).
+        set count to the length of stops
+        loop outer from 1 to count:
+            set inner to outer
+            loop while inner > 0:
+                set before to the item at (inner - 1) in stops
+                set here to the item at inner in stops
+                if before's along > here's along:
+                    replace item at index (inner - 1) in stops with here
+                    replace item at index inner in stops with before
+                    set inner to inner - 1
+                else:
+                    set inner to 0
+        set made to 0
+        loop cursor from 1 to count:
+            set fromStop to the item at (cursor - 1) in stops
+            set ontoStop to the item at cursor in stops
+            if (ontoStop's along - fromStop's along) > 0.005:
+                set middle to (fromStop's along + ontoStop's along) * 0.5
+                set placeAt to the cad sum of faceOrigin and (the cad sum of (alongDir scaled by middle) and (outwardDir scaled by offsetDistance))
+                ignore add bim dimension from fromStop's reference to ontoStop's reference through placeAt to target
+                set made to made + 1
+        return made
+
+# The three chains along every straight outer wall on level `levelId`; the
+# number of dimensions made.
+function add bim exterior dimensions on level {a 64 bit integer:levelId} to {a pointer to a bim model record:target}:
+    execute:
+        set modelValue to @intrinsic("dereference", target)
+        set index to the bim join index of modelValue
+        set storeyWalls to an empty list of a bim wall record
+        set centreX to 0.0
+        set centreY to 0.0
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if (wallValue's levelId = levelId) and (wallValue's bulge = 0.0):
+                append wallValue to storeyWalls
+                set centreX to centreX + ((wallValue's start's x + wallValue's finish's x) * 0.5)
+                set centreY to centreY + ((wallValue's start's y + wallValue's finish's y) * 0.5)
+        set wallCount to the length of storeyWalls
+        if wallCount = 0:
+            free storeyWalls
+            return 0
+        set centre to a cad vector2 with x (centreX / (wallCount as a 64 bit floating-point number)) and y (centreY / (wallCount as a 64 bit floating-point number))
+        set total to 0
+        loop wallCursor from 0 to wallCount:
+            set outerWall to the item at wallCursor in storeyWalls
+            set run to the cad difference of outerWall's finish and outerWall's start
+            set span to the square root of ((run's x * run's x) + (run's y * run's y))
+            if span >= 0.5:
+                set alongDir to a cad vector2 with x (run's x / span) and y (run's y / span)
+                set outwardDir to a cad vector2 with x (0.0 - alongDir's y) and y alongDir's x
+                set middle to a cad vector2 with x ((outerWall's start's x + outerWall's finish's x) * 0.5) and y ((outerWall's start's y + outerWall's finish's y) * 0.5)
+                if (the bim dot of outwardDir and (the cad difference of middle and centre)) < 0.0:
+                    set outwardDir to a cad vector2 with x (0.0 - outwardDir's x) and y (0.0 - outwardDir's y)
+                set halfThick to (the bim wall thickness of outerWall in modelValue) * 0.5
+                # Outer: nothing stands beyond its outer face.
+                set probe to the cad sum of middle and (outwardDir scaled by (halfThick + 0.01))
+                set covered to false
+                loop otherCursor from 0 to wallCount:
+                    if otherCursor != wallCursor:
+                        if the bim ray from probe heading outwardDir meets (the item at otherCursor in storeyWalls):
+                            set covered to true
+                if covered = false:
+                    set total to total + (add bim exterior chains of outerWall along alongDir outward outwardDir within storeyWalls in modelValue using index to target)
+        free storeyWalls
+        return total
+
+# The chains of outer wall `outerWall`, whose outer side is `outward`.
+local function add bim exterior chains of {bim wall record:outerWall} along {cad vector2:alongDir} outward {cad vector2:outwardDir} within {a pointer to a list:storeyWalls} in {bim model record:modelValue} using {bim join index record:index} to {a pointer to a bim model record:target}:
+    execute:
+        set origin to outerWall's start
+        set run to the cad difference of outerWall's finish and outerWall's start
+        set span to the square root of ((run's x * run's x) + (run's y * run's y))
+        set halfThick to (the bim wall thickness of outerWall in modelValue) * 0.5
+        set side to a cad vector2 with x (0.0 - alongDir's y) and y alongDir's x
+        # The wall's own ends, unless a corner wall closes them.
+        set firstStop to a bim chain stop of outerWall's id feature (bim wall start feature) at (the bim station of outerWall's id feature (bim wall start feature) from origin along alongDir in modelValue using index)
+        set lastStop to a bim chain stop of outerWall's id feature (bim wall finish feature) at (the bim station of outerWall's id feature (bim wall finish feature) from origin along alongDir in modelValue using index)
+        set wallStops to an empty list of a bim chain stop record
+        loop cursor from 0 to the length of storeyWalls:
+            set otherWall to the item at cursor in storeyWalls
+            if otherWall's id != outerWall's id:
+                set otherRun to the cad difference of otherWall's finish and otherWall's start
+                set otherSpan to the square root of ((otherRun's x * otherRun's x) + (otherRun's y * otherRun's y))
+                if otherSpan > 1e-6:
+                    set crossing to the absolute value of ((the bim dot of otherRun and alongDir) / otherSpan)
+                    if crossing < 0.1:
+                        set otherHalf to (the bim wall thickness of otherWall in modelValue) * 0.5
+                        set reach to (halfThick + otherHalf) + 0.02
+                        set touching to false
+                        set touchAt to 0.0
+                        set ends to an empty list of a cad vector2
+                        append otherWall's start to ends
+                        append otherWall's finish to ends
+                        loop endCursor from 0 to 2:
+                            set endPoint to the item at endCursor in ends
+                            set across to the bim dot of (the cad difference of endPoint and origin) and side
+                            set stationAt to the bim dot of (the cad difference of endPoint and origin) and alongDir
+                            if ((the absolute value of across) <= reach) and ((stationAt >= (0.0 - reach)) and (stationAt <= (span + reach))):
+                                set touching to true
+                                set touchAt to stationAt
+                        free ends
+                        if touching:
+                            set nearFace to a bim chain stop of otherWall's id feature (bim wall exterior feature) at (the bim station of otherWall's id feature (bim wall exterior feature) from origin along alongDir in modelValue using index)
+                            set farFace to a bim chain stop of otherWall's id feature (bim wall interior feature) at (the bim station of otherWall's id feature (bim wall interior feature) from origin along alongDir in modelValue using index)
+                            if farFace's along < nearFace's along:
+                                set swapped to nearFace
+                                set nearFace to farFace
+                                set farFace to swapped
+                            if touchAt <= reach:
+                                # A corner at the start: its outer face.
+                                set firstStop to nearFace
+                            else if touchAt >= (span - reach):
+                                set lastStop to farFace
+                            else:
+                                append nearFace to wallStops
+                                append farFace to wallStops
+        set openingStops to an empty list of a bim chain stop record
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            if openingValue's hostId = outerWall's id:
+                append (a bim chain stop of openingValue's id feature (bim opening left feature) at (the bim station of openingValue's id feature (bim opening left feature) from origin along alongDir in modelValue using index)) to openingStops
+                append (a bim chain stop of openingValue's id feature (bim opening right feature) at (the bim station of openingValue's id feature (bim opening right feature) from origin along alongDir in modelValue using index)) to openingStops
+        set faceOrigin to the cad sum of origin and (outwardDir scaled by halfThick)
+        set made to 0
+        if (the length of openingStops) > 0:
+            append firstStop to openingStops
+            append lastStop to openingStops
+            set made to made + (add bim chain openingStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 0) to target)
+        if (the length of wallStops) > 0:
+            append firstStop to wallStops
+            append lastStop to wallStops
+            set made to made + (add bim chain wallStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 1) to target)
+        set wholeStops to an empty list of a bim chain stop record
+        append firstStop to wholeStops
+        append lastStop to wholeStops
+        set made to made + (add bim chain wholeStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 2) to target)
+        free wholeStops
+        free openingStops
+        free wallStops
+        return made
+
+# 2461 (Annotate > Exterior dimensions): the chains of the active storey, as
+# one undo step.
+function add bim editor exterior dimensions in {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to add bim exterior dimensions on level editor's levelId to (the address of (editor's documentValue's current))
+        if made = 0:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Exterior dimensions: no outer walls on this storey"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's viewsDirty to true
+        set editor's message to ((the string form of "Exterior dimensions: ") + (the string form of made)) + (the string form of " dimensions in chains along the outer walls")
