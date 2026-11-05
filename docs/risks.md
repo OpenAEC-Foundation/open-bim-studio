@@ -82,6 +82,9 @@ drawing and export subsystems rely on: that the model is always in a valid, expo
   question 6 in the spatial model document. Extent needs only a tiled coordinate architecture;
   streaming needs paging and eviction. **Answer that question before committing to this risk.**
 - **Status:** open
+- **Design 2026-11-05:** the tile model is written down as a proposed ADR
+  ([ADR-0016](architecture/decisions/0016-tile-model-for-extent-and-streaming.md)); this spike decides
+  it
 - **Decision 2026-10-31:** design for unbounded extent and streaming together, so the data model
   does not rule streaming out; what that fixes now is round 2, question 4 in
   [`open-questions.md`](open-questions.md)
@@ -305,6 +308,8 @@ kernel developer.
   50k figure and set out the narrower reading. The most useful follow-up is cheap — separate
   whether the cost scales with pattern count, call-site count or lines, and whether it is
   per-file or whole-program.
+- **Since 2026-11-05:** a former acceptance condition of ADR-0004, which is now accepted; this
+  risk stays open with its own measurement instead of gating the ADR
 
 ### R-19 · DynLex runtime performance may fall short of native
 The performance targets assume native-speed code.
@@ -327,6 +332,8 @@ The performance targets assume native-speed code.
   unflagged it would fail on all three (9.09×, 6.78×, 21.14×) — the kernel's build must pass `-O2`
   or better. Not settled: no parallel, SIMD, boolean-pipeline or pointer-chasing workload was
   measured, and the compiler pin is dirty (see the caveat in the findings).
+- **Since 2026-11-05:** a former acceptance condition of ADR-0004, which is now accepted; this
+  risk stays open with its own measurement instead of gating the ADR
 
 ---
 
@@ -361,9 +368,8 @@ modelling work.
 must be designed in from the start, not bolted on.
 
 - **Action:** research how existing parametric systems handle the boundary; decide in phase 4.
-- **Status:** decided 2026-10-31 — DynLex is the default scripting language for components,
-  with bridges to Python, Java and other languages; how the bridges are built is open
-  ([`open-questions.md`](open-questions.md), round 2, question 5)
+- **Status:** decided — DynLex is the default for components; other languages connect through a
+  separate process over JSON-RPC, Python first ([ADR-0017](architecture/decisions/0017-scripting-bridge-is-a-separate-process.md))
 
 ### R-07 · The free-modelling / semantic-correctness seam is unlocated
 Flexibility and valid IFC output pull against each other. We have not established where the
@@ -377,10 +383,8 @@ boundary sits, and it affects the core data model.
 It constrains the entire stack. Deciding late is expensive.
 
 - **Action:** explicit decision, recorded as an ADR, before phase 3 spikes are designed.
-- **Status:** decided as a direction 2026-10-31 — the full application in the browser
-  (WASM/WebGPU) is a goal. Its scope (goal or release requirement, renderer path, DynLex target)
-  is open ([`open-questions.md`](open-questions.md), round 2, question 3); the ADR follows that
-  answer
+- **Status:** decided 2026-11-05 — the full application in the browser is a long-term goal, not a
+  release requirement ([ADR-0015](architecture/decisions/0015-the-browser-is-a-long-term-goal.md))
 
 ### R-20 · The DynLex GPU path is argued from source reading, not measured
 [`research/renderers/gpu-paths.md`](research/renderers/gpu-paths.md) recommends a buffer layout —
@@ -399,6 +403,8 @@ per-frame transient arena holds at most 25,890 boxes, against a 10⁵-box target
 - **Fail:** below 30 fps, or coordinate error above 1e-2 m.
 - **Status:** open — named in `renderers/gpu-paths.md` §Risks as the measured counterpart that note's
   own arithmetic does not substitute for.
+- **Since 2026-11-05:** a former acceptance condition of ADR-0004, which is now accepted; this
+  risk stays open with its own measurement instead of gating the ADR
 
   **The precondition is met, the experiment is not run (2026-10-15).** The DynLex compiler is built
   and runs a Vulkan renderer in [the application](notes/findings.md):
@@ -434,9 +440,9 @@ LGPL, MPL, and commercial components combined into one product, with possible op
 later. Not yet checked as a whole.
 
 - **Action:** licence compatibility review once the shortlist exists.
-- **Status:** process decided 2026-10-31 — every PR that adds a dependency carries its licence
-  check. The review of what is already in the stack is open
-  ([`open-questions.md`](open-questions.md), round 2, question 12)
+- **Status:** process decided — every PR adding a dependency carries its licence check; REUSE lint
+  in CI and a one-off list of external components in `docs/notes/licences.md`, by computer 2
+  (5 November 2026). The repository is MPL-2.0 with a root `LICENSE`
 
 ---
 

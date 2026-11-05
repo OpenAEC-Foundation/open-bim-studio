@@ -82,7 +82,8 @@ round 1, C):
    through to the one below. The properties panel shows per value whether it is inherited (grey)
    or overridden (bold, with a reset). The view type is native only, in its own property set.
 2. **Acceptance of the structural plan (#58):** the design's §3, plus a comparison with one real
-   structural drawing that the maintainer supplies and that stays outside this repository.
+   structural drawing that the maintainer supplies and that stays outside this repository. The
+   maintainer makes that comparison themselves, on a build of `main`, at the end (5 November).
 3. **Grid pattern syntax (#59):** both `4x5400` (also `4*5400`) and `5400 6000 5400`, in
    millimetres; new lines go in the direction of the end where the plus handle sits. Levels get
    no plus handle; they are added one at a time.

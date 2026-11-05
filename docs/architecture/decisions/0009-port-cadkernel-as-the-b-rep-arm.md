@@ -21,10 +21,9 @@ make a new one.
 The B-rep arm is the DynLex port of `cadkernel` (Option D), maintained in `kernel/`.
 
 - Every file derived from `cadkernel` stays under MPL-2.0, file by file, with its SPDX header.
-- Files written new in this repository that are not derived from `cadkernel` may carry another
-  licence. The repository has no root `LICENSE` file yet and most source files carry an MPL-2.0
-  SPDX header; which licence new, non-derived files carry is an open question in
-  [`open-questions.md`](../../open-questions.md), and until it is answered they keep MPL-2.0.
+- Files written new in this repository that are not derived from `cadkernel` are MPL-2.0 too: the
+  whole repository is MPL-2.0, with the licence text in the root `LICENSE` file (decided
+  2026-11-05, [`open-questions.md`](../../open-questions.md), round 2, question 11).
 - Rewriting parts of the port (for exact predicates or speed) is ordinary maintenance under this
   ADR. A rewritten file that still derives from a `cadkernel` file stays MPL-2.0.
 
@@ -60,8 +59,8 @@ priced in [`research/kernels/synthesis.md`](../../research/kernels/synthesis.md)
 **What this makes easier:** M1 is no longer blocked on the B-rep route; licence headers have one
 rule.
 
-**What this makes harder:** every file must say whether it derives from `cadkernel`; a new file
-copied from a derived one inherits MPL-2.0.
+**What this makes harder:** nothing for licensing, since every file is MPL-2.0; derived files
+must keep `cadkernel`'s copyright notices.
 
 **What this commits us to:** keeping SPDX headers accurate, and the licence check that
 accompanies every PR adding a dependency (R-11, decision of 31 October 2026).

@@ -209,7 +209,7 @@ The repository began as a research programme. Its [vision](docs/vision/vision.md
 
 ## License
 
-The application source files carry MPL-2.0 notices. Dependencies and bundled assets have their own terms; the DynLex runtime uses LGPL-3.0. When you redistribute builds, consult each component's source notices, the [installer licence bundle](installer/licenses/README.txt), and the font and icon notices.
+The application source is MPL-2.0 ([LICENSE](LICENSE)); every source file carries an MPL-2.0 notice. Dependencies and bundled assets have their own terms; the DynLex runtime uses LGPL-3.0. When you redistribute builds, consult each component's source notices, the [installer licence bundle](installer/licenses/README.txt), and the font and icon notices.
 
 ## Trademarks
 

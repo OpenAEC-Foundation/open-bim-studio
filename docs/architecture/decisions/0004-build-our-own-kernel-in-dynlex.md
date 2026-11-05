@@ -1,6 +1,6 @@
 # ADR-0004 — Build our own geometry kernel in DynLex
 
-**Status:** proposed
+**Status:** accepted (2026-11-05, by the maintainer; supersedes [ADR-0003](0003-build-on-an-existing-kernel.md))
 **Date:** 2026-09-09
 **Reviewed:** 2026-09-12 — amended on the evidence and **kept `proposed`**. The three conditions
 that would accept it are named in §Consequences, "What must be true before this ADR is accepted".
@@ -236,6 +236,14 @@ after M0 discards the kernel skeleton but not the research — `docs/research/ke
 `problems.md` remain valid evidence for evaluating any replacement candidate.
 
 ## What must be true before this ADR is accepted
+
+**Accepted 2026-11-05 with these conditions still open.** The maintainer accepted this ADR on
+5 November 2026 ([`open-questions.md`](../../open-questions.md), round 2, question 1). The three
+conditions below are no longer a gate on the ADR: each is now an open risk with its own
+measurement — condition 1 is [R-18](../../risks.md), condition 2 is [R-20](../../risks.md) with
+P-28 and is answered in direction by [ADR-0014](0014-choose-cpu-or-gpu-per-call-by-problem-size.md),
+and condition 3 is [R-19](../../risks.md). If R-18 cannot be fixed, Option E stays the fallback.
+The text below is kept as written on 2026-09-12.
 
 Added 2026-09-12. These are conditions, not aspirations: each names the measurement or the change
 that closes it, and the ADR stays `proposed` until all three are met. Until then **ADR-0003 remains

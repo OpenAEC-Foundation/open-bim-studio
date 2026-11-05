@@ -4,41 +4,45 @@
 one asked?
 
 Collected on 31 October 2026 from the roadmap, the ADRs, the risk register, the work board and
-every open issue. The maintainer answered the first round the same day; the answers are recorded
-below and carried into the ADRs, the roadmap, the plans and the risk register. Questions an
+every open issue. The maintainer answered the first round the same day and the second on
+5 November; the answers are recorded below and carried into the ADRs, the roadmap, the plans and
+the risk register. Questions an
 implementer can settle alone are not listed.
 
-## Round 2 — still open
+## Round 3 — still open
 
-Questions the first round left open, parked, or raised. Each needs the maintainer.
+1. **Signing through the GitHub organisation** (R2-13): the answer was "the GitHub organisation".
+   Does that mean signing in GitHub Actions with keys held as organisation secrets, or GitHub's own
+   artifact attestations? And where does the Windows Authenticode certificate come from?
+2. **KW and FB codings** (#68, taken up again in R2-16): which source or example defines each
+   coding?
+3. **InputV1** (#22, #30, taken up again in R2-16): after a native edit, is the system detached,
+   kept in sync, or does the application ask?
+4. **Whole-scene analytic renderer and rounded B-rep export** (#77, taken up again in R2-16): build
+   now, or measure at 1, 100 and 1,000 connections first?
+5. **The map tile source** (R2-7): which OpenStreetMap-based provider, or a tile set hosted by
+   OpenAEC?
 
-1. **ADR-0004** (own kernel in DynLex): accept, supersede or keep `proposed`? Asked again with
-   the trade-offs written out; the first round's answer asked for more explanation. (R1-1)
-2. **CPU and GPU per operation** (R1-3): who decides per operation which runs on the GPU, and on
-   what evidence? Does our compute dispatch (DynLex PR #8) go upstream first?
-3. **The full app in the browser** (R1-7): a long-term goal or a requirement for a release? Which
-   renderer path (WebGPU next to Vulkan) and which DynLex target (WASM) does it need?
-4. **Designing for streaming now** (R1-6): what must the data model fix today (tile identity,
-   cross-tile references), and when does the R-14 spike run?
-5. **Bridges to Python, Java and other languages** (R1-8): through the C-ABI seam of ADR-0008, as
-   a plugin process, or embedded? Which language first, and which sandbox?
-6. **IfcX in practice** (ADR-0010): which IfcX release do we follow, and which STEP schema is the
-   default export for partners?
-7. **Choosing the CRS from the world location** (R1-24): which map source for the built-in map,
-   and where does the list of local systems come from?
-8. **Round edges in building systems** (R1-30): arcs only or free curves, and how do round members
-   and panels go to IFC?
-9. **Connections between systems and elements as objects** (R1-31): one join object for all
-   element kinds, or one per discipline? Which IFC relationship?
-10. **The concept presets** (R1-52): asked again with an explanation.
-11. **Licence of new, non-derived files** (ADR-0009): the repository has no root `LICENSE` and
-    every source file carries MPL-2.0. Keep MPL-2.0 everywhere, or another licence for new code?
-12. **The first licence check of the existing stack** (R1-10): continuous checks cover new
-    dependencies; who checks what is already there?
-13. **Code signing** (R1-36): where do the Authenticode certificate and the signing key come from?
-14. **The real structural drawing** (R1-13): when does it arrive, and who compares against it?
-15. **Parked:** KW/FB codings (R1-15), whole-scene analytic renderer and rounded B-rep export
-    (R1-47), InputV1 (R1-50). Still parked, or one of them now?
+## Round 2 — answered 5 November 2026
+
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 1 | ADR-0004 | Accept it now; its three conditions become open risks with their own measurement. | [ADR-0004](architecture/decisions/0004-build-our-own-kernel-in-dynlex.md) (accepted; ADR-0003 superseded) |
+| 2 | CPU and GPU per operation | Chosen per call by problem size; every GPU operation has a CPU twin. | [ADR-0014](architecture/decisions/0014-choose-cpu-or-gpu-per-call-by-problem-size.md) |
+| 3 | The full app in the browser | A long-term goal, not a release requirement; keep the door open (own render layer, OS code only in `platform/`). | [ADR-0015](architecture/decisions/0015-the-browser-is-a-long-term-goal.md) |
+| 4 | Designing for streaming | An ADR with the full tile model now, the R-14 spike later. | [ADR-0016](architecture/decisions/0016-tile-model-for-extent-and-streaming.md) (`proposed`) |
+| 5 | Bridges to other languages | A separate process over JSON-RPC (stdio); Python first. | [ADR-0017](architecture/decisions/0017-scripting-bridge-is-a-separate-process.md) |
+| 6 | Default STEP export | IFC4 by default, IFC4X3_ADD2 as a choice. | [ADR-0010](architecture/decisions/0010-ifcx-as-the-reference-schema.md) |
+| 7 | Map and CRS list | An OpenStreetMap-based tile source through a provider with an app licence, everywhere. | #65; round 3, question 5 |
+| 8 | Round edges in building systems | Arcs and free curves (NURBS) together. | #71 |
+| 9 | Joins as objects | One join object for all element kinds, with a type and properties; IfcRelConnectsPathElements or IfcRelConnectsElements; each module makes its own geometry. | #72 |
+| 10 | The real structural drawing | The maintainer compares it themselves, on a build of `main`, at the end. | #58, [views plan](superpowers/plans/2026-10-29-views-grids-levels-plan.md) |
+| 11 | Licence of new code | MPL-2.0 for everything, with a root `LICENSE`. | [`LICENSE`](../LICENSE), ADR-0009 |
+| 12 | Licence check of the existing stack | REUSE lint in CI plus a one-off list in `docs/notes/licences.md`, by computer 2. | R-11 |
+| 13 | Signing certificate and key | "The GitHub organisation" — to be made precise. | #39; round 3, question 1 |
+| 14 | Who assembles and publishes the release | The maintainer, together with the installers. | [work board](WERKBORD.md) |
+| 15 | The 183 concept presets | They stay concept, visibly marked in the application; a preset becomes real with a source, a working recipe and a review, one family at a time, in the order the MVP needs. | #22 |
+| 16 | The three parked questions | Take all three up now. | Round 3, questions 2–4 |
 
 ## Round 1 — answered 31 October 2026
 
@@ -153,9 +157,8 @@ R1-n is question n of round 1. "Recorded in" names where the answer now lives.
 
 ## Verdict
 
-Round 1 settled the direction of the product track: the structural plan is the MVP, IfcX with
-IFC4.3 vocabulary is the reference schema, the B-rep arm is the port, and the DynLex pin stays
-until our patches are upstream. One decision of substance is still open — ADR-0004 (round 2,
-question 1) — and with it formally ADR-0003 remains in force. The browser goal (round 2,
-question 3) is the answer with the largest consequence for the stack and needs its scope pinned
-before any renderer work is planned around it.
+After two rounds the architecture is settled: ADR-0004 is accepted and supersedes ADR-0003, and
+ADR-0009 to ADR-0017 record the choices that follow from it. Only ADR-0016, the tile model, is
+`proposed`, because it waits on the R-14 spike. What remains open (round 3) is detail: how signing
+works through the organisation, the KW/FB sources, InputV1, the analytic renderer and the map
+provider.

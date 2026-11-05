@@ -22,7 +22,9 @@ development format `ifcx_alpha`, as JSON and as the compact `.ifcxb`), and STEP 
 - **IFC4.3 (IFC4X3_ADD2, ISO 16739-1:2024) supplies the vocabulary** wherever IfcX does not fix it
   itself: entity names, predefined types and standard property sets are taken from IFC4.3 as far as
   possible.
-- STEP export in IFC4 and IFC4X3_ADD2 stays, for exchange with other software.
+- STEP export in IFC4 and IFC4X3_ADD2 stays, for exchange with other software. **IFC4 is the
+  default STEP export**, because it is the most widely read; IFC4X3_ADD2 is a choice at export
+  (added 2026-11-05, [`open-questions.md`](../../open-questions.md), round 2, question 6).
 - Native-only properties use property sets with the prefix `OpenAEC_`, shared with other OpenAEC
   tools (decision of 31 October 2026 on #66).
 

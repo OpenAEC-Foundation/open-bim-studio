@@ -1,6 +1,6 @@
 # ADR-0003 — Build on an existing kernel
 
-**Status:** accepted
+**Status:** superseded by [ADR-0004](0004-build-our-own-kernel-in-dynlex.md) on 2026-11-05
 **Date:** 2026-07-29
 
 ## Context

@@ -81,11 +81,11 @@ These are **not** closed by the decision of 31 October; their fate is decided se
 | Branch `restructure/one-tree` | One commit not on `main`: `e41bedd` "Record the stage 1 build times measured on the Linux machine" | Kept, pending |
 | Probe commit on `mod/elements-connection/fastener-components` | One commit not on `main`: `663f348` "Add a direct implicit CSG fastener rendering probe"; the rest of the branch is on `main` (PR #25) | Kept, pending |
 
-Left as-is, not closed and not yet moved to an issue:
+Assigned on 5 November 2026 ([open-questions.md](open-questions.md), round 2, question 14):
 
-| Task | Owner | Branch | Files / boundary | Status (23 October) |
+| Task | Owner | Branch | Files / boundary | Status |
 |---|---|---|---|---|
-| Assemble and publish release | PC1 / coordinator | `main` | Integration, tested artefacts, tags | Blocked on app/installation tests |
+| Assemble and publish release | The maintainer, together with the installers | `main` | Integration, tested artefacts, tags | Assigned; blocked on app/installation tests |
 
 ## Review of the board — 31 October 2026
 

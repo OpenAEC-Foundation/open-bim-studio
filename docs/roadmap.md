@@ -56,11 +56,13 @@ a hard condition (#3, #29, #39).
 
 ### Architecture still open
 
-- **ADR-0004** (own kernel in DynLex) is still `proposed`, so ADR-0003 formally stays in force. The
-  product track runs ahead of that decision; it is round 2, question 1 in
-  [`open-questions.md`](open-questions.md).
-- The browser goal (R-08) and designing for streaming (R-14) were decided as directions on
-  31 October; their scope is still open (round 2).
+- **ADR-0004** (own kernel in DynLex) was accepted on 5 November 2026 and supersedes ADR-0003. Its
+  three former conditions are open risks with their own measurement: R-18 (compile scale), R-20
+  (the GPU path, answered in direction by ADR-0014) and R-19 (the `-O` flag in the real build).
+- The browser is a long-term goal, not a release requirement (ADR-0015). Scripting bridges run as a
+  separate process over JSON-RPC (ADR-0017).
+- **ADR-0016** (the tile model for extent and streaming) is `proposed` until the R-14 spike has
+  run.
 
 ## Phase 1 — domain and prior art
 

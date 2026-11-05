@@ -209,7 +209,7 @@ De repository begon als onderzoeksprogramma. De [visie](docs/vision/vision.md), 
 
 ## Licentie
 
-De bronbestanden van de applicatie dragen MPL-2.0-vermeldingen. Afhankelijkheden en meegeleverde bestanden hebben hun eigen voorwaarden; de DynLex-runtime gebruikt LGPL-3.0. Raadpleeg bij het verspreiden van builds de bronvermeldingen van elk onderdeel, de [licentiebundel van de installer](installer/licenses/README.txt), en de vermeldingen bij lettertypen en iconen.
+De broncode van de applicatie valt onder MPL-2.0 ([LICENSE](LICENSE)); elk bronbestand draagt een MPL-2.0-vermelding. Afhankelijkheden en meegeleverde bestanden hebben hun eigen voorwaarden; de DynLex-runtime gebruikt LGPL-3.0. Raadpleeg bij het verspreiden van builds de bronvermeldingen van elk onderdeel, de [licentiebundel van de installer](installer/licenses/README.txt), en de vermeldingen bij lettertypen en iconen.
 
 ## Handelsmerken
 
