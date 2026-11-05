@@ -25,8 +25,10 @@ reserved number for another function. Record new public command codes in advance
 | **2460** | command | Room separator: draws room separation lines (Home > Plane > Spaces) | Computer 1, room separation (5 November 2026) |
 | **91** | tool id | Room separator | Computer 1, room separation (5 November 2026) |
 | **2402300** | setting on a line sketch | 1: the line bounds rooms as a wall does (room separation line) | Computer 1, room separation (5 November 2026) |
-| **2370–2371** | commands | Building system placement: vertical line and horizontal contour sketch | System placement (4 November 2026) |
-| **2402100** | setting on a building system | Explicit placement orientation: 0 vertical, 1 horizontal; recipe changes preserve it | System placement (4 November 2026) |
+| **2370–2372** | commands | Building system placement orientation (floating toolbar of the Building System tool): 2370 vertical by its line, 2371 horizontal by a contour sketch (sketch host 850), 2372 tilted by its line and the side it rises to, at a typed pitch | System placement (4 November 2026; 2372 added 5 November 2026) |
+| **2402100** | setting on a building system | Explicit placement orientation: 0 vertical, 1 horizontal, 2 tilted; recipe changes preserve it; absent, the orientation is derived from 700007 (horizontal when set). 700007 is the base height of every non-vertical system | System placement (4 November 2026; value 2 added 5 November 2026) |
+| **2402101** | setting on a building system | Tilt of a tilted system's face from vertical, in millidegrees (1–89999); read only when 2402100 = 2. The user sees and types its pitch from horizontal (90 − tilt), as a roof's | System placement (5 November 2026) |
+| **12810–12812** | building system properties | Orientation (click: Vertical, Horizontal, Tilted), Pitch (degrees from horizontal) and Base above storey | System placement (5 November 2026) |
 | **2402000–2402002** | settings on a stair | Lower/upper quarter-turn winder counts and handedness | Reference dwelling (4 November 2026) |
 | **12800–12804** | stair properties | Width, riser count, lower/upper winders and handedness | Reference dwelling (4 November 2026) |
 | **2401900** | setting on a component instance | Vertical placement in micrometres; shared geometry across masonry courses | Component placement (2 November 2026) |
