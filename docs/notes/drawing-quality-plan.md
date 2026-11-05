@@ -61,6 +61,7 @@ Items are ordered by impact first, then by effort (S, then M, then L). Duplicate
   - **Slabs:** associate an IfcMaterial with untyped slabs (645-653), and give typed slabs an AXIS3 IfcMaterialLayerSetUsage.
   - **Follow-up (effort M):** rotate the wall placement along the wall and add an 'Axis' representation. Fix the layer sense to `.POSITIVE.` with offset −t/2 (114-120, 701-717).
 - **Effort:** S (the follow-up is M)
+- **Status (5 November 2026):** the opening placement, the wall PredefinedType and the untyped slab's IfcMaterial are done, proven by `ifc/tests/ifc_placement.dl`. Still open: the AXIS3 IfcMaterialLayerSetUsage for typed slabs, and the M follow-up (wall placement rotation, 'Axis' representation, layer sense).
 
 ## High impact, effort M
 
