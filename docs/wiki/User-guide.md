@@ -28,7 +28,7 @@ The Discipline menu chooses which tabs the ribbon shows; the choice is remembere
 
 | Tab | Groups (buttons) |
 |---|---|
-| **Home** | Select · Build: four family buttons — **Point** (Place, Component), **Line** (Column, Beam, Pile, Frame; Pipe, Duct, Cable tray), **Plane** (Wall, Floor, Roof, Ceiling, Space), **System** (Building System and every system recipe); click the icon to repeat the last choice, the arrow for the menu · Openings (Vertical opening, Window, Opening detail, Door) · Grid · Circulation (Stair, Railing, On stair) |
+| **Home** | Select · Build: four family buttons — **Point** (Place, Component), **Line** (Column, Beam, Pile, Frame; Pipe, Duct, Cable tray), **Plane** (Wall, Floor, Roof, Ceiling, Space), **System** (Building System and every system recipe); click the icon to repeat the last choice, the arrow for the menu · Openings (Window and Door; Floor/roof opening, cut in a selected floor or roof; Opening detail, the reveals and sill of a selected opening) · Grid · Circulation (Stair, Railing, On stair) |
 | **MEP** | Piping (Pipe) · HVAC (Duct) · Electrical (Cable tray) · Systems |
 | **Sketch** | Free geometry: Select, Draw, Shape (Push/Pull, Split face, Offset), Transform, Components, Solids (Box, Cylinder, Sphere, Add, Cut, Intersect) |
 | **Modify** | Move, Copy, Rotate, Mirror, Array, Scale · Trim, Extend, Offset, Fillet, Chamfer, Stretch, Split, Align, Join, Lengthen, Explode · Similar, Delete · Make editable (IFC) |
