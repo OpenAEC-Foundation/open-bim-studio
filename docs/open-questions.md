@@ -9,19 +9,25 @@ every open issue. The maintainer answered the first round the same day and the s
 the risk register. Questions an
 implementer can settle alone are not listed.
 
-## Round 3 — still open
+## Still open
 
-1. **Signing through the GitHub organisation** (R2-13): the answer was "the GitHub organisation".
-   Does that mean signing in GitHub Actions with keys held as organisation secrets, or GitHub's own
-   artifact attestations? And where does the Windows Authenticode certificate come from?
-2. **KW and FB codings** (#68, taken up again in R2-16): which source or example defines each
-   coding?
-3. **InputV1** (#22, #30, taken up again in R2-16): after a native edit, is the system detached,
-   kept in sync, or does the application ask?
-4. **Whole-scene analytic renderer and rounded B-rep export** (#77, taken up again in R2-16): build
-   now, or measure at 1, 100 and 1,000 connections first?
-5. **The map tile source** (R2-7): which OpenStreetMap-based provider, or a tile set hosted by
-   OpenAEC?
+Nothing waits on the maintainer as a question. Two answers leave work to be done:
+
+- **Signing** (R3-1) runs under the GitHub organisation. How exactly is settled when #39 is
+  implemented: where the Windows Authenticode certificate comes from, and whether the Linux
+  `.asc` signature stays or GitHub artifact attestations take its place.
+- **The KW and FB examples** (R3-2): the maintainer supplies one example frame schedule per coding,
+  outside the repository.
+
+## Round 3 — answered 5 November 2026
+
+| # | Question | Answer | Recorded in |
+|---|---|---|---|
+| 1 | Signing through the GitHub organisation | The GitHub organisation (OpenAEC-Foundation) — repeated without a choice between the options; settled when #39 is implemented. | #39 |
+| 2 | Source of the KW and FB codings | The maintainer supplies one example frame schedule per coding (anonymised, kept outside the repository); the rules are written from it. | #68 |
+| 3 | InputV1 after a native edit | Always kept in sync: native edits update the generator input, so the system stays parametric. | #22 |
+| 4 | Whole-scene analytic renderer, rounded B-rep export | Measure the renderer at 1, 100 and 1,000 connections first, then build; the rounded B-rep export starts now as a kernel issue. | #77, #163 |
+| 5 | Map tile source | A Protomaps world map (PMTiles) hosted by OpenAEC, with a setting for the user's own source; shared with other OpenAEC tools. | #65, [OpenAEC-Blueprint#87](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/87) |
 
 ## Round 2 — answered 5 November 2026
 
@@ -157,8 +163,7 @@ R1-n is question n of round 1. "Recorded in" names where the answer now lives.
 
 ## Verdict
 
-After two rounds the architecture is settled: ADR-0004 is accepted and supersedes ADR-0003, and
-ADR-0009 to ADR-0017 record the choices that follow from it. Only ADR-0016, the tile model, is
-`proposed`, because it waits on the R-14 spike. What remains open (round 3) is detail: how signing
-works through the organisation, the KW/FB sources, InputV1, the analytic renderer and the map
-provider.
+After three rounds the maintainer's questions are answered. The architecture is settled in
+ADR-0004 to ADR-0017, with ADR-0016 (the tile model) `proposed` until the R-14 spike has run. What
+remains is work, not decisions: signing under #39, the KW/FB examples, and the issues filed from
+the answers (#162, #163, OpenAEC-Blueprint#87).
