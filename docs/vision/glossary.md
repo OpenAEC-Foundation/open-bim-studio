@@ -117,6 +117,16 @@ the phase filter (existing, new construction, demolition), which is about the wo
 design. Issue #125 proposes UO (*uitvoeringsontwerp*, execution design) as the third phase of
 building system representations; whether the two phase lists become one is open.
 
+**NEN 2580: BVO, GO, NVO and VVO** — the Dutch standard for measuring floor areas.
+*Bruto vloeroppervlakte* (BVO, gross floor area) runs along the outer faces of the enclosing
+walls; *gebruiksoppervlakte* (GO, usable floor area) runs inside the walls, less shafts and the
+parts under 1.5 m high; *netto vloeroppervlakte* (NVO, net floor area) is the spaces themselves;
+*verhuurbaar vloeroppervlak* (VVO, lettable floor area) is GO less what cannot be let. The
+drawing type library has an Area plan with an Area plan BVO, GO and VVO beneath it (issue
+#123). The application measures GO along the outer walls' inner faces and VVO as equal to GO;
+the deductions are not made yet. The maintainers wrote the lettable area as "VO"; it is written
+VVO here to keep it apart from the design phase VO.
+
 See [`../domain/nl-standards.md`](../domain/nl-standards.md).
 
 ## Terms we avoid

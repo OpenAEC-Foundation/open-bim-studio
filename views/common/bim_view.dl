@@ -496,9 +496,17 @@ function bim level marks annotation:
 function bim area measures annotation:
     replacement:
         7
-function the bim annotation count:
+# The bound an area plan draws: the gross area's (BVO) along the outer
+# faces, the usable area's (GO) along the outer walls' inner faces.
+function bim gross area bound annotation:
     replacement:
         8
+function bim usable area bound annotation:
+    replacement:
+        9
+function the bim annotation count:
+    replacement:
+        10
 
 function the bim name of annotation {integer:ruleCode}:
     execute:
@@ -518,6 +526,10 @@ function the bim name of annotation {integer:ruleCode}:
             return the string form of "Level marks"
         if ruleCode = bim area measures annotation:
             return the string form of "Areas (NEN 2580)"
+        if ruleCode = bim gross area bound annotation:
+            return the string form of "BVO bound"
+        if ruleCode = bim usable area bound annotation:
+            return the string form of "GO bound"
         return the string form of "Annotation"
 
 # The phase filters a drawing type can apply.
@@ -606,6 +618,47 @@ function bim annotation {integer:ruleCode} applies to drawing type {a 64 bit int
     execute:
         return (the bim resolved setting 2 at ruleCode of drawing type typeId in modelValue) = 1
 
+# The drawing types in tree order, each after its parent and before its
+# siblings' trees, with how deep it lies: the Drawing Rules window's tree and
+# the Drawing type menu list them so.
+function the bim drawing type order of {bim model record:modelValue} noting {a pointer to a list:depthList}:
+    execute:
+        set ordered to an empty list of a 64 bit integer
+        set stack to an empty list of a 64 bit integer
+        set stackDepths to an empty list of an integer
+        set typeList to modelValue's drawingTypes's values
+        set rootCursor to (the length of typeList) - 1
+        loop while rootCursor >= 0:
+            set candidate to the item at rootCursor in typeList
+            if (the bim drawing type index of candidate's parentId in modelValue)'s valid = false:
+                append candidate's id to stack
+                append 0 to stackDepths
+            set rootCursor to rootCursor - 1
+        loop while ((the length of stack) > 0) and ((the length of ordered) <= (the length of typeList)):
+            set last to (the length of stack) - 1
+            set current to the item at last in stack
+            set currentDepth to the item at last in stackDepths
+            remove item last from stack
+            remove item last from stackDepths
+            append current to ordered
+            append currentDepth to depthList
+            set childCursor to (the length of typeList) - 1
+            loop while childCursor >= 0:
+                set child to the item at childCursor in typeList
+                if child's parentId = current:
+                    append child's id to stack
+                    append (currentDepth + 1) to stackDepths
+                set childCursor to childCursor - 1
+        free stack
+        free stackDepths
+        return ordered
+
+# Whether rule `ruleCode` is drawn for drawing type `typeId` unless switched
+# off: set on, or set nowhere (a model saved before the rule existed).
+function bim annotation {integer:ruleCode} is kept for drawing type {a 64 bit integer:typeId} in {bim model record:modelValue}:
+    execute:
+        return (the bim resolved setting 2 at ruleCode of drawing type typeId in modelValue) != 0
+
 # The phase filter of drawing type `typeId`; show all when none is set.
 function the bim phase filter of drawing type {a 64 bit integer:typeId} in {bim model record:modelValue}:
     execute:
@@ -668,14 +721,19 @@ local function set bim library type {a 64 bit integer:typeId} annotating {intege
 # - MEP, and the design phases VO, DO and TO beneath Structural plan and
 #   Floor plan (`ensure bim mep drawing types`, `ensure bim design phase
 #   types`).
+# - The NEN 2580 area plans BVO, GO and VVO beneath Area plan (`ensure bim
+#   area measure types`), and Fabrication Drawings (`ensure bim fabrication
+#   drawing types`).
 # A model that has drawing types gets only the types added since it was
 # made, those it lacks, and keeps its own.
 function ensure bim drawing types in {a pointer to a bim model record:target}:
     execute:
         if (the length of (target's drawingTypes's values)) > 0:
             ensure bim area plan type in target
+            ensure bim area measure types in target
             ensure bim mep drawing types in target
             ensure bim design phase types in target
+            ensure bim fabrication drawing types in target
             return nothing
         set architectural to add bim drawing type named (the string form of "Architectural") under (the bim refused id) to target
         loop code from 0 to the bim category count:
@@ -723,8 +781,10 @@ function ensure bim drawing types in {a pointer to a bim model record:target}:
         set bim library type pilePlan annotating bim pile table annotation in target
         ignore add bim drawing type named (the string form of "Structural details") under structural to target
         ensure bim area plan type in target
+        ensure bim area measure types in target
         ensure bim mep drawing types in target
         ensure bim design phase types in target
+        ensure bim fabrication drawing types in target
 
 # The Area plan type beneath Architectural (or at the top when there is
 # none), added to models made before it existed: spaces shown, furniture
@@ -740,7 +800,87 @@ function ensure bim area plan type in {a pointer to a bim model record:target}:
         set bim library type areaPlan showing bim furniture category as 0 in target
         set bim library type areaPlan showing bim dimension category as 0 in target
         set bim library type areaPlan annotating bim area measures annotation in target
+        set bim library type areaPlan annotating bim gross area bound annotation in target
+        set bim library type areaPlan annotating bim usable area bound annotation in target
         ignore set bim drawing type areaPlan setting 2 at bim opening tags annotation to 0 in target
+
+# The area plans by NEN 2580 beneath Area plan, added once to a model that
+# has Area plan and none of them (`docs/vision/glossary.md`). Area plan draws
+# both bounds (a model saved before the bound rules existed draws them too,
+# its rules being unset); each beneath it inherits the areas table and
+# draws one:
+# - Area plan BVO (bruto vloeroppervlakte): the bound along the outer faces.
+# - Area plan GO (gebruiksoppervlakte): the bound along the outer walls'
+#   inner faces.
+# - Area plan VVO (verhuurbaar vloeroppervlak): the GO bound, since VVO
+#   equals GO until spaces can be marked as not lettable.
+function ensure bim area measure types in {a pointer to a bim model record:target}:
+    execute:
+        set areaPlan to the bim drawing type named (the string form of "Area plan") in (@intrinsic("dereference", target))
+        if areaPlan = the bim refused id:
+            return nothing
+        set measureNames to [the string form of "Area plan BVO", the string form of "Area plan GO", the string form of "Area plan VVO"]
+        set present to false
+        loop measureCursor from 0 to 3:
+            if (the bim drawing type named (the item at measureCursor in measureNames) in (@intrinsic("dereference", target))) != the bim refused id:
+                set present to true
+        if present:
+            return nothing
+        set grossPlan to add bim drawing type named (the string form of "Area plan BVO") under areaPlan to target
+        ignore set bim drawing type grossPlan setting 2 at bim usable area bound annotation to 0 in target
+        set usablePlan to add bim drawing type named (the string form of "Area plan GO") under areaPlan to target
+        ignore set bim drawing type usablePlan setting 2 at bim gross area bound annotation to 0 in target
+        set lettablePlan to add bim drawing type named (the string form of "Area plan VVO") under areaPlan to target
+        ignore set bim drawing type lettablePlan setting 2 at bim gross area bound annotation to 0 in target
+
+# Fabrication Drawings, the workshop and production drawings, added once to
+# a model that has neither it nor its Precast Concrete branch (so a renamed
+# root is not added again). It shows every category but spaces, furniture,
+# ceilings, masses, doors and windows, with no annotation rules; beneath it
+# a branch per way of making:
+# - Steel: columns and beams, the walls and floors they meet in halftone.
+# - Precast Concrete: walls, floors, columns, beams and stairs.
+# - CLT: walls, floors and roofs, columns and beams in halftone.
+# - Wood/Steel Framing: walls (the building systems), floors and roofs.
+# - Other: as Fabrication Drawings.
+# The kinds of drawing within each branch (assembly, single part, element
+# and erection drawings) follow once assemblies (#134) exist to draw them.
+function ensure bim fabrication drawing types in {a pointer to a bim model record:target}:
+    execute:
+        if (the bim drawing type named (the string form of "Fabrication Drawings") in (@intrinsic("dereference", target))) != the bim refused id:
+            return nothing
+        if (the bim drawing type named (the string form of "Precast Concrete") in (@intrinsic("dereference", target))) != the bim refused id:
+            return nothing
+        set fabricationRoot to add bim drawing type named (the string form of "Fabrication Drawings") under (the bim refused id) to target
+        loop code from 0 to the bim category count:
+            set hiddenHere to ((code = bim space category) or (code = bim furniture category)) or ((code = bim ceiling category) or (code = bim mass category))
+            set hiddenHere to hiddenHere or ((code = bim door category) or (code = bim window category))
+            set value to 1
+            if hiddenHere:
+                set value to 0
+            set bim library type fabricationRoot showing code as value in target
+            ignore set bim drawing type fabricationRoot setting 1 at code to 0 in target
+        loop ruleCode from 0 to the bim annotation count:
+            ignore set bim drawing type fabricationRoot setting 2 at ruleCode to 0 in target
+        ignore set bim drawing type fabricationRoot setting 3 at 0 to bim show all phases in target
+        set steel to add bim drawing type named (the string form of "Steel") under fabricationRoot to target
+        set bim library type steel fading bim wall category in target
+        set bim library type steel fading bim slab category in target
+        set bim library type steel showing bim roof category as 0 in target
+        set bim library type steel showing bim stair category as 0 in target
+        set bim library type steel showing bim pile category as 0 in target
+        set precast to add bim drawing type named (the string form of "Precast Concrete") under fabricationRoot to target
+        set bim library type precast showing bim roof category as 0 in target
+        set bim library type precast showing bim railing category as 0 in target
+        set clt to add bim drawing type named (the string form of "CLT") under fabricationRoot to target
+        set bim library type clt fading bim column category in target
+        set bim library type clt fading bim beam category in target
+        set bim library type clt showing bim pile category as 0 in target
+        set framing to add bim drawing type named (the string form of "Wood/Steel Framing") under fabricationRoot to target
+        set bim library type framing showing bim column category as 0 in target
+        set bim library type framing showing bim beam category as 0 in target
+        set bim library type framing showing bim pile category as 0 in target
+        ignore add bim drawing type named (the string form of "Other") under fabricationRoot to target
 
 # The MEP discipline beside Architectural and Structural, added once to a
 # model that has no type named MEP. Building services (pipes, ducts, cable
