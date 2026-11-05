@@ -32,7 +32,7 @@ or switch it on in the app: **Collaborate > API / MCP**.
 | `select ID` | selects an element |
 | `properties`, `property CODE TEXT` | the selection's property rows; type TEXT into a row |
 | `wall X1 Y1 X2 Y2`, `slab X1 Y1 X2 Y2` | a wall of the current type, a floor over a rectangle |
-| `system X1 Y1 X2 Y2 [TYPE]`, `systemtypes` | a building system; the available system types |
+| `system X1 Y1 X2 Y2 [TYPE [ORIENT [PITCH [LENGTH]]]]`, `systemtypes` | a building system (TYPE -1 for none; ORIENT 0 vertical along the line, 1 horizontal over the rectangle, 2 tilted at PITCH degrees from level, LENGTH metres up the slope to the line's left); the available system types, with each recipe's orientation |
 | `grid NAME X1 Y1 X2 Y2 LOW HIGH`, `gridrepeat SOURCE PATTERN [UNIT]` | a grid line; copies by a spacing pattern |
 | `cursor X Y` | places the 3D cursor |
 | `types [TAB]`, `typeadd`, `typeduplicate`, `typeset`, `typeapply`, `typedelete` | the type library, as in the IfcTypes window |
