@@ -7,6 +7,7 @@ import views/drawings/bim_text.dl
 import kernel/core/core.dl
 import viewer/vulkan/images.dl
 import kernel/core/topology_list.dl
+import bim/bim_pens.dl
 
 class:
     patterns:
@@ -17,6 +18,9 @@ class:
         blue as an integer
         pixels as the type of (a cad topology list of a cad vector2)
         stroked as a boolean
+        # A stroked batch's line width in canvas units (its quads' width), so
+        # that a writer can draw it as lines; zero for filled triangles.
+        breadth as a 64 bit floating-point number
 
 class:
     patterns:
@@ -135,7 +139,7 @@ function record bim triangles {a pointer to a list:pixels} coloured {integer:red
         set copied to a cad topology list of a cad vector2
         loop cursor from 0 to the length of pixels:
             append (the item at cursor in pixels) to (copied's values)
-        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, copied, false)) to (canvas's batches's values)
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, copied, false, 0.0)) to (canvas's batches's values)
 
 # Records the strokes between the pixel pairs `pairs`, `breadth` pixels wide.
 function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, {integer:green} and {integer:blue} wide {a 64 bit floating-point number:breadth} on {a pointer to a bim canvas record:canvas}:
@@ -153,7 +157,67 @@ function record bim strokes {a pointer to a list:pairs} coloured {integer:red}, 
             else:
                 append bim stroke quad from first to second wide lineBreadth into (quads's values)
             set cursor to cursor + 2
-        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads, true)) to (canvas's batches's values)
+        append (@intrinsic("construct", a bim canvas batch record, red, green, blue, quads, true, lineBreadth)) to (canvas's batches's values)
+
+# The width, in symbol units (`the bim symbol scale of`), of a line of
+# `role` (`bim cut pen` and the others of bim/bim_pens.dl): on paper the
+# pen's width from the pen table, a symbol unit being a quarter of a paper
+# millimetre; on screen `screenWidth` pixels.
+function the bim stroke width of pen {integer:role} else {a 64 bit floating-point number:screenWidth} on {bim canvas record:canvas}:
+    execute:
+        if canvas's paperScale > 0.0:
+            return (the bim paper width of pen role) * 4.0
+        return screenWidth
+
+# Records the strokes between the pixel pairs `pairs` as lines of `role`:
+# on paper as wide as the pen table says, on screen `breadth` pixels wide.
+function record bim pen {integer:role} strokes {a pointer to a list:pairs} coloured {integer:red}, {integer:green} and {integer:blue} wide {a 64 bit floating-point number:breadth} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set penBreadth to the bim stroke width of pen role else breadth on (@intrinsic("dereference", canvas))
+        record bim strokes pairs coloured red, green and blue wide penBreadth on canvas
+
+# Ends the run of the last `runLength` points of `runPoints`: closed when it
+# comes back to where it started (that last point is then left off, the run
+# closes on its first), else open.
+local function finish bim stroke run of {integer:runLength} in {a pointer to a list:runPoints} counting {a pointer to a list:runCounts} closing {a pointer to a list:runClosed}:
+    execute:
+        if runLength < 2:
+            return nothing
+        set firstIndex to (the length of runPoints) - runLength
+        set closes to false
+        if runLength >= 4:
+            set closes to (the cad distance from (the item at firstIndex in runPoints) to (the last item of runPoints)) < 0.001
+        if closes:
+            remove item ((the length of runPoints) - 1) from runPoints
+            append (runLength - 1) to runCounts
+        else:
+            append runLength to runCounts
+        append closes to runClosed
+
+# The centrelines of a stroked batch, for a writer that draws lines rather
+# than triangles: each quad's centreline (`the bim stroke anchor of`), joined
+# into one run with the quad before when it starts where that one ends.
+# Appends the runs' points to `runPoints`, each run's point count to
+# `runCounts` and whether it closes on its first point to `runClosed`.
+function append bim stroke runs of {bim canvas batch record:batch} into {a pointer to a list:runPoints} counting {a pointer to a list:runCounts} closing {a pointer to a list:runClosed}:
+    execute:
+        set corners to batch's pixels's values
+        set quadCount to (the length of corners) / 6
+        set runLength to 0
+        loop quadCursor from 0 to quadCount:
+            set base to quadCursor * 6
+            set quadStart to the bim stroke anchor of corners at base
+            set quadEnd to the bim stroke anchor of corners at (base + 2)
+            set joins to false
+            if runLength > 0:
+                set joins to (the cad distance from (the last item of runPoints) to quadStart) < 0.001
+            if joins = false:
+                finish bim stroke run of runLength in runPoints counting runCounts closing runClosed
+                append quadStart to runPoints
+                set runLength to 1
+            append quadEnd to runPoints
+            set runLength to runLength + 1
+        finish bim stroke run of runLength in runPoints counting runCounts closing runClosed
 
 # Records a label with its baseline starting at `x`, `y`.
 function record bim text {a string:message} at {a 64 bit floating-point number:x} and {a 64 bit floating-point number:y} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
