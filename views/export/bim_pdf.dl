@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
 # A recorded drawing (`bim canvas record`) written as a one-page PDF, as
 # vectors: each batch of strokes stroked lines of its width, each other batch
-# of triangles a filled path in its colour, each label a line of Helvetica.
-# The canvas is recorded in PDF points (1/72 inch) with y down from the top
-# of the page, as on screen; the page flips it.
+# of triangles a filled path in its colour, each label a line of osifont,
+# the drawing font, embedded (`bim_pdf_font.dl`), or of Helvetica when the
+# font cannot be read. The canvas is recorded in PDF points (1/72 inch) with
+# y down from the top of the page, as on screen; the page flips it.
 import viewer/bim_canvas.dl
+import views/export/bim_pdf_font.dl
 
 # A number as PDF writes it: two decimals, never an exponent.
 function the bim pdf number of {a 64 bit floating-point number:value}:
@@ -18,9 +20,9 @@ local function the bim pdf channel {integer:channel}:
     execute:
         return the bim pdf number of ((channel as a 64 bit floating-point number) / 255.0)
 
-# `message` as a PDF string: brackets and backslashes escaped, and characters
-# printable UTF-8 Latin-1 mapped to the font's WinAnsi encoding.
-# Other Unicode remains unsupported by this built-in PDF font.
+# `message` as a PDF string for Helvetica, the PDF's font when osifont cannot
+# be read: brackets and backslashes escaped, and characters printable UTF-8
+# Latin-1 mapped to the font's WinAnsi encoding. Other Unicode is left out.
 function the bim pdf string of {a string:message}:
     execute:
         set buffer to a new string buffer containing (((the length of message) * 2) + 2) bytes
@@ -94,8 +96,15 @@ function the bim export size of {bim canvas text record:label} on {bim canvas re
         return fallback
 
 # The page's drawing operators for `canvas` on a page `pageHeight` points
-# high, its labels `textSize` points high.
+# high, its labels `textSize` points high, lettered in the drawing font
+# (`the bim pdf drawing font`).
 function the bim pdf content of {bim canvas record:canvas} on a page {a 64 bit floating-point number:pageHeight} high with text {a 64 bit floating-point number:textSize} high:
+    execute:
+        return the bim pdf content of canvas on a page pageHeight high with text textSize high in (the bim pdf drawing font)
+
+# The same, lettered in `drawingFont` (`/F1`), or in Helvetica when it is not
+# valid.
+function the bim pdf content of {bim canvas record:canvas} on a page {a 64 bit floating-point number:pageHeight} high with text {a 64 bit floating-point number:textSize} high in {bim pdf font record:drawingFont}:
     execute:
         set parts to an empty list of a string
         loop batchCursor from 0 to the length of (canvas's batches's values):
@@ -120,22 +129,28 @@ function the bim pdf content of {bim canvas record:canvas} on a page {a 64 bit f
             set label to the item at textCursor in (canvas's texts's values)
             set labelSize to the bim export size of label on canvas or textSize
             set x to label's x
-            # Centred by the advances of Helvetica's glyphs, which the page
-            # letters in, as drawings measure their lettering.
+            # Centred by the advances of the glyphs the page letters in:
+            # osifont's own, from its hmtx, else Helvetica's.
+            set labelWidth to the bim lettering width of label's message in face (bim helvetica lettering)
+            if drawingFont's valid:
+                set labelWidth to the bim pdf width of label's message in drawingFont
             if label's centred:
-                set x to x - ((the bim lettering width of label's message in face (bim helvetica lettering)) * (labelSize * 0.5))
+                set x to x - (labelWidth * (labelSize * 0.5))
+            set shownText to ((the string form of "(") + (the bim pdf string of label's message)) + (the string form of ")")
+            if drawingFont's valid:
+                set shownText to the bim pdf glyph string of label's message in drawingFont
             set line to ((((the bim pdf channel label's red) + (the string form of " ")) + ((the bim pdf channel label's green) + (the string form of " "))) + ((the bim pdf channel label's blue) + (the string form of " rg\n")))
             set line to line + (((the string form of "BT /F1 ") + (the bim pdf number of labelSize)) + (the string form of " Tf "))
             if label's angle = 0.0:
-                set line to line + (((the bim pdf number of x) + (the string form of " ")) + ((the bim pdf number of (pageHeight - label's y)) + (the string form of " Td (")))
+                set line to line + (((the bim pdf number of x) + (the string form of " ")) + ((the bim pdf number of (pageHeight - label's y)) + (the string form of " Td ")))
             else:
                 set cosine to the cosine of label's angle
                 set sine to the sine of label's angle
                 set shift to x - label's x
                 set line to line + (((the bim pdf number of cosine) + (the string form of " ")) + ((the bim pdf number of (0.0 - sine)) + (the string form of " ")))
                 set line to line + (((the bim pdf number of sine) + (the string form of " ")) + ((the bim pdf number of cosine) + (the string form of " ")))
-                set line to line + (((the bim pdf number of (label's x + (shift * cosine))) + (the string form of " ")) + ((the bim pdf number of (pageHeight - (label's y + (shift * sine)))) + (the string form of " Tm (")))
-            set line to line + ((the bim pdf string of label's message) + (the string form of ") Tj ET\n"))
+                set line to line + (((the bim pdf number of (label's x + (shift * cosine))) + (the string form of " ")) + ((the bim pdf number of (pageHeight - (label's y + (shift * sine)))) + (the string form of " Tm ")))
+            set line to line + (shownText + (the string form of " Tj ET\n"))
             append line to parts
         set contentText to parts joined with ""
         free parts
@@ -149,76 +164,74 @@ local function the bim pdf offset {integer:byteOffset}:
             set digits to (the string form of "0") + digits
         return digits
 
-# The whole PDF file of `canvas` on a page `pageWidth` by `pageHeight`
-# points: catalogue, page tree, page, content stream and font, with a
-# cross-reference table of the objects' byte offsets.
-function the bim pdf of {bim canvas record:canvas} sized {a 64 bit floating-point number:pageWidth} by {a 64 bit floating-point number:pageHeight} with text {a 64 bit floating-point number:textSize} high:
+# The PDF file of `objectList` (each object's dictionary and stream, numbered
+# from 1 in order, the first the catalogue): a header, the objects, and a
+# cross-reference table of their byte offsets.
+local function the bim pdf document of {a pointer to a list:objectList}:
     execute:
-        set pageContent to the bim pdf content of canvas on a page pageHeight high with text textSize high
-        set objects to an empty list of a string
-        append (the string form of "<< /Type /Catalog /Pages 2 0 R >>") to objects
-        append (the string form of "<< /Type /Pages /Kids [3 0 R] /Count 1 >>") to objects
-        append ((((the string form of "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ") + (the bim pdf number of pageWidth)) + ((the string form of " ") + (the bim pdf number of pageHeight))) + (the string form of "] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")) to objects
-        append ((((the string form of "<< /Length ") + (the string form of (the length of pageContent))) + (the string form of " >>\nstream\n")) + (pageContent + (the string form of "endstream"))) to objects
-        append (the string form of "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>") to objects
         set parts to an empty list of a string
         set header to the string form of "%PDF-1.4\n"
         append header to parts
         set position to the length of header
         set offsets to an empty list of an integer
-        loop cursor from 0 to the length of objects:
+        loop cursor from 0 to the length of objectList:
             append position to offsets
-            set body to (((the string form of (cursor + 1)) + (the string form of " 0 obj\n")) + ((the item at cursor in objects) + (the string form of "\nendobj\n")))
+            set body to (((the string form of (cursor + 1)) + (the string form of " 0 obj\n")) + ((the item at cursor in objectList) + (the string form of "\nendobj\n")))
             append body to parts
             set position to position + (the length of body)
-        set table to ((the string form of "xref\n0 ") + (the string form of ((the length of objects) + 1))) + (the string form of "\n0000000000 65535 f \n")
+        set crossReference to ((the string form of "xref\n0 ") + (the string form of ((the length of objectList) + 1))) + (the string form of "\n0000000000 65535 f \n")
         loop cursor from 0 to the length of offsets:
-            set table to table + ((the bim pdf offset (the item at cursor in offsets)) + (the string form of " 00000 n \n"))
-        set table to table + ((((the string form of "trailer\n<< /Size ") + (the string form of ((the length of objects) + 1))) + (the string form of " /Root 1 0 R >>\nstartxref\n")) + ((the string form of position) + (the string form of "\n%%EOF\n")))
-        append table to parts
+            set crossReference to crossReference + ((the bim pdf offset (the item at cursor in offsets)) + (the string form of " 00000 n \n"))
+        set crossReference to crossReference + ((((the string form of "trailer\n<< /Size ") + (the string form of ((the length of objectList) + 1))) + (the string form of " /Root 1 0 R >>\nstartxref\n")) + ((the string form of position) + (the string form of "\n%%EOF\n")))
+        append crossReference to parts
         set file to parts joined with ""
         free parts
-        free objects
         free offsets
+        return file
+
+# The whole PDF file of `canvas` on a page `pageWidth` by `pageHeight`
+# points: a book of one page (`the bim pdf of pages`).
+function the bim pdf of {bim canvas record:canvas} sized {a 64 bit floating-point number:pageWidth} by {a 64 bit floating-point number:pageHeight} with text {a 64 bit floating-point number:textSize} high:
+    execute:
+        set canvases to an empty list of a bim canvas record
+        append canvas to canvases
+        set sizes to an empty list of a cad vector2
+        append (a cad vector2 with x pageWidth and y pageHeight) to sizes
+        set file to the bim pdf of pages canvases sized sizes with text textSize high
+        free canvases
+        free sizes
         return file
 
 # One PDF of several pages, as a sheetview's book exports (#135): page `n`
 # draws canvas `n` of `canvases` on a page as wide and high (points) as item
-# `n` of `sizes` says. Catalogue, page tree and font first, then each page
-# and its content stream; a cross-reference table of the objects' offsets.
+# `n` of `sizes` says. Catalogue, page tree and the font first (osifont as a
+# Type0 font, object 3, with its CID font, descriptor, program and
+# ToUnicode map as 4 to 7; or Helvetica as 3), then each page and its
+# content stream; a cross-reference table of the objects' offsets.
 function the bim pdf of pages {a pointer to a list:canvases} sized {a pointer to a list:sizes} with text {a 64 bit floating-point number:textSize} high:
     execute:
+        set drawingFont to the bim pdf drawing font
         set pageCount to the minimum of (the length of canvases) and (the length of sizes)
+        set fontObjectCount to 1
+        if drawingFont's valid:
+            set fontObjectCount to 5
+        set firstPage to 3 + fontObjectCount
         set kids to an empty list of a string
         loop pageCursor from 0 to pageCount:
-            append ((the string form of (4 + (pageCursor * 2))) + (the string form of " 0 R")) to kids
-        set objects to an empty list of a string
-        append (the string form of "<< /Type /Catalog /Pages 2 0 R >>") to objects
-        append ((((the string form of "<< /Type /Pages /Kids [") + (kids joined with " ")) + (the string form of "] /Count ")) + ((the string form of pageCount) + (the string form of " >>"))) to objects
-        append (the string form of "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>") to objects
+            append ((the string form of (firstPage + (pageCursor * 2))) + (the string form of " 0 R")) to kids
+        set objectList to an empty list of a string
+        append (the string form of "<< /Type /Catalog /Pages 2 0 R >>") to objectList
+        append ((((the string form of "<< /Type /Pages /Kids [") + (kids joined with " ")) + (the string form of "] /Count ")) + ((the string form of pageCount) + (the string form of " >>"))) to objectList
         free kids
+        if drawingFont's valid:
+            append bim pdf font objects of drawingFont lettering canvases numbered 3 into objectList
+        else:
+            append (the string form of "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>") to objectList
         loop pageCursor from 0 to pageCount:
             set pageSize to the item at pageCursor in sizes
-            set pageContent to the bim pdf content of (the item at pageCursor in canvases) on a page (pageSize's y) high with text textSize high
-            append ((((the string form of "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ") + (the bim pdf number of pageSize's x)) + ((the string form of " ") + (the bim pdf number of pageSize's y))) + (((the string form of "] /Contents ") + (the string form of (5 + (pageCursor * 2)))) + (the string form of " 0 R /Resources << /Font << /F1 3 0 R >> >> >>"))) to objects
-            append ((((the string form of "<< /Length ") + (the string form of (the length of pageContent))) + (the string form of " >>\nstream\n")) + (pageContent + (the string form of "endstream"))) to objects
-        set parts to an empty list of a string
-        set header to the string form of "%PDF-1.4\n"
-        append header to parts
-        set position to the length of header
-        set offsets to an empty list of an integer
-        loop cursor from 0 to the length of objects:
-            append position to offsets
-            set body to (((the string form of (cursor + 1)) + (the string form of " 0 obj\n")) + ((the item at cursor in objects) + (the string form of "\nendobj\n")))
-            append body to parts
-            set position to position + (the length of body)
-        set table to ((the string form of "xref\n0 ") + (the string form of ((the length of objects) + 1))) + (the string form of "\n0000000000 65535 f \n")
-        loop cursor from 0 to the length of offsets:
-            set table to table + ((the bim pdf offset (the item at cursor in offsets)) + (the string form of " 00000 n \n"))
-        set table to table + ((((the string form of "trailer\n<< /Size ") + (the string form of ((the length of objects) + 1))) + (the string form of " /Root 1 0 R >>\nstartxref\n")) + ((the string form of position) + (the string form of "\n%%EOF\n")))
-        append table to parts
-        set file to parts joined with ""
-        free parts
-        free objects
-        free offsets
+            set pageContent to the bim pdf content of (the item at pageCursor in canvases) on a page (pageSize's y) high with text textSize high in drawingFont
+            append ((((the string form of "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ") + (the bim pdf number of pageSize's x)) + ((the string form of " ") + (the bim pdf number of pageSize's y))) + (((the string form of "] /Contents ") + (the string form of ((firstPage + 1) + (pageCursor * 2)))) + (the string form of " 0 R /Resources << /Font << /F1 3 0 R >> >> >>"))) to objectList
+            append ((((the string form of "<< /Length ") + (the string form of (the length of pageContent))) + (the string form of " >>\nstream\n")) + (pageContent + (the string form of "endstream"))) to objectList
+        set file to the bim pdf document of objectList
+        free objectList
         return file

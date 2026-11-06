@@ -1,0 +1,578 @@
+# SPDX-License-Identifier: MPL-2.0
+# The drawing font of a PDF: osifont, the ISO 3098 lettering the screen, a
+# sheet on screen and SVG letter in (ui/shell/fonts/osifont.ttf; LGPL-3.0
+# with the GPL font exception, so a PDF that embeds it is not thereby under
+# the GPL; see ui/shell/fonts/README.md). The PDF embeds it as a TrueType CID
+# font (Type0, Identity-H): each character is written as its glyph number
+# in the font, its advance comes from the font's own `hmtx`, and a
+# ToUnicode map gives the text back as Unicode, so ü, ß, ², Ø or ± print and
+# copy as they are. The font program is cut down to the glyphs the file
+# uses: the other glyphs are left empty with their numbers kept (so the
+# Identity map holds), and the tables a PDF reader does not use (names,
+# PostScript names, layout) are left out. When the font cannot be read the
+# PDF letters in Helvetica (`bim_pdf.dl`).
+import lib/std.dl
+import lib/string.dl
+import localisation/bim_utf8.dl
+import viewer/bim_canvas.dl
+
+# osifont as the PDF writer reads it: the whole font program and where in
+# it the tables are that lettering and embedding need (byte offsets), with
+# the metrics a font descriptor gives (font units).
+class:
+    patterns:
+        [a|] bim pdf font record
+    members:
+        valid as a boolean
+        fontBytes as a string
+        unitsPerEm as an integer
+        glyphCount as an integer
+        metricCount as an integer
+        metricsAt as an integer
+        locaAt as an integer
+        longOffsets as a boolean
+        glyphsAt as an integer
+        mapAt as an integer
+        lowX as an integer
+        lowY as an integer
+        highX as an integer
+        highY as an integer
+        ascent as an integer
+        descent as an integer
+        capHeight as an integer
+
+# No drawing font: the PDF letters in Helvetica.
+function no bim pdf font:
+    execute:
+        return @intrinsic("construct", a bim pdf font record, false, the string form of "", 1000, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+local function the bim font byte at {integer:byteAt} in {a string:fontBytes}:
+    execute:
+        return ((the character at byteAt in fontBytes) as an integer) bitwise and 255
+
+local function the bim font u16 at {integer:byteAt} in {a string:fontBytes}:
+    execute:
+        return ((the bim font byte at byteAt in fontBytes) * 256) + (the bim font byte at (byteAt + 1) in fontBytes)
+
+local function the bim font s16 at {integer:byteAt} in {a string:fontBytes}:
+    execute:
+        set unsignedValue to the bim font u16 at byteAt in fontBytes
+        if unsignedValue >= 32768:
+            return unsignedValue - 65536
+        return unsignedValue
+
+# A 32-bit field that holds an offset or a length (under 2 GB).
+local function the bim font u32 at {integer:byteAt} in {a string:fontBytes}:
+    execute:
+        return ((the bim font u16 at byteAt in fontBytes) * 65536) + (the bim font u16 at (byteAt + 2) in fontBytes)
+
+# Where the table `tableTag` starts in `fontBytes`, -1 when the font has
+# none.
+local function the bim font table {a string:tableTag} in {a string:fontBytes}:
+    execute:
+        set tableCount to the bim font u16 at 4 in fontBytes
+        set found to -1
+        loop tableCursor from 0 to tableCount:
+            set entryAt to 12 + (tableCursor * 16)
+            if (entryAt + 16) <= (the length of fontBytes):
+                if fontBytes has tableTag at offset entryAt:
+                    set found to the bim font u32 at (entryAt + 8) in fontBytes
+        return found
+
+# The font in the file at `fontPath`: invalid when it cannot be read, or is
+# not a TrueType font with the tables lettering needs (head, hhea, maxp,
+# hmtx, loca, glyf and a Unicode cmap of format 4).
+function the bim pdf font at {a string:fontPath}:
+    execute:
+        set handle to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of fontPath, "rb")
+        if handle = (0 as a pointer to a byte):
+            return no bim pdf font
+        # Its size in 64 bits on every platform (`platform/obs_platform.c`).
+        set fileSize to @intrinsic("call", "obs_platform", "obs_platform_file_size", a 64 bit integer, handle)
+        if (fileSize < (12 as a 64 bit integer)) or (fileSize > (67108864 as a 64 bit integer)):
+            ignore @intrinsic("call", "libc", "fclose", integer, handle)
+            return no bim pdf font
+        set stored to a new string buffer containing (fileSize as an integer) bytes
+        set got to @intrinsic("call", "libc", "fread", a word sized integer, the data of stored, 1 as a word sized integer, fileSize as a word sized integer, handle)
+        ignore @intrinsic("call", "libc", "fclose", integer, handle)
+        if got != (fileSize as a word sized integer):
+            return no bim pdf font
+        return the bim pdf font from stored
+
+# The font whose program is `fontBytes` (see `the bim pdf font at`).
+function the bim pdf font from {a string:fontBytes}:
+    execute:
+        set headAt to the bim font table (the string form of "head") in fontBytes
+        set horizontalAt to the bim font table (the string form of "hhea") in fontBytes
+        set profileAt to the bim font table (the string form of "maxp") in fontBytes
+        set metricsAt to the bim font table (the string form of "hmtx") in fontBytes
+        set locaAt to the bim font table (the string form of "loca") in fontBytes
+        set glyphsAt to the bim font table (the string form of "glyf") in fontBytes
+        set cmapAt to the bim font table (the string form of "cmap") in fontBytes
+        set os2At to the bim font table (the string form of "OS/2") in fontBytes
+        if (((headAt < 0) or (horizontalAt < 0)) or ((profileAt < 0) or (metricsAt < 0))) or (((locaAt < 0) or (glyphsAt < 0)) or (cmapAt < 0)):
+            return no bim pdf font
+        if (cmapAt + 4) > (the length of fontBytes):
+            return no bim pdf font
+        # A Unicode subtable of format 4: Windows Unicode BMP (3, 1), else
+        # any Unicode platform one (0, n).
+        set mapAt to -1
+        set subtableCount to the bim font u16 at (cmapAt + 2) in fontBytes
+        loop subtableCursor from 0 to subtableCount:
+            set recordAt to (cmapAt + 4) + (subtableCursor * 8)
+            set platformCode to the bim font u16 at recordAt in fontBytes
+            set encodingCode to the bim font u16 at (recordAt + 2) in fontBytes
+            set subtableAt to cmapAt + (the bim font u32 at (recordAt + 4) in fontBytes)
+            if (the bim font u16 at subtableAt in fontBytes) = 4:
+                if (platformCode = 3) and (encodingCode = 1):
+                    set mapAt to subtableAt
+                else if (platformCode = 0) and (mapAt < 0):
+                    set mapAt to subtableAt
+        if mapAt < 0:
+            return no bim pdf font
+        set unitsPerEm to the bim font u16 at (headAt + 18) in fontBytes
+        if unitsPerEm <= 0:
+            return no bim pdf font
+        set capHeight to (the bim font s16 at (horizontalAt + 4) in fontBytes)
+        if os2At >= 0:
+            if (the bim font u16 at os2At in fontBytes) >= 2:
+                set capHeight to the bim font s16 at (os2At + 88) in fontBytes
+        return @intrinsic("construct", a bim pdf font record, true, fontBytes, unitsPerEm, the bim font u16 at (profileAt + 4) in fontBytes, the bim font u16 at (horizontalAt + 34) in fontBytes, metricsAt, locaAt, (the bim font s16 at (headAt + 50) in fontBytes) = 1, glyphsAt, mapAt, the bim font s16 at (headAt + 36) in fontBytes, the bim font s16 at (headAt + 38) in fontBytes, the bim font s16 at (headAt + 40) in fontBytes, the bim font s16 at (headAt + 42) in fontBytes, the bim font s16 at (horizontalAt + 4) in fontBytes, the bim font s16 at (horizontalAt + 6) in fontBytes, capHeight)
+
+# Whether a file can be opened at `fontPath`.
+local function bim font file opens at {a string:fontPath}:
+    execute:
+        set probe to @intrinsic("call", "libc", "fopen", a pointer to a byte, the data of fontPath, "rb")
+        if probe = (0 as a pointer to a byte):
+            return false
+        ignore @intrinsic("call", "libc", "fclose", integer, probe)
+        return true
+
+# Where osifont is, as the editor finds it: under OPEN_BIM_STUDIO_HOME (or
+# BIM_SLICE_HOME, the earlier name) in fonts/, in fonts/ beside the program's
+# bin/ folder (an installed copy), else in the repository's ui/shell/fonts
+# (a build run from the repository root).
+function the bim drawing font path:
+    execute:
+        set fontName to the string form of "/fonts/osifont.ttf"
+        set installHome to @intrinsic("call", "libc", "getenv", a pointer to a byte, "OPEN_BIM_STUDIO_HOME")
+        if installHome = (0 as a pointer to a byte):
+            set installHome to @intrinsic("call", "libc", "getenv", a pointer to a byte, "BIM_SLICE_HOME")
+        if installHome != (0 as a pointer to a byte):
+            set homeLength to @intrinsic("call", "libc", "strlen", a word sized unsigned integer, installHome)
+            set homePath to (a new string from installHome containing (homeLength as an integer) bytes) + fontName
+            if bim font file opens at homePath:
+                return homePath
+        set programFolder to a new string buffer containing 4096 bytes
+        set programLength to @intrinsic("call", "obs_platform", "obs_platform_executable_folder", a 64 bit integer, the data of programFolder, 4097 as a 64 bit integer)
+        if programLength > (0 as a 64 bit integer):
+            set candidateHome to the substring of programFolder from 0 spanning (programLength as an integer) bytes
+            if (the length of candidateHome) > 4:
+                if (the substring of candidateHome from ((the length of candidateHome) - 4) spanning 4 bytes) = (the string form of "/bin"):
+                    set candidateHome to the substring of candidateHome from 0 spanning ((the length of candidateHome) - 4) bytes
+            set besideProgram to candidateHome + fontName
+            if bim font file opens at besideProgram:
+                return besideProgram
+        return the string form of "ui/shell/fonts/osifont.ttf"
+
+# osifont, read from where the editor finds it; invalid when it is not there.
+function the bim pdf drawing font:
+    execute:
+        return the bim pdf font at (the bim drawing font path)
+
+# The glyph of the Unicode character `codePoint` in `drawingFont` (its cmap
+# of format 4): its number, 0 (the missing glyph) when the font has none.
+function the bim pdf glyph of character {integer:codePoint} in {bim pdf font record:drawingFont}:
+    execute:
+        if (drawingFont's valid = false) or ((codePoint < 0) or (codePoint > 65535)):
+            return 0
+        set fontBytes to drawingFont's fontBytes
+        set mapAt to drawingFont's mapAt
+        set segmentBytes to the bim font u16 at (mapAt + 6) in fontBytes
+        set endsAt to mapAt + 14
+        set startsAt to (endsAt + segmentBytes) + 2
+        set deltasAt to startsAt + segmentBytes
+        set rangesAt to deltasAt + segmentBytes
+        set glyphNumber to 0
+        set searching to true
+        set segmentCursor to 0
+        loop while searching and (segmentCursor < (segmentBytes / 2)):
+            set segmentEnd to the bim font u16 at (endsAt + (segmentCursor * 2)) in fontBytes
+            if segmentEnd >= codePoint:
+                set searching to false
+                set segmentStart to the bim font u16 at (startsAt + (segmentCursor * 2)) in fontBytes
+                if segmentStart <= codePoint:
+                    set segmentDelta to the bim font u16 at (deltasAt + (segmentCursor * 2)) in fontBytes
+                    set rangeOffset to the bim font u16 at (rangesAt + (segmentCursor * 2)) in fontBytes
+                    if rangeOffset = 0:
+                        set glyphNumber to the remainder of (codePoint + segmentDelta) divided by 65536
+                    else:
+                        set entryAt to ((rangesAt + (segmentCursor * 2)) + rangeOffset) + ((codePoint - segmentStart) * 2)
+                        set listedGlyph to the bim font u16 at entryAt in fontBytes
+                        if listedGlyph != 0:
+                            set glyphNumber to the remainder of (listedGlyph + segmentDelta) divided by 65536
+            set segmentCursor to segmentCursor + 1
+        if glyphNumber >= drawingFont's glyphCount:
+            return 0
+        return glyphNumber
+
+# The advance of glyph `glyphNumber` of `drawingFont`, in font units.
+function the bim pdf advance of glyph {integer:glyphNumber} in {bim pdf font record:drawingFont}:
+    execute:
+        if drawingFont's valid = false:
+            return 0
+        set metric to the minimum of glyphNumber and (drawingFont's metricCount - 1)
+        return the bim font u16 at (drawingFont's metricsAt + (metric * 4)) in drawingFont's fontBytes
+
+# The Unicode characters of `message` (UTF-8), appended to `codes`; a byte
+# that starts no character gives U+FFFD.
+function append bim pdf characters of {a string:message} into {a pointer to a list:codes}:
+    execute:
+        set position to 0
+        loop while position < (the length of message):
+            set unicodeStep to the bim unicode step of message at position
+            append unicodeStep's codepoint to codes
+            set position to position + (the maximum of 1 and unicodeStep's size)
+
+# How wide `message` is lettered in `drawingFont`, in ems: the sum of its
+# glyphs' advances (no kerning).
+function the bim pdf width of {a string:message} in {bim pdf font record:drawingFont}:
+    execute:
+        set codes to an empty list of an integer
+        append bim pdf characters of message into codes
+        set total to 0
+        loop codeCursor from 0 to the length of codes:
+            set total to total + (the bim pdf advance of glyph (the bim pdf glyph of character (the item at codeCursor in codes) in drawingFont) in drawingFont)
+        free codes
+        return (total as a 64 bit floating-point number) / (drawingFont's unitsPerEm as a 64 bit floating-point number)
+
+local function the bim hex digit {integer:digitValue}:
+    execute:
+        if digitValue < 10:
+            return digitValue + 48
+        return digitValue + 55
+
+# `amount` (0 to 65535) as four hexadecimal digits.
+function the bim pdf hex of {integer:amount}:
+    execute:
+        set buffer to a new string buffer containing 4 bytes
+        set restValue to amount
+        loop digitCursor from 0 to 4:
+            store ((the bim hex digit (the remainder of restValue divided by 16)) as a byte) into the data of buffer at (3 - digitCursor)
+            set restValue to restValue / 16
+        return buffer
+
+# `message` as a PDF hex string of its glyph numbers in `drawingFont`, two
+# bytes each, as an Identity-H font shows it: `<0024004C>`.
+function the bim pdf glyph string of {a string:message} in {bim pdf font record:drawingFont}:
+    execute:
+        set codes to an empty list of an integer
+        append bim pdf characters of message into codes
+        set parts to an empty list of a string
+        append (the string form of "<") to parts
+        loop codeCursor from 0 to the length of codes:
+            append (the bim pdf hex of (the bim pdf glyph of character (the item at codeCursor in codes) in drawingFont)) to parts
+        append (the string form of ">") to parts
+        set shown to parts joined with ""
+        free parts
+        free codes
+        return shown
+
+# The labels of `canvases` (a list of canvas records) in `drawingFont`: for
+# each glyph of the font the Unicode character it letters first (0 for
+# none), set into `characterOf`, which holds one entry per glyph.
+function mark bim pdf glyphs of {a pointer to a list:canvases} in {bim pdf font record:drawingFont} into {a pointer to a list:characterOf}:
+    execute:
+        set codes to an empty list of an integer
+        loop canvasCursor from 0 to the length of canvases:
+            set lettered to the item at canvasCursor in canvases
+            loop textCursor from 0 to the length of (lettered's texts's values):
+                clear codes
+                append bim pdf characters of ((the item at textCursor in (lettered's texts's values))'s message) into codes
+                loop codeCursor from 0 to the length of codes:
+                    set codePoint to the item at codeCursor in codes
+                    set glyphNumber to the bim pdf glyph of character codePoint in drawingFont
+                    if (glyphNumber > 0) and ((the item at glyphNumber in characterOf) = 0):
+                        replace item at index glyphNumber in characterOf with codePoint
+        free codes
+
+# Where glyph `glyphNumber`'s outline starts in the glyf table of
+# `drawingFont`.
+local function the bim glyph offset {integer:glyphNumber} of {bim pdf font record:drawingFont}:
+    execute:
+        if drawingFont's longOffsets:
+            return the bim font u32 at (drawingFont's locaAt + (glyphNumber * 4)) in drawingFont's fontBytes
+        return (the bim font u16 at (drawingFont's locaAt + (glyphNumber * 2)) in drawingFont's fontBytes) * 2
+
+# Marks in `keptFlags` (one flag per glyph, 1 kept) the glyphs the kept
+# composite glyphs are built of, and theirs, until none is added.
+local function mark bim component glyphs of {bim pdf font record:drawingFont} in {a pointer to a list:keptFlags}:
+    execute:
+        set fontBytes to drawingFont's fontBytes
+        set adding to true
+        loop while adding:
+            set adding to false
+            loop glyphCursor from 0 to drawingFont's glyphCount:
+                set glyphStart to the bim glyph offset glyphCursor of drawingFont
+                set glyphEnd to the bim glyph offset (glyphCursor + 1) of drawingFont
+                if ((the item at glyphCursor in keptFlags) = 1) and (glyphEnd > glyphStart):
+                    set outlineAt to drawingFont's glyphsAt + glyphStart
+                    if (the bim font s16 at outlineAt in fontBytes) < 0:
+                        set componentAt to outlineAt + 10
+                        set moreComponents to true
+                        loop while moreComponents:
+                            set componentFlags to the bim font u16 at componentAt in fontBytes
+                            set componentGlyph to the bim font u16 at (componentAt + 2) in fontBytes
+                            if (componentGlyph < drawingFont's glyphCount) and ((the item at componentGlyph in keptFlags) = 0):
+                                replace item at index componentGlyph in keptFlags with 1
+                                set adding to true
+                            set componentAt to componentAt + 4
+                            if (componentFlags bitwise and 1) != 0:
+                                set componentAt to componentAt + 4
+                            else:
+                                set componentAt to componentAt + 2
+                            if (componentFlags bitwise and 8) != 0:
+                                set componentAt to componentAt + 2
+                            else if (componentFlags bitwise and 64) != 0:
+                                set componentAt to componentAt + 4
+                            else if (componentFlags bitwise and 128) != 0:
+                                set componentAt to componentAt + 8
+                            set moreComponents to (componentFlags bitwise and 32) != 0
+
+# `amount` as `byteCount` bytes, most significant first.
+local function the bim font bytes of {a 64 bit integer:amount} in {integer:byteCount}:
+    execute:
+        set buffer to a new string buffer containing byteCount bytes
+        loop place from 0 to byteCount:
+            set shiftBits to (((byteCount - 1) - place) * 8) as a 64 bit integer
+            store (((amount shifted right by shiftBits) bitwise and (255 as a 64 bit integer)) as a byte) into the data of buffer at place
+        return buffer
+
+# `tableData` padded with zero bytes to a multiple of four.
+local function the bim font aligned form of {a string:tableData}:
+    execute:
+        set padCount to the remainder of (4 - (the remainder of (the length of tableData) divided by 4)) divided by 4
+        if padCount = 0:
+            return tableData
+        return tableData + (the bim font bytes of (0 as a 64 bit integer) in padCount)
+
+# The TrueType checksum of `tableData` (padded to four bytes): the sum of its
+# 32-bit words, modulo 2^32.
+local function the bim font checksum of {a string:tableData}:
+    execute:
+        set padded to the bim font aligned form of tableData
+        set total to 0 as a 64 bit integer
+        set wordAt to 0
+        loop while wordAt < (the length of padded):
+            set upper to ((the bim font u16 at wordAt in padded) as a 64 bit integer) * (65536 as a 64 bit integer)
+            set wordValue to upper + ((the bim font u16 at (wordAt + 2) in padded) as a 64 bit integer)
+            set total to (total + wordValue) bitwise and (4294967295 as a 64 bit integer)
+            set wordAt to wordAt + 4
+        return total
+
+# Whether a PDF reader needs the table `tableTag` of a CID-keyed TrueType
+# font: the outlines and their metrics, the hinting programs, and cmap and
+# OS/2, which some readers look at.
+local function bim pdf needs font table {a string:tableTag}:
+    execute:
+        set keptFlags to false
+        if (tableTag = (the string form of "head")) or (tableTag = (the string form of "hhea")):
+            set keptFlags to true
+        if (tableTag = (the string form of "maxp")) or (tableTag = (the string form of "hmtx")):
+            set keptFlags to true
+        if (tableTag = (the string form of "loca")) or (tableTag = (the string form of "glyf")):
+            set keptFlags to true
+        if (tableTag = (the string form of "cvt ")) or (tableTag = (the string form of "fpgm")):
+            set keptFlags to true
+        if (tableTag = (the string form of "prep")) or (tableTag = (the string form of "cmap")):
+            set keptFlags to true
+        if tableTag = (the string form of "OS/2"):
+            set keptFlags to true
+        return keptFlags
+
+# The font program of `drawingFont` cut down to the glyphs `keptFlags` marks
+# (one flag per glyph, 1 kept; the composite glyphs' parts are added): every
+# other glyph left empty with its number kept, and only the tables a PDF
+# reader needs, with their checksums and the font's checksum adjustment.
+function the bim pdf font program of {bim pdf font record:drawingFont} keeping {a pointer to a list:keptFlags}:
+    execute:
+        set fontBytes to drawingFont's fontBytes
+        mark bim component glyphs of drawingFont in keptFlags
+        # The outlines anew, each kept glyph's own bytes, padded to four.
+        set outlineParts to an empty list of a string
+        set offsetParts to an empty list of a string
+        set outlineLength to 0
+        set offsetSize to 2
+        if drawingFont's longOffsets:
+            set offsetSize to 4
+        loop glyphCursor from 0 to drawingFont's glyphCount:
+            set offsetValue to outlineLength
+            if drawingFont's longOffsets = false:
+                set offsetValue to outlineLength / 2
+            append (the bim font bytes of (offsetValue as a 64 bit integer) in offsetSize) to offsetParts
+            if (the item at glyphCursor in keptFlags) = 1:
+                set glyphStart to the bim glyph offset glyphCursor of drawingFont
+                set glyphEnd to the bim glyph offset (glyphCursor + 1) of drawingFont
+                if glyphEnd > glyphStart:
+                    set glyphOutline to the bim font aligned form of (the substring of fontBytes from (drawingFont's glyphsAt + glyphStart) spanning (glyphEnd - glyphStart) bytes)
+                    append glyphOutline to outlineParts
+                    set outlineLength to outlineLength + (the length of glyphOutline)
+        set offsetValue to outlineLength
+        if drawingFont's longOffsets = false:
+            set offsetValue to outlineLength / 2
+        append (the bim font bytes of (offsetValue as a 64 bit integer) in offsetSize) to offsetParts
+        set outlineBytes to outlineParts joined with ""
+        set offsetBytes to offsetParts joined with ""
+        free outlineParts
+        free offsetParts
+        # The tables kept, in the font's own (sorted) order.
+        set tags to an empty list of a string
+        set tables to an empty list of a string
+        set headIndex to -1
+        set tableCount to the bim font u16 at 4 in fontBytes
+        loop tableCursor from 0 to tableCount:
+            set entryAt to 12 + (tableCursor * 16)
+            set tableTag to the substring of fontBytes from entryAt spanning 4 bytes
+            if bim pdf needs font table tableTag:
+                set tableAt to the bim font u32 at (entryAt + 8) in fontBytes
+                set tableLength to the bim font u32 at (entryAt + 12) in fontBytes
+                set tableData to the string form of ""
+                if tableTag = (the string form of "glyf"):
+                    set tableData to outlineBytes
+                else if tableTag = (the string form of "loca"):
+                    set tableData to offsetBytes
+                else if (tableAt + tableLength) <= (the length of fontBytes):
+                    set tableData to the substring of fontBytes from tableAt spanning tableLength bytes
+                if tableTag = (the string form of "head"):
+                    # Its checksum adjustment counts as zero until the whole is summed.
+                    set tableData to ((the substring of tableData from 0 spanning 8 bytes) + (the bim font bytes of (0 as a 64 bit integer) in 4)) + (the substring of tableData from 12 spanning ((the length of tableData) - 12) bytes)
+                    set headIndex to the length of tags
+                append tableTag to tags
+                append tableData to tables
+        set keptCount to the length of tags
+        set searchRange to 1
+        set entrySelector to 0
+        loop while (searchRange * 2) <= keptCount:
+            set searchRange to searchRange * 2
+            set entrySelector to entrySelector + 1
+        set parts to an empty list of a string
+        append (the substring of fontBytes from 0 spanning 4 bytes) to parts
+        append (the bim font bytes of (keptCount as a 64 bit integer) in 2) to parts
+        append (the bim font bytes of ((searchRange * 16) as a 64 bit integer) in 2) to parts
+        append (the bim font bytes of (entrySelector as a 64 bit integer) in 2) to parts
+        append (the bim font bytes of (((keptCount * 16) - (searchRange * 16)) as a 64 bit integer) in 2) to parts
+        set tableAt to 12 + (keptCount * 16)
+        set headAt to 0
+        loop tableCursor from 0 to keptCount:
+            set tableData to the item at tableCursor in tables
+            if tableCursor = headIndex:
+                set headAt to tableAt
+            append (the item at tableCursor in tags) to parts
+            append (the bim font bytes of (the bim font checksum of tableData) in 4) to parts
+            append (the bim font bytes of (tableAt as a 64 bit integer) in 4) to parts
+            append (the bim font bytes of ((the length of tableData) as a 64 bit integer) in 4) to parts
+            set tableAt to tableAt + (the length of (the bim font aligned form of tableData))
+        loop tableCursor from 0 to keptCount:
+            append (the bim font aligned form of (the item at tableCursor in tables)) to parts
+        set subsetBytes to parts joined with ""
+        free parts
+        free tags
+        free tables
+        # head's checksum adjustment: 0xB1B0AFBA less the whole font's sum.
+        if headIndex >= 0:
+            set adjustment to ((2981146554 as a 64 bit integer) - (the bim font checksum of subsetBytes)) bitwise and (4294967295 as a 64 bit integer)
+            set adjustmentBytes to the bim font bytes of adjustment in 4
+            loop byteCursor from 0 to 4:
+                store (the character at byteCursor in adjustmentBytes) into the data of subsetBytes at ((headAt + 8) + byteCursor)
+        return subsetBytes
+
+# `amount` font units of `drawingFont` in the thousandths of an em a PDF font
+# dictionary gives, rounded.
+local function the bim pdf font units {integer:amount} of {bim pdf font record:drawingFont}:
+    execute:
+        set scaled to ((amount as a 64 bit floating-point number) * 1000.0) / (drawingFont's unitsPerEm as a 64 bit floating-point number)
+        return (the rounded value of scaled) as an integer
+
+# The ToUnicode map of the glyphs `characterOf` gives a character: each
+# glyph number, as the content shows it, to the UTF-16 of its character.
+local function the bim pdf unicode map of {a pointer to a list:characterOf}:
+    execute:
+        set mapEntries to an empty list of a string
+        loop glyphCursor from 1 to the length of characterOf:
+            set codePoint to the item at glyphCursor in characterOf
+            if codePoint > 0:
+                set utf16 to the bim pdf hex of codePoint
+                if codePoint > 65535:
+                    set restValue to codePoint - 65536
+                    set utf16 to (the bim pdf hex of (55296 + (restValue / 1024))) + (the bim pdf hex of (56320 + (the remainder of restValue divided by 1024)))
+                append ((((the string form of "<") + (the bim pdf hex of glyphCursor)) + (the string form of "> <")) + (utf16 + (the string form of ">\n"))) to mapEntries
+        set parts to an empty list of a string
+        append (the string form of "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n") to parts
+        # At most a hundred entries to a block.
+        set entryCursor to 0
+        loop while entryCursor < (the length of mapEntries):
+            set blockLength to the minimum of 100 and ((the length of mapEntries) - entryCursor)
+            append ((the string form of blockLength) + (the string form of " beginbfchar\n")) to parts
+            loop blockCursor from 0 to blockLength:
+                append (the item at (entryCursor + blockCursor) in mapEntries) to parts
+            append (the string form of "endbfchar\n") to parts
+            set entryCursor to entryCursor + blockLength
+        append (the string form of "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n") to parts
+        set mapText to parts joined with ""
+        free parts
+        free mapEntries
+        return mapText
+
+# The six capitals that name a subset of glyphs (`AAAAAA+osifont`), from
+# the glyphs it keeps, so different subsets carry different names.
+local function the bim pdf font prefix of {a pointer to a list:characterOf}:
+    execute:
+        set tagHash to 0 as a 64 bit integer
+        loop glyphCursor from 0 to the length of characterOf:
+            if (the item at glyphCursor in characterOf) > 0:
+                set tagHash to the remainder of ((tagHash * (31 as a 64 bit integer)) + (glyphCursor as a 64 bit integer)) divided by (308915776 as a 64 bit integer)
+        set buffer to a new string buffer containing 6 bytes
+        loop letterCursor from 0 to 6:
+            set letterIndex to (the remainder of tagHash divided by (26 as a 64 bit integer)) as an integer
+            store ((65 + letterIndex) as a byte) into the data of buffer at letterCursor
+            set tagHash to tagHash / (26 as a 64 bit integer)
+        return buffer
+
+# The PDF objects that letter `canvases` (a list of canvas records) in
+# `drawingFont`, numbered from `firstNumber`: the Type0 font (`firstNumber`,
+# which pages name as /F1), its CID font, its font descriptor, its font
+# program (the glyphs the labels use) and its ToUnicode map; appended to
+# `objects`.
+function append bim pdf font objects of {bim pdf font record:drawingFont} lettering {a pointer to a list:canvases} numbered {integer:firstNumber} into {a pointer to a list:objectList}:
+    execute:
+        set characterOf to an empty list of an integer
+        loop glyphCursor from 0 to drawingFont's glyphCount:
+            append 0 to characterOf
+        mark bim pdf glyphs of canvases in drawingFont into characterOf
+        set keptFlags to an empty list of an integer
+        loop glyphCursor from 0 to drawingFont's glyphCount:
+            set keepFlag to 0
+            if (glyphCursor = 0) or ((the item at glyphCursor in characterOf) > 0):
+                set keepFlag to 1
+            append keepFlag to keptFlags
+        set fontName to (the string form of "/") + ((the bim pdf font prefix of characterOf) + (the string form of "+osifont"))
+        # The advances of the glyphs the labels use, in thousandths of an em.
+        set widthParts to an empty list of a string
+        loop glyphCursor from 0 to drawingFont's glyphCount:
+            if (the item at glyphCursor in characterOf) > 0:
+                append ((((the string form of glyphCursor) + (the string form of " [")) + (the string form of (the bim pdf font units (the bim pdf advance of glyph glyphCursor in drawingFont) of drawingFont))) + (the string form of "]")) to widthParts
+        set widthText to widthParts joined with " "
+        free widthParts
+        set subsetBytes to the bim pdf font program of drawingFont keeping keptFlags
+        set unicodeMap to the bim pdf unicode map of characterOf
+        append ((((the string form of "<< /Type /Font /Subtype /Type0 /BaseFont ") + fontName) + (the string form of " /Encoding /Identity-H /DescendantFonts [")) + ((((the string form of (firstNumber + 1)) + (the string form of " 0 R] /ToUnicode ")) + (the string form of (firstNumber + 4))) + (the string form of " 0 R >>"))) to objectList
+        append ((((the string form of "<< /Type /Font /Subtype /CIDFontType2 /BaseFont ") + fontName) + (the string form of " /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ")) + ((((the string form of (firstNumber + 2)) + (the string form of " 0 R /CIDToGIDMap /Identity /DW 1000 /W [")) + widthText) + (the string form of "] >>"))) to objectList
+        set boundingBox to ((((the string form of (the bim pdf font units drawingFont's lowX of drawingFont)) + (the string form of " ")) + ((the string form of (the bim pdf font units drawingFont's lowY of drawingFont)) + (the string form of " "))) + (((the string form of (the bim pdf font units drawingFont's highX of drawingFont)) + (the string form of " ")) + (the string form of (the bim pdf font units drawingFont's highY of drawingFont))))
+        set descriptorText to (((the string form of "<< /Type /FontDescriptor /FontName ") + fontName) + (the string form of " /Flags 4 /FontBBox [")) + (boundingBox + (the string form of "] /ItalicAngle 0"))
+        set descriptorText to descriptorText + (((the string form of " /Ascent ") + (the string form of (the bim pdf font units drawingFont's ascent of drawingFont))) + ((the string form of " /Descent ") + (the string form of (the bim pdf font units drawingFont's descent of drawingFont))))
+        set descriptorText to descriptorText + (((the string form of " /CapHeight ") + (the string form of (the bim pdf font units drawingFont's capHeight of drawingFont))) + ((((the string form of " /StemV 80 /FontFile2 ") + (the string form of (firstNumber + 3))) + (the string form of " 0 R >>"))))
+        append descriptorText to objectList
+        append (((((the string form of "<< /Length ") + (the string form of (the length of subsetBytes))) + ((the string form of " /Length1 ") + (the string form of (the length of subsetBytes)))) + (the string form of " >>\nstream\n")) + (subsetBytes + (the string form of "\nendstream"))) to objectList
+        append ((((the string form of "<< /Length ") + (the string form of (the length of unicodeMap))) + (the string form of " >>\nstream\n")) + (unicodeMap + (the string form of "endstream"))) to objectList
+        free characterOf
+        free keptFlags
