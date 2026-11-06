@@ -46,13 +46,11 @@ half a minute. The sheets end up as `fzk-out/drawings/A-101.pdf`, `A-102.pdf` (t
 | Exterior walls 300 mm on their outer face, interior walls 240 mm on one face | Walls drawn on their centrelines with the Wall tool (clicks snap to 50 mm) |
 | Base slab, upper floor | Floor tool, rectangle sketch |
 | Two roof planes at 30°, eaves 0.5 m out | Two Roof sketches with Pitch, Slope toward and Top |
-| Gable walls up to the ridge | Gable walls split at the ridge, each half attached to its own roof plane |
+| Gable walls up to the ridge | One wall per gable, its top attached to both roof planes (Top constraint: Attached to roofs above) |
 | 11 windows, 5 doors | Window and Door tools, types sized as in the IFC |
 | 7 spaces, three of them parted by virtual boundaries | Room separators and Space, named as the IFC's spaces |
 | (drawings) | Floor plans DO with exterior dimensions; section A-A at x = 6 m with height chains |
 
 ## Known differences
 
-- A wall's top follows one roof plane, so each gable is two walls split at the ridge. The two
-  upper windows, which sit across the ridge line in the IFC, are 0.6 m off to clear that split.
 - Clicks snap to 50 mm, so interior walls can be up to 20 mm away from their IFC position.

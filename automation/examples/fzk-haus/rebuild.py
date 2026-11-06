@@ -214,39 +214,35 @@ def step_roof():
     escape()
 
 
-def attach_to_roof(wall_id, wanted_roof):
-    """Clicks Top constraint until it reads Attached to roof `wanted_roof` (at most 6 clicks)."""
+def attach_top(wall_id, wanted):
+    """Clicks Top constraint until it reads `wanted` (at most 8 clicks)."""
     call("select", {"id": wall_id})
-    for _ in range(6):
-        if row("Top constraint (click)")["value"] == "Attached to roof %d" % wanted_roof:
+    for _ in range(8):
+        if row("Top constraint (click)")["value"] == wanted:
             return True
         call("set_property", {"code": 12670, "value": ""})
     return False
 
 
 def step_walls_dg():
-    # The knee walls along the eaves and the gables split at the ridge (y = 5): a wall
-    # follows one roof plane, so each half of a gable is attached to its own plane.
+    # The knee walls along the eaves, each under its own roof plane, and the gables, one wall
+    # each whose top follows both roof planes up to the ridge (Attached to roofs above).
     go_to_storey("Dachgeschoss")
     use_wall_type("FZK Aussenwand 300")
     existing = [w for w in call("elements", quiet=True)["walls"] if w["storeyId"] == level_ids()[1]["id"]]
-    if not any(w["start"] == [0.15, 0.15] for w in existing):
-        wall_chain([(0.15, 5.0), (0.15, 0.15), (11.85, 0.15), (11.85, 5.0)])
-    if not any(w["start"] == [11.85, 9.85] for w in existing):
-        wall_chain([(11.85, 5.0), (11.85, 9.85), (0.15, 9.85), (0.15, 5.0)])
-    elif not any(w["start"] == [0.15, 9.85] for w in existing):
-        wall_chain([(0.15, 9.85), (0.15, 5.0)])
-    if not any(w["start"] == [0.15, 5.0] for w in existing) and any(w["start"] == [0.15, 0.15] for w in existing):
-        wall_chain([(0.15, 5.0), (0.15, 0.15)])
+    if not existing:
+        wall_chain([(0.15, 0.15), (11.85, 0.15), (11.85, 9.85), (0.15, 9.85), (0.15, 0.15)])
     roofs = [slab for slab in call("elements", quiet=True)["slabs"] if slab["outline"][0][0] == -0.5]
     south = [r for r in roofs if r["outline"][0][1] == -0.5][0]["id"]
     north = [r for r in roofs if r["outline"][0][1] == 5][0]["id"]
     for wall in call("elements", quiet=True)["walls"]:
         if wall["storeyId"] != level_ids()[1]["id"]:
             continue
-        middle = (wall["start"][1] + wall["end"][1]) / 2
-        print("   wall", wall["id"], wall["start"], wall["end"], "->",
-              attach_to_roof(wall["id"], south if middle < 5 else north))
+        if wall["start"][0] == wall["end"][0]:  # a gable, across the ridge
+            wanted = "Attached to roofs above"
+        else:
+            wanted = "Attached to roof %d" % (south if wall["start"][1] < 5 else north)
+        print("   wall", wall["id"], wall["start"], wall["end"], "->", wanted, attach_top(wall["id"], wanted))
     escape()
 
 
@@ -280,10 +276,9 @@ def place_opening(type_name, x, y):
 
 def step_windows_dg():
     go_to_storey("Dachgeschoss")
-    # OG-Fenster-1/2 sit across the ridge line (y 4.5-5.5) in the IFC; the gables are split
-    # there, so they go in the south halves, y 3.9-4.9, clear of the halves' joint (0.6 m off).
-    place_opening("FZK Fenster 1000x1000", 0.15, 4.4)
-    place_opening("FZK Fenster 1000x1000", 11.85, 4.4)
+    # OG-Fenster-1/2 sit across the ridge line (y 4.5-5.5) in the IFC, in the gables.
+    place_opening("FZK Fenster 1000x1000", 0.15, 5.0)
+    place_opening("FZK Fenster 1000x1000", 11.85, 5.0)
 
 
 # The IFC's wall axes (outer faces, or one face of an interior wall) moved to the centre
