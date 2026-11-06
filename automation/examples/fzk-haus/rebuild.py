@@ -369,16 +369,17 @@ def step_drawings():
 
 
 def step_section():
-    """Section A-A across the house at x = 6 m, through the gable window and the ridge, with
-    its height chains, on an A3 sheet of its own."""
+    """Section A-A across the house at x = 6 m, through the gable windows' axis, with its height
+    chains, on an A3 sheet of its own; then the floor plans again, now with the section line."""
     import shutil
     import time
     out = os.path.join(OUT, "drawings")
     os.makedirs(out, exist_ok=True)
     go_to_storey("Erdgeschoss")
+    # 3 m outside the facades, so that the heads stand clear of the dimension chains.
     press("View/Section")
-    click(6.0, -1.5)
-    print("  ", click(6.0, 11.5).get("message"))
+    click(6.0, -3.0)
+    print("  ", click(6.0, 13.0).get("message"))
     escape()
     CLIENT.call("open_view", {"name": "Section 1"})  # the first section of a fresh rebuild
     time.sleep(0.5)
@@ -399,6 +400,15 @@ def step_section():
     produced = os.path.join(os.environ.get("OBS_CWD", os.getcwd()), "%s.pdf" % number)
     if os.path.exists(produced):
         shutil.move(produced, os.path.join(out, "%s.pdf" % number))
+    # The floor plans again, now that they show the section line A-A.
+    for plan_sheet in ("A-101", "A-102"):
+        CLIENT.call("open_view", {"name": plan_sheet})
+        time.sleep(0.5)
+        press("Collaborate/Export: Open sheet/PDF")
+        time.sleep(1.5)
+        produced = os.path.join(os.environ.get("OBS_CWD", os.getcwd()), "%s.pdf" % plan_sheet)
+        if os.path.exists(produced):
+            shutil.move(produced, os.path.join(out, "%s.pdf" % plan_sheet))
     CLIENT.call("save")
 
 
