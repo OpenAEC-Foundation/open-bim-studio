@@ -716,6 +716,15 @@ local function append bim drawn edges of {bim projection mesh record:meshEntry} 
 # polygons of `cutView`, which lie on the plane.
 function the bim projected edges of {a pointer to a list:meshes} on {cad plane:viewPlane} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} within {a 64 bit floating-point number:depthLimit} behind {bim view record:cutView}:
     execute:
+        set meshEdgeCounts to an empty list of an integer
+        set result to the bim projected edges of meshes on viewPlane from lowAlong to highAlong within depthLimit behind cutView counting meshEdgeCounts
+        free meshEdgeCounts
+        return result
+
+# The same, appending to `meshEdgeCounts` how many of the edges each mesh
+# drew: the edges come mesh after mesh, in the meshes' order.
+function the bim projected edges of {a pointer to a list:meshes} on {cad plane:viewPlane} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} within {a 64 bit floating-point number:depthLimit} behind {bim view record:cutView} counting {a pointer to a list:meshEdgeCounts}:
+    execute:
         set result to a cad topology list of a bim projected edge record
         set depthAxis to the bim depth axis of viewPlane
         set farDepth to 1e300
@@ -738,13 +747,395 @@ function the bim projected edges of {a pointer to a list:meshes} on {cad plane:v
         append (0 as a 64 bit integer) to edgeCounter
         loop meshCursor from 0 to the length of meshes:
             set projectionMesh to the item at meshCursor in meshes
+            set edgesBefore to the length of (result's values)
             if projectionMesh's outlined:
                 set cornerOffset to the item at meshCursor in cornerOffsets
                 append bim drawn edges of projectionMesh at viewCorners offset cornerOffset counted (the length of (projectionMesh's shape's positions's values)) on viewPlane deep along depthAxis from lowAlong to highAlong until farDepth among occluders behind cutView counting edgeCounter into (result's values)
+            append ((the length of (result's values)) - edgesBefore) to meshEdgeCounts
         free viewCorners
         free cornerOffsets
         free edgeCounter
         return result
+
+# ---------------------------------------------------- kept while editing
+
+# A projection kept from one frame to the next, so that a continuous edit
+# (a drag) works out again only the edges it can have changed: the meshes
+# and the cut the edges were worked out from (the cut copied, so that a
+# view updated in place cannot change it unseen), each mesh's box in the
+# drawing, how many of `edges` (mesh after mesh) each drew, and the plane
+# and limits. The meshes are kept as given: whoever makes them makes new
+# triangles for a changed element rather than changing the old ones in
+# place (the evaluation's tessellation and the scene's meshes do).
+class:
+    patterns:
+        [a|] bim kept projection record
+    members:
+        valid as a boolean
+        viewPlane as a cad plane
+        lowAlong as a 64 bit floating-point number
+        highAlong as a 64 bit floating-point number
+        depthLimit as a 64 bit floating-point number
+        meshes as the type of (a cad topology list of a bim projection mesh record)
+        lows as the type of (a cad topology list of a cad vector2)
+        highs as the type of (a cad topology list of a cad vector2)
+        counts as the type of (a cad topology list of an integer)
+        sources as the type of (a cad topology list of a bim cut source record)
+        edges as the type of (a cad topology list of a bim projected edge record)
+        # How many meshes the last update worked the edges of out, whether
+        # it updated the edges kept rather than working them all out, and
+        # the elements of the meshes it worked out, for tests and timing.
+        redrawn as an integer
+        partial as a boolean
+        redrawnIds as the type of (a cad topology list of a 64 bit integer)
+
+function an empty bim kept projection:
+    execute:
+        return @intrinsic("construct", a bim kept projection record, false, (a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z 0.0), x axis (the cad x axis) and y axis (the cad y axis)), 0.0, 0.0, 0.0, a cad topology list of a bim projection mesh record, a cad topology list of a cad vector2, a cad topology list of a cad vector2, a cad topology list of an integer, a cad topology list of a bim cut source record, a cad topology list of a bim projected edge record, 0, false, a cad topology list of a 64 bit integer)
+
+# How far apart in the drawing (metres) two boxes may lie and still be
+# taken to touch: more than the tolerances by which a triangle or a cut
+# polygon hides what lies just outside its outline.
+local function the bim projection box slack:
+    replacement:
+        0.001
+
+# Whether the box from `lowCorner` to `highCorner` and the box from
+# `otherLow` to `otherHigh` touch, within the box slack.
+local function bim box {cad vector2:lowCorner} till {cad vector2:highCorner} touches {cad vector2:otherLow} through {cad vector2:otherHigh}:
+    execute:
+        set boxSlack to the bim projection box slack
+        set acrossX to ((lowCorner's x - boxSlack) <= otherHigh's x) and ((otherLow's x - boxSlack) <= highCorner's x)
+        set acrossY to ((lowCorner's y - boxSlack) <= otherHigh's y) and ((otherLow's y - boxSlack) <= highCorner's y)
+        return acrossX and acrossY
+
+# Whether the box from `lowCorner` to `highCorner` touches one of the boxes
+# from `otherLows` to `otherHighs`.
+local function bim box {cad vector2:lowCorner} till {cad vector2:highCorner} meets one of {a pointer to a list:otherLows} and {a pointer to a list:otherHighs}:
+    execute:
+        loop boxCursor from 0 to the length of otherLows:
+            if bim box lowCorner till highCorner touches (the item at boxCursor in otherLows) through (the item at boxCursor in otherHighs):
+                return true
+        return false
+
+# The box in the drawing of the corners of `meshShape`, appended to
+# `boxLows` and `boxHighs` (an empty mesh's box touches nothing).
+local function append bim drawing box of {fast mesh record:meshShape} on {cad plane:viewPlane} deep along {cad vector3:depthAxis} to {a pointer to a list:boxLows} and {a pointer to a list:boxHighs}:
+    execute:
+        set lowX to 1e300
+        set lowY to 1e300
+        set highX to -1e300
+        set highY to -1e300
+        loop cornerCursor from 0 to the length of (meshShape's positions's values):
+            set viewCorner to the bim view coordinates of (the item at cornerCursor in (meshShape's positions's values)) on viewPlane deep along depthAxis
+            set lowX to the minimum of lowX and viewCorner's x
+            set lowY to the minimum of lowY and viewCorner's y
+            set highX to the maximum of highX and viewCorner's x
+            set highY to the maximum of highY and viewCorner's y
+        append (a cad vector2 with x lowX and y lowY) to boxLows
+        append (a cad vector2 with x highX and y highY) to boxHighs
+
+# The box of the cut polygons of `cutSource` (drawing coordinates),
+# appended to `boxLows` and `boxHighs`.
+local function append bim cut box of {bim cut source record:cutSource} to {a pointer to a list:boxLows} and {a pointer to a list:boxHighs}:
+    execute:
+        set lowX to 1e300
+        set lowY to 1e300
+        set highX to -1e300
+        set highY to -1e300
+        loop polygonCursor from 0 to the length of (cutSource's polygons's values):
+            set cutRing to (the item at polygonCursor in (cutSource's polygons's values))'s points's values
+            loop cornerCursor from 0 to the length of cutRing:
+                set ringCorner to the item at cornerCursor in cutRing
+                set lowX to the minimum of lowX and ringCorner's x
+                set lowY to the minimum of lowY and ringCorner's y
+                set highX to the maximum of highX and ringCorner's x
+                set highY to the maximum of highY and ringCorner's y
+        append (a cad vector2 with x lowX and y lowY) to boxLows
+        append (a cad vector2 with x highX and y highY) to boxHighs
+
+# Whether projection meshes `keptMesh` and `freshMesh` are the same: one
+# element, drawn alike, with the same corners, normals and triangles.
+local function bim projection mesh {bim projection mesh record:keptMesh} matches {bim projection mesh record:freshMesh}:
+    execute:
+        if (keptMesh's elementId != freshMesh's elementId) or (keptMesh's outlined != freshMesh's outlined):
+            return false
+        set keptPositions to keptMesh's shape's positions's values
+        set freshPositions to freshMesh's shape's positions's values
+        set keptNormals to keptMesh's shape's normals's values
+        set freshNormals to freshMesh's shape's normals's values
+        set keptIndices to keptMesh's shape's triangles's values
+        set freshIndices to freshMesh's shape's triangles's values
+        if (the length of keptPositions) != (the length of freshPositions):
+            return false
+        if (the length of keptNormals) != (the length of freshNormals):
+            return false
+        if (the length of keptIndices) != (the length of freshIndices):
+            return false
+        loop cornerCursor from 0 to the length of keptPositions:
+            set keptCorner to the item at cornerCursor in keptPositions
+            set freshCorner to the item at cornerCursor in freshPositions
+            if ((keptCorner's x != freshCorner's x) or (keptCorner's y != freshCorner's y)) or (keptCorner's z != freshCorner's z):
+                return false
+        loop normalCursor from 0 to the length of keptNormals:
+            set keptNormal to the item at normalCursor in keptNormals
+            set freshNormal to the item at normalCursor in freshNormals
+            if ((keptNormal's x != freshNormal's x) or (keptNormal's y != freshNormal's y)) or (keptNormal's z != freshNormal's z):
+                return false
+        loop indexCursor from 0 to the length of keptIndices:
+            if (the item at indexCursor in keptIndices) != (the item at indexCursor in freshIndices):
+                return false
+        return true
+
+# Whether cut sources `keptSource` and `freshSource` cut the same: one
+# element, with the same polygons.
+local function bim cut source {bim cut source record:keptSource} matches {bim cut source record:freshSource}:
+    execute:
+        if keptSource's id != freshSource's id:
+            return false
+        set keptPolygons to keptSource's polygons's values
+        set freshPolygons to freshSource's polygons's values
+        if (the length of keptPolygons) != (the length of freshPolygons):
+            return false
+        loop polygonCursor from 0 to the length of keptPolygons:
+            set keptRing to (the item at polygonCursor in keptPolygons)'s points's values
+            set freshRing to (the item at polygonCursor in freshPolygons)'s points's values
+            if (the length of keptRing) != (the length of freshRing):
+                return false
+            loop cornerCursor from 0 to the length of keptRing:
+                set keptCorner to the item at cornerCursor in keptRing
+                set freshCorner to the item at cornerCursor in freshRing
+                if (keptCorner's x != freshCorner's x) or (keptCorner's y != freshCorner's y):
+                    return false
+        return true
+
+# A copy of the cut sources `sourceList`, down to their polygons' corners.
+local function the bim copied cut sources of {a pointer to a list:sourceList}:
+    execute:
+        set sourceCopies to a cad topology list of a bim cut source record
+        loop sourceCursor from 0 to the length of sourceList:
+            set givenSource to the item at sourceCursor in sourceList
+            set sourceCopy to @intrinsic("construct", a bim cut source record, givenSource's id, givenSource's serial, givenSource's refused, a cad topology list of a bim cut polygon record)
+            loop polygonCursor from 0 to the length of (givenSource's polygons's values):
+                set polygonValue to the item at polygonCursor in (givenSource's polygons's values)
+                set cornerCopies to a cad topology list of a cad vector2
+                loop cornerCursor from 0 to the length of (polygonValue's points's values):
+                    append (the item at cornerCursor in (polygonValue's points's values)) to (cornerCopies's values)
+                append (@intrinsic("construct", a bim cut polygon record, polygonValue's elementId, cornerCopies)) to (sourceCopy's polygons's values)
+            append sourceCopy to (sourceCopies's values)
+        return sourceCopies
+
+# Works the edges of `meshList` out whole, as `the bim projected edges of
+# … on …` does, into `keptHolder`, keeping what they were worked out from.
+function project bim kept projection {a pointer to a bim kept projection record:keptHolder} of {a pointer to a list:meshList} on {cad plane:viewPlane} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} within {a 64 bit floating-point number:depthLimit} behind {bim view record:cutView}:
+    execute:
+        set depthAxis to the bim depth axis of viewPlane
+        set freshCounts to a cad topology list of an integer
+        set keptHolder's edges to the bim projected edges of meshList on viewPlane from lowAlong to highAlong within depthLimit behind cutView counting (freshCounts's values)
+        set freshMeshes to a cad topology list of a bim projection mesh record
+        set freshLows to a cad topology list of a cad vector2
+        set freshHighs to a cad topology list of a cad vector2
+        set outlinedTotal to 0
+        set outlinedIds to a cad topology list of a 64 bit integer
+        loop meshCursor from 0 to the length of meshList:
+            set freshMesh to the item at meshCursor in meshList
+            append freshMesh to (freshMeshes's values)
+            append bim drawing box of freshMesh's shape on viewPlane deep along depthAxis to (freshLows's values) and (freshHighs's values)
+            if freshMesh's outlined:
+                set outlinedTotal to outlinedTotal + 1
+                append freshMesh's elementId to (outlinedIds's values)
+        set keptHolder's valid to true
+        set keptHolder's viewPlane to viewPlane
+        set keptHolder's lowAlong to lowAlong
+        set keptHolder's highAlong to highAlong
+        set keptHolder's depthLimit to depthLimit
+        set keptHolder's meshes to freshMeshes
+        set keptHolder's lows to freshLows
+        set keptHolder's highs to freshHighs
+        set keptHolder's counts to freshCounts
+        set keptHolder's sources to the bim copied cut sources of (cutView's sources's values)
+        set keptHolder's redrawn to outlinedTotal
+        set keptHolder's partial to false
+        set keptHolder's redrawnIds to outlinedIds
+
+# Brings the edges `keptHolder` keeps up to `meshList` cut by `cutView`, as
+# `project bim kept projection` would work them out whole, working out
+# again only the edges of the meshes that may have changed: each mesh not
+# found unchanged among those kept (by element, in order, corner for
+# corner), and each mesh whose box in the drawing touches the box of a mesh
+# or cut polygon changed, added or gone. A mesh's edges depend only on its
+# own triangles, on the triangles whose boxes touch theirs and on the cut
+# polygons whose boxes touch theirs, so the edges of every other mesh are
+# kept as they were; the meshes worked out again are hidden only by the
+# meshes and cut polygons that touch them. Worked out whole when nothing
+# is kept or the plane or its limits differ.
+function update bim kept projection {a pointer to a bim kept projection record:keptHolder} with {a pointer to a list:meshList} on {cad plane:viewPlane} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} within {a 64 bit floating-point number:depthLimit} behind {bim view record:cutView}:
+    execute:
+        set sameFrame to (keptHolder's valid) and (bim planes keptHolder's viewPlane and viewPlane are identical)
+        set sameLimits to ((keptHolder's lowAlong = lowAlong) and (keptHolder's highAlong = highAlong)) and (keptHolder's depthLimit = depthLimit)
+        if (sameFrame and sameLimits) = false:
+            project bim kept projection keptHolder of meshList on viewPlane from lowAlong to highAlong within depthLimit behind cutView
+            return nothing
+        set depthAxis to the bim depth axis of viewPlane
+        set meshTotal to the length of meshList
+        set freshLows to a cad topology list of a cad vector2
+        set freshHighs to a cad topology list of a cad vector2
+        loop meshCursor from 0 to meshTotal:
+            append bim drawing box of (the item at meshCursor in meshList)'s shape on viewPlane deep along depthAxis to (freshLows's values) and (freshHighs's values)
+        # Each mesh found among those kept, in order; what is not found, and
+        # what was kept and is not found again, changed.
+        set keptMeshes to keptHolder's meshes's values
+        set keptTotal to the length of keptMeshes
+        set keptFound to an empty list of an integer
+        loop keptCursor from 0 to keptTotal:
+            append 0 to keptFound
+        set matchOf to an empty list of an integer
+        set changedLows to an empty list of a cad vector2
+        set changedHighs to an empty list of a cad vector2
+        set keptFrom to 0
+        loop meshCursor from 0 to meshTotal:
+            set freshMesh to the item at meshCursor in meshList
+            set foundSlot to -1
+            set seekSlot to keptFrom
+            loop while (foundSlot < 0) and (seekSlot < keptTotal):
+                if bim projection mesh (the item at seekSlot in keptMeshes) matches freshMesh:
+                    set foundSlot to seekSlot
+                set seekSlot to seekSlot + 1
+            append foundSlot to matchOf
+            if foundSlot >= 0:
+                replace item at index foundSlot in keptFound with 1
+                set keptFrom to foundSlot + 1
+            else:
+                append (the item at meshCursor in (freshLows's values)) to changedLows
+                append (the item at meshCursor in (freshHighs's values)) to changedHighs
+        loop keptCursor from 0 to keptTotal:
+            if (the item at keptCursor in keptFound) = 0:
+                append (the item at keptCursor in (keptHolder's lows's values)) to changedLows
+                append (the item at keptCursor in (keptHolder's highs's values)) to changedHighs
+        # The cut polygons the same way.
+        set freshSources to the bim copied cut sources of (cutView's sources's values)
+        set keptSources to keptHolder's sources's values
+        set keptSourceTotal to the length of keptSources
+        set sourceFound to an empty list of an integer
+        loop keptCursor from 0 to keptSourceTotal:
+            append 0 to sourceFound
+        set keptFrom to 0
+        loop sourceCursor from 0 to the length of (freshSources's values):
+            set freshSource to the item at sourceCursor in (freshSources's values)
+            set foundSlot to -1
+            set seekSlot to keptFrom
+            loop while (foundSlot < 0) and (seekSlot < keptSourceTotal):
+                if bim cut source (the item at seekSlot in keptSources) matches freshSource:
+                    set foundSlot to seekSlot
+                set seekSlot to seekSlot + 1
+            if foundSlot >= 0:
+                replace item at index foundSlot in sourceFound with 1
+                set keptFrom to foundSlot + 1
+            else:
+                append bim cut box of freshSource to changedLows and changedHighs
+        loop keptCursor from 0 to keptSourceTotal:
+            if (the item at keptCursor in sourceFound) = 0:
+                append bim cut box of (the item at keptCursor in keptSources) to changedLows and changedHighs
+        # The outlined meshes whose edges are worked out again, and their
+        # boxes.
+        set redrawFlags to an empty list of an integer
+        set redrawnIds to a cad topology list of a 64 bit integer
+        set redrawnLows to an empty list of a cad vector2
+        set redrawnHighs to an empty list of a cad vector2
+        loop meshCursor from 0 to meshTotal:
+            set freshMesh to the item at meshCursor in meshList
+            set meshLow to the item at meshCursor in (freshLows's values)
+            set meshHigh to the item at meshCursor in (freshHighs's values)
+            set redraws to false
+            if freshMesh's outlined:
+                if (the item at meshCursor in matchOf) < 0:
+                    set redraws to true
+                else if bim box meshLow till meshHigh meets one of changedLows and changedHighs:
+                    set redraws to true
+            if redraws:
+                append 1 to redrawFlags
+                append freshMesh's elementId to (redrawnIds's values)
+                append meshLow to redrawnLows
+                append meshHigh to redrawnHighs
+            else:
+                append 0 to redrawFlags
+        # Those worked out among the meshes and cut polygons that touch them:
+        # the others drawn as they hide, but not outlined.
+        set partialSlots to an empty list of an integer
+        set partialEdges to a cad topology list of a bim projected edge record
+        set partialCounts to an empty list of an integer
+        if (the length of redrawnLows) > 0:
+            set partialMeshes to an empty list of a bim projection mesh record
+            loop meshCursor from 0 to meshTotal:
+                set freshMesh to the item at meshCursor in meshList
+                if bim box (the item at meshCursor in (freshLows's values)) till (the item at meshCursor in (freshHighs's values)) meets one of redrawnLows and redrawnHighs:
+                    append (the length of partialMeshes) to partialSlots
+                    append (a bim projection mesh of freshMesh's elementId shaped freshMesh's shape outlined ((the item at meshCursor in redrawFlags) = 1)) to partialMeshes
+                else:
+                    append (0 - 1) to partialSlots
+            set partialView to an empty bim view
+            set partialView's viewPlane to cutView's viewPlane
+            set sourceLows to an empty list of a cad vector2
+            set sourceHighs to an empty list of a cad vector2
+            loop sourceCursor from 0 to the length of (cutView's sources's values):
+                set cutSource to the item at sourceCursor in (cutView's sources's values)
+                append bim cut box of cutSource to sourceLows and sourceHighs
+                if bim box (the item at sourceCursor in sourceLows) till (the item at sourceCursor in sourceHighs) meets one of redrawnLows and redrawnHighs:
+                    append cutSource to (partialView's sources's values)
+            set partialEdges to the bim projected edges of partialMeshes on viewPlane from lowAlong to highAlong within depthLimit behind partialView counting partialCounts
+            free partialMeshes
+            free sourceLows
+            free sourceHighs
+        # The edges in the meshes' order: worked out again, or kept.
+        set keptOffsets to an empty list of an integer
+        set runningTotal to 0
+        loop keptCursor from 0 to the length of (keptHolder's counts's values):
+            append runningTotal to keptOffsets
+            set runningTotal to runningTotal + (the item at keptCursor in (keptHolder's counts's values))
+        set partialOffsets to an empty list of an integer
+        set runningTotal to 0
+        loop partialCursor from 0 to the length of partialCounts:
+            append runningTotal to partialOffsets
+            set runningTotal to runningTotal + (the item at partialCursor in partialCounts)
+        set mergedEdges to a cad topology list of a bim projected edge record
+        set mergedCounts to a cad topology list of an integer
+        loop meshCursor from 0 to meshTotal:
+            set edgesBefore to the length of (mergedEdges's values)
+            if (the item at meshCursor in redrawFlags) = 1:
+                set partialSlot to the item at meshCursor in partialSlots
+                set firstEdge to the item at partialSlot in partialOffsets
+                loop edgeCursor from firstEdge to (firstEdge + (the item at partialSlot in partialCounts)):
+                    append (the item at edgeCursor in (partialEdges's values)) to (mergedEdges's values)
+            else if (the item at meshCursor in matchOf) >= 0:
+                set keptSlot to the item at meshCursor in matchOf
+                set firstEdge to the item at keptSlot in keptOffsets
+                loop edgeCursor from firstEdge to (firstEdge + (the item at keptSlot in (keptHolder's counts's values))):
+                    append (the item at edgeCursor in (keptHolder's edges's values)) to (mergedEdges's values)
+            append ((the length of (mergedEdges's values)) - edgesBefore) to (mergedCounts's values)
+        set freshMeshes to a cad topology list of a bim projection mesh record
+        loop meshCursor from 0 to meshTotal:
+            append (the item at meshCursor in meshList) to (freshMeshes's values)
+        set keptHolder's meshes to freshMeshes
+        set keptHolder's lows to freshLows
+        set keptHolder's highs to freshHighs
+        set keptHolder's counts to mergedCounts
+        set keptHolder's sources to freshSources
+        set keptHolder's edges to mergedEdges
+        set keptHolder's redrawn to the length of redrawnLows
+        set keptHolder's partial to true
+        set keptHolder's redrawnIds to redrawnIds
+        free keptFound
+        free matchOf
+        free changedLows
+        free changedHighs
+        free sourceFound
+        free redrawFlags
+        free redrawnLows
+        free redrawnHighs
+        free partialSlots
+        free partialCounts
+        free keptOffsets
+        free partialOffsets
 
 # The plane an elevation looks along: upright through the line from
 # `lineStart` to `lineFinish` in plan, looking to its left, as a section's.

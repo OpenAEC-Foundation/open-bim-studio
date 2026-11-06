@@ -58,10 +58,23 @@ class:
         # How many elements the last build tessellated, for tests and
         # timing.
         tessellated as an integer
+        # The edges below and above as kept while the model is edited
+        # continuously (`bim editor … edits continuously`, ui/editor/
+        # bim_editor_core.dl), so that a drag works out again only the
+        # edges it can have changed.
+        keptBelow as a bim kept projection record
+        keptAbove as a bim kept projection record
+        # Whether the edges were last worked out whole (not updated during
+        # an edit), how often they were updated during an edit, and how
+        # many meshes the last update worked the edges of out, for tests
+        # and timing.
+        exact as a boolean
+        partials as an integer
+        redrawn as an integer
 
 function an empty bim plan projection:
     execute:
-        return @intrinsic("construct", a bim plan projection record, (the string form of "unprojected"), a cad topology list of a bim projected edge record, a cad topology list of a bim projected edge record, 0, a cad topology list of a bim plan element mesh record, 0)
+        return @intrinsic("construct", a bim plan projection record, (the string form of "unprojected"), a cad topology list of a bim projected edge record, a cad topology list of a bim projected edge record, 0, a cad topology list of a bim plan element mesh record, 0, an empty bim kept projection, an empty bim kept projection, false, 0, 0)
 
 # How far short of the floor (below) or of the next level (above) the
 # depth looked through stops, in metres: what lies on the floor itself is
@@ -247,14 +260,28 @@ local function the bim plan projection key of {bim editor record:planEditor} amo
 
 # Brings `projection` up to the plan of `planEditor` cut as `cutView`,
 # among the scene's meshes `sceneMeshes` (the 3D view's): worked out again
-# only when its key changes.
+# only when its key changes. While the model is edited continuously (a
+# drag, which changes the evaluation every frame) the edges kept are
+# updated instead: only those of the elements changed and of the elements
+# whose boxes in plan touch theirs are worked out again (`update bim kept
+# projection`), which gives the same edges. Once the edit ends they are
+# worked out whole again, even when the key stays (a drag let go where it
+# began); a sheet's projection, which starts empty, is always worked out
+# whole.
 function refresh bim plan projection in {a pointer to a bim plan projection record:projectionHolder} of {bim editor record:planEditor} among {a pointer to a list:sceneMeshes} cut as {bim view record:cutView}:
     execute:
         set wantedKey to the bim plan projection key of planEditor among sceneMeshes
+        set continuousEdit to bim editor planEditor edits continuously
         if wantedKey = projectionHolder's key:
-            return nothing
+            if continuousEdit or projectionHolder's exact:
+                return nothing
         set projectionHolder's key to wantedKey
-        set projectionHolder's builds to projectionHolder's builds + 1
+        set updatesKept to continuousEdit and (projectionHolder's builds > 0)
+        if updatesKept:
+            set projectionHolder's partials to projectionHolder's partials + 1
+        else:
+            set projectionHolder's builds to projectionHolder's builds + 1
+        set projectionHolder's exact to (updatesKept = false)
         set modelValue to planEditor's documentValue's current
         set storeyHeight to the bim storey elevation of planEditor
         set cutLevel to storeyHeight + (the bim plan cut height of planEditor)
@@ -313,10 +340,17 @@ function refresh bim plan projection in {a pointer to a bim plan projection reco
         set hidingView to the bim plan hiding view of planEditor cut as cutView
         # Below: the plan's own plane, looking down; drawing coordinates
         # are plan coordinates.
+        set projectionHolder's redrawn to 0
         if downDepth > 0.0:
             set downPlane to the bim plan plane at storeyHeight cut at (the bim plan cut height of planEditor)
-            set projectionHolder's below to the bim projected edges of (belowMeshes's values) on downPlane from -1e300 to 1e300 within downDepth behind hidingView
+            if updatesKept:
+                update bim kept projection (the address of (projectionHolder's keptBelow)) with (belowMeshes's values) on downPlane from -1e300 to 1e300 within downDepth behind hidingView
+            else:
+                project bim kept projection (the address of (projectionHolder's keptBelow)) of (belowMeshes's values) on downPlane from -1e300 to 1e300 within downDepth behind hidingView
+            set projectionHolder's below to projectionHolder's keptBelow's edges
+            set projectionHolder's redrawn to projectionHolder's keptBelow's redrawn
         else:
+            set projectionHolder's keptBelow to an empty bim kept projection
             set projectionHolder's below to a cad topology list of a bim projected edge record
         # Above: the same plane looking up, its y axis turned over so that
         # it looks the other way; the edges are turned back after. Without
@@ -327,12 +361,20 @@ function refresh bim plan projection in {a pointer to a bim plan projection reco
             if topHeight >= 1e299:
                 set upLimit to 0.0
             set upPlane to a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z cutLevel), x axis (the cad x axis) and y axis (a cad vector3 with x 0.0, y -1.0 and z 0.0)
-            set upEdges to the bim projected edges of (aboveMeshes's values) on upPlane from -1e300 to 1e300 within upLimit behind (the bim mirrored view of hidingView)
+            if updatesKept:
+                update bim kept projection (the address of (projectionHolder's keptAbove)) with (aboveMeshes's values) on upPlane from -1e300 to 1e300 within upLimit behind (the bim mirrored view of hidingView)
+            else:
+                project bim kept projection (the address of (projectionHolder's keptAbove)) of (aboveMeshes's values) on upPlane from -1e300 to 1e300 within upLimit behind (the bim mirrored view of hidingView)
+            set projectionHolder's redrawn to projectionHolder's redrawn + projectionHolder's keptAbove's redrawn
+            # Turned back into new edges: the kept ones stay as worked out.
+            set upEdges to projectionHolder's keptAbove's edges
             loop edgeCursor from 0 to the length of (upEdges's values):
                 set upEdge to the item at edgeCursor in (upEdges's values)
-                set upEdge's start to a cad vector2 with x upEdge's start's x and y (0.0 - upEdge's start's y)
-                set upEdge's finish to a cad vector2 with x upEdge's finish's x and y (0.0 - upEdge's finish's y)
-                append upEdge to (projectionHolder's above's values)
+                set turnedStart to a cad vector2 with x upEdge's start's x and y (0.0 - upEdge's start's y)
+                set turnedFinish to a cad vector2 with x upEdge's finish's x and y (0.0 - upEdge's finish's y)
+                append (@intrinsic("construct", a bim projected edge record, upEdge's elementId, turnedStart, turnedFinish, upEdge's depth)) to (projectionHolder's above's values)
+        else:
+            set projectionHolder's keptAbove to an empty bim kept projection
 
 # Appends edges `projectedEdges` (plan coordinates) as pixel pairs through
 # `transform` to `pairs`, dashed when `dash` is above zero (pieces `dash`
