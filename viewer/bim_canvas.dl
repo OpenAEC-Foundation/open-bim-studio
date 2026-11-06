@@ -8,6 +8,7 @@ import kernel/core/core.dl
 import viewer/vulkan/images.dl
 import kernel/core/topology_list.dl
 import bim/bim_pens.dl
+import viewer/bim_lettering.dl
 
 class:
     patterns:
@@ -60,10 +61,13 @@ class:
         # Zero for screen recordings; canvas units per paper millimetre on sheets.
         paperScale as a 64 bit floating-point number
         images as the type of (a cad topology list of a bim canvas image record)
+        # The boxes of symbols that lettering laid out later keeps out of
+        # (`keep bim lettering out of`).
+        keepClear as the type of (a cad topology list of a bim lettering box record)
 
 function a new bim canvas:
     execute:
-        return @intrinsic("construct", a bim canvas record, a cad topology list of a bim canvas batch record, a cad topology list of a bim canvas text record, false, 0.0, a cad topology list of a bim canvas image record)
+        return @intrinsic("construct", a bim canvas record, a cad topology list of a bim canvas batch record, a cad topology list of a bim canvas text record, false, 0.0, a cad topology list of a bim canvas image record, a cad topology list of a bim lettering box record)
 
 # Existing screen symbols are specified on a four-pixels-per-millimetre grid.
 # Sheet recordings convert these lengths once, independently of model scale.
@@ -358,13 +362,16 @@ function replay bim canvas {bim canvas record:canvas} shifted by {a 64 bit float
                 draw bim rotated text label's message at (label's x + dx) and (label's y + dy) offset advance turned label's angle scaled labelScale in face faceIndex with atlas coloured label's red, label's green and label's blue in frame
 
 # Direction in screen coordinates, normalised so text reads from left to right
-# or bottom to top. Reversing dimension endpoints must not flip the label.
+# or bottom to top. Reversing dimension endpoints must not flip the label. A
+# line a rounding error off vertical reads bottom to top as well (within a
+# microradian): one end a hair to the right of the other turned it to read
+# top to bottom, its value on the other side of the line.
 function the bim readable text angle from {cad vector2:first} to {cad vector2:last}:
     execute:
         set textTurn to @intrinsic("atan2", last's y - first's y, last's x - first's x)
-        if textTurn >= 1.5707963267948966:
+        if textTurn > (1.5707963267948966 - 0.000001):
             set textTurn to textTurn - 3.141592653589793
-        if textTurn < -1.5707963267948966:
+        if textTurn <= (-1.5707963267948966 - 0.000001):
             set textTurn to textTurn + 3.141592653589793
         return textTurn
 
@@ -377,14 +384,16 @@ function record bim member tag {a string:message} at {cad vector2:anchor} along 
 
 # A dimension's value lettered between `first` and `last` when it fits
 # there, else moved beside the line past its end (`the bim dimension text
-# place of`).
+# place of`). A plan letters its dimensions together, clear of each other
+# and of what it shows around them (`letter bim dimension values`,
+# viewer/bim_dimension_lettering.dl).
 function record bim dimension text {a string:message} between {cad vector2:first} and {cad vector2:last} on {a pointer to a bim canvas record:canvas}:
     execute:
         set onCanvas to @intrinsic("dereference", canvas)
         set where to bim dimension text inside
         if (bim dimension text message fits between first and last on onCanvas) = false:
             set where to bim dimension text past the end
-        record bim dimension text (the bim dimension text place of message between first and last at where below false on onCanvas) on canvas
+        record bim dimension text (the bim dimension text place of message between first and last at where shifted 0.0 in row 0 on onCanvas) on canvas
 
 # Where a dimension's value stands along its line: between the extension
 # lines, beside the line past its end (the end a reader reaches last), or
@@ -411,12 +420,28 @@ class:
         angle as a 64 bit floating-point number
         halfWidth as a 64 bit floating-point number
 
-# How wide a dimension's value is lettered, in canvas units: ISO 3098
-# lettering 2.5 mm high takes 1.75 mm a character with its spacing (seven
-# symbol units, as wide as the 13 pixel drawing face on screen).
+# The size of the drawing face on screen, in pixels (`bim text drawing`).
+function the bim drawing face pixels:
+    replacement:
+        13.0
+
+# The font size, in canvas units, of dimension values and of labels of no
+# height of their own: the paper text height on paper (`paperScale` units
+# to the millimetre), as the sheet, SVG and PDF letter them; the drawing
+# face's size on screen.
+function the bim lettering size of {bim canvas record:canvas}:
+    execute:
+        if canvas's paperScale > 0.0:
+            return (the bim paper text height) * canvas's paperScale
+        return the bim drawing face pixels
+
+# How wide a dimension's value is lettered, in canvas units: the advances
+# of its glyphs at the lettering size, each the wider of osifont's and
+# Helvetica's (viewer/bim_lettering.dl), so that it holds on screen, in SVG
+# and in PDF alike.
 function the bim dimension text width of {a string:message} on {bim canvas record:canvas}:
     execute:
-        return ((the length of message) as a 64 bit floating-point number) * (7.0 * (the bim symbol scale of canvas))
+        return (the bim lettering width of message in face (bim widest lettering)) * (the bim lettering size of canvas)
 
 # Whether a dimension's value fits between its extension lines at `first`
 # and `last`, with a millimetre to spare at either side.
@@ -426,10 +451,13 @@ function bim dimension text {a string:message} fits between {cad vector2:first} 
         return room <= (the cad distance from first to last)
 
 # The place of a dimension's value: `where` along the line (`bim dimension
-# text inside` and the others; beside the line it stands 2.5 mm past the
-# line's end), on its reading side of the line 1.25 mm off it, or, staggered
-# clear of another value (`belowLine`), as far off on the other side.
-function the bim dimension text place of {a string:message} between {cad vector2:first} and {cad vector2:last} at {integer:where} below {boolean:belowLine} on {bim canvas record:canvas}:
+# text inside` and the others; beside the line it starts 2.5 mm past the
+# line's end), moved `slide` canvas units further along the line, in row
+# `rowIndex` across it. Row 0 stands on the line's reading side, its baseline
+# 1.25 mm off the line; rows 1, 2 and on stand further out on that side, a
+# line of lettering and 0.5 mm apart. Row -1 stands on the other side, its
+# top 1.25 mm off the line; rows -2 and on beyond it.
+function the bim dimension text place of {a string:message} between {cad vector2:first} and {cad vector2:last} at {integer:where} shifted {a 64 bit floating-point number:slide} in row {integer:rowIndex} on {bim canvas record:canvas}:
     execute:
         set unit to the bim symbol scale of canvas
         set textTurn to the bim readable text angle from first to last
@@ -441,40 +469,46 @@ function the bim dimension text place of {a string:message} between {cad vector2
             set shift to ((the cad distance from first to last) * 0.5) + ((10.0 * unit) + halfText)
             if where = (bim dimension text before the start):
                 set shift to 0.0 - shift
-        # Lettering is 2.5 mm (ten symbol units) high above its baseline.
-        set rise to 5.0 * unit
-        if belowLine:
-            set rise to 0.0 - (15.0 * unit)
+        set shift to shift + slide
+        set letterSize to the bim lettering size of canvas
+        set letterTop to (the bim lettering top) * letterSize
+        set pitch to (letterTop + ((the bim lettering depth of message) * letterSize)) + (2.0 * unit)
+        set rise to (5.0 * unit) + ((rowIndex as a 64 bit floating-point number) * pitch)
+        if rowIndex < 0:
+            set rise to 0.0 - (((5.0 * unit) + letterTop) + ((((0 - rowIndex) - 1) as a 64 bit floating-point number) * pitch))
         set x to (((first's x + last's x) * 0.5) + (ux * shift)) + (rise * uy)
         set y to (((first's y + last's y) * 0.5) + (uy * shift)) - (rise * ux)
         return @intrinsic("construct", a bim dimension lettering record, message, (a cad vector2 with x x and y y), textTurn, halfText)
 
-# Whether two dimension values would be lettered over each other: turned
-# alike, closer along their lines than their half widths and a millimetre,
-# and closer across than a line of lettering.
-function bim dimension text {bim dimension lettering record:placed} crowds {bim dimension lettering record:other} on {bim canvas record:canvas}:
+# The box a dimension's value `placed` takes on `canvas`: its width, from
+# the depth of its descending glyphs below the baseline to the height of
+# its digits above it.
+function the bim lettering box of {bim dimension lettering record:placed} on {bim canvas record:canvas}:
     execute:
-        set unit to the bim symbol scale of canvas
-        if (the absolute value of (placed's angle - other's angle)) > 0.01:
-            return false
-        set dx to other's spot's x - placed's spot's x
-        set dy to other's spot's y - placed's spot's y
-        set along to the absolute value of ((dx * (the cosine of placed's angle)) + (dy * (the sine of placed's angle)))
-        set across to the absolute value of ((dx * (the sine of placed's angle)) - (dy * (the cosine of placed's angle)))
-        return (along < ((placed's halfWidth + other's halfWidth) + (4.0 * unit))) and (across < (12.0 * unit))
+        set letterSize to the bim lettering size of canvas
+        return the bim lettering box of a baseline at placed's spot turned placed's angle reaching placed's halfWidth from ((the bim lettering depth of placed's message) * letterSize) below to ((the bim lettering top) * letterSize) above
 
-# Whether `placed` crowds none of the values in `others`.
-function bim dimension text {bim dimension lettering record:placed} is clear of {a pointer to a list:others} on {bim canvas record:canvas}:
+# The box label `label` takes on `canvas`, lettered at its own height or the
+# lettering size, measured as a dimension's value is.
+function the bim lettering box of {bim canvas text record:label} on {bim canvas record:canvas}:
     execute:
-        set unhindered to true
-        loop otherCursor from 0 to the length of others:
-            if bim dimension text placed crowds (the item at otherCursor in others) on canvas:
-                set unhindered to false
-        return unhindered
+        set letterSize to (the bim lettering size of canvas) * (the bim lettering factor of label)
+        set halfText to ((the bim lettering width of label's message in face (bim widest lettering)) * letterSize) * 0.5
+        set spot to a cad vector2 with x label's x and y label's y
+        if label's centred = false:
+            set spot to a cad vector2 with x (label's x + ((the cosine of label's angle) * halfText)) and y (label's y + ((the sine of label's angle) * halfText))
+        return the bim lettering box of a baseline at spot turned label's angle reaching halfText from ((the bim lettering depth of label's message) * letterSize) below to ((the bim lettering top) * letterSize) above
 
 function record bim dimension text {bim dimension lettering record:placed} on {a pointer to a bim canvas record:canvas}:
     execute:
         append (@intrinsic("construct", a bim canvas text record, placed's message, placed's spot's x, placed's spot's y, 0, 0, 0, true, placed's angle, placed's spot, 0.0)) to (canvas's texts's values)
+
+# Keeps lettering laid out later (`letter bim dimension values`) out of
+# `kept`, the box of a symbol on `canvas` (an elevation mark, a level mark,
+# a grid head); labels keep their own boxes.
+function keep bim lettering out of {bim lettering box record:kept} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        append kept to (canvas's keepClear's values)
 
 # A recorded depth-tested drawing: triangles in pixels with depth, each with
 # its own colour (packed as red * 65536 + green * 256 + blue). The 3D view is

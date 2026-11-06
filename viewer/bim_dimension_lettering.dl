@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: MPL-2.0
+# A view's dimension values lettered together, so that no value stands over
+# another, over a dimension or extension line, or over what the view shows
+# around its dimensions (room labels, level and elevation marks, grid
+# heads: the labels and kept boxes on the canvas). Each value takes the
+# first place that is clear, in this order:
+#
+# - between its extension lines, centred, else slid along the segment;
+# - the same a row further out (staggered to the outer side of the chain);
+# - beside the line past its end, else before its start, on the line's
+#   reading side, then in the outer row;
+# - further out on the outer side, over the segment's middle or moved
+#   along, with a leader to the line's middle.
+#
+# Values that fit their segment go first, so that a value moved out of a
+# short segment never takes the place of one that fits.
+import viewer/bim_canvas.dl
+
+# A dimension's value waiting to be lettered: `message` along the line from
+# `first` to `last` (canvas units), `outward` the unit direction away from
+# what the dimension measures (zero when it measures along its own line).
+class:
+    patterns:
+        [a|] bim dimension value record
+    members:
+        message as a string
+        first as a cad vector2
+        last as a cad vector2
+        outward as a cad vector2
+
+function a bim dimension value {a string:message} between {cad vector2:first} and {cad vector2:last} outward {cad vector2:side}:
+    execute:
+        return @intrinsic("construct", a bim dimension value record, message, first, last, side)
+
+# A place a value may take: where it would be lettered, with a leader from
+# `leaderFrom` on the dimension line to `leaderTo` by the lettering when
+# `leader`; `early` when it is tried in the first round, for values that fit.
+class:
+    patterns:
+        [a|] bim dimension candidate record
+    members:
+        placed as a bim dimension lettering record
+        leader as a boolean
+        leaderFrom as a cad vector2
+        leaderTo as a cad vector2
+        early as a boolean
+
+local function the bim dimension candidate {bim dimension lettering record:proposed} early {boolean:firstRound}:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim dimension candidate record, proposed, false, nowhere, nowhere, firstRound)
+
+# How many rows of lettering a value may stand off its line with a leader.
+local function the bim dimension leader rows:
+    replacement:
+        7
+
+# Appends the places `pending` may take to `candidates`, in the order they
+# are tried.
+local function append bim dimension candidates of {bim dimension value record:pending} into {a pointer to a list:candidates} on {bim canvas record:canvas}:
+    execute:
+        set unit to the bim symbol scale of canvas
+        set message to pending's message
+        set first to pending's first
+        set last to pending's last
+        set fitting to bim dimension text message fits between first and last on canvas
+        set slack to ((the cad distance from first to last) - ((the bim dimension text width of message on canvas) + (8.0 * unit))) * 0.5
+        set textTurn to the bim readable text angle from first to last
+        set upX to the sine of textTurn
+        set upY to 0.0 - (the cosine of textTurn)
+        # The outer row: further out on the reading side when that side is
+        # the outer one (or the line has none), else the first row on the
+        # other side.
+        set staggerRow to 1
+        set rowStep to 1
+        if ((pending's outward's x * upX) + (pending's outward's y * upY)) < -0.000001:
+            set staggerRow to -1
+            set rowStep to -1
+        if fitting:
+            loop rowCursor from 0 to 2:
+                set rowNumber to 0
+                if rowCursor = 1:
+                    set rowNumber to staggerRow
+                loop slideCursor from 0 to 5:
+                    set slide to 0.0
+                    if slideCursor = 1:
+                        set slide to slack * 0.5
+                    if slideCursor = 2:
+                        set slide to 0.0 - (slack * 0.5)
+                    if slideCursor = 3:
+                        set slide to slack
+                    if slideCursor = 4:
+                        set slide to 0.0 - slack
+                    append (the bim dimension candidate (the bim dimension text place of message between first and last at (bim dimension text inside) shifted slide in row rowNumber on canvas) early (rowNumber = 0)) to candidates
+        loop rowCursor from 0 to 2:
+            set rowNumber to 0
+            if rowCursor = 1:
+                set rowNumber to staggerRow
+            append (the bim dimension candidate (the bim dimension text place of message between first and last at (bim dimension text past the end) shifted 0.0 in row rowNumber on canvas) early false) to candidates
+            append (the bim dimension candidate (the bim dimension text place of message between first and last at (bim dimension text before the start) shifted 0.0 in row rowNumber on canvas) early false) to candidates
+        # In the rows beyond the outer row, over the segment's middle or
+        # moved along by one or two of its widths and a millimetre either
+        # way, a leader from the line's middle to a symbol unit short of the
+        # lettering.
+        set lineMiddle to a cad vector2 with x ((first's x + last's x) * 0.5) and y ((first's y + last's y) * 0.5)
+        set letterSize to the bim lettering size of canvas
+        set leaderStep to (the bim dimension text width of message on canvas) + (4.0 * unit)
+        loop leaderCursor from 1 to ((the bim dimension leader rows) + 1):
+            set rowNumber to staggerRow + (rowStep * leaderCursor)
+            loop stepCursor from 0 to 5:
+                set leaderSlide to leaderStep * (((stepCursor + 1) / 2) as a 64 bit floating-point number)
+                if (the remainder of stepCursor divided by 2) = 0:
+                    set leaderSlide to 0.0 - leaderSlide
+                set leaderPlace to the bim dimension text place of message between first and last at (bim dimension text inside) shifted leaderSlide in row rowNumber on canvas
+                set nearRise to 0.0 - (((the bim lettering depth of message) * letterSize) + unit)
+                if rowNumber < 0:
+                    set nearRise to ((the bim lettering top) * letterSize) + unit
+                set offered to the bim dimension candidate leaderPlace early false
+                set offered's leader to true
+                set offered's leaderFrom to lineMiddle
+                set offered's leaderTo to a cad vector2 with x (leaderPlace's spot's x + (upX * nearRise)) and y (leaderPlace's spot's y + (upY * nearRise))
+                append offered to candidates
+
+# Whether `trial` stands clear of the boxes `obstacles` and the stroke
+# pairs `strokes` on `canvas`, by 0.75 mm along its line and 0.25 mm across
+# it (three and one symbol units), its leader clear of the boxes.
+local function bim dimension candidate {bim dimension candidate record:trial} stands clear of {a pointer to a list:obstacles} and {a pointer to a list:strokes} on {bim canvas record:canvas}:
+    execute:
+        set unit to the bim symbol scale of canvas
+        set grown to the bim lettering box (the bim lettering box of trial's placed on canvas) grown by (3.0 * unit) and unit
+        set unhindered to true
+        loop obstacleCursor from 0 to the length of obstacles:
+            if unhindered:
+                if bim lettering box grown overlaps (the item at obstacleCursor in obstacles):
+                    set unhindered to false
+                if trial's leader:
+                    if bim lettering box (the item at obstacleCursor in obstacles) meets the segment from trial's leaderFrom to trial's leaderTo:
+                        set unhindered to false
+        set pairCount to (the length of strokes) / 2
+        loop pairCursor from 0 to pairCount:
+            if unhindered:
+                if bim lettering box grown meets the segment from (the item at (pairCursor * 2) in strokes) to (the item at ((pairCursor * 2) + 1) in strokes):
+                    set unhindered to false
+        return unhindered
+
+# Letters the dimension values `values` (`bim dimension value record`s) on
+# `canvas`, each in the first place that stands clear of the labels and
+# kept boxes already on it, of the values lettered before it and of the
+# stroke pairs `strokes` (the dimension and extension lines). The leaders
+# it draws are appended to `strokes`. A value with no clear place stands in
+# its first; the number of those.
+function letter bim dimension values {a pointer to a list:values} among {a pointer to a list:strokes} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set onCanvas to @intrinsic("dereference", canvas)
+        set obstacles to an empty list of a bim lettering box record
+        loop textCursor from 0 to the length of (onCanvas's texts's values):
+            append (the bim lettering box of (the item at textCursor in (onCanvas's texts's values)) on onCanvas) to obstacles
+        loop keptCursor from 0 to the length of (onCanvas's keepClear's values):
+            append (the item at keptCursor in (onCanvas's keepClear's values)) to obstacles
+        set lettered to an empty list of a boolean
+        loop valueCursor from 0 to the length of values:
+            append false to lettered
+        set crowded to 0
+        loop roundIndex from 0 to 2:
+            loop valueCursor from 0 to the length of values:
+                if (the item at valueCursor in lettered) = false:
+                    set candidates to an empty list of a bim dimension candidate record
+                    append bim dimension candidates of (the item at valueCursor in values) into candidates on onCanvas
+                    set chosenIndex to -1
+                    loop candidateCursor from 0 to the length of candidates:
+                        if chosenIndex < 0:
+                            set offered to the item at candidateCursor in candidates
+                            if (roundIndex = 1) or offered's early:
+                                if bim dimension candidate offered stands clear of obstacles and strokes on onCanvas:
+                                    set chosenIndex to candidateCursor
+                    if (chosenIndex < 0) and (roundIndex = 1):
+                        set chosenIndex to 0
+                        set crowded to crowded + 1
+                    if chosenIndex >= 0:
+                        set chosen to the item at chosenIndex in candidates
+                        record bim dimension text chosen's placed on canvas
+                        append (the bim lettering box of chosen's placed on onCanvas) to obstacles
+                        if chosen's leader:
+                            append chosen's leaderFrom to strokes
+                            append chosen's leaderTo to strokes
+                        replace item at index valueCursor in lettered with true
+                    free candidates
+        free obstacles
+        free lettered
+        return crowded
