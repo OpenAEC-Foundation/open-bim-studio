@@ -75,6 +75,9 @@ Identifiers with a fixed meaning that must stay compatible:
   revisions in the set `Revisions` (`1.Revision`, `1.Date`, `1.Description`, `1.DrawnBy`,
   `1.CheckedBy`, numbered from 1 without a gap). IFC GlobalId kinds 17 and 18 are the
   project's actors and their assignments (`mod/views/title-block`, 6 November 2026).
+- IFC GlobalId kind **19** is an explicit space (space object) written as IfcSpace, by its
+  id; kind **34** is that space's `Qto_SpaceBaseQuantities` (`mod/ifc/spaces-and-schedule`,
+  6 November 2026). Kind 9 stays the wall-derived region, by its bounding walls' hash.
 - Window recipes are appended after the existing 21 entries so stored indices remain stable;
   timber and Reynaers window recipes use append-only recipe indices 33–42.
 
