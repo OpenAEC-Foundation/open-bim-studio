@@ -170,6 +170,7 @@ Items are ordered by impact first, then by effort (S, then M, then L). Duplicate
     - Draw the frame, and a threshold on exterior doors.
     - Read the `leaves` setting (bim_model.dl:1777) for double doors.
 - **Effort:** M
+- **Status:** done on `mod/architectural/opening-symbols` (6 November 2026). The symbol is `the bim plan symbol of opening` (architectural/openings/bim_opening_symbol.dl), drawn by `draw bim openings in plan`; hand and swing are opening settings 2402520–2402521 with Flip hand/Flip swing (2475–2476) and Hand/Opens property rows (12830–12831); tests `opening_symbols` and `opening_symbols_editor`. Left: the opening type has no frame depth or position, so the frame is a fixed 114 mm on the wall's line (a type parameter would make it real); outer walls are found by a ray test, so a wall facing another wing reads as inner (no sills, no threshold); Mirror does not yet flip a door's hand; IFC export does not yet write the hand as `OperationType`.
 
 ### 13. Hatch floors and roofs per layer in cuts
 - **Why it matters:** A cut slab or roof shows only its thickest layer's material. A roof whose thickest layer is insulation gets no zigzag, because its band is unbounded.

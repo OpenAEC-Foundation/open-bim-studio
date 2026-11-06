@@ -21,6 +21,9 @@ reserved number for another function. Record new public command codes in advance
 
 | Code / range | Kind | Reserved for | Reserved by (date) |
 |---|---|---|---|
+| **2475–2476** | commands | Door Flip hand (hinges to the other jamb) and Flip swing (opens to the other side), on a selected door's floating toolbar | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
+| **2402520–2402521** | settings on an opening | A door's hand (1 right-handed per EN 12519; absent left) and swing (1 opens to the outdoor side; absent indoor) | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
+| **12830–12831** | properties | A door's Hand (click) and Opens (click) rows | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **2461** | command | Exterior dimensions: three chains along the storey's outer walls (View > Annotate) | Computer 1, drawing quality (5 November 2026) |
 | **2460** | command | Room separator: draws room separation lines (Home > Plane > Spaces) | Computer 1, room separation (5 November 2026) |
 | **91** | tool id | Room separator | Computer 1, room separation (5 November 2026) |

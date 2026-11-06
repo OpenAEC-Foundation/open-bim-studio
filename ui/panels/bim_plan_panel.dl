@@ -22,6 +22,7 @@ import exchange/import/bim_vector_reference.dl
 import views/common/bim_crop.dl
 import views/drawings/bim_plan_presentation.dl
 import architectural/openings/bim_window_actions.dl
+import architectural/openings/bim_opening_symbol.dl
 import kernel/planar/triangulate2.dl
 import views/common/bim_category_tree.dl
 import elements/linear/pile_tip_levels.dl
@@ -640,47 +641,29 @@ function the bim meshes of {a pointer to a list:meshes} and {a pointer to a list
                 append entry to (visibleMeshes's values)
         return visibleMeshes
 
-# Appends, as pixel pairs, a door leaf hinged at `hinge` (drawing
-# coordinates) standing open along `openDirection` (a unit vector into the
-# room) for `reach` metres, and its quarter swing toward `shutDirection`, the
-# wall's direction.
-function append bim door leaf at {cad vector2:hinge} opening {cad vector2:openDirection} closing {cad vector2:shutDirection} reaching {a 64 bit floating-point number:reach} through {bim drawing transform record:transform} into {a pointer to a list:pairs}:
+# Appends the plan points `points` (two per segment) as pixel pairs.
+function append bim plan pixels of {a pointer to a list:points} through {bim drawing transform record:transform} into {a pointer to a list:pairs}:
     execute:
-        set tip to a cad vector2 with x (hinge's x + (reach * openDirection's x)) and y (hinge's y + (reach * openDirection's y))
-        append (the bim pixel of hinge through transform) to pairs
-        append (the bim pixel of tip through transform) to pairs
-        set previous to tip
-        loop step from 1 to 13:
-            set angle to (1.5707963267948966 * (step as a 64 bit floating-point number)) / 12.0
-            set swing to a cad vector2 with x (hinge's x + (reach * (((the cosine of angle) * openDirection's x) + ((the sine of angle) * shutDirection's x)))) and y (hinge's y + (reach * (((the cosine of angle) * openDirection's y) + ((the sine of angle) * shutDirection's y))))
-            append (the bim pixel of previous through transform) to pairs
-            append (the bim pixel of swing through transform) to pairs
-            set previous to swing
+        loop pointCursor from 0 to the length of points:
+            append (the bim pixel of (the item at pointCursor in points) through transform) to pairs
 
-# Appends, as pixel pairs, a window's three lines from `leftPoint` to
-# `rightPoint` on the centreline: the exterior face, the glass and the
-# interior face, `half` metres either side along `normal`.
-function append bim window panes from {cad vector2:leftPoint} to {cad vector2:rightPoint} across {cad vector2:normal} by {a 64 bit floating-point number:half} through {bim drawing transform record:transform} into {a pointer to a list:pairs}:
-    execute:
-        loop line from 0 to 3:
-            set offset to half
-            if line = 1:
-                set offset to half * 0.1
-            if line = 2:
-                set offset to 0.0 - half
-            append (the bim pixel of (a cad vector2 with x (leftPoint's x + (offset * normal's x)) and y (leftPoint's y + (offset * normal's y))) through transform) to pairs
-            append (the bim pixel of (a cad vector2 with x (rightPoint's x + (offset * normal's x)) and y (rightPoint's y + (offset * normal's y))) through transform) to pairs
-
-# Door and window symbols in the plan, on the walls of the active storey: a
-# door's leaf standing open into the room with its swing, a window's glass
-# between the wall faces. Each follows its category's rule.
+# Door and window symbols in the plan, on the walls of the active storey
+# (`the bim plan symbol of opening`, architectural/openings): a window's
+# frame, glass and sills, a door's frame, leaves, swings and threshold, each
+# compared with the plan's cut height; one wholly above the cut dashed. Each
+# follows its category's rule.
 function draw bim openings in plan of {bim editor record:editor} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
     execute:
         set modelValue to editor's documentValue's current
-        set leaves to an empty list of a cad vector2
-        set faintLeaves to an empty list of a cad vector2
+        set cutHeight to the bim plan cut height of editor
+        set framePairs to an empty list of a cad vector2
+        set faintFramePairs to an empty list of a cad vector2
         set panes to an empty list of a cad vector2
         set faintPanes to an empty list of a cad vector2
+        set swingPairs to an empty list of a cad vector2
+        set faintSwingPairs to an empty list of a cad vector2
+        set hiddenPairs to an empty list of a cad vector2
+        set faintHiddenPairs to an empty list of a cad vector2
         loop cursor from 0 to the length of (modelValue's openings's values):
             set openingValue to the item at cursor in (modelValue's openings's values)
             set hostFound to the bim wall index of openingValue's hostId in modelValue
@@ -694,27 +677,12 @@ function draw bim openings in plan of {bim editor record:editor} through {bim dr
                 set host to the item at hostFound's position in (modelValue's walls's values)
                 set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
                 if host's levelId = editor's levelId:
-                    set half to (the bim wall thickness of host in modelValue) * 0.5
-                    set halfWidth to (the bim rough width of openingType) * 0.5
-                    set span to the bim span of host at openingValue's offset reaching halfWidth
-                    set direction to span's direction
-                    set normal to span's normal
-                    set leftPoint to span's left
-                    set rightPoint to span's right
                     set isFaint to bim category openingCategory is halftone in editor's planRules
-                    if openingType's isDoor:
-                        # Hinged at the left jamb on the interior face.
-                        set hinge to a cad vector2 with x (leftPoint's x - (half * normal's x)) and y (leftPoint's y - (half * normal's y))
-                        set inward to a cad vector2 with x (0.0 - normal's x) and y (0.0 - normal's y)
-                        if isFaint:
-                            append bim door leaf at hinge opening inward closing direction reaching (halfWidth * 2.0) through transform into faintLeaves
-                        else:
-                            append bim door leaf at hinge opening inward closing direction reaching (halfWidth * 2.0) through transform into leaves
-                    else:
-                        # A hosted frame is already drawn from its 3D parts.
-                        # The three-line placeholder must not run over the
-                        # frame/glass or fill the entire wall thickness.
-                        set showPlaceholder to true
+                    # A window system hosted in the opening draws its own
+                    # frame and glass from its 3D parts; the symbol keeps
+                    # only the sills then.
+                    set showFrame to true
+                    if openingType's isDoor = false:
                         set hostedId to the bim window system in opening openingValue's id in modelValue
                         if hostedId != the bim refused id:
                             set hostedCategory to the bim category of element hostedId in modelValue
@@ -722,30 +690,49 @@ function draw bim openings in plan of {bim editor record:editor} through {bim dr
                             set hostedShown to hostedShown and (bim category hostedCategory is visible in editor's planRules)
                             if bim editor hides hostedId in plan of editor:
                                 set hostedShown to false
-                            set showPlaceholder to hostedShown = false
-                        if showPlaceholder:
-                            if isFaint:
-                                append bim window panes from leftPoint to rightPoint across normal by half through transform into faintPanes
-                            else:
-                                append bim window panes from leftPoint to rightPoint across normal by half through transform into panes
-        # A technical drawing draws leaves and panes in black (grey when
-        # halftone), on paper thinner than the cut: a leaf as a visible
-        # edge, a pane as a thin line; the model review tells the glass
-        # apart in blue.
+                            set showFrame to hostedShown = false
+                    set drawnSymbol to the bim plan symbol of opening openingValue in modelValue cut at cutHeight framed showFrame
+                    if isFaint:
+                        append bim plan pixels of (drawnSymbol's lines's values) through transform into faintFramePairs
+                        append bim plan pixels of (drawnSymbol's glazing's values) through transform into faintPanes
+                        append bim plan pixels of (drawnSymbol's swings's values) through transform into faintSwingPairs
+                        append bim dashes of (drawnSymbol's hidden's values) through transform dashing 4.0 into faintHiddenPairs
+                    else:
+                        append bim plan pixels of (drawnSymbol's lines's values) through transform into framePairs
+                        append bim plan pixels of (drawnSymbol's glazing's values) through transform into panes
+                        append bim plan pixels of (drawnSymbol's swings's values) through transform into swingPairs
+                        append bim dashes of (drawnSymbol's hidden's values) through transform dashing 4.0 into hiddenPairs
+        # A technical drawing draws the symbols in black (grey when
+        # halftone), on paper thinner than the cut: frames and leaves as
+        # visible edges, glass and swings as thin lines, what lies above the
+        # cut with the hidden pen; the model review tells the glass apart in
+        # blue.
         if bim view editor's planViewId draws technically on canvas in modelValue:
-            record bim pen (bim visible pen) strokes leaves coloured 0, 0 and 0 wide 1.0 on canvas
-            record bim pen (bim visible pen) strokes faintLeaves coloured 150, 150 and 150 wide 1.0 on canvas
+            record bim pen (bim visible pen) strokes framePairs coloured 0, 0 and 0 wide 1.0 on canvas
+            record bim pen (bim visible pen) strokes faintFramePairs coloured 150, 150 and 150 wide 1.0 on canvas
             record bim pen (bim thin pen) strokes panes coloured 0, 0 and 0 wide 1.0 on canvas
             record bim pen (bim thin pen) strokes faintPanes coloured 150, 150 and 150 wide 1.0 on canvas
+            record bim pen (bim thin pen) strokes swingPairs coloured 0, 0 and 0 wide 0.7 on canvas
+            record bim pen (bim thin pen) strokes faintSwingPairs coloured 150, 150 and 150 wide 0.7 on canvas
+            record bim pen (bim hidden pen) strokes hiddenPairs coloured 0, 0 and 0 wide 0.7 on canvas
+            record bim pen (bim hidden pen) strokes faintHiddenPairs coloured 150, 150 and 150 wide 0.7 on canvas
         else:
-            record bim strokes leaves coloured 70, 74 and 90 wide 1.0 on canvas
-            record bim strokes faintLeaves coloured 165, 168 and 178 wide 1.0 on canvas
+            record bim strokes framePairs coloured 70, 74 and 90 wide 1.0 on canvas
+            record bim strokes faintFramePairs coloured 165, 168 and 178 wide 1.0 on canvas
             record bim strokes panes coloured 50, 110 and 190 wide 1.0 on canvas
             record bim strokes faintPanes coloured 160, 185 and 225 wide 1.0 on canvas
-        free leaves
-        free faintLeaves
+            record bim strokes swingPairs coloured 70, 74 and 90 wide 0.7 on canvas
+            record bim strokes faintSwingPairs coloured 165, 168 and 178 wide 0.7 on canvas
+            record bim strokes hiddenPairs coloured 70, 74 and 90 wide 0.7 on canvas
+            record bim strokes faintHiddenPairs coloured 165, 168 and 178 wide 0.7 on canvas
+        free framePairs
+        free faintFramePairs
         free panes
         free faintPanes
+        free swingPairs
+        free faintSwingPairs
+        free hiddenPairs
+        free faintHiddenPairs
 
 # ---------------------------------------------------------------- grids
 
