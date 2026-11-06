@@ -6,7 +6,9 @@ components), with hidden lines removed well enough for a Dutch working drawing, 
 the geometry the application already has?
 
 **Status:** sections, elevations and plans built (drawing quality plan, item 15), 6 November
-2026.
+2026. The plans' shared code is compiled and tested headless; the live plan's wiring in
+`ui/shell/main.dl` (its cache and call) has not been compiled yet, as the application was not
+built on the branch.
 
 ## Approach
 
@@ -89,19 +91,27 @@ Its cost is the number of edges times the occluders in their cells.
   edges turned back. Meshes that reach neither depth are left out before the projection
   welds them. What the plan already draws is not drawn twice:
   - the cut outlines hide what lies under or on them, as in a section;
-  - each opening of the storey whose symbol is drawn (one reaching above the cut) hides
-    its rough opening across the wall and its sills, which the symbol draws;
-  - the storey's slabs and roofs (`record bim slab edges`), stairs, railings, curtain
-    walls, linear elements, component instances and openings only hide; their own
-    symbols draw them. Walls, free meshes, building systems and every element of
-    another storey are drawn.
+  - each opening of the storey whose symbol is drawn (one reaching above the cut, its
+    category shown, its phase not hidden, its wall not hidden) hides its rough opening
+    across the wall and its sills, which the symbol draws; along a curved wall that
+    rectangle reaches further across by as much as the inner face falls away from the
+    tangent at the opening's ends;
+  - every other element of the storey but its walls only hides: slabs and roofs
+    (`record bim slab edges`), stairs, railings, curtain walls, linear elements,
+    component instances, openings, masses and free meshes (`draw bim sketches of`) are
+    drawn by the plan's own symbols. The storey's walls and every element of another
+    storey are drawn.
 
   `record bim plan of` records both under the hatched cut, for the live plan and a sheet's
   viewport alike. The live plan keeps the edges (`bim plan projection record`) until the
   model's revision, the evaluation's generation, the storey, the plan view, its cut
-  height or depth, its rules or hidden elements, or the scene's meshes (count and builds)
-  change; a sheet works them out each time it records the viewport, which happens when
-  the model changes.
+  height or depth, its rules or hidden elements, or a fingerprint of the scene's meshes
+  (their elements, corner counts and first and last corners; a scene mesh carries no
+  build serial) change; a sheet works them out each time it records the viewport, which
+  happens when the model changes. The record also keeps each evaluated element's
+  triangles with its build serial and signature, so that a build after a change (a frame
+  of a drag) tessellates only the elements built again. A plan's view depth is typed as
+  the plan view's View depth (property 12840, as for sections).
 
 ## Measured
 
@@ -124,19 +134,27 @@ at 1.2 m, a roof level at 3 m) of four walls with a window, a knee wall 0.8 m hi
 flat roof on the roof level overhanging 0.4 m:
 
 - below the cut the knee wall's top is drawn (its faces 2 m, its ends 0.2 m), nothing of
-  the walls cut normally, and nothing in the window's rough opening;
+  the walls cut normally, nothing in the window's rough opening, and nothing of a raised
+  floor and a free mesh on the same storey (the plan's own symbols draw them);
 - above the cut the roof's overhang is drawn whole on all four sides, and nothing else;
 - on paper the edges below are one stroke each in the 0.25 mm pen and those above are
-  dashed in the 0.18 mm pen, black; a sheet's viewport and the live plan record the same
-  batches;
-- the edges are kept until the model changes, then worked out again.
+  dashed in the 0.18 mm pen, black; a sheet's viewport and a live plan working its own
+  edges out record the same batches; on screen they are grey;
+- a plan view depth of 0.3 m leaves the knee wall (0.4 m below the cut) out, 0.5 m sees it;
+- the edges are kept until what they show changes, then worked out again, tessellating
+  only the elements built again (one, after the knee wall is raised).
 
 `tools/probes/plan_projection_timing` (built at -O0, measured on this computer, 6 November
-2026), the ground floor's plan of a generated tower: one storey of 312 walls, 48 windows and
-a slab, 75 ms to work out (the plan's cut 1 ms, the evaluation 17 ms); five storeys of 420
-walls, 120 windows and 5 slabs, 45 ms (meshes out of both depths are left out before
-welding); kept, 0 ms. Both plans draw no edge (every wall is cut, every opening has a
-symbol), so this measures the weighing and hiding, not a plan full of edges.
+2026), the ground floor's plan of a generated tower:
+
+| Model | No edge drawn | Every third wall lowered below the cut | Again, every mesh kept | Kept |
+|---|---|---|---|---|
+| 1 storey, 312 walls, 48 windows, 1 slab | 74 ms | 72 ms (190 edges below) | 70 ms | 0 ms |
+| 5 storeys, 420 walls, 120 windows, 5 slabs | 45 ms | 22 ms (46 below, 16 above) | 22 ms | 0 ms |
+
+(The plan's cut takes 1 ms, the evaluation 17 to 25 ms.) Keeping the meshes saves little:
+for walls, tessellating is cheap and the welding and hiding is the cost, so a frame of a
+wall drag pays nearly the whole time. Not measured at -O2 nor on the FZK-Haus.
 
 ## Not done
 
@@ -158,14 +176,18 @@ symbol), so this measures the weighing and hiding, not a plan full of edges.
   their cut is not filled.
 - The live section recomputes on every frame of a drag, since the evaluation changes.
 
+- Plans: the live plan's wiring in `ui/shell/main.dl` is not compiled yet; a drag works
+  the edges out again every frame.
+
 Sections and elevations were not measured on a large model; plans only on generated
 towers, not on the FZK-Haus.
 
 ## Verdict
 
 Keep the exact triangle-based hidden-line removal over a painter's or raster method. It
-reuses the 3D view's meshes, gives exact vector lines for PDF and SVG, and is fast
-enough for a house on a sheet and, kept between frames, for a plan of a few hundred
-elements (tens of milliseconds to work out at -O0). Plans now use it below and above the
-cut. Measure it on the FZK-Haus before using it for dashed hidden lines in sections; that
-and the per-category pens are the next steps of item 15.
+reuses the 3D view's meshes and gives exact vector lines for PDF and SVG. Plans now use it
+below and above the cut. Provisionally it is fast enough, kept between frames, for a plan
+of a few hundred elements: measured at -O0 on generated towers, 20 to 75 ms to work out,
+with up to 190 edges. What is missing to settle it: a measurement on the FZK-Haus and at
+-O2, and the cost of a frame of a drag in the running application. Those, and the
+per-category pens, are the next steps of item 15.
