@@ -218,29 +218,33 @@ Items are ordered by impact first, then by effort (S, then M, then L). Duplicate
   - **Elevations (detail 1-4):** drawn on sheets along `the bim elevation line of` (a metre outside the plan extent), with their own extent, title and share in the scale text. They have a ground line in the cut pen at peil and level marks right of the building. Section and elevation extents now reach a pitched plate's top.
   - **Left:** plans (below the cut thin, above it dashed); hidden edges dashed; the crop clip on sheets; a flip field; per-category projection pens; sills and leaf details; a maaiveld height (the ground line stands at peil); elements the evaluation does not hold stay open where a section cuts them; the live section recomputes every frame of a drag; not measured on a large model.
 
+## High impact, effort M (added after the review)
+
 ### 16. Let a gable wall follow both roof planes up to the ridge
 - **Why it matters:** A wall's top could follow one plate only, so the FZK-Haus rebuild split each gable into two walls at the ridge. Elevations and sections then show a joint line up the middle of the gable, and a window cannot sit on the ridge line.
 - **Change:** attach a wall's top to several plates. Over each stretch of the wall it follows the lowest underside of the plates covering that stretch, so the contour of a gable wall is a pentagon. Offer it as a Top constraint choice (12670), Attached to roofs above, and keep it in `.bim` and IfcX like the single attachment.
 - **Effort:** M
-- **Status (6 November 2026):** done on `mod/elements/wall-top-two-roofs`, proven by `elements/planar/tests/wall_top_roofs` and `ui/properties/tests/wall_top_rows`.
-  - **Model** (bim/bim_model.dl): the first plate stays at setting 2401701; further plates follow at 2401710 + n (WERKBORD). `the bim top profile of wall … under plates` gives the top's corners along the wall. It bends where the centreline crosses a plate's outline or two undersides cross, and steps where one plate's edge hands over to a higher one. An uncovered stretch takes the lowest of all the attached planes. One plate gives the same top as before. `fit bim wall … top to plates` writes the face contour that the wall solid is already cut to, and `attach bim wall … top to roofs above` attaches to every roof plate (`the bim roofs above wall`) covering part of the centreline above the foot. `refresh bim wall tops` lets go of a deleted plate and keeps following the rest.
+- **Status (6 November 2026):** done on `mod/elements/wall-top-two-roofs`, proven by `elements/planar/tests/wall_top_roofs`, with `ui/properties/tests/wall_top_rows` (the 12670 click cycle) and `elements/planar/tests/wall_top_constraint` (one plate, unchanged).
+  - **Model** (bim/bim_model.dl): the first plate stays at setting 2401701; further plates follow at 2401710 + n (WERKBORD). `the bim top profile of wall … under plates` gives the top's corners along the wall. It bends where the centreline crosses a plate's outline or two undersides cross, and steps where one plate's edge hands over to a higher one. A plate the centreline lies well inside (`the bim plate hold of`) comes before one whose outline only runs along the centreline at its edge, so a lean-to drawn against the gable's axis does not pull its top down. An uncovered stretch takes the lowest of all the attached planes. One plate gives the same top as before. `fit bim wall … top to plates` writes the face contour that the wall solid is already cut to; a held contour counts as unchanged while each coordinate is within the millimetre the file rounds it to, so a refresh does not rewrite a top whose corners fall between millimetres. `attach bim wall … top to roofs above` attaches to every roof plate (`the bim roofs above wall`) over part of the centreline above the foot, by the same rule. `refresh bim wall tops` lets go of a deleted plate and keeps following the rest.
   - **Properties:** the Top constraint row offers Attached to roofs above when two or more roofs stand over the wall, in the same click cycle as set_property 12670. A wall attached to several plates reads that way. IFC's `OBS_WallTopConstraint` names all the plates in its TopTarget, comma-separated.
-  - **Test:** a 10 m gable wall under two 1:2 planes, with its ridge over the middle, gets the contour (0, 3.25) to (5, 5.75) to (10, 3.25), a height of 5.75 m and a volume of 9.0 m³. A 1.0 × 1.2 m window across the ridge brings the volume to 8.76 m³. A section along the wall cuts one outline with five turning corners (45 m²) and the window's hole. Raising one plane steps the top at the ridge. Deleting a plane leaves the wall on the other. Undo, `.bim` (same text again) and IfcX keep both plates, and a single attachment works as before (`wall_top_constraint` unchanged).
+  - **Schedule** (views/schedules/bim_schedule.dl): a contoured wall's face area is its contour's area, not its length times its highest point.
+  - **Test** (`wall_top_roofs`): a 10 m gable wall under two 1:2 planes, with its ridge over the middle, gets the contour (0, 3.25) to (5, 5.75) to (10, 3.25), a height of 5.75 m and a volume of 9.0 m³. A 1.0 × 1.2 m window across the ridge brings the volume to 8.76 m³. A section along the wall cuts one outline with five turning corners (45 m²) and the window's hole. An elevation from the west (`the bim projected edges of`, the wall's evaluated mesh) draws 17 edges, none upright at the ridge, two meeting at its top at 5.75 m. The schedule gives 43.8 m² (the pentagon less the window). Raising one plane steps the top at the ridge. Deleting a plane leaves the wall on the other. Undo, `.bim` (same text again) and IfcX keep both plates. A lean-to whose outline edge lies on the wall's axis is not among the roofs above and, attached as a third plate, leaves the pentagon unchanged. Roofs and a wall placed half a millimetre off the grid give a ridge corner between millimetres in both directions; two refreshes then journal nothing.
   - **Left:**
     - A roof added later is not picked up; choose Attached to roofs above again.
     - A curved, leaning or bowed wall stays level at its lowest point, as with one plate.
     - The roof's curved form and the holes in its outline are not followed.
-    - Elevations are not separately tested, though they project the same single solid.
+    - When the gable's own roofs are also drawn only up to the wall's axis, they and a lean-to there all run along it at their edge, and the lowest wins; drawing the roofs over the wall (an overhang) avoids it.
+    - The elevation is tested on the projection of the wall alone, not on a sheet's elevation viewport with the roofs in front.
     - The FZK-Haus example (automation/examples/fzk-haus) still splits its gables into two walls.
 
 ## Deferred
 
-These findings are verified but ranked below the 15 above:
+These findings are verified but ranked below the items above:
 - NEN 2580 GO ignoring free height under 1.5 m, voids and shafts (architectural/spaces/bim_spaces.dl:141-266), effort L
 - Stair break line and walking-line start mark (bim_plan_panel.dl:2127-2177), effort M
 - Legend showing a generic hatch instead of the materials on the sheet, and the elevation-mark sample leaving its row (bim_sheet.dl:104-206), effort M
 - Elevation level text in the 3D view ignoring the drawing standard (ui/panels/bim_view_panel.dl:1842-1898), effort M
-- Roof and gable-wall schedule areas based on plan geometry (bim_schedule.dl:150-196), effort S
+- Roof schedule areas based on plan geometry (bim_schedule.dl:150-196), effort S. A contoured wall (a gable under its roofs) now takes its contour's area (item 16).
 - IfcStairFlight with riser and tread data, and component instances and systems in IFC STEP, effort M
 - IFC import of roof slabs and IfcSpace, effort M
 - Elongated paper formats, effort S
