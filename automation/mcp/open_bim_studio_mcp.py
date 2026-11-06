@@ -640,7 +640,8 @@ def fit_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("fit"))
 
 
-@tool("open_view", "Open the plan or section view named `name`, or the sheet so numbered or named, as its tab "
+@tool("open_view", "Open the plan, section or elevation view named `name` (an elevation turns the 3D tab level "
+      "toward its side), or the sheet so numbered or named, as its tab "
       "(as a click in the project browser), on the window's next frame.",
       {"name": {"type": "string"}}, ["name"])
 def open_view_tool(arguments: dict) -> dict:
