@@ -1809,25 +1809,208 @@ function the bim room label lines of {bim space object record:spaceValue} under 
         append (the bim room area text of areaValue under standardCode) to labelLines
         return labelLines
 
-# Records `labelLines` as a room label for the room around `ring`, its
-# lettering anchored at the room's inside point. A room wide enough on
-# screen (7 text heights across its square root of area) gets the lines
-# centred on that point; a smaller room keeps its label beside it, to the
-# right of the room, with a thin leader from the inside point.
-function record bim room label {a pointer to a list:labelLines} for outline {a pointer to a list:ring} of area {a 64 bit floating-point number:areaValue} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
+# What room labels keep clear of on the active storey, in the pixels of
+# `transform`: the plan symbols of its openings (frames, leaves, sills,
+# thresholds, glass and swings) and the outlines of its walls as stroke
+# pairs into `pairs`, and the box each door's swings sweep (the box around
+# its arcs, which holds its leaves standing open) into `swept`.
+function append bim room label obstacles of {bim editor record:editor} through {bim drawing transform record:transform} into {a pointer to a list:pairs} and {a pointer to a list:swept}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set cutHeight to the bim plan cut height of editor
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            set hostFound to the bim wall index of openingValue's hostId in modelValue
+            if hostFound's valid:
+                if (the item at hostFound's position in (modelValue's walls's values))'s levelId = editor's levelId:
+                    set drawnSymbol to the bim plan symbol of opening openingValue in modelValue cut at cutHeight framed true
+                    append bim plan pixels of (drawnSymbol's lines's values) through transform into pairs
+                    append bim plan pixels of (drawnSymbol's glazing's values) through transform into pairs
+                    append bim plan pixels of (drawnSymbol's swings's values) through transform into pairs
+                    set swingCount to the length of (drawnSymbol's swings's values)
+                    if swingCount > 0:
+                        set swingLow to the bim pixel of (the item at 0 in (drawnSymbol's swings's values)) through transform
+                        set swingHigh to swingLow
+                        loop swingCursor from 1 to swingCount:
+                            set swingPixel to the bim pixel of (the item at swingCursor in (drawnSymbol's swings's values)) through transform
+                            set swingLow to a cad vector2 with x (the minimum of swingLow's x and swingPixel's x) and y (the minimum of swingLow's y and swingPixel's y)
+                            set swingHigh to a cad vector2 with x (the maximum of swingHigh's x and swingPixel's x) and y (the maximum of swingHigh's y and swingPixel's y)
+                        append (a bim lettering box around (a cad vector2 with x ((swingLow's x + swingHigh's x) * 0.5) and y ((swingLow's y + swingHigh's y) * 0.5)) turned 0.0 reaching ((swingHigh's x - swingLow's x) * 0.5) by ((swingHigh's y - swingLow's y) * 0.5)) to swept
+        set wallIndex to the bim join index of modelValue
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if wallValue's levelId = editor's levelId:
+                set footprint to the bim footprint of wallValue in modelValue using wallIndex
+                if footprint's valid:
+                    set wallRing to the bim outline of wallValue with footprint wide (the bim wall thickness of wallValue in modelValue)
+                    set sides to the length of wallRing
+                    loop wallSide from 0 to sides:
+                        append (the bim pixel of (the item at wallSide in wallRing) through transform) to pairs
+                        append (the bim pixel of (the item at (the remainder of (wallSide + 1) divided by sides) in wallRing) through transform) to pairs
+                    free wallRing
+
+# Whether a room is wide enough on the canvas for its label inside it: 7
+# text heights across the square root of its area.
+function bim room of area {a 64 bit floating-point number:areaValue} holds its label through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight}:
     execute:
         set pixelsPerMetre to the cad distance from (the bim pixel of (a cad vector2 with x 0.0 and y 0.0) through transform) to (the bim pixel of (a cad vector2 with x 1.0 and y 0.0) through transform)
+        return ((the square root of areaValue) * pixelsPerMetre) >= (7.0 * textHeight)
+
+# How far below the middle of a room label's block of `lineCount` lines the
+# level mark under it stands (its line, `textHeight` the lettering's
+# height): 1.6 text heights under the last baseline, the lines' baselines
+# 1.3 text heights apart and the block centred on its middle.
+function the bim room label mark drop of {integer:lineCount} lettered at {a 64 bit floating-point number:textHeight}:
+    execute:
+        return ((0.4 * textHeight) + ((((lineCount - 1) as a 64 bit floating-point number) * (1.3 * textHeight)) * 0.5)) + (1.6 * textHeight)
+
+# How wide a level mark lettered `markText` stands, in canvas units: the
+# mark, its text and its line (15 symbol units and the text's reach).
+function the bim room label mark width of {a string:markText} lettered at {a 64 bit floating-point number:textHeight} on {bim canvas record:canvas}:
+    execute:
+        return (15.0 * (the bim symbol scale of canvas)) + (((the length of markText) as a 64 bit floating-point number) * (0.56 * textHeight))
+
+# Whether the box `block` stands inside `ringPixels` and clear of the stroke
+# pairs `pairs` and the boxes `swept`.
+local function bim room label block {bim lettering box record:block} stands clear inside {a pointer to a list:ringPixels} of {a pointer to a list:pairs} and {a pointer to a list:swept}:
+    execute:
+        set alongX to the cosine of block's angle
+        set alongY to the sine of block's angle
+        set blockClear to true
+        loop cornerCursor from 0 to 4:
+            set alongSign to 1.0
+            if cornerCursor >= 2:
+                set alongSign to -1.0
+            set acrossSign to 1.0
+            if (the remainder of cornerCursor divided by 2) = 1:
+                set acrossSign to -1.0
+            set blockCorner to a cad vector2 with x ((block's centre's x + ((alongSign * block's halfAlong) * alongX)) - ((acrossSign * block's halfAcross) * alongY)) and y ((block's centre's y + ((alongSign * block's halfAlong) * alongY)) + ((acrossSign * block's halfAcross) * alongX))
+            if (bim ring ringPixels encloses blockCorner) = false:
+                set blockClear to false
+        set ringCount to the length of ringPixels
+        loop ringCursor from 0 to ringCount:
+            if blockClear:
+                if bim lettering box block meets the segment from (the item at ringCursor in ringPixels) to (the item at (the remainder of (ringCursor + 1) divided by ringCount) in ringPixels):
+                    set blockClear to false
+        set pairCount to (the length of pairs) / 2
+        loop pairCursor from 0 to pairCount:
+            if blockClear:
+                if bim lettering box block meets the segment from (the item at (pairCursor * 2) in pairs) to (the item at ((pairCursor * 2) + 1) in pairs):
+                    set blockClear to false
+        loop sweptCursor from 0 to the length of swept:
+            if blockClear:
+                if bim lettering box block overlaps (the item at sweptCursor in swept):
+                    set blockClear to false
+        return blockClear
+
+# The box a room label's block takes centred on `blockMiddle` (canvas units):
+# `labelLines` centred, baselines 1.3 text heights apart, and under them
+# the level mark lettered `markText` when that is not empty, grown by a
+# quarter text height all round.
+function the bim room label box of {a pointer to a list:labelLines} marked {a string:markText} at {cad vector2:blockMiddle} lettered at {a 64 bit floating-point number:textHeight} on {bim canvas record:canvas}:
+    execute:
+        set lineCount to the length of labelLines
+        set widestLine to 0.0
+        set deepest to 0.0
+        loop lineIndex from 0 to lineCount:
+            set lineText to the item at lineIndex in labelLines
+            set widestLine to the maximum of widestLine and ((the bim lettering width of lineText in face (bim widest lettering)) * textHeight)
+            set deepest to the maximum of deepest and ((the bim lettering depth of lineText) * textHeight)
+        set firstBaseline to (0.4 * textHeight) - ((((lineCount - 1) as a 64 bit floating-point number) * (1.3 * textHeight)) * 0.5)
+        set lastBaseline to firstBaseline + (((lineCount - 1) as a 64 bit floating-point number) * (1.3 * textHeight))
+        set blockTop to firstBaseline - ((the bim lettering top) * textHeight)
+        set blockBottom to lastBaseline + deepest
+        if (the length of markText) > 0:
+            set widestLine to the maximum of widestLine and (the bim room label mark width of markText lettered at textHeight on canvas)
+            set blockBottom to (the bim room label mark drop of lineCount lettered at textHeight) + (6.0 * (the bim symbol scale of canvas))
+        set blockMargin to 0.25 * textHeight
+        return a bim lettering box around (a cad vector2 with x blockMiddle's x and y (blockMiddle's y + ((blockTop + blockBottom) * 0.5))) turned 0.0 reaching ((widestLine * 0.5) + blockMargin) by (((blockBottom - blockTop) * 0.5) + blockMargin)
+
+# The middle of the label `labelLines` (and the level mark `markText` under
+# it, when not empty) in the room around `ring`, in canvas units: the
+# room's inside point when the block stands clear there (inside the room,
+# clear of its walls, of the opening symbols `pairs` and the door swings
+# `swept`: `append bim room label obstacles of`), else the nearest point
+# of a grid around it, half a text height apart (coarser in a large room),
+# where it does; the inside point when none does.
+function the bim room label middle for outline {a pointer to a list:ring} holding {a pointer to a list:labelLines} marked {a string:markText} among {a pointer to a list:pairs} and {a pointer to a list:swept} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} on {bim canvas record:canvas}:
+    execute:
+        set insidePixel to the bim pixel of (a bim point inside ring) through transform
+        set ringPixels to an empty list of a cad vector2
+        loop corner from 0 to the length of ring:
+            append (the bim pixel of (the item at corner in ring) through transform) to ringPixels
+        set roomLow to insidePixel
+        set roomHigh to insidePixel
+        loop corner from 0 to the length of ringPixels:
+            set cornerPixel to the item at corner in ringPixels
+            set roomLow to a cad vector2 with x (the minimum of roomLow's x and cornerPixel's x) and y (the minimum of roomLow's y and cornerPixel's y)
+            set roomHigh to a cad vector2 with x (the maximum of roomHigh's x and cornerPixel's x) and y (the maximum of roomHigh's y and cornerPixel's y)
+        # Only the strokes and swings that reach into the room's box.
+        set nearPairs to an empty list of a cad vector2
+        loop pairCursor from 0 to ((the length of pairs) / 2):
+            set pairStart to the item at (pairCursor * 2) in pairs
+            set pairEnd to the item at ((pairCursor * 2) + 1) in pairs
+            set pastLow to ((pairStart's x < roomLow's x) and (pairEnd's x < roomLow's x)) or ((pairStart's y < roomLow's y) and (pairEnd's y < roomLow's y))
+            set pastHigh to ((pairStart's x > roomHigh's x) and (pairEnd's x > roomHigh's x)) or ((pairStart's y > roomHigh's y) and (pairEnd's y > roomHigh's y))
+            if (pastLow = false) and (pastHigh = false):
+                append pairStart to nearPairs
+                append pairEnd to nearPairs
+        set roomBox to a bim lettering box around (a cad vector2 with x ((roomLow's x + roomHigh's x) * 0.5) and y ((roomLow's y + roomHigh's y) * 0.5)) turned 0.0 reaching ((roomHigh's x - roomLow's x) * 0.5) by ((roomHigh's y - roomLow's y) * 0.5)
+        set nearSwept to an empty list of a bim lettering box record
+        loop sweptCursor from 0 to the length of swept:
+            if bim lettering box roomBox overlaps (the item at sweptCursor in swept):
+                append (the item at sweptCursor in swept) to nearSwept
+        set chosen to insidePixel
+        set blockOffset to the bim room label box of labelLines marked markText at (a cad vector2 with x 0.0 and y 0.0) lettered at textHeight on canvas
+        if (bim room label block (the bim room label box of labelLines marked markText at insidePixel lettered at textHeight on canvas) stands clear inside ringPixels of nearPairs and nearSwept) = false:
+            set roomReach to the maximum of (roomHigh's x - roomLow's x) and (roomHigh's y - roomLow's y)
+            set gridStep to the maximum of (0.5 * textHeight) and (roomReach / 40.0)
+            set ringLimit to ((the ceiling of (roomReach / gridStep)) as an integer) + 1
+            set bestDistance to -1.0
+            set ringIndex to 1
+            loop while ringIndex <= ringLimit:
+                loop acrossIndex from (0 - ringIndex) to (ringIndex + 1):
+                    loop downIndex from (0 - ringIndex) to (ringIndex + 1):
+                        if (the maximum of (the absolute value of acrossIndex) and (the absolute value of downIndex)) = ringIndex:
+                            set offsetX to (acrossIndex as a 64 bit floating-point number) * gridStep
+                            set offsetY to (downIndex as a 64 bit floating-point number) * gridStep
+                            set offsetDistance to the square root of ((offsetX * offsetX) + (offsetY * offsetY))
+                            if (bestDistance < 0.0) or (offsetDistance < bestDistance):
+                                set trialMiddle to a cad vector2 with x (insidePixel's x + offsetX) and y (insidePixel's y + offsetY)
+                                set trialBlock to a bim lettering box around (a cad vector2 with x (trialMiddle's x + blockOffset's centre's x) and y (trialMiddle's y + blockOffset's centre's y)) turned 0.0 reaching blockOffset's halfAlong by blockOffset's halfAcross
+                                if bim room label block trialBlock stands clear inside ringPixels of nearPairs and nearSwept:
+                                    set chosen to trialMiddle
+                                    set bestDistance to offsetDistance
+                # No ring further out holds a nearer point than one found.
+                if (bestDistance >= 0.0) and (((ringIndex as a 64 bit floating-point number) * gridStep) >= bestDistance):
+                    set ringIndex to ringLimit
+                set ringIndex to ringIndex + 1
+        free ringPixels
+        free nearPairs
+        free nearSwept
+        return chosen
+
+# Records `labelLines` as a room label for the room around `ring`. A room
+# wide enough on screen (`bim room of area … holds its label`) gets the
+# lines centred on the middle `the bim room label middle for outline` finds,
+# clear of its walls, opening symbols and door swings (`pairs`, `swept`),
+# with room under them for the level mark `markText` when that is not
+# empty; a smaller room keeps its label beside it, to the right of the
+# room, with a thin leader from its inside point.
+function record bim room label {a pointer to a list:labelLines} for outline {a pointer to a list:ring} of area {a 64 bit floating-point number:areaValue} marked {a string:markText} among {a pointer to a list:pairs} and {a pointer to a list:swept} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
+    execute:
         set anchorPixel to the bim pixel of (a bim point inside ring) through transform
         set lineCount to the length of labelLines
         set lineSpacing to 1.3 * textHeight
         set firstLabel to the length of (canvas's texts's values)
-        if ((the square root of areaValue) * pixelsPerMetre) >= (7.0 * textHeight):
-            # The block of lines centred on the anchor, baselines 1.3 text
+        if bim room of area areaValue holds its label through transform lettered at textHeight:
+            set labelMiddle to the bim room label middle for outline ring holding labelLines marked markText among pairs and swept through transform lettered at textHeight on (@intrinsic("dereference", canvas))
+            # The block of lines centred on its middle, baselines 1.3 text
             # heights apart.
-            set firstBaseline to (anchorPixel's y + (0.4 * textHeight)) - ((((lineCount - 1) as a 64 bit floating-point number) * lineSpacing) * 0.5)
+            set firstBaseline to (labelMiddle's y + (0.4 * textHeight)) - ((((lineCount - 1) as a 64 bit floating-point number) * lineSpacing) * 0.5)
             loop lineIndex from 0 to lineCount:
-                record bim centred text (the item at lineIndex in labelLines) at anchorPixel's x and (firstBaseline + ((lineIndex as a 64 bit floating-point number) * lineSpacing)) coloured red, green and blue on canvas
-            anchor bim canvas text since firstLabel at anchorPixel on canvas
+                record bim centred text (the item at lineIndex in labelLines) at labelMiddle's x and (firstBaseline + ((lineIndex as a 64 bit floating-point number) * lineSpacing)) coloured red, green and blue on canvas
+            anchor bim canvas text since firstLabel at labelMiddle on canvas
             return nothing
         set rightEdge to anchorPixel's x
         set topEdge to anchorPixel's y
@@ -1849,11 +2032,35 @@ function record bim room label {a pointer to a list:labelLines} for outline {a p
             record bim text (the item at lineIndex in labelLines) at (elbowPixel's x + (0.3 * textHeight)) and ((elbowPixel's y + (0.4 * textHeight)) + ((lineIndex as a 64 bit floating-point number) * lineSpacing)) coloured red, green and blue on canvas
         anchor bim canvas text since firstLabel at anchorPixel on canvas
 
+# The same with nothing to keep clear of and no level mark.
+function record bim room label {a pointer to a list:labelLines} for outline {a pointer to a list:ring} of area {a 64 bit floating-point number:areaValue} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} coloured {integer:red}, {integer:green} and {integer:blue} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set noPairs to an empty list of a cad vector2
+        set noSwept to an empty list of a bim lettering box record
+        record bim room label labelLines for outline ring of area areaValue marked (the string form of "") among noPairs and noSwept through transform lettered at textHeight coloured red, green and blue on canvas
+        free noPairs
+        free noSwept
+
+# The level mark text of the plan's storey when its drawing type applies
+# the Level marks annotation, else empty: what a room label leaves room for
+# under it.
+function the bim plan level mark text of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set typeId to the bim plan drawing type of editor
+        if typeId = the bim refused id:
+            return the string form of ""
+        if (bim annotation bim level marks annotation applies to drawing type typeId in modelValue) = false:
+            return the string form of ""
+        return the bim level text of (the bim storey elevation of editor) under (the bim drawing standard of modelValue) in modelValue
+
 # The room labels of the active storey: an explicit space's name, number and
 # area, a detected room without a space its area, each as the drawing
-# standard writes it ('12,98 m²' under NEN). Drawn unless the plan's
-# drawing type switches its 'Room labels' rule off; a plan without a drawing
-# type keeps them.
+# standard writes it ('12,98 m²' under NEN), clear of the walls, opening
+# symbols and door swings (`append bim room label obstacles of`), with room
+# under each for its level mark when the plan's drawing type applies them.
+# Drawn unless the plan's drawing type switches its 'Room labels' rule off;
+# a plan without a drawing type keeps them.
 function draw bim space labels of {bim editor record:editor} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} on {a pointer to a bim canvas record:canvas}:
     execute:
         set modelValue to editor's documentValue's current
@@ -1870,6 +2077,10 @@ function draw bim space labels of {bim editor record:editor} through {bim drawin
             set roomRed to 0
             set roomGreen to 0
             set roomBlue to 0
+        set markText to the bim plan level mark text of editor
+        set obstaclePairs to an empty list of a cad vector2
+        set sweptBoxes to an empty list of a bim lettering box record
+        append bim room label obstacles of editor through transform into obstaclePairs and sweptBoxes
         loop cursor from 0 to the length of (editor's spaces's values):
             set regionValue to the item at cursor in (editor's spaces's values)
             # Slivers under a quarter of a square metre (a cavity between
@@ -1877,15 +2088,17 @@ function draw bim space labels of {bim editor record:editor} through {bim drawin
             if ((bim region regionValue has an explicit space in modelValue) = false) and (regionValue's area >= 0.25):
                 set regionLines to an empty list of a string
                 append (the bim room area text of regionValue's area under standardCode) to regionLines
-                record bim room label regionLines for outline (regionValue's outline's values) of area regionValue's area through transform lettered at textHeight coloured roomRed, roomGreen and roomBlue on canvas
+                record bim room label regionLines for outline (regionValue's outline's values) of area regionValue's area marked markText among obstaclePairs and sweptBoxes through transform lettered at textHeight coloured roomRed, roomGreen and roomBlue on canvas
                 free regionLines
         loop cursor from 0 to the length of (modelValue's spaceObjects's values):
             set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
             if spaceValue's levelId = editor's levelId:
                 set spaceLines to the bim room label lines of spaceValue under standardCode in modelValue
                 set spaceArea to the absolute value of (the cad signed area of (spaceValue's outline's values))
-                record bim room label spaceLines for outline (spaceValue's outline's values) of area spaceArea through transform lettered at textHeight coloured roomRed, roomGreen and roomBlue on canvas
+                record bim room label spaceLines for outline (spaceValue's outline's values) of area spaceArea marked markText among obstaclePairs and sweptBoxes through transform lettered at textHeight coloured roomRed, roomGreen and roomBlue on canvas
                 free spaceLines
+        free obstaclePairs
+        free sweptBoxes
 
 # ---------------------------------------------------------------- north and levels
 
@@ -1951,30 +2164,49 @@ local function scale bim mark corners {a pointer to a list:cornerList} from {int
 
 # The storey's floor level in each room of the plan, as the project's
 # drawing standard marks and writes it ("P", "P +2,800", with the datum
-# height when the project is georeferenced), under the room's labels, when
+# height when the project is georeferenced), under the room's label, when
 # the plan's drawing type applies the Level marks annotation. `textHeight`
-# is the room labels' (`draw bim space labels`); a room too small for its
-# label gets no mark either.
+# is the room labels' (`draw bim space labels`): the mark stands with the
+# label's block, wherever that moved to keep clear of doors and walls (`the
+# bim room label middle for outline`), 1.6 text heights under its last
+# line. A detected room too small for its label gets no mark; a small space
+# keeps its mark under its inside point, its label beside the room.
 function draw bim level marks in plan of {bim editor record:editor} through {bim drawing transform record:transform} lettered at {a 64 bit floating-point number:textHeight} on {a pointer to a bim canvas record:canvas}:
     execute:
         set modelValue to editor's documentValue's current
-        set typeId to the bim plan drawing type of editor
-        if typeId = the bim refused id:
-            return nothing
-        if (bim annotation bim level marks annotation applies to drawing type typeId in modelValue) = false:
+        set levelText to the bim plan level mark text of editor
+        if (the length of levelText) = 0:
             return nothing
         set drawingStandard to the bim drawing standard of modelValue
-        set levelText to the bim level text of (the bim storey elevation of editor) under drawingStandard in modelValue
+        set onCanvas to @intrinsic("dereference", canvas)
+        set obstaclePairs to an empty list of a cad vector2
+        set sweptBoxes to an empty list of a bim lettering box record
+        append bim room label obstacles of editor through transform into obstaclePairs and sweptBoxes
+        # Each mark's spot: the middle of its room's label, moved down to
+        # the mark's line.
         set roomAnchors to an empty list of a cad vector2
-        set metre to the cad distance from (the bim pixel of (a cad vector2 with x 0.0 and y 0.0) through transform) to (the bim pixel of (a cad vector2 with x 1.0 and y 0.0) through transform)
         loop cursor from 0 to the length of (editor's spaces's values):
             set regionValue to the item at cursor in (editor's spaces's values)
-            if (((the square root of regionValue's area) * metre) >= (7.0 * textHeight)) and ((bim region regionValue has an explicit space in modelValue) = false):
-                append (the bim pixel of (a bim point inside (regionValue's outline's values)) through transform) to roomAnchors
+            if (bim room of area regionValue's area holds its label through transform lettered at textHeight) and ((bim region regionValue has an explicit space in modelValue) = false):
+                set regionLines to an empty list of a string
+                append (the bim room area text of regionValue's area under drawingStandard) to regionLines
+                set regionMiddle to the bim room label middle for outline (regionValue's outline's values) holding regionLines marked levelText among obstaclePairs and sweptBoxes through transform lettered at textHeight on onCanvas
+                append (a cad vector2 with x regionMiddle's x and y (regionMiddle's y + (the bim room label mark drop of 1 lettered at textHeight))) to roomAnchors
+                free regionLines
         loop cursor from 0 to the length of (modelValue's spaceObjects's values):
             set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
             if spaceValue's levelId = editor's levelId:
-                append (the bim pixel of (a bim point inside (spaceValue's outline's values)) through transform) to roomAnchors
+                set spaceArea to the absolute value of (the cad signed area of (spaceValue's outline's values))
+                if bim room of area spaceArea holds its label through transform lettered at textHeight:
+                    set spaceLines to the bim room label lines of spaceValue under drawingStandard in modelValue
+                    set spaceMiddle to the bim room label middle for outline (spaceValue's outline's values) holding spaceLines marked levelText among obstaclePairs and sweptBoxes through transform lettered at textHeight on onCanvas
+                    append (a cad vector2 with x spaceMiddle's x and y (spaceMiddle's y + (the bim room label mark drop of (the length of spaceLines) lettered at textHeight))) to roomAnchors
+                    free spaceLines
+                else:
+                    set insidePixel to the bim pixel of (a bim point inside (spaceValue's outline's values)) through transform
+                    append (a cad vector2 with x insidePixel's x and y (insidePixel's y + (the bim room label mark drop of 3 lettered at textHeight))) to roomAnchors
+        free obstaclePairs
+        free sweptBoxes
         set symbolScale to the bim symbol scale of (@intrinsic("dereference", canvas))
         set textReach to ((the length of levelText) as a 64 bit floating-point number) * (0.56 * textHeight)
         set markFills to an empty list of a cad vector2
@@ -1982,10 +2214,9 @@ function draw bim level marks in plan of {bim editor record:editor} through {bim
         loop anchorCursor from 0 to the length of roomAnchors:
             set roomAnchor to the item at anchorCursor in roomAnchors
             # The mark, then the text on its line, centred under the room's
-            # label of three lines (name, number, area: the last baseline
-            # 1.7 text heights below the anchor).
+            # label.
             set markLeft to roomAnchor's x - (((15.0 * symbolScale) + textReach) * 0.5)
-            set spot to a cad vector2 with x (markLeft + (6.0 * symbolScale)) and y (roomAnchor's y + (3.3 * textHeight))
+            set spot to a cad vector2 with x (markLeft + (6.0 * symbolScale)) and y roomAnchor's y
             set firstFill to the length of markFills
             set firstLine to the length of markLines
             append bim level mark at spot under drawingStandard into markFills and markLines
