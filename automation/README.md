@@ -120,6 +120,12 @@ executable. Output goes to `modeller.log` in the temporary launch folder;
 a stopped process is reported with the end of that log. `close` and stdio
 EOF terminate only processes launched by this adapter.
 
+## Example: a building rebuilt through the UI
+
+[`examples/fzk-haus/`](examples/fzk-haus/README.md) rebuilds the KIT FZK-Haus from its IFC through
+the MCP server, the way a user works (ribbon, clicks, properties), and draws it: rooms, exterior
+dimensions and two technical floor plans on A3 sheets, exported as PDF.
+
 ## Optional loopback HTTP API
 
 ```powershell
