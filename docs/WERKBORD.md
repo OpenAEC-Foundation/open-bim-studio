@@ -25,7 +25,7 @@ reserved number for another function. Record new public command codes in advance
 | **2402520–2402521** | settings on an opening | A door's hand (1 right-handed per EN 12519; absent left) and swing (1 opens to the outdoor side; absent indoor) | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **12830–12831** | properties | A door's Hand (click) and Opens (click) rows | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **12820–12828** | properties | Project data, typed (12820 project name, 12821 number, 12822 client, 12823 architect, 12824 phase) and a sheet's title block, typed (12825 date, 12826 drawn by, 12827 checked by, 12828 add revision) | Computer 1, `mod/views/title-block` (6 November 2026) |
-| **2461** | command | Exterior dimensions: three chains along the storey's outer walls (View > Annotate) | Computer 1, drawing quality (5 November 2026) |
+| **2461** | command | Exterior dimensions: three chains along each facade of the storey's outer walls, walls in line grouped corner to corner, 8/14/20 mm off on paper (View > Annotate) | Computer 1, drawing quality (5 November 2026; per facade `mod/views/facade-chains`, 6 November 2026) |
 | **2460** | command | Room separator: draws room separation lines (Home > Plane > Spaces) | Computer 1, room separation (5 November 2026) |
 | **91** | tool id | Room separator | Computer 1, room separation (5 November 2026) |
 | **2402300** | setting on a line sketch | 1: the line bounds rooms as a wall does (room separation line) | Computer 1, room separation (5 November 2026) |
@@ -75,6 +75,12 @@ Identifiers with a fixed meaning that must stay compatible:
   revisions in the set `Revisions` (`1.Revision`, `1.Date`, `1.Description`, `1.DrawnBy`,
   `1.CheckedBy`, numbered from 1 without a gap). IFC GlobalId kinds 17 and 18 are the
   project's actors and their assignments (`mod/views/title-block`, 6 November 2026).
+- A dimension kept a paper distance off its base (exterior chains) is written in `.bim` as
+  `dimension id e1 f1 e2 f2 x y paperOffset outwardX outwardY` (11 fields; `x y` the base on
+  the measured face, `paperOffset` in millimetres on paper) and in IfcX as the
+  `openbim::dimension` fields `paperOffset` and `outward` beside `place`; 6- and 8-field
+  lines and records without them keep their meaning (`mod/views/facade-chains`, 6 November
+  2026). No new command, property or setting codes.
 - Window recipes are appended after the existing 21 entries so stored indices remain stable;
   timber and Reynaers window recipes use append-only recipe indices 33–42.
 
