@@ -4,6 +4,7 @@
 # scale: one model metre is 1000 / scale millimetres on the sheet.
 import bim/bim_model.dl
 import views/sheets/bim_sheetview.dl
+import localisation/bim_catalogue.dl
 
 class:
     patterns:
@@ -34,13 +35,172 @@ function the bim size of sheet {bim sheet record:sheetValue}:
             return landscapeSize
         return a cad vector2 with x landscapeSize's y and y landscapeSize's x
 
-# The title block: 180 mm wide and 40 mm high in the lower right corner,
-# inside a 10 mm margin (as narrow sheets allow).
+# The drawing frame of NEN-EN-ISO 5457: 20 mm from the left edge (the
+# filing margin), 10 mm from the others, on every paper size.
+function the bim sheet filing margin:
+    replacement:
+        20.0
+function the bim sheet margin:
+    replacement:
+        10.0
+
+# The drawing frame of sheet `sheetValue`, in millimetres.
+function the bim drawing frame of sheet {bim sheet record:sheetValue}:
+    execute:
+        set sheetSize to the bim size of sheet sheetValue
+        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x (the bim sheet filing margin) and y (the bim sheet margin), a cad vector2 with x (sheetSize's x - (the bim sheet margin)) and y (sheetSize's y - (the bim sheet margin)))
+
+# The title block's stamp (NEN-EN-ISO 7200): 180 mm wide in the lower right
+# corner of the drawing frame, as narrow sheets allow; five rows, 48 mm
+# high (`record bim title block`).
+function the bim stamp height:
+    replacement:
+        48.0
+# Each row of the revision table above the stamp, its heading's too.
+function the bim revision row height:
+    replacement:
+        5.0
+# The most revisions the table lists: the latest ones.
+function the bim revision rows shown:
+    replacement:
+        8
+
 function the bim title block of sheet {bim sheet record:sheetValue}:
     execute:
         set sheetSize to the bim size of sheet sheetValue
-        set blockWidth to the minimum of 180.0 and (sheetSize's x - 20.0)
-        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x ((sheetSize's x - 10.0) - blockWidth) and y 10.0, a cad vector2 with x (sheetSize's x - 10.0) and y 50.0)
+        set rightEdge to sheetSize's x - (the bim sheet margin)
+        set blockWidth to the minimum of 180.0 and (rightEdge - (the bim sheet filing margin))
+        set lowEdge to the bim sheet margin
+        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x (rightEdge - blockWidth) and y lowEdge, a cad vector2 with x rightEdge and y (lowEdge + (the bim stamp height)))
+
+# The whole title block of sheet `sheetValue`: the stamp and the revision
+# table over it, a heading and a row per revision listed.
+function the bim title block of sheet {bim sheet record:sheetValue} in {bim model record:modelValue}:
+    execute:
+        set stamp to the bim title block of sheet sheetValue
+        set listed to the minimum of (the bim revision count of sheet sheetValue's id in modelValue) and (the bim revision rows shown)
+        set tableHeight to ((listed + 1) as a 64 bit floating-point number) * (the bim revision row height)
+        return @intrinsic("construct", a bim sheet frame record, true, stamp's low, a cad vector2 with x stamp's high's x and y (stamp's high's y + tableHeight))
+
+# ---------------------------------------------------------------- title block data
+
+# What a sheet's title block states besides its number, name and scale:
+# its date and who drew and checked it, and its revisions. They are text,
+# kept as properties of the sheet (the set "Title block" and the set
+# "Revisions"), so that the native file and IfcX keep them and the sheet's
+# properties show them.
+function the bim title block set:
+    execute:
+        return the string form of "Title block"
+function the bim revisions set:
+    execute:
+        return the string form of "Revisions"
+
+function the bim sheet date field:
+    execute:
+        return the string form of "Date"
+function the bim sheet drawn field:
+    execute:
+        return the string form of "DrawnBy"
+function the bim sheet checked field:
+    execute:
+        return the string form of "CheckedBy"
+
+# Title block field `fieldName` of sheet `sheetId`, "" when it has none.
+function the bim sheet field {a string:fieldName} of sheet {a 64 bit integer:sheetId} in {bim model record:modelValue}:
+    execute:
+        return the bim property value fieldName of set (the bim title block set) of sheetId in modelValue
+
+# Title block field `fieldName` of sheet `sheetId` set to `fieldValue`, or
+# removed when that is empty.
+function set bim sheet field {a string:fieldName} of sheet {a 64 bit integer:sheetId} to {a string:fieldValue} in {a pointer to a bim model record:target}:
+    execute:
+        set wantedSet to the bim title block set
+        if (the length of fieldValue) > 0:
+            set bim property fieldName of set wantedSet of sheetId to fieldValue typed (the string form of "IFCLABEL") in target
+            return nothing
+        set cursor to (the length of (target's properties's values)) - 1
+        loop while cursor >= 0:
+            set entry to the item at cursor in (target's properties's values)
+            if ((entry's elementId = sheetId) and (entry's setName = wantedSet)) and (entry's name = fieldName):
+                remove item cursor from (target's properties's values)
+            set cursor to cursor - 1
+        note bim change of sheetId in target
+
+# The property of revision `ordinal` (1 for the first) that holds
+# `partName` (Revision, Date, Description, DrawnBy, CheckedBy): "1.Revision".
+function the bim revision property {integer:ordinal} part {a string:partName}:
+    execute:
+        return ((the string form of ordinal) + (the string form of ".")) + partName
+
+# How many revisions sheet `sheetId` has: they are numbered from 1 without
+# a gap.
+function the bim revision count of sheet {a 64 bit integer:sheetId} in {bim model record:modelValue}:
+    execute:
+        set counted to 0
+        set reading to true
+        loop while reading:
+            set codeText to the bim property value (the bim revision property (counted + 1) part (the string form of "Revision")) of set (the bim revisions set) of sheetId in modelValue
+            if (the length of codeText) = 0:
+                set reading to false
+            else:
+                set counted to counted + 1
+        return counted
+
+# The revisions of sheet `sheetId`, the first first.
+function the bim revisions of sheet {a 64 bit integer:sheetId} in {bim model record:modelValue}:
+    execute:
+        set revisionList to an empty list of a bim sheet revision record
+        set wantedSet to the bim revisions set
+        loop ordinal from 1 to ((the bim revision count of sheet sheetId in modelValue) + 1):
+            set codeText to the bim property value (the bim revision property ordinal part (the string form of "Revision")) of set wantedSet of sheetId in modelValue
+            set dateText to the bim property value (the bim revision property ordinal part (the string form of "Date")) of set wantedSet of sheetId in modelValue
+            set aboutText to the bim property value (the bim revision property ordinal part (the string form of "Description")) of set wantedSet of sheetId in modelValue
+            set drawnText to the bim property value (the bim revision property ordinal part (the string form of "DrawnBy")) of set wantedSet of sheetId in modelValue
+            set checkedText to the bim property value (the bim revision property ordinal part (the string form of "CheckedBy")) of set wantedSet of sheetId in modelValue
+            append (@intrinsic("construct", a bim sheet revision record, codeText, dateText, aboutText, drawnText, checkedText)) to revisionList
+        return revisionList
+
+# The code the next revision of sheet `sheetId` takes: A for the first,
+# then B and on to Z, then R27 and on.
+function the bim next revision code of sheet {a 64 bit integer:sheetId} in {bim model record:modelValue}:
+    execute:
+        set counted to the bim revision count of sheet sheetId in modelValue
+        if counted >= 26:
+            return (the string form of "R") + (the string form of (counted + 1))
+        set letter to a new string buffer containing 1 bytes
+        store ((65 + counted) as a byte) into the data of letter at 0
+        return letter
+
+# The current revision of sheet `sheetId`: its last revision's code, "" when
+# it has none.
+function the bim current revision of sheet {a 64 bit integer:sheetId} in {bim model record:modelValue}:
+    execute:
+        set counted to the bim revision count of sheet sheetId in modelValue
+        if counted = 0:
+            return the string form of ""
+        return the bim property value (the bim revision property counted part (the string form of "Revision")) of set (the bim revisions set) of sheetId in modelValue
+
+# A revision added to sheet `sheetId` after its others: code
+# `revisionCode` (the next one when empty), dated `revisionDate`, saying
+# what changed, drawn and checked by whom. The revision's code; "" and
+# nothing changed for no such sheet.
+function add bim revision {a string:revisionCode} dated {a string:revisionDate} saying {a string:about} drawn by {a string:drawer} checked by {a string:checker} to sheet {a 64 bit integer:sheetId} in {a pointer to a bim model record:target}:
+    execute:
+        if (the bim sheet index of sheetId in (@intrinsic("dereference", target)))'s valid = false:
+            return the string form of ""
+        set chosenCode to revisionCode
+        if (the length of chosenCode) = 0:
+            set chosenCode to the bim next revision code of sheet sheetId in (@intrinsic("dereference", target))
+        set ordinal to (the bim revision count of sheet sheetId in (@intrinsic("dereference", target))) + 1
+        set wantedSet to the bim revisions set
+        set labelType to the string form of "IFCLABEL"
+        set bim property (the bim revision property ordinal part (the string form of "Revision")) of set wantedSet of sheetId to chosenCode typed labelType in target
+        set bim property (the bim revision property ordinal part (the string form of "Date")) of set wantedSet of sheetId to revisionDate typed labelType in target
+        set bim property (the bim revision property ordinal part (the string form of "Description")) of set wantedSet of sheetId to about typed labelType in target
+        set bim property (the bim revision property ordinal part (the string form of "DrawnBy")) of set wantedSet of sheetId to drawer typed labelType in target
+        set bim property (the bim revision property ordinal part (the string form of "CheckedBy")) of set wantedSet of sheetId to checker typed labelType in target
+        return chosenCode
 
 # The scale of view `viewId` (100 for 1:100), or 100 when it is gone.
 function the bim scale of view {a 64 bit integer:viewId} in {bim model record:modelValue}:
@@ -197,6 +357,28 @@ function the bim legend name of entry {integer:entryCode}:
             return the string form of "Dimension in millimetres"
         return the string form of "Tags: type / rebar mark, count, diameter, pitch; representative bars"
 
+# The catalogue key of legend entry `entryCode`.
+function the bim legend key of entry {integer:entryCode}:
+    execute:
+        if entryCode = bim cut legend entry:
+            return the string form of "legend.cut"
+        if entryCode = bim grid legend entry:
+            return the string form of "legend.grid"
+        if entryCode = bim level legend entry:
+            return the string form of "legend.level"
+        if entryCode = bim section legend entry:
+            return the string form of "legend.section"
+        if entryCode = bim elevation legend entry:
+            return the string form of "legend.elevation"
+        if entryCode = bim dimension legend entry:
+            return the string form of "legend.dimension"
+        return the string form of "legend.tags"
+
+# The name of legend entry `entryCode` in the language of `catalogue`.
+function the bim legend name of entry {integer:entryCode} in {bim message catalogue record:catalogue}:
+    execute:
+        return the bim message (the bim legend key of entry entryCode) defaulting to (the bim legend name of entry entryCode) in catalogue
+
 # Whether sheet `sheetValue` shows a view of `viewKind`.
 function bim view kind {integer:viewKind} is placed on {bim sheet record:sheetValue} in {bim model record:modelValue}:
     execute:
@@ -254,7 +436,7 @@ function the bim legend block of sheet {bim sheet record:sheetValue} in {bim mod
         set legendList to the bim legend entries of sheet sheetValue in modelValue
         set rowCount to the length of legendList
         free legendList
-        set titleBlock to the bim title block of sheet sheetValue
+        set titleBlock to the bim title block of sheet sheetValue in modelValue
         set bottom to titleBlock's high's y + 4.0
         set top to bottom + ((the bim legend heading height) + ((rowCount as a 64 bit floating-point number) * (the bim legend row height)))
         return @intrinsic("construct", a bim sheet frame record, (rowCount > 0), a cad vector2 with x titleBlock's low's x and y bottom, a cad vector2 with x titleBlock's high's x and y top)
@@ -292,8 +474,13 @@ function set bim sheet {a 64 bit integer:sheetId} number {a string:sheetNumber} 
 # differ, and empty when it has none.
 function the bim scale text of sheet {bim sheet record:sheetValue} in {bim model record:modelValue}:
     execute:
+        return the bim scale text of sheet sheetValue in modelValue saying (the string form of "As indicated") when mixed
+
+# The same, saying `mixedText` when the scales differ.
+function the bim scale text of sheet {bim sheet record:sheetValue} in {bim model record:modelValue} saying {a string:mixedText} when mixed:
+    execute:
         set sharedScale to 0
-        set mixed to false
+        set differing to false
         loop cursor from 0 to the length of (sheetValue's viewports's values):
             set found to the bim view index of (the item at cursor in (sheetValue's viewports's values))'s viewId in modelValue
             if found's valid:
@@ -303,9 +490,9 @@ function the bim scale text of sheet {bim sheet record:sheetValue} in {bim model
                     if sharedScale = 0:
                         set sharedScale to viewScale
                     else if sharedScale != viewScale:
-                        set mixed to true
-        if mixed:
-            return the string form of "As indicated"
+                        set differing to true
+        if differing:
+            return mixedText
         if sharedScale = 0:
             return the string form of ""
         return (the string form of "1:") + (the string form of sharedScale)
@@ -319,13 +506,14 @@ function bim frame {bim sheet frame record:first} overlaps frame {bim sheet fram
         return acrossOverlap and upOverlap
 
 # What is wrong with how views are placed on sheet `sheetValue`: a viewport
-# of a missing view or one without an extent, a view outside the 10 mm
-# border, over the title block or the legend, or over another view. Empty
+# of a missing view or one without an extent, a view outside the drawing
+# frame, over the title block (its revision table too) or the legend, or
+# over another view. Empty
 # when the placement is sound.
 function the bim placement fault of sheet {bim sheet record:sheetValue} in {bim model record:modelValue}:
     execute:
-        set sheetSize to the bim size of sheet sheetValue
-        set titleBlock to the bim title block of sheet sheetValue
+        set drawingFrame to the bim drawing frame of sheet sheetValue
+        set titleBlock to the bim title block of sheet sheetValue in modelValue
         set legendBlock to the bim legend block of sheet sheetValue in modelValue
         set placedList to sheetValue's viewports's values
         loop cursor from 0 to the length of placedList:
@@ -336,8 +524,8 @@ function the bim placement fault of sheet {bim sheet record:sheetValue} in {bim 
             set placedFrame to the bim frame of viewport placedViewport in modelValue
             if placedFrame's valid = false:
                 return label + (the string form of " has nothing to show")
-            set insideAcross to (placedFrame's low's x >= 10.0) and (placedFrame's high's x <= (sheetSize's x - 10.0))
-            set insideUp to (placedFrame's low's y >= 10.0) and (placedFrame's high's y <= (sheetSize's y - 10.0))
+            set insideAcross to (placedFrame's low's x >= drawingFrame's low's x) and (placedFrame's high's x <= drawingFrame's high's x)
+            set insideUp to (placedFrame's low's y >= drawingFrame's low's y) and (placedFrame's high's y <= drawingFrame's high's y)
             if (insideAcross and insideUp) = false:
                 return label + (the string form of " runs past the border")
             if bim frame placedFrame overlaps frame titleBlock:
