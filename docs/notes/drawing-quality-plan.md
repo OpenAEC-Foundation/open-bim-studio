@@ -210,6 +210,11 @@ Items are ordered by impact first, then by effort (S, then M, then L). Duplicate
   - Clip the section to its crop on the sheet.
   - **Elevations:** add a branch to `record bim sheet viewport` for elevation views (detail 1-4) that uses this projection. Also handle elevations in the viewport title (bim_app_parts.dl:1546), the extent (bim_sheet.dl:77-86) and the scale text (247), and draw a ground line and level marks.
 - **Effort:** L
+- **Status (6 November 2026), sections and elevations:** first step done on `mod/views/section-projection` (design: docs/notes/section-projection.md), proven by `ui/shell/tests/section_projection`.
+  - **Projection:** `the bim projected edges of … on … from … to … within … behind …` (views/drawings/bim_projection.dl) projects triangle meshes square onto a view plane. It draws folds, outlines and open borders, and removes hidden lines exactly per triangle (a grid over the occluders) and behind the cut polygons. The meshes are the evaluated walls and plates, the scene's meshes (stairs, railings, building systems, linear members, components, free meshes, opening details) and a frame and glass or leaf per door and window (`the bim opening view of`, architectural/openings/bim_opening_view.dl), under the view's category, phase and HH rules.
+  - **Sections:** on a sheet and in the live panel (cached until the model, evaluation, view or line change), sections draw the visible edges beyond the cut, within the line's run and the view record's new `depth`. `depth` is kept in .bim (`viewdepth`) and IfcX (`depth`) and typed as property 12840; 0 means no limit.
+  - **Elevations (detail 1-4):** drawn on sheets along `the bim elevation line of` (a metre outside the plan extent), with their own extent, title and share in the scale text. They have a ground line in the cut pen at peil and level marks right of the building. Section and elevation extents now reach a pitched plate's top.
+  - **Left:** plans (below the cut thin, above it dashed); hidden edges dashed; the crop clip on sheets; a flip field; per-category projection pens; sills and leaf details; a maaiveld height (the ground line stands at peil); elements the evaluation does not hold stay open where a section cuts them; the live section recomputes every frame of a drag; not measured on a large model.
 
 ## Deferred
 

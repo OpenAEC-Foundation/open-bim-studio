@@ -229,15 +229,11 @@ function the bim section extent headroom:
     replacement:
         1.0
 
-# The extent of section `viewValue` in section coordinates (metres along its
-# line, height): along the line from its start to its end, in height from
-# the lowest level or wall foot to the highest level or wall top, with room
-# around; not valid for a line of no length.
-local function the bim extent of section {bim view definition record:viewValue} in {bim model record:modelValue}:
+# The heights a section or an elevation spans: from the lowest level or
+# wall foot to the highest level, wall top or plate top (a pitched roof's
+# highest corner), as x and y; both 0 when the model has none.
+local function the bim drawn heights of {bim model record:modelValue}:
     execute:
-        set run to the cad distance from viewValue's lineStart to viewValue's lineFinish
-        if run <= 1e-9:
-            return @intrinsic("construct", a bim sheet frame record, false, a cad vector2 with x 0.0 and y 0.0, a cad vector2 with x 0.0 and y 0.0)
         set bottomHeight to 1e300
         set topHeight to -1e300
         loop cursor from 0 to the length of (modelValue's levels's values):
@@ -251,15 +247,60 @@ local function the bim extent of section {bim view definition record:viewValue} 
                 set footHeight to ((the item at levelFound's position in (modelValue's levels's values))'s elevation) + wallValue's baseOffset
                 set bottomHeight to the minimum of bottomHeight and footHeight
                 set topHeight to the maximum of topHeight and (footHeight + wallValue's height)
+        # A plate's top is `top` above its storey at its first corner, rising
+        # at its pitch toward its heading; a plate without a type is its
+        # thickness above the storey.
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set plateValue to the item at cursor in (modelValue's slabs's values)
+            set levelFound to the bim level index of plateValue's levelId in modelValue
+            set plateCorners to plateValue's outline's values
+            if levelFound's valid and ((the length of plateCorners) > 0):
+                set storeyHeight to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+                if (the bim type index of plate plateValue in modelValue)'s valid:
+                    set firstCorner to the item at 0 in plateCorners
+                    set slope to (the sine of plateValue's pitch) / (the cosine of plateValue's pitch)
+                    loop cornerCursor from 0 to the length of plateCorners:
+                        set cornerPoint to the item at cornerCursor in plateCorners
+                        set rising to (((cornerPoint's x - firstCorner's x) * (the cosine of plateValue's heading)) + ((cornerPoint's y - firstCorner's y) * (the sine of plateValue's heading))) * slope
+                        set topHeight to the maximum of topHeight and ((storeyHeight + plateValue's top) + rising)
+                else:
+                    set topHeight to the maximum of topHeight and (storeyHeight + plateValue's thickness)
         if topHeight < bottomHeight:
             set bottomHeight to 0.0
             set topHeight to 0.0
+        return a cad vector2 with x bottomHeight and y topHeight
+
+# The extent of section `viewValue` in section coordinates (metres along its
+# line, height): along the line from its start to its end, in height
+# `the bim drawn heights of` the model, with room around; not valid for a
+# line of no length.
+local function the bim extent of section {bim view definition record:viewValue} in {bim model record:modelValue}:
+    execute:
+        set run to the cad distance from viewValue's lineStart to viewValue's lineFinish
+        if run <= 1e-9:
+            return @intrinsic("construct", a bim sheet frame record, false, a cad vector2 with x 0.0 and y 0.0, a cad vector2 with x 0.0 and y 0.0)
+        set heights to the bim drawn heights of modelValue
         set beyondEnds to the bim section extent overrun
         set aroundHeights to the bim section extent headroom
-        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x (0.0 - beyondEnds) and y (bottomHeight - aroundHeights), a cad vector2 with x (run + beyondEnds) and y (topHeight + aroundHeights))
+        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x (0.0 - beyondEnds) and y (heights's x - aroundHeights), a cad vector2 with x (run + beyondEnds) and y (heights's y + aroundHeights))
+
+# The extent of elevation `viewValue` in its drawing coordinates: along its
+# whole line (`the bim elevation line of`, views/common/bim_view.dl, which
+# runs the elevation line margin past the model either side), in height as
+# a section; not valid when the model has nothing in plan.
+local function the bim extent of elevation {bim view definition record:viewValue} in {bim model record:modelValue}:
+    execute:
+        set elevationLine to the bim elevation line of (viewValue's detail as an integer) in modelValue
+        set run to the cad distance from elevationLine's lineStart to elevationLine's lineFinish
+        if (elevationLine's valid = false) or (run <= 1e-9):
+            return @intrinsic("construct", a bim sheet frame record, false, a cad vector2 with x 0.0 and y 0.0, a cad vector2 with x 0.0 and y 0.0)
+        set heights to the bim drawn heights of modelValue
+        set aroundHeights to the bim section extent headroom
+        return @intrinsic("construct", a bim sheet frame record, true, a cad vector2 with x 0.0 and y (heights's x - aroundHeights), a cad vector2 with x run and y (heights's y + aroundHeights))
 
 # The model extent a view shows: its crop; else for a section its line and
-# heights in section coordinates (`the bim extent of section`), and for a
+# heights in section coordinates (`the bim extent of section`), for an
+# elevation its line and those heights (`the bim extent of elevation`), and for a
 # plan the walls of its storey with a metre around them; not valid when
 # there is nothing to show.
 # Metres kept free around a plan's walls in its viewport for its annotation
@@ -279,6 +320,8 @@ function the bim model extent of view {a 64 bit integer:viewId} in {bim model re
             return @intrinsic("construct", a bim sheet frame record, true, viewValue's cropLow, viewValue's cropHigh)
         if viewValue's kind = bim section view:
             return the bim extent of section viewValue in modelValue
+        if bim view viewValue is an elevation:
+            return the bim extent of elevation viewValue in modelValue
         set lowX to 1e300
         set lowY to 1e300
         set highX to -1e300
@@ -485,7 +528,7 @@ function the bim scale text of sheet {bim sheet record:sheetValue} in {bim model
             set found to the bim view index of (the item at cursor in (sheetValue's viewports's values))'s viewId in modelValue
             if found's valid:
                 set viewValue to the item at found's position in (modelValue's views's values)
-                if (viewValue's kind = bim plan view) or (viewValue's kind = bim section view):
+                if ((viewValue's kind = bim plan view) or (viewValue's kind = bim section view)) or (bim view viewValue is an elevation):
                     set viewScale to (the bim scale of view viewValue's id in modelValue) as an integer
                     if sharedScale = 0:
                         set sharedScale to viewScale

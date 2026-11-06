@@ -1,0 +1,753 @@
+# SPDX-License-Identifier: MPL-2.0
+# The visible edges of triangle meshes seen square onto a view plane: the
+# projection a section draws beyond its cut and an elevation draws whole
+# (drawing quality plan, item 15; docs/notes/section-projection.md).
+#
+# Drawing coordinates are the view plane's: x along its x axis, y along its
+# y axis, and depth along y axis x x axis, which for a section is the side
+# its line looks to (`the bim section plane from … to …`). What lies before
+# the plane (depth below 0) is left out; so is what lies beyond the view
+# depth when the view has one.
+#
+# What it draws of a mesh: its edges where the surface folds (two faces at
+# more than a degree whose shared corners carry different normals, or at
+# more than 60 degrees whatever the normals say), its outline seen from the
+# view (one face toward the viewer, the other not) and its open borders,
+# each only when a face beside it looks toward the viewer. Coplanar
+# triangles of one face, and the facets of a smoothly shaded curve, draw no
+# line between them.
+#
+# Hidden-line removal is exact for triangles, not a painter's guess: each
+# edge is cut against every triangle in front of it that its projection
+# crosses (triangles found through a grid over the drawing), and the part
+# lying behind a triangle's plane is taken away; so are the parts behind
+# the view's cut polygons, which stand on the plane at depth 0. The meshes
+# are what the 3D view tessellates, so a curved element is as exact as its
+# facets.
+import views/drawings/bim_drawing.dl
+import bim/bim_index.dl
+
+# One mesh to project: the element it belongs to, its triangles in model
+# coordinates, and whether its edges are drawn (`outlined`) or it only hides
+# what lies behind it (a window's glass, a door's leaf).
+class:
+    patterns:
+        [a|] bim projection mesh record
+    members:
+        elementId as a 64 bit integer
+        shape as a fast mesh record
+        outlined as a boolean
+
+function a bim projection mesh of {a 64 bit integer:elementId} shaped {fast mesh record:meshShape} outlined {boolean:drawsEdges}:
+    execute:
+        return @intrinsic("construct", a bim projection mesh record, elementId, meshShape, drawsEdges)
+
+# A visible piece of an edge, in drawing coordinates, with its depth at its
+# middle.
+class:
+    patterns:
+        [a|] bim projected edge record
+    members:
+        elementId as a 64 bit integer
+        start as a cad vector2
+        finish as a cad vector2
+        depth as a 64 bit floating-point number
+
+# The triangles that hide edges, in drawing coordinates (x along, y up,
+# z depth), three corners each, turned anticlockwise in the drawing, and a
+# grid of `columns` by `rows` cells over them: cell c holds the triangles
+# `cellItems` lists from `cellStarts` c to c + 1. `seen` marks the triangles
+# an edge has met already.
+class:
+    patterns:
+        [a|] bim projection occluders record
+    members:
+        corners as the type of (a cad topology list of a cad vector3)
+        lows as the type of (a cad topology list of a cad vector2)
+        highs as the type of (a cad topology list of a cad vector2)
+        nearest as the type of (a cad topology list of a 64 bit floating-point number)
+        gridLow as a cad vector2
+        cellWidth as a 64 bit floating-point number
+        cellHeight as a 64 bit floating-point number
+        columns as an integer
+        rows as an integer
+        cellStarts as the type of (a cad topology list of an integer)
+        cellItems as the type of (a cad topology list of an integer)
+        seen as the type of (a cad topology list of a 64 bit integer)
+
+# How far behind a triangle's plane a point must lie to be hidden by it
+# (metres), and how far outside its outline a point may lie and still be
+# hidden (metres), so that the triangles of one face leave no gap.
+local function the bim projection depth tolerance:
+    replacement:
+        0.0001
+local function the bim projection edge tolerance:
+    replacement:
+        0.0000001
+
+# The shortest visible piece kept, in metres in the drawing.
+local function the bim projection shortest piece:
+    replacement:
+        0.0001
+
+# 2 to the 21st: the room a welded vertex number and a triangle number each
+# take in a sorting key.
+local function the bim projection key room:
+    replacement:
+        2097152
+
+local function the bim depth axis of {cad plane:viewPlane}:
+    execute:
+        set upAxis to viewPlane's yAxis
+        set alongAxis to viewPlane's xAxis
+        return a cad vector3 with x ((upAxis's y * alongAxis's z) - (upAxis's z * alongAxis's y)), y ((upAxis's z * alongAxis's x) - (upAxis's x * alongAxis's z)) and z ((upAxis's x * alongAxis's y) - (upAxis's y * alongAxis's x))
+
+# Model point `location` in drawing coordinates and depth.
+local function the bim view coordinates of {cad vector3:location} on {cad plane:viewPlane} deep along {cad vector3:depthAxis}:
+    execute:
+        set offset to the cad difference of location and viewPlane's origin
+        return a cad vector3 with x (the cad dot of offset and viewPlane's xAxis), y (the cad dot of offset and viewPlane's yAxis) and z (the cad dot of offset and depthAxis)
+
+# A direction `heading` in drawing coordinates and depth.
+local function the bim view direction of {cad vector3:heading} on {cad plane:viewPlane} deep along {cad vector3:depthAxis}:
+    execute:
+        return a cad vector3 with x (the cad dot of heading and viewPlane's xAxis), y (the cad dot of heading and viewPlane's yAxis) and z (the cad dot of heading and depthAxis)
+
+# The corners of polygon `polygonCorners` (drawing coordinates and depth)
+# on the side of depth `bound` that `sideSign` names (1 beyond it, -1
+# before it), the polygon cut where it crosses.
+local function append bim corners in {a pointer to a list:polygonCorners} kept {a 64 bit floating-point number:sideSign} of depth {a 64 bit floating-point number:bound} into {a pointer to a list:keptCorners}:
+    execute:
+        set cornerCount to the length of polygonCorners
+        loop cornerCursor from 0 to cornerCount:
+            set here to the item at cornerCursor in polygonCorners
+            set there to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in polygonCorners
+            set hereSide to sideSign * (here's z - bound)
+            set thereSide to sideSign * (there's z - bound)
+            if hereSide >= 0.0:
+                append here to keptCorners
+            if ((hereSide >= 0.0) and (thereSide < 0.0)) or ((hereSide < 0.0) and (thereSide >= 0.0)):
+                set fraction to hereSide / (hereSide - thereSide)
+                append (a cad vector3 with x (here's x + ((there's x - here's x) * fraction)), y (here's y + ((there's y - here's y) * fraction)) and z (here's z + ((there's z - here's z) * fraction))) to keptCorners
+
+# Triangle `firstCorner`, `secondCorner`, `thirdCorner` (drawing
+# coordinates and depth) as an occluder: turned anticlockwise, unless it
+# stands edge-on to the view.
+local function add bim occluder {cad vector3:firstCorner}, {cad vector3:secondCorner} and {cad vector3:thirdCorner} to {bim projection occluders record:occluders}:
+    execute:
+        set twiceArea to ((secondCorner's x - firstCorner's x) * (thirdCorner's y - firstCorner's y)) - ((thirdCorner's x - firstCorner's x) * (secondCorner's y - firstCorner's y))
+        if (the absolute value of twiceArea) < 0.000000000001:
+            return nothing
+        append firstCorner to (occluders's corners's values)
+        if twiceArea > 0.0:
+            append secondCorner to (occluders's corners's values)
+            append thirdCorner to (occluders's corners's values)
+        else:
+            append thirdCorner to (occluders's corners's values)
+            append secondCorner to (occluders's corners's values)
+        append (a cad vector2 with x (the minimum of firstCorner's x and (the minimum of secondCorner's x and thirdCorner's x)) and y (the minimum of firstCorner's y and (the minimum of secondCorner's y and thirdCorner's y))) to (occluders's lows's values)
+        append (a cad vector2 with x (the maximum of firstCorner's x and (the maximum of secondCorner's x and thirdCorner's x)) and y (the maximum of firstCorner's y and (the maximum of secondCorner's y and thirdCorner's y))) to (occluders's highs's values)
+        append (the minimum of firstCorner's z and (the minimum of secondCorner's z and thirdCorner's z)) to (occluders's nearest's values)
+
+# The triangles of a mesh whose corners are `viewCorners` (drawing
+# coordinates and depth) as occluders, each cut to the depths from 0 to
+# `farDepth`, those wholly outside the drawing's width from `lowAlong` to
+# `highAlong` left out.
+local function add bim occluders of {fast mesh record:meshShape} at {a pointer to a list:viewCorners} offset {integer:cornerOffset} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} until {a 64 bit floating-point number:farDepth} into {bim projection occluders record:occluderSet}:
+    execute:
+        set indices to meshShape's triangles's values
+        set triangleCount to (the length of indices) / 3
+        loop triangleCursor from 0 to triangleCount:
+            set firstCorner to the item at (cornerOffset + (the item at (triangleCursor * 3) in indices)) in viewCorners
+            set secondCorner to the item at (cornerOffset + (the item at ((triangleCursor * 3) + 1) in indices)) in viewCorners
+            set thirdCorner to the item at (cornerOffset + (the item at ((triangleCursor * 3) + 2) in indices)) in viewCorners
+            set leastAlong to the minimum of firstCorner's x and (the minimum of secondCorner's x and thirdCorner's x)
+            set mostAlong to the maximum of firstCorner's x and (the maximum of secondCorner's x and thirdCorner's x)
+            set leastDepth to the minimum of firstCorner's z and (the minimum of secondCorner's z and thirdCorner's z)
+            set mostDepth to the maximum of firstCorner's z and (the maximum of secondCorner's z and thirdCorner's z)
+            set inWidth to (mostAlong >= lowAlong) and (leastAlong <= highAlong)
+            set inDepth to (mostDepth >= 0.0) and (leastDepth <= farDepth)
+            if inWidth and inDepth:
+                if (leastDepth >= 0.0) and (mostDepth <= farDepth):
+                    add bim occluder firstCorner, secondCorner and thirdCorner to occluderSet
+                else:
+                    set whole to an empty list of a cad vector3
+                    append firstCorner to whole
+                    append secondCorner to whole
+                    append thirdCorner to whole
+                    set beyondPlane to an empty list of a cad vector3
+                    append bim corners in whole kept 1.0 of depth 0.0 into beyondPlane
+                    set withinDepth to an empty list of a cad vector3
+                    if (the length of beyondPlane) >= 3:
+                        append bim corners in beyondPlane kept (0.0 - 1.0) of depth farDepth into withinDepth
+                    if (the length of withinDepth) >= 3:
+                        loop fanCursor from 1 to ((the length of withinDepth) - 1):
+                            add bim occluder (the item at 0 in withinDepth), (the item at fanCursor in withinDepth) and (the item at (fanCursor + 1) in withinDepth) to occluderSet
+                    free whole
+                    free beyondPlane
+                    free withinDepth
+
+local function the bim grid column of {a 64 bit floating-point number:coordinate} in {bim projection occluders record:occluders}:
+    execute:
+        set cell to (the floor of ((coordinate - occluders's gridLow's x) / occluders's cellWidth)) as an integer
+        if cell < 0:
+            return 0
+        if cell >= occluders's columns:
+            return occluders's columns - 1
+        return cell
+
+local function the bim grid row of {a 64 bit floating-point number:coordinate} in {bim projection occluders record:occluders}:
+    execute:
+        set cell to (the floor of ((coordinate - occluders's gridLow's y) / occluders's cellHeight)) as an integer
+        if cell < 0:
+            return 0
+        if cell >= occluders's rows:
+            return occluders's rows - 1
+        return cell
+
+# The grid over the occluders: about one cell per triangle, at most 128 by
+# 128 cells, each triangle listed in every cell its box touches.
+local function index bim occluders {a pointer to a bim projection occluders record:occluderSet}:
+    execute:
+        set triangleCount to the length of (occluderSet's lows's values)
+        set lowX to 1e300
+        set lowY to 1e300
+        set highX to -1e300
+        set highY to -1e300
+        loop triangleCursor from 0 to triangleCount:
+            set boxLow to the item at triangleCursor in (occluderSet's lows's values)
+            set boxHigh to the item at triangleCursor in (occluderSet's highs's values)
+            set lowX to the minimum of lowX and boxLow's x
+            set lowY to the minimum of lowY and boxLow's y
+            set highX to the maximum of highX and boxHigh's x
+            set highY to the maximum of highY and boxHigh's y
+        set gridSide to 1
+        loop while ((gridSide * gridSide) < triangleCount) and (gridSide < 128):
+            set gridSide to gridSide + 1
+        set occluderSet's columns to gridSide
+        set occluderSet's rows to gridSide
+        if highX < lowX:
+            set lowX to 0.0
+            set lowY to 0.0
+            set highX to 1.0
+            set highY to 1.0
+        set occluderSet's gridLow to a cad vector2 with x lowX and y lowY
+        set occluderSet's cellWidth to (the maximum of (highX - lowX) and 0.001) / (gridSide as a 64 bit floating-point number)
+        set occluderSet's cellHeight to (the maximum of (highY - lowY) and 0.001) / (gridSide as a 64 bit floating-point number)
+        set cellCount to gridSide * gridSide
+        set counts to an empty list of an integer
+        loop cellCursor from 0 to (cellCount + 1):
+            append 0 to counts
+        loop triangleCursor from 0 to triangleCount:
+            set boxLow to the item at triangleCursor in (occluderSet's lows's values)
+            set boxHigh to the item at triangleCursor in (occluderSet's highs's values)
+            set firstColumn to the bim grid column of boxLow's x in (@intrinsic("dereference", occluderSet))
+            set lastColumn to the bim grid column of boxHigh's x in (@intrinsic("dereference", occluderSet))
+            set firstRow to the bim grid row of boxLow's y in (@intrinsic("dereference", occluderSet))
+            set lastRow to the bim grid row of boxHigh's y in (@intrinsic("dereference", occluderSet))
+            loop rowCursor from firstRow to (lastRow + 1):
+                loop columnCursor from firstColumn to (lastColumn + 1):
+                    set cellIndex to (rowCursor * gridSide) + columnCursor
+                    replace item at index (cellIndex + 1) in counts with ((the item at (cellIndex + 1) in counts) + 1)
+        loop cellCursor from 0 to cellCount:
+            replace item at index (cellCursor + 1) in counts with ((the item at (cellCursor + 1) in counts) + (the item at cellCursor in counts))
+        loop cellCursor from 0 to (cellCount + 1):
+            append (the item at cellCursor in counts) to (occluderSet's cellStarts's values)
+        loop itemCursor from 0 to (the item at cellCount in counts):
+            append 0 to (occluderSet's cellItems's values)
+        loop triangleCursor from 0 to triangleCount:
+            set boxLow to the item at triangleCursor in (occluderSet's lows's values)
+            set boxHigh to the item at triangleCursor in (occluderSet's highs's values)
+            set firstColumn to the bim grid column of boxLow's x in (@intrinsic("dereference", occluderSet))
+            set lastColumn to the bim grid column of boxHigh's x in (@intrinsic("dereference", occluderSet))
+            set firstRow to the bim grid row of boxLow's y in (@intrinsic("dereference", occluderSet))
+            set lastRow to the bim grid row of boxHigh's y in (@intrinsic("dereference", occluderSet))
+            loop rowCursor from firstRow to (lastRow + 1):
+                loop columnCursor from firstColumn to (lastColumn + 1):
+                    set cellIndex to (rowCursor * gridSide) + columnCursor
+                    set slot to the item at cellIndex in counts
+                    replace item at index slot in (occluderSet's cellItems's values) with triangleCursor
+                    replace item at index cellIndex in counts with (slot + 1)
+            append ((-1) as a 64 bit integer) to (occluderSet's seen's values)
+        free counts
+
+# What remains of the pieces `pieceStarts` to `pieceEnds` (parameters along
+# an edge) once the stretch from `hiddenStart` to `hiddenEnd` is taken out.
+local function take bim stretch {a 64 bit floating-point number:hiddenStart} until {a 64 bit floating-point number:hiddenEnd} out of {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
+    execute:
+        if hiddenEnd <= hiddenStart:
+            return nothing
+        set keptStarts to an empty list of a 64 bit floating-point number
+        set keptEnds to an empty list of a 64 bit floating-point number
+        loop pieceCursor from 0 to the length of pieceStarts:
+            set pieceStart to the item at pieceCursor in pieceStarts
+            set pieceEnd to the item at pieceCursor in pieceEnds
+            if (hiddenEnd <= pieceStart) or (hiddenStart >= pieceEnd):
+                append pieceStart to keptStarts
+                append pieceEnd to keptEnds
+            else:
+                if hiddenStart > pieceStart:
+                    append pieceStart to keptStarts
+                    append hiddenStart to keptEnds
+                if hiddenEnd < pieceEnd:
+                    append hiddenEnd to keptStarts
+                    append pieceEnd to keptEnds
+        clear pieceStarts
+        clear pieceEnds
+        loop pieceCursor from 0 to the length of keptStarts:
+            append (the item at pieceCursor in keptStarts) to pieceStarts
+            append (the item at pieceCursor in keptEnds) to pieceEnds
+        free keptStarts
+        free keptEnds
+
+# Whether drawing point `testedSpot` lies inside the cut polygons `polygons`
+# (even-odd over all their loops) or within a hair of one of their edges.
+local function bim spot {cad vector2:testedSpot} lies in cut {a pointer to a list:polygons}:
+    execute:
+        set inside to false
+        set onEdge to false
+        loop polygonCursor from 0 to the length of polygons:
+            set ring to (the item at polygonCursor in polygons)'s points's values
+            set cornerCount to the length of ring
+            loop cornerCursor from 0 to cornerCount:
+                set here to the item at cornerCursor in ring
+                set there to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in ring
+                if ((here's y > testedSpot's y) and (there's y <= testedSpot's y)) or ((here's y <= testedSpot's y) and (there's y > testedSpot's y)):
+                    set crossX to here's x + (((testedSpot's y - here's y) / (there's y - here's y)) * (there's x - here's x))
+                    if crossX > testedSpot's x:
+                        set inside to inside = false
+                set edgeX to there's x - here's x
+                set edgeY to there's y - here's y
+                set edgeSquare to (edgeX * edgeX) + (edgeY * edgeY)
+                if edgeSquare > 0.0:
+                    set fraction to (((testedSpot's x - here's x) * edgeX) + ((testedSpot's y - here's y) * edgeY)) / edgeSquare
+                    set fraction to the maximum of 0.0 and (the minimum of 1.0 and fraction)
+                    set nearX to (here's x + (fraction * edgeX)) - testedSpot's x
+                    set nearY to (here's y + (fraction * edgeY)) - testedSpot's y
+                    if ((nearX * nearX) + (nearY * nearY)) < 0.000000000001:
+                        set onEdge to true
+        return inside or onEdge
+
+# Takes out of the pieces of the edge from `edgeStart` to `edgeEnd`
+# (drawing coordinates) what the cut polygons of `cutSource` cover.
+local function take bim cut {bim cut source record:cutSource} out of edge {cad vector2:edgeStart} to {cad vector2:edgeEnd} from {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
+    execute:
+        set polygons to cutSource's polygons's values
+        set crossings to an empty list of a 64 bit floating-point number
+        append 0.0 to crossings
+        set runX to edgeEnd's x - edgeStart's x
+        set runY to edgeEnd's y - edgeStart's y
+        set touching to false
+        loop polygonCursor from 0 to the length of polygons:
+            set ring to (the item at polygonCursor in polygons)'s points's values
+            set cornerCount to the length of ring
+            loop cornerCursor from 0 to cornerCount:
+                set here to the item at cornerCursor in ring
+                set there to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in ring
+                set sideX to there's x - here's x
+                set sideY to there's y - here's y
+                set denominator to (runX * sideY) - (runY * sideX)
+                if (the absolute value of denominator) > 0.000000000001:
+                    set startX to here's x - edgeStart's x
+                    set startY to here's y - edgeStart's y
+                    set alongParameter to ((startX * sideY) - (startY * sideX)) / denominator
+                    set acrossParameter to ((startX * runY) - (startY * runX)) / denominator
+                    if (((alongParameter > 0.0) and (alongParameter < 1.0)) and (acrossParameter >= -0.000001)) and (acrossParameter <= 1.000001):
+                        append alongParameter to crossings
+                        set touching to true
+        append 1.0 to crossings
+        # Sorted by insertion: an edge crosses a cut a few times at most.
+        loop sortCursor from 1 to the length of crossings:
+            set moving to the item at sortCursor in crossings
+            set slot to sortCursor
+            set shifting to true
+            loop while shifting:
+                if slot = 0:
+                    set shifting to false
+                else if (the item at (slot - 1) in crossings) > moving:
+                    replace item at index slot in crossings with (the item at (slot - 1) in crossings)
+                    set slot to slot - 1
+                else:
+                    set shifting to false
+            replace item at index slot in crossings with moving
+        loop crossingCursor from 0 to ((the length of crossings) - 1):
+            set fromParameter to the item at crossingCursor in crossings
+            set toParameter to the item at (crossingCursor + 1) in crossings
+            if toParameter > fromParameter:
+                set middle to (fromParameter + toParameter) * 0.5
+                set middleSpot to a cad vector2 with x (edgeStart's x + (runX * middle)) and y (edgeStart's y + (runY * middle))
+                if bim spot middleSpot lies in cut polygons:
+                    take bim stretch fromParameter until toParameter out of pieceStarts and pieceEnds
+        free crossings
+
+# The parameters along the edge from `edgeStart` to `edgeEnd` (drawing
+# coordinates and depth) that triangle `triangleIndex` hides, taken out of
+# the pieces.
+local function take bim triangle {integer:triangleIndex} among {bim projection occluders record:occluders} out of edge {cad vector3:edgeStart} to {cad vector3:edgeEnd} from {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
+    execute:
+        set cornerA to the item at (triangleIndex * 3) in (occluders's corners's values)
+        set cornerB to the item at ((triangleIndex * 3) + 1) in (occluders's corners's values)
+        set cornerC to the item at ((triangleIndex * 3) + 2) in (occluders's corners's values)
+        set enter to 0.0
+        set leave to 1.0
+        set runX to edgeEnd's x - edgeStart's x
+        set runY to edgeEnd's y - edgeStart's y
+        set tolerance to the bim projection edge tolerance
+        loop sideCursor from 0 to 3:
+            set sideFrom to cornerA
+            set sideTo to cornerB
+            if sideCursor = 1:
+                set sideFrom to cornerB
+                set sideTo to cornerC
+            if sideCursor = 2:
+                set sideFrom to cornerC
+                set sideTo to cornerA
+            set sideX to sideTo's x - sideFrom's x
+            set sideY to sideTo's y - sideFrom's y
+            set sideLength to the square root of ((sideX * sideX) + (sideY * sideY))
+            # The inward normal of an anticlockwise side, of unit length.
+            set inwardX to (0.0 - sideY) / sideLength
+            set inwardY to sideX / sideLength
+            set atStart to ((edgeStart's x - sideFrom's x) * inwardX) + ((edgeStart's y - sideFrom's y) * inwardY)
+            set change to (runX * inwardX) + (runY * inwardY)
+            if (the absolute value of change) < 0.000000000000001:
+                if atStart < (0.0 - tolerance):
+                    set leave to -1.0
+            else:
+                set crossing to ((0.0 - tolerance) - atStart) / change
+                if change > 0.0:
+                    set enter to the maximum of enter and crossing
+                else:
+                    set leave to the minimum of leave and crossing
+        if leave <= (enter + 0.000000000001):
+            return nothing
+        # The triangle's plane: depth = depthAt + slopeX (x - ax) + slopeY (y - ay).
+        set twiceArea to ((cornerB's x - cornerA's x) * (cornerC's y - cornerA's y)) - ((cornerC's x - cornerA's x) * (cornerB's y - cornerA's y))
+        set slopeX to (((cornerB's z - cornerA's z) * (cornerC's y - cornerA's y)) - ((cornerC's z - cornerA's z) * (cornerB's y - cornerA's y))) / twiceArea
+        set slopeY to (((cornerB's x - cornerA's x) * (cornerC's z - cornerA's z)) - ((cornerC's x - cornerA's x) * (cornerB's z - cornerA's z))) / twiceArea
+        set enterX to edgeStart's x + (runX * enter)
+        set enterY to edgeStart's y + (runY * enter)
+        set leaveX to edgeStart's x + (runX * leave)
+        set leaveY to edgeStart's y + (runY * leave)
+        set planeEnter to (cornerA's z + (slopeX * (enterX - cornerA's x))) + (slopeY * (enterY - cornerA's y))
+        set planeLeave to (cornerA's z + (slopeX * (leaveX - cornerA's x))) + (slopeY * (leaveY - cornerA's y))
+        set edgeEnter to edgeStart's z + ((edgeEnd's z - edgeStart's z) * enter)
+        set edgeLeave to edgeStart's z + ((edgeEnd's z - edgeStart's z) * leave)
+        set behindEnter to (edgeEnter - planeEnter) - (the bim projection depth tolerance)
+        set behindLeave to (edgeLeave - planeLeave) - (the bim projection depth tolerance)
+        if (behindEnter > 0.0) and (behindLeave > 0.0):
+            take bim stretch enter until leave out of pieceStarts and pieceEnds
+        else if (behindEnter > 0.0) or (behindLeave > 0.0):
+            set turning to enter + ((leave - enter) * (behindEnter / (behindEnter - behindLeave)))
+            if behindEnter > 0.0:
+                take bim stretch enter until turning out of pieceStarts and pieceEnds
+            else:
+                take bim stretch turning until leave out of pieceStarts and pieceEnds
+
+# The visible pieces of the edge from `edgeStart` to `edgeEnd` (drawing
+# coordinates and depth) of element `elementId`, cut to the drawing's width
+# and depth, appended to `found`. `edgeNumber` marks the triangles met.
+local function append bim visible pieces of edge {cad vector3:edgeStart} till {cad vector3:edgeEnd} for element {a 64 bit integer:elementId} numbered {a 64 bit integer:edgeNumber} between {a 64 bit floating-point number:lowAlong} and {a 64 bit floating-point number:highAlong} until {a 64 bit floating-point number:farDepth} among {bim projection occluders record:occluders} behind {bim view record:cutView} into {a pointer to a list:foundPieces}:
+    execute:
+        set enter to 0.0
+        set leave to 1.0
+        # Cut to depths 0 to `farDepth` and the width `lowAlong` to `highAlong`.
+        loop limitCursor from 0 to 4:
+            set atStart to edgeStart's z
+            set atEnd to edgeEnd's z
+            set bound to 0.0
+            set sideSign to 1.0
+            if limitCursor = 1:
+                set bound to farDepth
+                set sideSign to -1.0
+            if limitCursor >= 2:
+                set atStart to edgeStart's x
+                set atEnd to edgeEnd's x
+                set bound to lowAlong
+            if limitCursor = 3:
+                set bound to highAlong
+                set sideSign to -1.0
+            set fromStart to sideSign * (atStart - bound)
+            set fromEnd to sideSign * (atEnd - bound)
+            if (fromStart < 0.0) and (fromEnd < 0.0):
+                set leave to -1.0
+            else if (fromStart < 0.0) or (fromEnd < 0.0):
+                set crossing to fromStart / (fromStart - fromEnd)
+                if fromStart < 0.0:
+                    set enter to the maximum of enter and crossing
+                else:
+                    set leave to the minimum of leave and crossing
+        if leave <= enter:
+            return nothing
+        set runX to edgeEnd's x - edgeStart's x
+        set runY to edgeEnd's y - edgeStart's y
+        set runZ to edgeEnd's z - edgeStart's z
+        set flatLength to the square root of ((runX * runX) + (runY * runY))
+        if (flatLength * (leave - enter)) < (the bim projection shortest piece):
+            return nothing
+        set pieceStarts to an empty list of a 64 bit floating-point number
+        set pieceEnds to an empty list of a 64 bit floating-point number
+        append enter to pieceStarts
+        append leave to pieceEnds
+        set clippedStart to a cad vector3 with x (edgeStart's x + (runX * enter)), y (edgeStart's y + (runY * enter)) and z (edgeStart's z + (runZ * enter))
+        set clippedEnd to a cad vector3 with x (edgeStart's x + (runX * leave)), y (edgeStart's y + (runY * leave)) and z (edgeStart's z + (runZ * leave))
+        set boxLow to a cad vector2 with x (the minimum of clippedStart's x and clippedEnd's x) and y (the minimum of clippedStart's y and clippedEnd's y)
+        set boxHigh to a cad vector2 with x (the maximum of clippedStart's x and clippedEnd's x) and y (the maximum of clippedStart's y and clippedEnd's y)
+        set deepest to the maximum of clippedStart's z and clippedEnd's z
+        # The triangles in the cells the edge's box touches.
+        if (the length of (occluders's lows's values)) > 0:
+            set firstColumn to the bim grid column of boxLow's x in occluders
+            set lastColumn to the bim grid column of boxHigh's x in occluders
+            set firstRow to the bim grid row of boxLow's y in occluders
+            set lastRow to the bim grid row of boxHigh's y in occluders
+            loop rowCursor from firstRow to (lastRow + 1):
+                loop columnCursor from firstColumn to (lastColumn + 1):
+                    set cellIndex to (rowCursor * occluders's columns) + columnCursor
+                    set itemFrom to the item at cellIndex in (occluders's cellStarts's values)
+                    set itemTo to the item at (cellIndex + 1) in (occluders's cellStarts's values)
+                    loop itemCursor from itemFrom to itemTo:
+                        set triangleIndex to the item at itemCursor in (occluders's cellItems's values)
+                        if (the item at triangleIndex in (occluders's seen's values)) != edgeNumber:
+                            replace item at index triangleIndex in (occluders's seen's values) with edgeNumber
+                            set triangleLow to the item at triangleIndex in (occluders's lows's values)
+                            set triangleHigh to the item at triangleIndex in (occluders's highs's values)
+                            set overlapping to ((triangleLow's x <= boxHigh's x) and (triangleHigh's x >= boxLow's x)) and ((triangleLow's y <= boxHigh's y) and (triangleHigh's y >= boxLow's y))
+                            set nearer to (the item at triangleIndex in (occluders's nearest's values)) < (deepest - (the bim projection depth tolerance))
+                            if overlapping and nearer:
+                                if (the length of pieceStarts) > 0:
+                                    take bim triangle triangleIndex among occluders out of edge edgeStart to edgeEnd from pieceStarts and pieceEnds
+        # The cut, which stands on the plane in front of everything beyond.
+        set flatStart to a cad vector2 with x edgeStart's x and y edgeStart's y
+        set flatEnd to a cad vector2 with x edgeEnd's x and y edgeEnd's y
+        loop sourceCursor from 0 to the length of (cutView's sources's values):
+            set cutSource to the item at sourceCursor in (cutView's sources's values)
+            if (the length of pieceStarts) > 0:
+                take bim cut cutSource out of edge flatStart to flatEnd from pieceStarts and pieceEnds
+        loop pieceCursor from 0 to the length of pieceStarts:
+            set pieceStart to the item at pieceCursor in pieceStarts
+            set pieceEnd to the item at pieceCursor in pieceEnds
+            if (flatLength * (pieceEnd - pieceStart)) >= (the bim projection shortest piece):
+                set middle to (pieceStart + pieceEnd) * 0.5
+                set startPoint to a cad vector2 with x (edgeStart's x + (runX * pieceStart)) and y (edgeStart's y + (runY * pieceStart))
+                set endPoint to a cad vector2 with x (edgeStart's x + (runX * pieceEnd)) and y (edgeStart's y + (runY * pieceEnd))
+                append (@intrinsic("construct", a bim projected edge record, elementId, startPoint, endPoint, edgeStart's z + (runZ * middle))) to foundPieces
+        free pieceStarts
+        free pieceEnds
+
+# The position of `wanted` in the ascending `sortedKeys`, which holds it.
+local function the bim key slot of {a 64 bit integer:wanted} among {a pointer to a list:sortedKeys}:
+    execute:
+        set lowSlot to 0
+        set highSlot to the length of sortedKeys
+        loop while (highSlot - lowSlot) > 1:
+            set middleSlot to (lowSlot + highSlot) / 2
+            if (the item at middleSlot in sortedKeys) <= wanted:
+                set lowSlot to middleSlot
+            else:
+                set highSlot to middleSlot
+        return lowSlot
+
+# The model normal stored at corner `cornerIndex` of `meshShape`, in
+# drawing coordinates and depth; zero when the mesh stores none.
+local function the bim stored normal {integer:cornerIndex} of {fast mesh record:meshShape} on {cad plane:viewPlane} deep along {cad vector3:depthAxis}:
+    execute:
+        if cornerIndex >= (the length of (meshShape's normals's values)):
+            return a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return the bim view direction of (the item at cornerIndex in (meshShape's normals's values)) on viewPlane deep along depthAxis
+
+# The corner of triangle `triangleIndex` of `meshShape` welded to vertex
+# `welded`, by `weldOf` (one welded vertex per corner).
+local function the bim corner of triangle {integer:triangleIndex} in {fast mesh record:meshShape} welded to {integer:weldNumber} by {a pointer to a list:weldOf}:
+    execute:
+        loop cornerCursor from 0 to 3:
+            set cornerIndex to the item at ((triangleIndex * 3) + cornerCursor) in (meshShape's triangles's values)
+            if (the item at cornerIndex in weldOf) = weldNumber:
+                return cornerIndex
+        return the item at (triangleIndex * 3) in (meshShape's triangles's values)
+
+# The edges of one outlined mesh that the projection draws (see the head of
+# this file), each cut by the occluders and the cut and appended to
+# `foundEdges`. Its `cornerCount` corners in drawing coordinates and depth
+# are those of `viewCorners` from `cornerOffset`.
+local function append bim drawn edges of {bim projection mesh record:meshEntry} at {a pointer to a list:viewCorners} offset {integer:cornerOffset} counted {integer:cornerCount} on {cad plane:viewPlane} deep along {cad vector3:depthAxis} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} until {a 64 bit floating-point number:farDepth} among {bim projection occluders record:occluders} behind {bim view record:cutView} counting {a pointer to a list:edgeCounter} into {a pointer to a list:foundEdges}:
+    execute:
+        set meshShape to meshEntry's shape
+        set indices to meshShape's triangles's values
+        set triangleCount to (the length of indices) / 3
+        set keyRoom to (the bim projection key room) as a 64 bit integer
+        if (cornerCount = 0) or (triangleCount = 0):
+            return nothing
+        if (cornerCount >= (the bim projection key room)) or (triangleCount >= (the bim projection key room)):
+            return nothing
+        # Weld corners that share a place: their keys on a grid of 1/2^20
+        # of the mesh's largest extent (at least a micrometre).
+        set lowCorner to the item at cornerOffset in viewCorners
+        set highCorner to lowCorner
+        loop cornerCursor from 0 to cornerCount:
+            set viewCorner to the item at (cornerOffset + cornerCursor) in viewCorners
+            set lowCorner to a cad vector3 with x (the minimum of lowCorner's x and viewCorner's x), y (the minimum of lowCorner's y and viewCorner's y) and z (the minimum of lowCorner's z and viewCorner's z)
+            set highCorner to a cad vector3 with x (the maximum of highCorner's x and viewCorner's x), y (the maximum of highCorner's y and viewCorner's y) and z (the maximum of highCorner's z and viewCorner's z)
+        set extent to the maximum of (highCorner's x - lowCorner's x) and (the maximum of (highCorner's y - lowCorner's y) and (highCorner's z - lowCorner's z))
+        set quantum to the maximum of 0.000001 and (extent / 1048576.0)
+        set cornerKeys to an empty list of a 64 bit integer
+        loop cornerCursor from 0 to cornerCount:
+            set viewCorner to the item at (cornerOffset + cornerCursor) in viewCorners
+            set keyX to (the floor of (((viewCorner's x - lowCorner's x) / quantum) + 0.5)) as a 64 bit integer
+            set keyY to (the floor of (((viewCorner's y - lowCorner's y) / quantum) + 0.5)) as a 64 bit integer
+            set keyZ to (the floor of (((viewCorner's z - lowCorner's z) / quantum) + 0.5)) as a 64 bit integer
+            append ((((keyX * keyRoom) + keyY) * keyRoom) + keyZ) to cornerKeys
+        set sortedKeys to an empty list of a 64 bit integer
+        loop cornerCursor from 0 to cornerCount:
+            append (the item at cornerCursor in cornerKeys) to sortedKeys
+        sort and deduplicate bim ids sortedKeys
+        set weldOf to an empty list of an integer
+        set weldedCorners to an empty list of a cad vector3
+        loop cornerCursor from 0 to (the length of sortedKeys):
+            append (a cad vector3 with x 0.0, y 0.0 and z 0.0) to weldedCorners
+        loop cornerCursor from 0 to cornerCount:
+            set welded to the bim key slot of (the item at cornerCursor in cornerKeys) among sortedKeys
+            append welded to weldOf
+            replace item at index welded in weldedCorners with (the item at (cornerOffset + cornerCursor) in viewCorners)
+        # Each triangle's normal, turned to agree with the normals the mesh
+        # stores, and its sides keyed by their welded ends.
+        set faceNormals to an empty list of a cad vector3
+        set sideKeys to an empty list of a 64 bit integer
+        loop triangleCursor from 0 to triangleCount:
+            set firstIndex to the item at (triangleCursor * 3) in indices
+            set secondIndex to the item at ((triangleCursor * 3) + 1) in indices
+            set thirdIndex to the item at ((triangleCursor * 3) + 2) in indices
+            set firstCorner to the item at (cornerOffset + firstIndex) in viewCorners
+            set secondCorner to the item at (cornerOffset + secondIndex) in viewCorners
+            set thirdCorner to the item at (cornerOffset + thirdIndex) in viewCorners
+            set uX to secondCorner's x - firstCorner's x
+            set uY to secondCorner's y - firstCorner's y
+            set uZ to secondCorner's z - firstCorner's z
+            set vX to thirdCorner's x - firstCorner's x
+            set vY to thirdCorner's y - firstCorner's y
+            set vZ to thirdCorner's z - firstCorner's z
+            set normalX to (uY * vZ) - (uZ * vY)
+            set normalY to (uZ * vX) - (uX * vZ)
+            set normalZ to (uX * vY) - (uY * vX)
+            set magnitude to the square root of (((normalX * normalX) + (normalY * normalY)) + (normalZ * normalZ))
+            if magnitude > 0.0:
+                set normalX to normalX / magnitude
+                set normalY to normalY / magnitude
+                set normalZ to normalZ / magnitude
+            set storedSum to the cad sum of (the bim stored normal firstIndex of meshShape on viewPlane deep along depthAxis) and (the cad sum of (the bim stored normal secondIndex of meshShape on viewPlane deep along depthAxis) and (the bim stored normal thirdIndex of meshShape on viewPlane deep along depthAxis))
+            if (((storedSum's x * normalX) + (storedSum's y * normalY)) + (storedSum's z * normalZ)) < 0.0:
+                set normalX to 0.0 - normalX
+                set normalY to 0.0 - normalY
+                set normalZ to 0.0 - normalZ
+            append (a cad vector3 with x normalX, y normalY and z normalZ) to faceNormals
+            set firstWeld to the item at firstIndex in weldOf
+            set secondWeld to the item at secondIndex in weldOf
+            set thirdWeld to the item at thirdIndex in weldOf
+            set sound to ((firstWeld != secondWeld) and (secondWeld != thirdWeld)) and ((thirdWeld != firstWeld) and (magnitude > 0.0))
+            if sound:
+                loop sideCursor from 0 to 3:
+                    set fromWeld to firstWeld
+                    set toWeld to secondWeld
+                    if sideCursor = 1:
+                        set fromWeld to secondWeld
+                        set toWeld to thirdWeld
+                    if sideCursor = 2:
+                        set fromWeld to thirdWeld
+                        set toWeld to firstWeld
+                    set lowWeld to (the minimum of fromWeld and toWeld) as a 64 bit integer
+                    set highWeld to (the maximum of fromWeld and toWeld) as a 64 bit integer
+                    append ((((lowWeld * keyRoom) + highWeld) * keyRoom) + (triangleCursor as a 64 bit integer)) to sideKeys
+        sort and deduplicate bim ids sideKeys
+        # Runs of one side key are the faces that share that side.
+        set runStart to 0
+        set sideCount to the length of sideKeys
+        loop while runStart < sideCount:
+            set runKey to (the item at runStart in sideKeys) / keyRoom
+            set runEnd to runStart + 1
+            set scanning to runEnd < sideCount
+            loop while scanning:
+                if ((the item at runEnd in sideKeys) / keyRoom) = runKey:
+                    set runEnd to runEnd + 1
+                    set scanning to runEnd < sideCount
+                else:
+                    set scanning to false
+            set lowWeld to (runKey / keyRoom) as an integer
+            set highWeld to (the remainder of runKey divided by keyRoom) as an integer
+            set drawsEdge to true
+            if (runEnd - runStart) = 2:
+                set firstFace to (the remainder of (the item at runStart in sideKeys) divided by keyRoom) as an integer
+                set secondFace to (the remainder of (the item at (runStart + 1) in sideKeys) divided by keyRoom) as an integer
+                set firstNormal to the item at firstFace in faceNormals
+                set secondNormal to the item at secondFace in faceNormals
+                set firstToward to firstNormal's z < -0.000001
+                set secondToward to secondNormal's z < -0.000001
+                set bend to the cad dot of firstNormal and secondNormal
+                set folded to false
+                if bend < 0.5:
+                    set folded to true
+                else if bend < 0.99985:
+                    # Folded where the mesh stores different normals at the
+                    # shared corners; a smooth curve stores the same.
+                    set folded to (the length of (meshShape's normals's values)) = 0
+                    loop endCursor from 0 to 2:
+                        set endWeld to lowWeld
+                        if endCursor = 1:
+                            set endWeld to highWeld
+                        set firstStored to the bim stored normal (the bim corner of triangle firstFace in meshShape welded to endWeld by weldOf) of meshShape on viewPlane deep along depthAxis
+                        set secondStored to the bim stored normal (the bim corner of triangle secondFace in meshShape welded to endWeld by weldOf) of meshShape on viewPlane deep along depthAxis
+                        if (the cad dot of firstStored and secondStored) < 0.9999:
+                            set folded to true
+                set drawsEdge to (firstToward or secondToward) and (folded or (firstToward != secondToward))
+            if drawsEdge:
+                set edgeNumber to (the item at 0 in edgeCounter) + (1 as a 64 bit integer)
+                replace item at index 0 in edgeCounter with edgeNumber
+                append bim visible pieces of edge (the item at lowWeld in weldedCorners) till (the item at highWeld in weldedCorners) for element (meshEntry's elementId) numbered edgeNumber between lowAlong and highAlong until farDepth among occluders behind cutView into foundEdges
+            set runStart to runEnd
+        free cornerKeys
+        free sortedKeys
+        free weldOf
+        free weldedCorners
+        free faceNormals
+        free sideKeys
+
+# The visible edges of `meshes` (`bim projection mesh record`s) seen square
+# onto `viewPlane`, in drawing coordinates: within the drawing's width from
+# `lowAlong` to `highAlong`, beyond the plane up to `depthLimit` (no limit
+# when it is 0 or less), hidden by every mesh in front and by the cut
+# polygons of `cutView`, which lie on the plane.
+function the bim projected edges of {a pointer to a list:meshes} on {cad plane:viewPlane} from {a 64 bit floating-point number:lowAlong} to {a 64 bit floating-point number:highAlong} within {a 64 bit floating-point number:depthLimit} behind {bim view record:cutView}:
+    execute:
+        set result to a cad topology list of a bim projected edge record
+        set depthAxis to the bim depth axis of viewPlane
+        set farDepth to 1e300
+        if depthLimit > 0.0:
+            set farDepth to depthLimit
+        set occluders to @intrinsic("construct", a bim projection occluders record, a cad topology list of a cad vector3, a cad topology list of a cad vector2, a cad topology list of a cad vector2, a cad topology list of a 64 bit floating-point number, a cad vector2 with x 0.0 and y 0.0, 1.0, 1.0, 1, 1, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a 64 bit integer)
+        # Every mesh's corners in drawing coordinates and depth, once, one
+        # mesh after another from its offset.
+        set viewCorners to an empty list of a cad vector3
+        set cornerOffsets to an empty list of an integer
+        loop meshCursor from 0 to the length of meshes:
+            set projectionMesh to the item at meshCursor in meshes
+            set cornerOffset to the length of viewCorners
+            append cornerOffset to cornerOffsets
+            loop cornerCursor from 0 to the length of (projectionMesh's shape's positions's values):
+                append (the bim view coordinates of (the item at cornerCursor in (projectionMesh's shape's positions's values)) on viewPlane deep along depthAxis) to viewCorners
+            add bim occluders of projectionMesh's shape at viewCorners offset cornerOffset from lowAlong to highAlong until farDepth into occluders
+        index bim occluders (the address of occluders)
+        set edgeCounter to an empty list of a 64 bit integer
+        append (0 as a 64 bit integer) to edgeCounter
+        loop meshCursor from 0 to the length of meshes:
+            set projectionMesh to the item at meshCursor in meshes
+            if projectionMesh's outlined:
+                set cornerOffset to the item at meshCursor in cornerOffsets
+                append bim drawn edges of projectionMesh at viewCorners offset cornerOffset counted (the length of (projectionMesh's shape's positions's values)) on viewPlane deep along depthAxis from lowAlong to highAlong until farDepth among occluders behind cutView counting edgeCounter into (result's values)
+        free viewCorners
+        free cornerOffsets
+        free edgeCounter
+        return result
+
+# The plane an elevation looks along: upright through the line from
+# `lineStart` to `lineFinish` in plan, looking to its left, as a section's.
+function the bim elevation plane from {cad vector2:lineStart} to {cad vector2:lineFinish}:
+    execute:
+        return the bim section plane from lineStart to lineFinish
