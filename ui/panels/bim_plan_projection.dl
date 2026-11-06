@@ -1,0 +1,308 @@
+# SPDX-License-Identifier: MPL-2.0
+# What a plan sees beyond its cut (drawing quality plan, item 15;
+# docs/notes/section-projection.md), as NEN plans draw it: looking down from
+# the cut to the storey's floor (or the plan view's depth), the visible
+# edges below the cut, thin in the visible pen (a knee wall or parapet lower
+# than the cut, a wall of a lower part, a building system, a free mesh);
+# looking up from the cut to the next level (or the storey's top), the edges
+# above it, dashed in the hidden pen (a roof's overhang, the edge of the
+# floor above where it overhangs or has a void, a beam). Both are the
+# section's projection (`the bim projected edges of … on …`), hidden-line
+# removal included, on a horizontal plane at the cut.
+#
+# What the plan draws by its own symbols is not drawn again: the cut
+# outlines hide what lies under or on them, the openings of the storey's
+# walls (their symbols draw frames, sills and jambs) hide what lies in
+# their rough opening across the wall, and the storey's slabs and roofs
+# (`record bim slab edges`), stairs, railings, curtain walls, linear
+# elements, component instances and opening details only hide what lies
+# behind them. Elements of other storeys are drawn when they reach into
+# the depth looked through.
+import ui/panels/bim_plan_panel.dl
+import views/drawings/bim_projection.dl
+import viewer/bim_scene.dl
+import bim/bim_pens.dl
+import architectural/openings/bim_opening_symbol.dl
+
+# The edges a plan sees below and above its cut, in plan coordinates, kept
+# until what they show changes (`key`: the model's revision, the
+# evaluation's generation, the storey, the plan view, its cut height, depth,
+# rules and hidden elements, and the scene's meshes and their builds).
+class:
+    patterns:
+        [a|] bim plan projection record
+    members:
+        key as a string
+        below as the type of (a cad topology list of a bim projected edge record)
+        above as the type of (a cad topology list of a bim projected edge record)
+        # How often the edges were worked out, for tests and timing.
+        builds as an integer
+
+function an empty bim plan projection:
+    execute:
+        return @intrinsic("construct", a bim plan projection record, (the string form of "unprojected"), a cad topology list of a bim projected edge record, a cad topology list of a bim projected edge record, 0)
+
+# How far short of the floor (below) or of the next level (above) the
+# depth looked through stops, in metres: what lies on the floor itself is
+# the floor's, and the floor above's underside or a roof resting on the
+# next level is still seen.
+local function the bim plan projection margin:
+    replacement:
+        0.0001
+
+# Whether the plan of `planEditor` shows element `elementId` of category
+# `categoryCode` (-1: none known): its category and its node of the
+# category tree shown, its phase not hidden, the element not hidden (HH).
+local function bim plan editor {bim editor record:planEditor} projects element {a 64 bit integer:elementId} in category {integer:categoryCode}:
+    execute:
+        set modelValue to planEditor's documentValue's current
+        if (categoryCode >= 0) and (categoryCode < the bim category count):
+            if (bim category categoryCode is visible in planEditor's planRules) = false:
+                return false
+            if ((the bim node of element elementId by planEditor's planRules in modelValue)'s visible) = false:
+                return false
+        if (the bim phase look of element elementId in plan of planEditor) = bim phase hidden look:
+            return false
+        if bim editor hides elementId in plan of planEditor:
+            return false
+        return true
+
+# Whether the plan of `planEditor` draws element `elementId` by a symbol of
+# its own: a slab or roof, stair, railing, curtain wall, linear element,
+# component instance or opening of its storey.
+local function bim plan editor {bim editor record:planEditor} symbolises element {a 64 bit integer:elementId}:
+    execute:
+        set modelValue to planEditor's documentValue's current
+        if (the bim level of element elementId in modelValue) != planEditor's levelId:
+            return false
+        if (the bim wall index of elementId in modelValue)'s valid:
+            return false
+        if (the bim mesh index of elementId in modelValue)'s valid:
+            return false
+        if (the bim sketch index of elementId in modelValue)'s valid:
+            return false
+        return true
+
+# The lowest and highest height of `meshShape`'s corners.
+local function the bim height span of {fast mesh record:meshShape}:
+    execute:
+        set lowest to 1e300
+        set highest to -1e300
+        loop cornerCursor from 0 to the length of (meshShape's positions's values):
+            set cornerHeight to (the item at cornerCursor in (meshShape's positions's values))'s z
+            set lowest to the minimum of lowest and cornerHeight
+            set highest to the maximum of highest and cornerHeight
+        return a cad vector2 with x lowest and y highest
+
+# Appends mesh `meshShape` of element `elementId` to `belowMeshes` when it
+# reaches between `floorHeight` and `cutLevel`, and to `aboveMeshes` when
+# it reaches between `cutLevel` and `topHeight`; drawn when `drawsEdges`.
+local function sort bim plan mesh {fast mesh record:meshShape} of {a 64 bit integer:elementId} drawn {boolean:drawsEdges} between {a 64 bit floating-point number:floorHeight}, {a 64 bit floating-point number:cutLevel} and {a 64 bit floating-point number:topHeight} into {a pointer to a list:belowMeshes} and {a pointer to a list:aboveMeshes}:
+    execute:
+        set heightSpan to the bim height span of meshShape
+        if (heightSpan's x <= cutLevel) and (heightSpan's y >= floorHeight):
+            append (a bim projection mesh of elementId shaped meshShape outlined drawsEdges) to belowMeshes
+        if (heightSpan's y >= cutLevel) and (heightSpan's x <= topHeight):
+            append (a bim projection mesh of elementId shaped meshShape outlined drawsEdges) to aboveMeshes
+
+# The cut `cutView` with, for each opening in a wall of the plan's storey
+# whose symbol the plan draws (one reaching above the cut), its rough
+# opening across the wall and its sills as one more cut polygon: what lies
+# there (the wall's own sill and jambs) the symbol draws.
+local function the bim plan hiding view of {bim editor record:planEditor} cut as {bim view record:cutView}:
+    execute:
+        set modelValue to planEditor's documentValue's current
+        set hidingView to an empty bim view
+        loop sourceCursor from 0 to the length of (cutView's sources's values):
+            append (the item at sourceCursor in (cutView's sources's values)) to (hidingView's sources's values)
+        set cutAbove to the bim plan cut height of planEditor
+        loop openingCursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at openingCursor in (modelValue's openings's values)
+            set hostFound to the bim wall index of openingValue's hostId in modelValue
+            set typeFound to the bim opening type index of openingValue's typeId in modelValue
+            if hostFound's valid and typeFound's valid:
+                set hostWall to the item at hostFound's position in (modelValue's walls's values)
+                set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+                set reachesAbove to (hostWall's baseOffset + (the bim head height of openingType)) > cutAbove
+                if (hostWall's levelId = planEditor's levelId) and reachesAbove:
+                    set roughHalf to (the bim rough width of openingType) * 0.5
+                    set openingSpan to the bim span of hostWall at openingValue's offset reaching roughHalf
+                    set acrossReach to ((the bim wall thickness of hostWall in modelValue) * 0.5) + ((the bim symbol sill projection) + 0.001)
+                    set acrossX to openingSpan's normal's x * acrossReach
+                    set acrossY to openingSpan's normal's y * acrossReach
+                    set openingRectangle to a cad topology list of a cad vector2
+                    append (a cad vector2 with x (openingSpan's left's x - acrossX) and y (openingSpan's left's y - acrossY)) to (openingRectangle's values)
+                    append (a cad vector2 with x (openingSpan's right's x - acrossX) and y (openingSpan's right's y - acrossY)) to (openingRectangle's values)
+                    append (a cad vector2 with x (openingSpan's right's x + acrossX) and y (openingSpan's right's y + acrossY)) to (openingRectangle's values)
+                    append (a cad vector2 with x (openingSpan's left's x + acrossX) and y (openingSpan's left's y + acrossY)) to (openingRectangle's values)
+                    set openingSource to @intrinsic("construct", a bim cut source record, openingValue's id, 0 as a 64 bit integer, false, a cad topology list of a bim cut polygon record)
+                    append (@intrinsic("construct", a bim cut polygon record, openingValue's id, openingRectangle)) to (openingSource's polygons's values)
+                    append openingSource to (hidingView's sources's values)
+        return hidingView
+
+# `viewValue` mirrored across the plan's x axis: its polygons with y turned
+# over, as the view looking up from the cut sees them.
+local function the bim mirrored view of {bim view record:viewValue}:
+    execute:
+        set mirroredView to an empty bim view
+        loop sourceCursor from 0 to the length of (viewValue's sources's values):
+            set original to the item at sourceCursor in (viewValue's sources's values)
+            set turnedSource to @intrinsic("construct", a bim cut source record, original's id, original's serial, original's refused, a cad topology list of a bim cut polygon record)
+            loop polygonCursor from 0 to the length of (original's polygons's values):
+                set polygonValue to the item at polygonCursor in (original's polygons's values)
+                set turnedPoints to a cad topology list of a cad vector2
+                loop cornerCursor from 0 to the length of (polygonValue's points's values):
+                    set planCorner to the item at cornerCursor in (polygonValue's points's values)
+                    append (a cad vector2 with x planCorner's x and y (0.0 - planCorner's y)) to (turnedPoints's values)
+                append (@intrinsic("construct", a bim cut polygon record, polygonValue's elementId, turnedPoints)) to (turnedSource's polygons's values)
+            append turnedSource to (mirroredView's sources's values)
+        return mirroredView
+
+# The height the plan of `planEditor` looks up to: the next level up, else
+# the storey's own top (its elevation and height), else none (1e300).
+function the bim plan top of {bim editor record:planEditor}:
+    execute:
+        set modelValue to planEditor's documentValue's current
+        set nextLevel to the bim level next to planEditor's levelId going up true in modelValue
+        if nextLevel's valid:
+            return (the item at nextLevel's position in (modelValue's levels's values))'s elevation
+        set levelFound to the bim level index of planEditor's levelId in modelValue
+        if levelFound's valid:
+            set storeyRecord to the item at levelFound's position in (modelValue's levels's values)
+            if storeyRecord's height > 0.0:
+                return storeyRecord's elevation + storeyRecord's height
+        return 1e300
+
+# The depth the plan of `planEditor` looks down through from its cut: its
+# view's depth when it has one, else down to the storey's floor.
+function the bim plan depth of {bim editor record:planEditor}:
+    execute:
+        set modelValue to planEditor's documentValue's current
+        set viewFound to the bim view index of planEditor's planViewId in modelValue
+        if viewFound's valid:
+            set viewDepth to (the item at viewFound's position in (modelValue's views's values))'s depth
+            if viewDepth > 0.0:
+                return viewDepth
+        return the bim plan cut height of planEditor
+
+# The key of what the plan of `planEditor` sees among the scene's meshes
+# `sceneMeshes` (`bim plan projection record`).
+local function the bim plan projection key of {bim editor record:planEditor} among {a pointer to a list:sceneMeshes}:
+    execute:
+        set keyText to ((the string form of planEditor's documentValue's revision) + (the string form of " ")) + (the string form of planEditor's evaluation's generation)
+        set keyText to ((keyText + (the string form of " level ")) + (the string form of planEditor's levelId)) + ((the string form of " view ") + (the string form of planEditor's planViewId))
+        set keyText to ((keyText + (the string form of " cut ")) + (the bim exact text of (the bim plan cut height of planEditor))) + ((the string form of " depth ") + (the bim exact text of (the bim plan depth of planEditor)))
+        set keyText to (keyText + (the string form of " rules ")) + (the bim rule text of planEditor's planRules)
+        set keyText to (keyText + (the string form of " hidden ")) + (the bim hidden key in view planEditor's planViewId among (planEditor's hiddenElements's values))
+        # A mesh built again carries a new serial, also while it is dragged
+        # and the revision stays.
+        set serialSum to 0 as a 64 bit integer
+        loop meshCursor from 0 to the length of sceneMeshes:
+            set serialSum to serialSum + ((the item at meshCursor in sceneMeshes)'s serial)
+        return (keyText + (the string form of " meshes ")) + ((the string form of (the length of sceneMeshes)) + ((the string form of " ") + (the string form of serialSum)))
+
+# Brings `projection` up to the plan of `planEditor` cut as `cutView`,
+# among the scene's meshes `sceneMeshes` (the 3D view's): worked out again
+# only when its key changes.
+function refresh bim plan projection in {a pointer to a bim plan projection record:projectionHolder} of {bim editor record:planEditor} among {a pointer to a list:sceneMeshes} cut as {bim view record:cutView}:
+    execute:
+        set wantedKey to the bim plan projection key of planEditor among sceneMeshes
+        if wantedKey = projectionHolder's key:
+            return nothing
+        set projectionHolder's key to wantedKey
+        set projectionHolder's builds to projectionHolder's builds + 1
+        set modelValue to planEditor's documentValue's current
+        set storeyHeight to the bim storey elevation of planEditor
+        set cutLevel to storeyHeight + (the bim plan cut height of planEditor)
+        set downDepth to (the bim plan depth of planEditor) - (the bim plan projection margin)
+        set topHeight to the bim plan top of planEditor
+        set upDepth to (topHeight - cutLevel) + (the bim plan projection margin)
+        set belowMeshes to a cad topology list of a bim projection mesh record
+        set aboveMeshes to a cad topology list of a bim projection mesh record
+        # The walls and plates the evaluation holds; the storey's own
+        # slabs and roofs only hide, `record bim slab edges` draws them.
+        loop elementCursor from 0 to the length of (planEditor's evaluation's elements's values):
+            set geometry to the item at elementCursor in (planEditor's evaluation's elements's values)
+            if geometry's status = 0:
+                set categoryCode to the bim category of element geometry's id in modelValue
+                if bim plan editor planEditor projects element geometry's id in category categoryCode:
+                    set triangles to an empty fast mesh
+                    append bim mesh of geometry to (the address of triangles)
+                    set drawsEdges to (bim plan editor planEditor symbolises element geometry's id) = false
+                    sort bim plan mesh triangles of geometry's id drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
+        # The scene's meshes, less those that hold lines (reinforcement,
+        # masonry joints).
+        loop meshCursor from 0 to the length of sceneMeshes:
+            set entry to the item at meshCursor in sceneMeshes
+            if (bim scene mesh entry draws lines) = false:
+                if bim plan editor planEditor projects element entry's elementId in category entry's category:
+                    set drawsEdges to (bim plan editor planEditor symbolises element entry's elementId) = false
+                    sort bim plan mesh entry's shape of entry's elementId drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
+        set hidingView to the bim plan hiding view of planEditor cut as cutView
+        # Below: the plan's own plane, looking down; drawing coordinates
+        # are plan coordinates.
+        if downDepth > 0.0:
+            set downPlane to the bim plan plane at storeyHeight cut at (the bim plan cut height of planEditor)
+            set projectionHolder's below to the bim projected edges of (belowMeshes's values) on downPlane from -1e300 to 1e300 within downDepth behind hidingView
+        else:
+            set projectionHolder's below to a cad topology list of a bim projected edge record
+        # Above: the same plane looking up, its y axis turned over so that
+        # it looks the other way; the edges are turned back after. Without
+        # a level above or a storey height, everything above the cut.
+        set projectionHolder's above to a cad topology list of a bim projected edge record
+        if upDepth > 0.0:
+            set upLimit to upDepth
+            if topHeight >= 1e299:
+                set upLimit to 0.0
+            set upPlane to a cad plane with origin (a cad vector3 with x 0.0, y 0.0 and z cutLevel), x axis (the cad x axis) and y axis (a cad vector3 with x 0.0, y -1.0 and z 0.0)
+            set upEdges to the bim projected edges of (aboveMeshes's values) on upPlane from -1e300 to 1e300 within upLimit behind (the bim mirrored view of hidingView)
+            loop edgeCursor from 0 to the length of (upEdges's values):
+                set upEdge to the item at edgeCursor in (upEdges's values)
+                set upEdge's start to a cad vector2 with x upEdge's start's x and y (0.0 - upEdge's start's y)
+                set upEdge's finish to a cad vector2 with x upEdge's finish's x and y (0.0 - upEdge's finish's y)
+                append upEdge to (projectionHolder's above's values)
+
+# Appends edges `projectedEdges` (plan coordinates) as pixel pairs through
+# `transform` to `pairs`, dashed when `dash` is above zero (pieces `dash`
+# long, gaps half as long, from the same end whichever way an edge runs,
+# as `append bim edges of slab` dashes a roof's edges).
+local function append bim plan edges {a pointer to a list:projectedEdges} through {bim drawing transform record:transform} dashing {a 64 bit floating-point number:dash} into {a pointer to a list:pairs}:
+    execute:
+        loop edgeCursor from 0 to the length of projectedEdges:
+            set planEdge to the item at edgeCursor in projectedEdges
+            set here to the bim pixel of planEdge's start through transform
+            set following to the bim pixel of planEdge's finish through transform
+            if dash <= 0.0:
+                append here to pairs
+                append following to pairs
+            else:
+                if (following's x < here's x) or ((following's x = here's x) and (following's y < here's y)):
+                    set swapped to here
+                    set here to following
+                    set following to swapped
+                set total to the cad distance from here to following
+                set position to 0.0
+                loop while (total > 0.0) and (position < total):
+                    set ending to the minimum of (position + dash) and total
+                    append (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to pairs
+                    append (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) to pairs
+                    set position to ending + (dash * 0.5)
+
+# The edges `projection` holds for the plan of `planEditor`, recorded on
+# `canvas` through `transform`: those below the cut in the visible pen,
+# those above it dashed in the hidden pen (dashes of 2 paper millimetres,
+# as a roof's edges); black on a technical drawing (every sheet), dark grey
+# in the model review.
+function record bim plan projection {a pointer to a bim plan projection record:projectionHolder} of {bim editor record:planEditor} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set shade to 80
+        if bim view planEditor's planViewId draws technically on canvas in planEditor's documentValue's current:
+            set shade to 0
+        set belowPairs to an empty list of a cad vector2
+        append bim plan edges (projectionHolder's below's values) through transform dashing 0.0 into belowPairs
+        record bim pen (bim visible pen) strokes belowPairs coloured shade, shade and shade wide 0.7 on canvas
+        free belowPairs
+        set abovePairs to an empty list of a cad vector2
+        append bim plan edges (projectionHolder's above's values) through transform dashing (8.0 * (the bim symbol scale of (@intrinsic("dereference", canvas)))) into abovePairs
+        record bim pen (bim hidden pen) strokes abovePairs coloured shade, shade and shade wide 0.7 on canvas
+        free abovePairs
