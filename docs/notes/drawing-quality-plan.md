@@ -151,6 +151,7 @@ Items are ordered by impact first, then by effort (S, then M, then L). Duplicate
 - **Why it matters:** At every inner wall on A-101, the outer wall's inner face line runs straight through the junction, so the walls do not read as one mass.
 - **Change:** in `draw bim hatched cut faces` (bim_plan_panel.dl:303-365, 430-441), replace the exact-edge match with collinear-overlap subtraction. For each edge, remove the intervals covered by opposite-direction collinear edges of other wall rings, and draw only what is left. This handles L-joints and T-joints alike.
 - **Effort:** M
+- **Status:** done. `append bim uncovered parts of wall edge` subtracts the stretches that other walls' cut edges cover on the same line with their wall on the other side; `collect bim wall edges of` turns every wall ring anticlockwise first, so the rule does not depend on the kernel's loop direction. ui/panels/tests/wall_junctions.dl measures a T junction, a butt L corner and a mitred L corner. Left: only walls are joined this way (a column or slab cut against a wall still draws its line), and a wall hidden by the view rules still interrupts its neighbour's line, as the exact match did.
 
 ### 12. Draw real window and door symbols
 - **Why it matters:**
