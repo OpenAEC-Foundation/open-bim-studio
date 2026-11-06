@@ -63,6 +63,13 @@ def row(label):
     return None
 
 
+def use_type(tab, type_id):
+    """Type `type_id` as the drawing default. Escape first: apply_type also gives the type to a
+    compatible selection, so a floor still selected after it was drawn would become a roof."""
+    escape()
+    return call("apply_type", {"tab": tab, "id": type_id})
+
+
 def type_named(tab, name):
     for entry in call("list_types", {"tab": tab}, quiet=True)["types"]:
         if entry["name"] == name:
@@ -138,7 +145,7 @@ def wall_chain(points):
 
 
 def use_wall_type(name):
-    call("apply_type", {"tab": 0, "id": type_named(0, name)["id"]})
+    use_type(0, type_named(0, name)["id"])
 
 
 def step_walls_eg():
@@ -164,7 +171,7 @@ def step_fix_interior():
 
 
 def sketch_rectangle_floor(type_name, x1, y1, x2, y2):
-    call("apply_type", {"tab": 1, "id": type_named(1, type_name)["id"]})
+    use_type(1, type_named(1, type_name)["id"])
     escape()
     press("Floor")
     call("key", {"code": 82})  # R: rectangle
@@ -184,7 +191,7 @@ def step_floor_dg():
 
 
 def roof_plane(x1, y1, x2, y2, pitch, toward, top_mm):
-    call("apply_type", {"tab": 2, "id": type_named(2, "FZK Dach 230")["id"]})
+    use_type(2, type_named(2, "FZK Dach 230")["id"])
     escape()
     press("Roof")
     call("key", {"code": 82})
@@ -263,7 +270,7 @@ def step_opening_types():
 
 
 def place_opening(type_name, x, y):
-    call("apply_type", {"tab": 7, "id": type_named(7, type_name)["id"]})
+    use_type(7, type_named(7, type_name)["id"])
     escape()
     press("Door" if "tuer" in type_name else "Window")
     result = click(x, y)
