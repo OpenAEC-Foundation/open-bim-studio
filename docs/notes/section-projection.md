@@ -163,8 +163,12 @@ touch them, so only the meshes changed and those whose drawing box touches the b
 cut polygon changed, added or gone are worked out again, among the meshes and cut polygons
 touching them; the rest are copied. The edges equal a whole projection to the bit
 (`ui/panels/tests/plan_projection_drag` checks every frame), and the plan is worked out whole
-again when the edit ends. The same probe, a lowered wall dragged over six frames: 3.3 ms a
-frame updated against 82 ms worked out whole (-O0).
+again when the edit ends. The same probe, against a whole projection that keeps its
+tessellated meshes (-O0, six frames): one storey of 312 walls, a lowered wall 3.4 ms a frame
+updated against 71 ms worked out whole, a full-height wall 3.7 ms against 71 ms; two storeys,
+where the next floor's slab is seen above the cut over the whole plan, 5.5 ms and 11.7 ms
+against 108 ms (a full-height wall's cut changes what is seen above, so the slab is worked
+out again on every frame). The application itself was not run.
 
 ## Not done
 
