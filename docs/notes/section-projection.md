@@ -169,7 +169,9 @@ wall drag pays nearly the whole time. Not measured at -O2 nor on the FZK-Haus.
 - A view flip field.
 - Section-only pens per category: the per-category projection line weight and colour
   overrides (`bim projection weight field`) are not read yet.
-- Sills (vensterbank, waterslag) and door leaf details.
+- Sills and door leaf details on the projected frame beyond the cut. Where the section
+  line cuts a door or window they are drawn by its cut detail
+  (`architectural/openings/bim_opening_section.dl`, drawing quality plan item 15).
 - A real maaiveld height.
 - Elements cut by the section that the evaluation does not hold (stairs, components,
   systems) leave their cut open. Their far faces look away, so little shows through, but
