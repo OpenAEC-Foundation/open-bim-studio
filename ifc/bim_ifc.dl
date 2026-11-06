@@ -13,6 +13,7 @@ import architectural/spaces/bim_spaces.dl
 import viewer/bim_mesh.dl
 import viewer/bim_scene.dl
 import bim/bim_project_settings.dl
+import localisation/bim_utf8.dl
 
 class:
     patterns:
@@ -59,10 +60,48 @@ function the bim area text of {a 64 bit floating-point number:value}:
         set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 33 as a word sized unsigned integer, "%.2f", value)
         return the substring of buffer from 0 spanning written bytes
 
-# A STEP string: apostrophes are doubled; the slice writes ASCII names only.
+# A STEP string: apostrophes are doubled, and a character beyond ASCII (a
+# client's ß or ø, the ² of m²) is written as ISO 10303-21 has it, as
+# backslash X2 backslash, four hexadecimal digits, backslash X0 backslash
+# (one beyond the basic plane as ?), so that the file stays ASCII and
+# readers decode it (`the bim step string of`).
 local function the bim label text of {a string:value}:
     execute:
-        return ((the string form of "'") + (value with (the string form of "'") replaced by (the string form of "''"))) + (the string form of "'")
+        set quoted to value with (the string form of "'") replaced by (the string form of "''")
+        set plain to true
+        loop cursor from 0 to the length of quoted:
+            if (((the character at cursor in quoted) as an integer) bitwise and 255) >= 128:
+                set plain to false
+        if plain:
+            return ((the string form of "'") + quoted) + (the string form of "'")
+        set backslash to a new string buffer containing 1 bytes
+        store (92 as a byte) into the data of backslash at 0
+        set parts to an empty list of a string
+        append (the string form of "'") to parts
+        set position to 0
+        loop while position < (the length of quoted):
+            set stepped to the bim unicode step of quoted at position
+            if stepped's size <= 0:
+                set position to the length of quoted
+            else if stepped's valid = false:
+                set position to position + stepped's size
+            else if stepped's codepoint < 128:
+                append (the substring of quoted from position spanning 1 bytes) to parts
+                set position to position + 1
+            else if stepped's codepoint > 65535:
+                append (the string form of "?") to parts
+                set position to position + stepped's size
+            else:
+                set buffer to a new string buffer containing 8 bytes
+                set written to @intrinsic("variadic call", "libc", "snprintf", integer, 3, the data of buffer, 9 as a word sized unsigned integer, "%04X", stepped's codepoint as a 32 bit integer)
+                append ((backslash + (the string form of "X2")) + backslash) to parts
+                append (the substring of buffer from 0 spanning written bytes) to parts
+                append ((backslash + (the string form of "X0")) + backslash) to parts
+                set position to position + stepped's size
+        append (the string form of "'") to parts
+        set encoded to parts joined with ""
+        free parts
+        return encoded
 
 local function the bim ifc alphabet:
     execute:
@@ -300,6 +339,21 @@ local function the bim optional step string of {a string:value}:
             return the string form of "$"
         return the bim label text of value
 
+# The organisation `actorName` acting for the project (entity number
+# `projectNumber`) in role `roleName` (an IfcRoleEnum: CLIENT, ARCHITECT):
+# its role, the organisation, the actor and the assignment. Nothing for an
+# empty name. `ordinal` keeps each actor's GlobalIds apart.
+local function write bim acting organisation {a string:actorName} as {a string:roleName} numbered {integer:ordinal} for {integer:projectNumber} in {a pointer to a bim step writer record:writer}:
+    execute:
+        if (the length of actorName) = 0:
+            return nothing
+        set roleNumber to write bim entity (((the string form of "IFCACTORROLE(.") + roleName) + (the string form of ".,$,$)")) to writer
+        set companyNumber to write bim entity (((the string form of "IFCORGANIZATION($,") + (the bim label text of actorName)) + (((the string form of ",$,(") + (the bim reference text of roleNumber)) + (the string form of "),$)"))) to writer
+        set actorBody to ((the string form of "IFCACTOR(") + (the bim global id for kind 17 of (ordinal as a 64 bit integer))) + ((the string form of ",$,") + (the bim label text of actorName))
+        set actorNumber to write bim entity (((actorBody + (the string form of ",$,$,")) + (the bim reference text of companyNumber)) + (the string form of ")")) to writer
+        set assignment to ((the string form of "IFCRELASSIGNSTOACTOR(") + (the bim global id for kind 18 of (ordinal as a 64 bit integer))) + ((the string form of ",$,$,$,(") + (the bim reference text of projectNumber))
+        ignore write bim entity (((assignment + (the string form of "),$,")) + (the bim reference text of actorNumber)) + (((the string form of ",") + (the bim reference text of roleNumber)) + (the string form of ")"))) to writer
+
 # Whether a property's value of IFC type `typeName` is written quoted (a
 # label, a text, an identifier, a date: IFC's string types).
 local function bim ifc type {a string:typeName} holds text:
@@ -524,8 +578,26 @@ function the bim ifc text of {bim model record:modelValue} using schema43 {boole
             set mapBody to ((mapBody + (the bim real text of mapOrigin's z)) + (the string form of ",")) + ((the bim real text of (the cosine of northAngle)) + (the string form of ","))
             ignore write bim entity ((mapBody + (the bim real text of (0.0 - (the sine of northAngle)))) + (the string form of ",$)")) to w
         set bodyContext to write bim entity (((the string form of "IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,") + (the bim reference text of context)) + (the string form of ",$,.MODEL_VIEW.,$)")) to w
-        set projectBody to ((the string form of "IFCPROJECT(") + (the bim global id for kind 1 of (1 as a 64 bit integer))) + (the string form of ",$,'Open BIM Studio',$,$,$,$,(")
+        # The project's data (`bim_project_settings.dl`): its number as
+        # Name (its name when it has no number), its name as LongName, its
+        # phase as Phase.
+        set projectName to the bim project text (bim project name field) of modelValue
+        set projectNumber to the bim project text (bim project number field) of modelValue
+        set projectLabel to projectNumber
+        if (the length of projectLabel) = 0:
+            set projectLabel to projectName
+        if (the length of projectLabel) = 0:
+            set projectLabel to the string form of "Open BIM Studio"
+        set projectBody to ((the string form of "IFCPROJECT(") + (the bim global id for kind 1 of (1 as a 64 bit integer))) + ((the string form of ",$,") + (the bim label text of projectLabel))
+        set projectPhase to the bim project text (bim project phase field) of modelValue
+        set clientName to the bim project text (bim project client field) of modelValue
+        set architectName to the bim project text (bim project architect field) of modelValue
+        set projectBody to ((projectBody + (the string form of ",$,$,")) + (the bim optional step string of projectName)) + (((the string form of ",") + (the bim optional step string of projectPhase)) + (the string form of ",("))
         set project to write bim entity (((projectBody + (the bim reference text of context)) + (the string form of "),")) + ((the bim reference text of units) + (the string form of ")"))) to w
+        # The client (opdrachtgever) and the architect: each an organisation
+        # acting for the project in its role.
+        write bim acting organisation clientName as (the string form of "CLIENT") numbered 1 for project in w
+        write bim acting organisation architectName as (the string form of "ARCHITECT") numbered 2 for project in w
         set sitePlacement to the bim ifc placement at height 0.0 relative to 0 in w
         set site to write bim entity (((the string form of "IFCSITE(") + (the bim global id for kind 2 of (1 as a 64 bit integer))) + (((the string form of ",$,'Site',$,$,") + (the bim reference text of sitePlacement)) + (the string form of ",$,$,.ELEMENT.,$,$,$,$,$)"))) to w
         set buildingPlacement to the bim ifc placement at height 0.0 relative to sitePlacement in w

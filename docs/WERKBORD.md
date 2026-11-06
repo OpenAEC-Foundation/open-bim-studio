@@ -24,6 +24,7 @@ reserved number for another function. Record new public command codes in advance
 | **2475–2476** | commands | Door Flip hand (hinges to the other jamb) and Flip swing (opens to the other side), on a selected door's floating toolbar | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **2402520–2402521** | settings on an opening | A door's hand (1 right-handed per EN 12519; absent left) and swing (1 opens to the outdoor side; absent indoor) | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **12830–12831** | properties | A door's Hand (click) and Opens (click) rows | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
+| **12820–12828** | properties | Project data, typed (12820 project name, 12821 number, 12822 client, 12823 architect, 12824 phase) and a sheet's title block, typed (12825 date, 12826 drawn by, 12827 checked by, 12828 add revision) | Computer 1, `mod/views/title-block` (6 November 2026) |
 | **2461** | command | Exterior dimensions: three chains along the storey's outer walls (View > Annotate) | Computer 1, drawing quality (5 November 2026) |
 | **2460** | command | Room separator: draws room separation lines (Home > Plane > Spaces) | Computer 1, room separation (5 November 2026) |
 | **91** | tool id | Room separator | Computer 1, room separation (5 November 2026) |
@@ -68,6 +69,12 @@ Identifiers with a fixed meaning that must stay compatible:
   group. Existing styles remain unchanged.
 - Existing connection kind/style IDs and 10000-series properties retain their meanings. Native
   older-file defaults must remain explicit.
+- Project data are properties of element 0 in the set `Project data` (`ProjectName`,
+  `ProjectNumber`, `Client`, `Architect`, `Phase`); a sheet's title block fields are
+  properties of the sheet in the set `Title block` (`Date`, `DrawnBy`, `CheckedBy`) and its
+  revisions in the set `Revisions` (`1.Revision`, `1.Date`, `1.Description`, `1.DrawnBy`,
+  `1.CheckedBy`, numbered from 1 without a gap). IFC GlobalId kinds 17 and 18 are the
+  project's actors and their assignments (`mod/views/title-block`, 6 November 2026).
 - Window recipes are appended after the existing 21 entries so stored indices remain stable;
   timber and Reynaers window recipes use append-only recipe indices 33–42.
 
