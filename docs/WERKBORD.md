@@ -21,6 +21,7 @@ reserved number for another function. Record new public command codes in advance
 
 | Code / range | Kind | Reserved for | Reserved by (date) |
 |---|---|---|---|
+| **2401710–2401749** | settings on a wall | The further plates a wall's top is attached to after the first at 2401701 (the n-th further plate's id at 2401710 + n); a top attached to several plates follows the lowest one covering each stretch of the wall (a gable under two roof planes). Absent: attached to one plate, as before. In the Top constraint row (12670) such a wall reads "Attached to roofs above"; the choice's target id is −2, no element's | Computer 1, `mod/elements/wall-top-two-roofs` (6 November 2026) |
 | **12840** | property | A section's or elevation's View depth, typed in metres (0: all that lies beyond); kept as the view record's `depth`, the native file's `viewdepth` line and IfcX's `depth` field | Computer 1, `mod/views/section-projection` (6 November 2026) |
 | **2462** | command | Height dimensions: the height chains of the section shown (openings beside each facade, floor to floor up to the roof's top, the whole), 8/14/20 mm off on paper, made again on each use (View > Annotate) | Computer 1, `mod/views/section-heights` (6 November 2026) |
 | **9–12** | dimension feature kinds | Heights for a section's dimensions: 9 a level's height, 10 an opening's sill, 11 an opening's head, 12 a plate's highest top (ridge) | Computer 1, `mod/views/section-heights` (6 November 2026) |
