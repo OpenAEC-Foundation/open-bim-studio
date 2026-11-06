@@ -22,6 +22,10 @@ reserved number for another function. Record new public command codes in advance
 | Code / range | Kind | Reserved for | Reserved by (date) |
 |---|---|---|---|
 | **12840** | property | A section's or elevation's View depth, typed in metres (0: all that lies beyond); kept as the view record's `depth`, the native file's `viewdepth` line and IfcX's `depth` field | Computer 1, `mod/views/section-projection` (6 November 2026) |
+| **2462** | command | Height dimensions: the height chains of the section shown (openings beside each facade, floor to floor up to the roof's top, the whole), 8/14/20 mm off on paper, made again on each use (View > Annotate) | Computer 1, `mod/views/section-heights` (6 November 2026) |
+| **9–12** | dimension feature kinds | Heights for a section's dimensions: 9 a level's height, 10 an opening's sill, 11 an opening's head, 12 a plate's highest top (ridge) | Computer 1, `mod/views/section-heights` (6 November 2026) |
+| **1800010** | project setting | Ground level (maaiveld) above peil in millimetres; absent when not set | Computer 1, `mod/views/section-heights` (6 November 2026) |
+| **271** | property | Ground level (maaiveld), typed in metres, on the Project settings page | Computer 1, `mod/views/section-heights` (6 November 2026) |
 | **2475–2476** | commands | Door Flip hand (hinges to the other jamb) and Flip swing (opens to the other side), on a selected door's floating toolbar | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **2402520–2402521** | settings on an opening | A door's hand (1 right-handed per EN 12519; absent left) and swing (1 opens to the outdoor side; absent indoor) | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |
 | **12830–12831** | properties | A door's Hand (click) and Opens (click) rows | Computer 1, `mod/architectural/opening-symbols` (6 November 2026) |

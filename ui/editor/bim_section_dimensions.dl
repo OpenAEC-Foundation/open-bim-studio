@@ -1,0 +1,226 @@
+# SPDX-License-Identifier: MPL-2.0
+# Height chains in a section, as a Dutch section has them beside the
+# building ("hoogtematen"), each a chain of dimensions between heights that
+# follow the model (`bim level height feature` and the other height
+# features: a storey's level, an opening's sill and head, a plate's highest
+# top), kept in the section's view:
+# - the openings: beside each facade, the storeys' floors and the sill and
+#   head of every window and door the section cuts on that side;
+# - floor to floor: the storeys' floors and the top of the roof (its ridge,
+#   or the highest plate's top);
+# - the whole: the lowest floor to that top.
+# The chains lie 8, 14 and 20 mm off the building's outer face on paper,
+# whatever the scale of the view that draws them; the openings' chains on
+# the side of their facade, the others on the left of the section.
+import ui/editor/bim_editor_core.dl
+
+# How far beside the building the three chains lie, in millimetres on
+# paper.
+function bim height chain offset {integer:chainIndex}:
+    execute:
+        if chainIndex = 0:
+            return 8.0
+        if chainIndex = 1:
+            return 14.0
+        return 20.0
+
+# A height of a chain: its reference and the height it resolves to.
+class:
+    patterns:
+        [a|] bim height stop record
+    members:
+        reference as a bim reference record
+        height as a 64 bit floating-point number
+
+# Feature `featureCode` of element `elementId` as a stop; its height is not
+# a number when it does not resolve.
+local function a bim height stop of {a 64 bit integer:elementId} feature {integer:featureCode} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set reference to @intrinsic("construct", a bim reference record, elementId, featureCode)
+        set anchor to the bim feature of reference in modelValue using index
+        set stopHeight to 0.0 / 0.0
+        if anchor's valid:
+            set stopHeight to anchor's origin's y
+        return @intrinsic("construct", a bim height stop record, reference, stopHeight)
+
+# Where the section line from `first` to `second` crosses opening
+# `openingValue` within its width, in metres along the line (as the section
+# draws its void, `the bim section box of opening`); not a number when it
+# does not cross it, or the opening stands in a curtain wall.
+local function the bim section crossing of opening {bim opening record:openingValue} from {cad vector2:first} to {cad vector2:second} in {bim model record:modelValue}:
+    execute:
+        set missing to 0.0 / 0.0
+        set hostFound to the bim wall index of openingValue's hostId in modelValue
+        set typeFound to the bim opening type index of openingValue's typeId in modelValue
+        if (hostFound's valid = false) or (typeFound's valid = false):
+            return missing
+        set host to the item at hostFound's position in (modelValue's walls's values)
+        set run to the cad distance from first to second
+        set wallLength to the cad distance from host's start to host's finish
+        if (run < 1e-9) or (wallLength < 1e-9):
+            return missing
+        set dx to (second's x - first's x) / run
+        set dy to (second's y - first's y) / run
+        set gx to host's finish's x - host's start's x
+        set gy to host's finish's y - host's start's y
+        set denominator to (dx * gy) - (dy * gx)
+        if (the absolute value of denominator) < 1e-9:
+            return missing
+        set ox to host's start's x - first's x
+        set oy to host's start's y - first's y
+        set alongLine to ((ox * gy) - (oy * gx)) / denominator
+        set onWall to ((ox * dy) - (oy * dx)) / denominator
+        set halfWidth to (the bim rough width of (the item at typeFound's position in (modelValue's openingTypes's values))) * 0.5
+        set fromStart to onWall * wallLength
+        if (fromStart < (openingValue's offset - halfWidth)) or (fromStart > (openingValue's offset + halfWidth)):
+            return missing
+        if (alongLine < 0.0) or (alongLine > run):
+            return missing
+        return alongLine
+
+# Adds the stops of `stops` in order of height as a chain of dimensions in
+# view `viewId`, `paperMillimetres` on paper beside the face at `faceX`
+# (section coordinates) on the side `sideSign` (-1 left, 1 right); the number
+# of dimensions made. Stops less than 5 mm apart make no dimension.
+local function add bim height chain {a pointer to a list:stops} in view {a 64 bit integer:viewId} beside {a 64 bit floating-point number:faceX} on side {a 64 bit floating-point number:sideSign} at {a 64 bit floating-point number:paperMillimetres} to {a pointer to a bim model record:target}:
+    execute:
+        # Sorted by height (insertion: the chains are short).
+        set count to the length of stops
+        loop outer from 1 to count:
+            set inner to outer
+            loop while inner > 0:
+                set before to the item at (inner - 1) in stops
+                set here to the item at inner in stops
+                if before's height > here's height:
+                    replace item at index (inner - 1) in stops with here
+                    replace item at index inner in stops with before
+                    set inner to inner - 1
+                else:
+                    set inner to 0
+        set made to 0
+        set outwardDir to a cad vector2 with x sideSign and y 0.0
+        loop cursor from 1 to count:
+            set fromStop to the item at (cursor - 1) in stops
+            set ontoStop to the item at cursor in stops
+            if (ontoStop's height - fromStop's height) > 0.005:
+                set base to a cad vector2 with x faceX and y ((fromStop's height + ontoStop's height) * 0.5)
+                ignore add bim dimension from fromStop's reference to ontoStop's reference in view viewId through base outward outwardDir at paperMillimetres paper millimetres to target
+                set made to made + 1
+        return made
+
+# Appends the stops of `source` to `stops`.
+local function append bim height stops {a pointer to a list:source} to {a pointer to a list:stops}:
+    execute:
+        loop cursor from 0 to the length of source:
+            append (the item at cursor in source) to stops
+
+# The height chains of section view `viewValue`, whose cut is `sectionCut`
+# (`the bim section of … from … to …`), made again: the view's dimensions
+# before are dropped (a section has no other). The number of dimensions
+# made; none when the section cuts nothing.
+function add bim height dimensions of section {bim view definition record:viewValue} cut {bim view record:sectionCut} to {a pointer to a bim model record:target}:
+    execute:
+        ignore drop bim dimensions of view viewValue's id in target
+        set modelValue to @intrinsic("dereference", target)
+        set index to the bim join index of modelValue
+        # The building in the section: what it cuts.
+        set lowX to 1e300
+        set highX to -1e300
+        set lowY to 1e300
+        set highY to -1e300
+        loop sourceCursor from 0 to the length of (sectionCut's sources's values):
+            set polygons to (the item at sourceCursor in (sectionCut's sources's values))'s polygons's values
+            loop polygonCursor from 0 to the length of polygons:
+                set corners to (the item at polygonCursor in polygons)'s points's values
+                loop corner from 0 to the length of corners:
+                    set point to the item at corner in corners
+                    set lowX to the minimum of lowX and point's x
+                    set highX to the maximum of highX and point's x
+                    set lowY to the minimum of lowY and point's y
+                    set highY to the maximum of highY and point's y
+        if highX < lowX:
+            return 0
+        # The storeys' floors within its height.
+        set levelStops to an empty list of a bim height stop record
+        set highestLevel to -1e300
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at cursor in (modelValue's levels's values)
+            if (levelValue's elevation >= (lowY - 0.001)) and (levelValue's elevation <= (highY + 0.001)):
+                append (a bim height stop of levelValue's id feature (bim level height feature) in modelValue using index) to levelStops
+                set highestLevel to the maximum of highestLevel and levelValue's elevation
+        # The top: the highest top of a plate it cuts, above the floors.
+        set topFound to false
+        set topStop to a bim height stop of (the bim refused id) feature (bim plate top feature) in modelValue using index
+        loop sourceCursor from 0 to the length of (sectionCut's sources's values):
+            set sourceId to (the item at sourceCursor in (sectionCut's sources's values))'s id
+            if (the bim slab index of sourceId in modelValue)'s valid:
+                set plateStop to a bim height stop of sourceId feature (bim plate top feature) in modelValue using index
+                if (plateStop's height - plateStop's height) = 0.0:
+                    if plateStop's height > (highestLevel + 0.005):
+                        if (topFound = false) or (plateStop's height > topStop's height):
+                            set topStop to plateStop
+                            set topFound to true
+        # The openings it cuts, by side: left of the building's middle on
+        # the left.
+        set middleX to (lowX + highX) * 0.5
+        set leftOpenings to an empty list of a bim height stop record
+        set rightOpenings to an empty list of a bim height stop record
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            set crossing to the bim section crossing of opening openingValue from viewValue's lineStart to viewValue's lineFinish in modelValue
+            if (crossing - crossing) = 0.0:
+                set sillStop to a bim height stop of openingValue's id feature (bim opening sill feature) in modelValue using index
+                set headStop to a bim height stop of openingValue's id feature (bim opening head feature) in modelValue using index
+                if ((sillStop's height - sillStop's height) = 0.0) and ((headStop's height - headStop's height) = 0.0):
+                    if crossing < middleX:
+                        append sillStop to leftOpenings
+                        append headStop to leftOpenings
+                    else:
+                        append sillStop to rightOpenings
+                        append headStop to rightOpenings
+        set viewId to viewValue's id
+        set made to 0
+        if (the length of leftOpenings) > 0:
+            append bim height stops levelStops to leftOpenings
+            set made to made + (add bim height chain leftOpenings in view viewId beside lowX on side (-1.0) at (bim height chain offset 0) to target)
+        if (the length of rightOpenings) > 0:
+            append bim height stops levelStops to rightOpenings
+            set made to made + (add bim height chain rightOpenings in view viewId beside highX on side 1.0 at (bim height chain offset 0) to target)
+        set floorStops to an empty list of a bim height stop record
+        append bim height stops levelStops to floorStops
+        if topFound:
+            append topStop to floorStops
+        set floorMade to add bim height chain floorStops in view viewId beside lowX on side (-1.0) at (bim height chain offset 1) to target
+        set made to made + floorMade
+        # The whole, when floor to floor has more than one step.
+        if floorMade > 1:
+            set wholeStops to an empty list of a bim height stop record
+            append (the item at 0 in floorStops) to wholeStops
+            append (the last item of floorStops) to wholeStops
+            set made to made + (add bim height chain wholeStops in view viewId beside lowX on side (-1.0) at (bim height chain offset 2) to target)
+            free wholeStops
+        free floorStops
+        free leftOpenings
+        free rightOpenings
+        free levelStops
+        return made
+
+# 2462 (Annotate > Height dimensions): the height chains of the section
+# shown, made again, as one undo step.
+function add bim editor height dimensions in {a pointer to a bim editor record:editor}:
+    execute:
+        set found to the bim view index of editor's sectionViewId in editor's documentValue's current
+        if (editor's hasSection = false) or (found's valid = false):
+            set editor's message to the string form of "Height dimensions: open a section first"
+            return nothing
+        set viewValue to the item at found's position in (editor's documentValue's current's views's values)
+        set sectionCut to the bim section of (editor's evaluation) from (viewValue's lineStart) to (viewValue's lineFinish)
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to add bim height dimensions of section viewValue cut sectionCut to (the address of (editor's documentValue's current))
+        if made = 0:
+            roll back bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Height dimensions: the section cuts no storey"
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's viewsDirty to true
+        set editor's message to ((the string form of "Height dimensions: ") + (the string form of made)) + (the string form of " dimensions in chains beside the section")
