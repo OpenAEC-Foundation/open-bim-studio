@@ -7,7 +7,8 @@
 #   and the volume of the evaluated solids.
 # - Doors and windows, per type: the count and the total rough opening area.
 # - Slabs: the outline area and the evaluated volume.
-# - Spaces: the floor area.
+# - Spaces: one row per room, storey by storey, with its number, name,
+#   storey and net floor area, and an explicit space's volume.
 # - Masses (pushed sketch faces): the footprint area and the volume.
 # - Components, each: the instances placed, and the footprint area and the
 #   volume of the masses in all of them.
@@ -28,10 +29,71 @@ class:
         length as a 64 bit floating-point number
         area as a 64 bit floating-point number
         volume as a 64 bit floating-point number
+        number as a string
+        storey as a string
 
 local function a bim schedule row in {a string:group} named {a string:name}:
     execute:
-        return @intrinsic("construct", a bim schedule row record, group, name, 0, -1.0, -1.0, -1.0)
+        return @intrinsic("construct", a bim schedule row record, group, name, 0, -1.0, -1.0, -1.0, the string form of "", the string form of "")
+
+# The text a table shows for `row`'s type: a room's number before its name.
+function the bim schedule label of {bim schedule row record:row}:
+    execute:
+        if (the length of row's number) = 0:
+            return row's name
+        return (row's number + (the string form of "  ")) + row's name
+
+# Whether room number `first` sorts before `second`, byte by byte, a prefix
+# first: 0.02 before 0.10 before 1.01.
+local function bim room number {a string:first} sorts before {a string:second}:
+    execute:
+        set shared to the minimum of (the length of first) and (the length of second)
+        loop cursor from 0 to shared:
+            set firstByte to ((the character at cursor in first) as an integer) bitwise and 255
+            set secondByte to ((the character at cursor in second) as an integer) bitwise and 255
+            if firstByte != secondByte:
+                return firstByte < secondByte
+        return (the length of first) < (the length of second)
+
+# One row per room, storey by storey in the levels' order: the explicit
+# spaces by number, then the regions derived from the walls that no explicit
+# space claims (`the bim unsaved regions`), named as the IFCX export names
+# them ("Space 1"). A row has the room's number, name, storey and net floor
+# area, and an explicit space's volume over its own height; its group names
+# the storey ("Spaces: Ground floor"), so a table heads each storey once.
+local function append bim rooms of {bim model record:modelValue} joined by {bim join index record:joinIndex} to {a pointer to a list:target}:
+    execute:
+        loop levelCursor from 0 to the length of (modelValue's levels's values):
+            set levelValue to the item at levelCursor in (modelValue's levels's values)
+            set storeyGroup to (the string form of "Spaces: ") + levelValue's name
+            set ordered to an empty list of an integer
+            loop objectCursor from 0 to the length of (modelValue's spaceObjects's values):
+                set candidate to the item at objectCursor in (modelValue's spaceObjects's values)
+                if candidate's levelId = levelValue's id:
+                    set place to 0
+                    loop orderedCursor from 0 to the length of ordered:
+                        set placed to the item at (the item at orderedCursor in ordered) in (modelValue's spaceObjects's values)
+                        if (bim room number placed's number sorts before candidate's number) or (placed's number = candidate's number):
+                            set place to orderedCursor + 1
+                    insert objectCursor into ordered at index place
+            loop orderedCursor from 0 to the length of ordered:
+                set spaceValue to the item at (the item at orderedCursor in ordered) in (modelValue's spaceObjects's values)
+                set row to a bim schedule row in storeyGroup named spaceValue's name
+                set row's number to spaceValue's number
+                set row's storey to levelValue's name
+                set row's count to 1
+                set row's area to the absolute value of (the cad signed area of (spaceValue's outline's values))
+                set row's volume to row's area * spaceValue's height
+                append row to target
+            free ordered
+            set allRegions to the bim spaces of modelValue on level levelValue's id using joinIndex
+            set unsaved to the bim unsaved regions of (allRegions's values) in modelValue
+            loop regionCursor from 0 to the length of (unsaved's values):
+                set row to a bim schedule row in storeyGroup named ((the string form of "Space ") + (the string form of (regionCursor + 1)))
+                set row's storey to levelValue's name
+                set row's count to 1
+                set row's area to (the item at regionCursor in (unsaved's values))'s area
+                append row to target
 
 # The doubled signed area of the closed ring `points`.
 local function the bim ring area of {a pointer to a list:points}:
@@ -98,8 +160,8 @@ function append bim services rows of {bim model record:modelValue} to {a pointer
         free linearSystems
 
 # The schedule of `modelValue`, with volumes from `evaluation` (which must
-# have evaluated it) and the spaces `spaces`.
-function the bim schedule of {bim model record:modelValue} with {bim evaluation record:evaluation} and {a pointer to a list:spaces}:
+# have evaluated it) and the rooms of every storey.
+function the bim schedule of {bim model record:modelValue} with {bim evaluation record:evaluation}:
     execute:
         set rows to a cad topology list of a bim schedule row record
         loop reinforcementCursor from 0 to the length of (modelValue's reinforcements's values):
@@ -109,7 +171,7 @@ function the bim schedule of {bim model record:modelValue} with {bim evaluation 
             loop barCursor from 0 to the length of (generated's bars's values):
                 set itemValue to the item at barCursor in (generated's bars's values)
                 set volumeValue to volumeValue + ((((3.141592653589793 * itemValue's diameter) * itemValue's diameter) * 0.25) * itemValue's length)
-            append (@intrinsic("construct", a bim schedule row record, the string form of "Reinforcement", the reinforcement annotation of spec, the length of (generated's bars's values), the reinforcement total length of generated, -1.0, volumeValue)) to (rows's values)
+            append (@intrinsic("construct", a bim schedule row record, the string form of "Reinforcement", the reinforcement annotation of spec, the length of (generated's bars's values), the reinforcement total length of generated, -1.0, volumeValue, the string form of "", the string form of "")) to (rows's values)
         # Once for the whole model: each wall's and slab's evaluated volume
         # and each wall's openings' area, by position (each element is found
         # by its id, in id order, not searched for per row).
@@ -215,13 +277,7 @@ function the bim schedule of {bim model record:modelValue} with {bim evaluation 
                     set row's volume to row's volume + (profileArea * run)
             if row's count > 0:
                 append row to (rows's values)
-        if (the length of spaces) > 0:
-            set row to a bim schedule row in (the string form of "Spaces") named (the string form of "Rooms")
-            set row's area to 0.0
-            loop cursor from 0 to the length of spaces:
-                set row's count to row's count + 1
-                set row's area to row's area + (the item at cursor in spaces)'s area
-            append row to (rows's values)
+        append bim rooms of modelValue joined by evaluation's index to (rows's values)
         set masses to a bim schedule row in (the string form of "Masses") named (the string form of "Sketch masses")
         set masses's area to 0.0
         set masses's volume to 0.0
@@ -312,7 +368,9 @@ function bim schedule group {a string:group} belongs in {integer:scheduleCode}:
         if scheduleCode = 4:
             return ((((group = (the string form of "Columns")) or (group = (the string form of "Beams"))) or ((group = (the string form of "Mullions")) or (group = (the string form of "Skirtings")))) or (group = (the string form of "Pipes"))) or (((group = (the string form of "Linear elements")) or (group = (the string form of "Ducts"))) or (group = (the string form of "Cable trays")))
         if scheduleCode = 5:
-            return group = (the string form of "Spaces")
+            if (the length of group) < 6:
+                return false
+            return (the substring of group from 0 spanning 6 bytes) = (the string form of "Spaces")
         if scheduleCode = 7:
             return group = (the string form of "Clashes")
         if scheduleCode = 6:
@@ -337,7 +395,7 @@ function the bim schedule csv of {a pointer to a list:rows}:
         set text to the string form of "Group,Type,Count,Length (m),Area (m2),Volume (m3)\n"
         loop cursor from 0 to the length of rows:
             set row to the item at cursor in rows
-            set line to ((row's group + (the string form of ",")) + row's name) + (the string form of ",")
+            set line to ((row's group + (the string form of ",")) + (the bim schedule label of row)) + (the string form of ",")
             set line to ((line + (the string form of row's count)) + (the string form of ",")) + (the bim schedule text of row's length)
             set line to ((line + (the string form of ",")) + (the bim schedule text of row's area)) + (the string form of ",")
             set text to ((text + line) + (the bim schedule text of row's volume)) + (the string form of "\n")
