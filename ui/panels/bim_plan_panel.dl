@@ -1571,9 +1571,97 @@ function add bim edge arrows at {cad vector2:pixel} across {cad vector2:here} to
             add a vertex at x ((pixel's x + ((sign * gap) * nx)) + (half * ux)) and y ((pixel's y + ((sign * gap) * ny)) + (half * uy)) to frame
             add a vertex at x ((pixel's x + ((sign * gap) * nx)) - (half * ux)) and y ((pixel's y + ((sign * gap) * ny)) - (half * uy)) to frame
 
+# Whether slab `slabValue` shows in the plan of `editor`: on its storey,
+# its category and its node of the category tree visible, its phase not
+# hidden.
+function bim slab {bim slab record:slabValue} shows in plan of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        if slabValue's levelId != editor's levelId:
+            return false
+        if (bim category (the bim category of element slabValue's id in modelValue) is visible in editor's planRules) = false:
+            return false
+        if (the bim phase look of element slabValue's id in plan of editor) = bim phase hidden look:
+            return false
+        return (the bim node of element slabValue's id by editor's planRules in modelValue)'s visible
+
+# Whether the edges of slab `slabValue` are dashed in a plan: a roof's or a
+# ceiling's, which lie above the cut; a floor's are not.
+function bim slab {bim slab record:slabValue} is dashed in plan in {bim model record:modelValue}:
+    execute:
+        return (the bim role of plate slabValue in modelValue) != bim floor planar role
+
+# Appends the edges of slab `slabValue` as pixel pairs through `transform`
+# to `pairs`: its openings' rectangles, then its outline, dashed (pieces
+# `dash` long, gaps half as long) when `bim slab … is dashed in plan`.
+function append bim edges of slab {bim slab record:slabValue} in {bim model record:modelValue} through {bim drawing transform record:transform} dashing {a 64 bit floating-point number:dash} into {a pointer to a list:pairs}:
+    execute:
+        set holeRings to the bim plate holes of slabValue's id in modelValue
+        loop holeCursor from 0 to the length of holeRings:
+            set holeRing to the item at holeCursor in holeRings
+            loop holeCorner from 0 to 4:
+                append (the bim pixel of (the item at holeCorner in holeRing) through transform) to pairs
+                append (the bim pixel of (the item at (the remainder of (holeCorner + 1) divided by 4) in holeRing) through transform) to pairs
+        free bim plate holes holeRings
+        set isDashed to bim slab slabValue is dashed in plan in modelValue
+        set count to the length of (slabValue's outline's values)
+        loop corner from 0 to count:
+            set here to the bim pixel of (the item at corner in (slabValue's outline's values)) through transform
+            set following to the bim pixel of (the item at (the remainder of (corner + 1) divided by count) in (slabValue's outline's values)) through transform
+            if isDashed:
+                set total to the cad distance from here to following
+                set position to 0.0
+                loop while (total > 0.0) and (position < total):
+                    set ending to the minimum of (position + dash) and total
+                    append (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to pairs
+                    append (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) to pairs
+                    set position to ending + (dash * 0.5)
+            else:
+                append here to pairs
+                append following to pairs
+
+# The slab and roof edges of the plan's storey recorded on `canvas`, as
+# `draw bim slabs` draws them on screen: a floor's edges as visible lines, a
+# roof's or a ceiling's, above the cut, dashed as hidden lines (dashes of 2
+# paper millimetres); black on a technical drawing (every sheet), tan in the
+# model review; a node of the category tree's projection colour and weight
+# over either.
+function record bim slab edges of {bim editor record:editor} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set technical to bim view editor's planViewId draws technically on canvas in modelValue
+        set symbolScale to the bim symbol scale of (@intrinsic("dereference", canvas))
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            if bim slab slabValue shows in plan of editor:
+                set plateNode to the bim node of element slabValue's id by editor's planRules in modelValue
+                set edgePen to bim visible pen
+                if bim slab slabValue is dashed in plan in modelValue:
+                    set edgePen to bim hidden pen
+                set edgeWidth to the bim stroke width of pen edgePen else 1.0 on (@intrinsic("dereference", canvas))
+                if plateNode's projectionWeight >= (0 as a 64 bit integer):
+                    set edgeWidth to the bim pixel width of weight plateNode's projectionWeight
+                set edgeRed to 196
+                set edgeGreen to 170
+                set edgeBlue to 120
+                if technical:
+                    set edgeRed to 0
+                    set edgeGreen to 0
+                    set edgeBlue to 0
+                if plateNode's projectionColour >= (0 as a 64 bit integer):
+                    set edgeRed to the bim red of colour plateNode's projectionColour
+                    set edgeGreen to the bim green of colour plateNode's projectionColour
+                    set edgeBlue to the bim blue of colour plateNode's projectionColour
+                set edgePairs to an empty list of a cad vector2
+                append bim edges of slab slabValue in modelValue through transform dashing (8.0 * symbolScale) into edgePairs
+                record bim strokes edgePairs coloured edgeRed, edgeGreen and edgeBlue wide edgeWidth on canvas
+                free edgePairs
+
 # The outlines of the active storey's slabs, faintly; the selected slab's
 # outline strongly, with a handle on every corner to drag and arrows on
-# every edge's middle that push that side across itself.
+# every edge's middle that push that side across itself. The outlines are
+# drawn every frame, rather than recorded with the plan, so that they follow
+# a slab while it is dragged; a sheet records them (`record bim slab edges`).
 function draw bim slabs of {bim editor record:editor} through {bim drawing transform record:transform} in {graphics frame:frame}:
     execute:
         set modelValue to editor's documentValue's current
@@ -1589,10 +1677,8 @@ function draw bim slabs of {bim editor record:editor} through {bim drawing trans
             use vertex color red 196, green 170 and blue 120 in frame
             loop cursor from 0 to the length of (modelValue's slabs's values):
                 set slabValue to the item at cursor in (modelValue's slabs's values)
-                set plateCategory to the bim category of element slabValue's id in modelValue
-                set slabShown to (the bim phase look of element slabValue's id in plan of editor) != bim phase hidden look
-                set plateNode to the bim node of element slabValue's id by editor's planRules in modelValue
-                if ((slabValue's levelId = editor's levelId) and (bim category plateCategory is visible in editor's planRules)) and (slabShown and plateNode's visible):
+                if bim slab slabValue shows in plan of editor:
+                    set plateNode to the bim node of element slabValue's id by editor's planRules in modelValue
                     # Its projection lines' colour and weight, when its
                     # node of the category tree overrides them.
                     set edgeWidth to 1.0
@@ -1602,28 +1688,13 @@ function draw bim slabs of {bim editor record:editor} through {bim drawing trans
                         use vertex color red (the bim red of colour plateNode's projectionColour), green (the bim green of colour plateNode's projectionColour) and blue (the bim blue of colour plateNode's projectionColour) in frame
                     else:
                         use vertex color red 196, green 170 and blue 120 in frame
-                    set dashed to (the bim role of plate slabValue in modelValue) != bim floor planar role
-                    set holeRings to the bim plate holes of slabValue's id in modelValue
-                    loop holeCursor from 0 to the length of holeRings:
-                        set holeRing to the item at holeCursor in holeRings
-                        loop holeCorner from 0 to 4:
-                            set holeHere to the bim pixel of (the item at holeCorner in holeRing) through transform
-                            set holeNext to the bim pixel of (the item at (the remainder of (holeCorner + 1) divided by 4) in holeRing) through transform
-                            add bim stroke from holeHere to holeNext wide edgeWidth in frame
-                    free bim plate holes holeRings
-                    set count to the length of (slabValue's outline's values)
-                    loop corner from 0 to count:
-                        set here to the bim pixel of (the item at corner in (slabValue's outline's values)) through transform
-                        set following to the bim pixel of (the item at (the remainder of (corner + 1) divided by count) in (slabValue's outline's values)) through transform
-                        if dashed:
-                            set total to the cad distance from here to following
-                            set position to 0.0
-                            loop while (total > 0.0) and (position < total):
-                                set ending to the minimum of (position + 8.0) and total
-                                add bim stroke from (a cad vector2 with x (here's x + (((following's x - here's x) * position) / total)) and y (here's y + (((following's y - here's y) * position) / total))) to (a cad vector2 with x (here's x + (((following's x - here's x) * ending) / total)) and y (here's y + (((following's y - here's y) * ending) / total))) wide edgeWidth in frame
-                                set position to ending + 4.0
-                        else:
-                            add bim stroke from here to following wide edgeWidth in frame
+                    set edgePairs to an empty list of a cad vector2
+                    append bim edges of slab slabValue in modelValue through transform dashing 8.0 into edgePairs
+                    set pairCursor to 0
+                    loop while (pairCursor + 1) < (the length of edgePairs):
+                        add bim stroke from (the item at pairCursor in edgePairs) to (the item at (pairCursor + 1) in edgePairs) wide edgeWidth in frame
+                        set pairCursor to pairCursor + 2
+                    free edgePairs
             finish triangles in frame
         if chosen's valid = false:
             return nothing
@@ -2121,6 +2192,9 @@ function draw bim annotations in plan of {bim editor record:editor} through {bim
         if ((numbering or tabling) or labelling) = false:
             return nothing
         set storeyLevel to the bim storey elevation of editor
+        # Offsets in symbol units: pixels on screen, quarter millimetres on
+        # paper (`the bim symbol scale of`).
+        set symbolScale to the bim symbol scale of (@intrinsic("dereference", canvas))
         set pileIds to an empty list of a 64 bit integer
         set pileSpots to an empty list of a cad vector2
         loop cursor from 0 to the length of (modelValue's linears's values):
@@ -2136,7 +2210,7 @@ function draw bim annotations in plan of {bim editor record:editor} through {bim
                     set firstPixel to the bim pixel of (a cad vector2 with x linearValue's start's x and y linearValue's start's y) through transform
                     set lastPixel to the bim pixel of (a cad vector2 with x linearValue's finish's x and y linearValue's finish's y) through transform
                     set labelTurn to the bim readable text angle from firstPixel to lastPixel
-                    append (@intrinsic("construct", a bim canvas text record, linearType's name, labelPixel's x + (6.0 * (the sine of labelTurn)), labelPixel's y - (6.0 * (the cosine of labelTurn)), 20, 60, 140, true, labelTurn, labelPixel, 0.0)) to (canvas's texts's values)
+                    append (@intrinsic("construct", a bim canvas text record, linearType's name, labelPixel's x + ((6.0 * symbolScale) * (the sine of labelTurn)), labelPixel's y - ((6.0 * symbolScale) * (the cosine of labelTurn)), 20, 60, 140, true, labelTurn, labelPixel, 0.0)) to (canvas's texts's values)
         set count to the length of pileIds
         if count = 0:
             free pileIds
@@ -2162,7 +2236,7 @@ function draw bim annotations in plan of {bim editor record:editor} through {bim
         if numbering:
             loop cursor from 0 to count:
                 set spot to the bim pixel of (the item at cursor in pileSpots) through transform
-                record bim text ((the string form of "P") + (the string form of (the item at cursor in numbers))) at (spot's x + 8.0) and (spot's y - 8.0) coloured 180, 20 and 20 on canvas
+                record bim text ((the string form of "P") + (the string form of (the item at cursor in numbers))) at (spot's x + (8.0 * symbolScale)) and (spot's y - (8.0 * symbolScale)) coloured 180, 20 and 20 on canvas
         if tabling:
             # The table to the right of the piles, its rows in number order.
             set corner to the bim pixel of (a cad vector2 with x (highX + 2.0) and y highY) through transform
@@ -2176,13 +2250,13 @@ function draw bim annotations in plan of {bim editor record:editor} through {bim
                         set pileType to the bim type of linear pileValue in modelValue
                         set topLevel to storeyLevel + (the maximum of pileValue's start's z and pileValue's finish's z)
                         set tipLevel to storeyLevel + (the minimum of pileValue's start's z and pileValue's finish's z)
-                        set rowY to rowY + 16.0
+                        set rowY to rowY + (16.0 * symbolScale)
                         set row to (the string form of "P") + (the string form of rank)
                         record bim text row at corner's x and rowY coloured 0, 0 and 0 on canvas
-                        record bim text pileType's name at (corner's x + 42.0) and rowY coloured 0, 0 and 0 on canvas
-                        record bim text (the bim height text of topLevel) at (corner's x + 210.0) and rowY coloured 0, 0 and 0 on canvas
-                        record bim text (the bim height text of tipLevel) at (corner's x + 265.0) and rowY coloured 0, 0 and 0 on canvas
-                        record bim text (the bim height text of (topLevel - tipLevel)) at (corner's x + 320.0) and rowY coloured 0, 0 and 0 on canvas
+                        record bim text pileType's name at (corner's x + (42.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+                        record bim text (the bim height text of topLevel) at (corner's x + (210.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+                        record bim text (the bim height text of tipLevel) at (corner's x + (265.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+                        record bim text (the bim height text of (topLevel - tipLevel)) at (corner's x + (320.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
         free numbers
         free pileIds
         free pileSpots
@@ -2266,6 +2340,9 @@ function draw bim area measures in plan of {bim editor record:editor} through {b
         if (bim annotation bim area measures annotation applies to drawing type typeId in modelValue) = false:
             return nothing
         set storeyAreas to the bim area measures of modelValue on level editor's levelId using editor's evaluation's index
+        # Dashes and the table's offsets in symbol units: pixels on screen,
+        # quarter millimetres on paper (`the bim symbol scale of`).
+        set symbolScale to the bim symbol scale of (@intrinsic("dereference", canvas))
         if bim annotation bim gross area bound annotation is kept for drawing type typeId in modelValue:
             set heavy to an empty list of a cad vector2
             set boundCursor to 0
@@ -2277,7 +2354,7 @@ function draw bim area measures in plan of {bim editor record:editor} through {b
             free heavy
         if bim annotation bim usable area bound annotation is kept for drawing type typeId in modelValue:
             set dashLines to an empty list of a cad vector2
-            append bim dashes of (storeyAreas's usablePairs's values) through transform dashing 6.0 into dashLines
+            append bim dashes of (storeyAreas's usablePairs's values) through transform dashing (6.0 * symbolScale) into dashLines
             record bim strokes dashLines coloured 20, 150 and 60 wide 2.0 on canvas
             free dashLines
         # The building's totals over every storey.
@@ -2301,29 +2378,29 @@ function draw bim area measures in plan of {bim editor record:editor} through {b
         if lowX > 1.0e29:
             return nothing
         set corner to the bim pixel of (a cad vector2 with x lowX and y highY) through transform
-        set rowY to corner's y - 110.0
+        set rowY to corner's y - (110.0 * symbolScale)
         set storeyName to the string form of ""
         set levelFound to the bim level index of editor's levelId in modelValue
         if levelFound's valid:
             set storeyName to (the item at levelFound's position in (modelValue's levels's values))'s name
         record bim text ((the string form of "NEN 2580  ") + storeyName) at corner's x and rowY coloured 0, 0 and 0 on canvas
-        record bim text (the string form of "gebouw") at (corner's x + 300.0) and rowY coloured 0, 0 and 0 on canvas
-        set rowY to rowY + 18.0
+        record bim text (the string form of "gebouw") at (corner's x + (300.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        set rowY to rowY + (18.0 * symbolScale)
         record bim text (the string form of "BVO  bruto vloeroppervlakte") at corner's x and rowY coloured 200, 30 and 30 on canvas
-        record bim text (the bim decimal text (the bim square metres text of storeyAreas's gross) under areaStandard) at (corner's x + 190.0) and rowY coloured 0, 0 and 0 on canvas
-        record bim text (the bim decimal text (the bim square metres text of totalGross) under areaStandard) at (corner's x + 300.0) and rowY coloured 0, 0 and 0 on canvas
-        set rowY to rowY + 18.0
+        record bim text (the bim decimal text (the bim square metres text of storeyAreas's gross) under areaStandard) at (corner's x + (190.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        record bim text (the bim decimal text (the bim square metres text of totalGross) under areaStandard) at (corner's x + (300.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        set rowY to rowY + (18.0 * symbolScale)
         record bim text (the string form of "GO   gebruiksoppervlakte") at corner's x and rowY coloured 20, 150 and 60 on canvas
-        record bim text (the bim decimal text (the bim square metres text of storeyAreas's usable) under areaStandard) at (corner's x + 190.0) and rowY coloured 0, 0 and 0 on canvas
-        record bim text (the bim decimal text (the bim square metres text of totalUsable) under areaStandard) at (corner's x + 300.0) and rowY coloured 0, 0 and 0 on canvas
-        set rowY to rowY + 18.0
+        record bim text (the bim decimal text (the bim square metres text of storeyAreas's usable) under areaStandard) at (corner's x + (190.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        record bim text (the bim decimal text (the bim square metres text of totalUsable) under areaStandard) at (corner's x + (300.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        set rowY to rowY + (18.0 * symbolScale)
         record bim text (the string form of "NVO  netto vloeroppervlakte") at corner's x and rowY coloured 35, 48 and 70 on canvas
-        record bim text (the bim decimal text (the bim square metres text of storeyAreas's net) under areaStandard) at (corner's x + 190.0) and rowY coloured 0, 0 and 0 on canvas
-        record bim text (the bim decimal text (the bim square metres text of totalNet) under areaStandard) at (corner's x + 300.0) and rowY coloured 0, 0 and 0 on canvas
-        set rowY to rowY + 18.0
+        record bim text (the bim decimal text (the bim square metres text of storeyAreas's net) under areaStandard) at (corner's x + (190.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        record bim text (the bim decimal text (the bim square metres text of totalNet) under areaStandard) at (corner's x + (300.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        set rowY to rowY + (18.0 * symbolScale)
         record bim text (the string form of "VVO  verhuurbaar vloeropp.") at corner's x and rowY coloured 120, 60 and 160 on canvas
-        record bim text (the bim decimal text (the bim square metres text of storeyAreas's lettable) under areaStandard) at (corner's x + 190.0) and rowY coloured 0, 0 and 0 on canvas
-        record bim text (the bim decimal text (the bim square metres text of totalLettable) under areaStandard) at (corner's x + 300.0) and rowY coloured 0, 0 and 0 on canvas
+        record bim text (the bim decimal text (the bim square metres text of storeyAreas's lettable) under areaStandard) at (corner's x + (190.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
+        record bim text (the bim decimal text (the bim square metres text of totalLettable) under areaStandard) at (corner's x + (300.0 * symbolScale)) and rowY coloured 0, 0 and 0 on canvas
 
 # Model-space outlines, not a scaled screenshot/canvas. Reprojecting them
 # retains the original pixel widths, dashes, text and screen-size detail.
