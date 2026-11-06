@@ -4,7 +4,7 @@ This example rebuilds the KIT FZK-Haus in Open BIM Studio by driving the applica
 user does: ribbon buttons, clicks in the plan and rows of the properties panel, all through the
 MCP server (`automation/mcp/open_bim_studio_mcp.py`). It does not use the `create_*` shortcuts.
 Then it draws the house: rooms with names and numbers, exterior dimension chains, and the two
-floor plans as technical drawings on A3 sheets, exported as PDF.
+floor plans and section A-A as technical drawings on A3 sheets, exported as PDF.
 
 The reference model is `reference/models/AC20-FZK-Haus.ifc`. Its source, licence and SHA-256 are
 in [`reference/README.md`](../../../reference/README.md). The model file is not in the
@@ -30,7 +30,8 @@ OBS_API=fzk-out/api OBS_OUT=fzk-out python3 automation/examples/fzk-haus/rebuild
 ```
 
 The app opens an empty model that it saves as `fzk-out/fzk-haus.ifcx`. The rebuild takes about
-half a minute. The sheets end up as `fzk-out/drawings/A-101.pdf` and `A-102.pdf`.
+half a minute. The sheets end up as `fzk-out/drawings/A-101.pdf`, `A-102.pdf` (the floor plans) and
+`A-103.pdf` (section A-A with its height chains).
 
 - `OBS_DISPLAY` picks the X display for the MCP server (default `:0`).
 - `OBS_CWD` is the folder the app runs in, where it writes exported PDFs. The default is the
@@ -48,6 +49,7 @@ half a minute. The sheets end up as `fzk-out/drawings/A-101.pdf` and `A-102.pdf`
 | Gable walls up to the ridge | Gable walls split at the ridge, each half attached to its own roof plane |
 | 11 windows, 5 doors | Window and Door tools, types sized as in the IFC |
 | 7 spaces, three of them parted by virtual boundaries | Room separators and Space, named as the IFC's spaces |
+| (drawings) | Floor plans DO with exterior dimensions; section A-A at x = 6 m with height chains |
 
 ## Known differences
 
