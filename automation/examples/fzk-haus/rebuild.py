@@ -412,6 +412,34 @@ def step_section():
     CLIENT.call("save")
 
 
+def step_elevations():
+    """The four elevations, named as German drawings name them, each on an A3 sheet of its own."""
+    import shutil
+    import time
+    out = os.path.join(OUT, "drawings")
+    os.makedirs(out, exist_ok=True)
+    for view, title in (("South", "Ansicht Süd"), ("East", "Ansicht Ost"), ("North", "Ansicht Nord"),
+                        ("West", "Ansicht West")):
+        CLIENT.call("open_view", {"name": view})
+        time.sleep(0.5)
+        escape()
+        prop(12841, title)
+        press("New sheet")
+        prop(12621, title)
+        print("   paper", cycle_to(12622, "Paper", "A3"))
+        prop(12825, "06-11-2026")
+        prop(12826, "Open BIM Studio via MCP")
+        number = row("Number")["value"]
+        call("key", {"code": 2096})  # Place view: the elevation, whose tab was active last
+        press("Collaborate/Export: Open sheet/PDF")
+        time.sleep(1.5)
+        print("  ", title, number, call("state", quiet=True)["message"])
+        produced = os.path.join(os.environ.get("OBS_CWD", os.getcwd()), "%s.pdf" % number)
+        if os.path.exists(produced):
+            shutil.move(produced, os.path.join(out, "%s.pdf" % number))
+    CLIENT.call("save")
+
+
 # The IFC's spaces (IfcSpace LongName) by a point inside each; Küche, Wohnen and Flur are
 # parted by virtual boundaries, drawn here as room separation lines.
 SPACES_EG = (("Küche", 2.0, 2.0), ("Wohnen", 8.0, 2.0), ("Flur", 3.0, 5.0), ("Buero", 2.0, 8.0),
@@ -443,10 +471,10 @@ def step_spaces():
     escape()
 
 
-STEPS = {"section": step_section, "spaces": step_spaces, "drawings": step_drawings, "openings_eg": step_openings_eg, "opening_types": step_opening_types, "windows_dg": step_windows_dg, "walls_dg": step_walls_dg, "roof": step_roof, "floor_dg": step_floor_dg, "floor_eg": step_floor_eg, "fix_interior": step_fix_interior, "types": step_types, "levels": step_levels, "walls_eg": step_walls_eg}
+STEPS = {"elevations": step_elevations, "section": step_section, "spaces": step_spaces, "drawings": step_drawings, "openings_eg": step_openings_eg, "opening_types": step_opening_types, "windows_dg": step_windows_dg, "walls_dg": step_walls_dg, "roof": step_roof, "floor_dg": step_floor_dg, "floor_eg": step_floor_eg, "fix_interior": step_fix_interior, "types": step_types, "levels": step_levels, "walls_eg": step_walls_eg}
 
 ALL = ("types", "opening_types", "levels", "walls_eg", "fix_interior", "floor_eg", "floor_dg", "roof",
-       "walls_dg", "windows_dg", "openings_eg", "spaces", "drawings", "section")
+       "walls_dg", "windows_dg", "openings_eg", "spaces", "drawings", "section", "elevations")
 
 if __name__ == "__main__":
     CLIENT = mcp.connected()
