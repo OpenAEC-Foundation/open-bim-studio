@@ -2519,6 +2519,12 @@ function hold bim wall {a 64 bit integer:wallId} top at level {a 64 bit integer:
 # `topLevelId` is the refused id; its height reaches the highest point of
 # its top, and a top sloping along a straight wall is its face contour
 # (`the bim face contour of`), which the attachment owns while it lasts.
+# A top may be attached to several plates (a gable wall under the two
+# planes of a pitched roof): over each stretch of the wall it follows the
+# lowest of the plates whose outline covers it (`the bim top profile of
+# wall`), so its contour rises to the ridge and falls again. The first
+# plate stays at `bim wall top attachment setting`, the others follow at
+# `bim wall further top attachment setting`.
 # `refresh bim wall tops in` keeps every constrained top where its
 # constraint puts it; every committed edit runs it (`commit bim
 # transaction in`), so that walls follow their levels and plates.
@@ -2528,6 +2534,22 @@ function bim wall top offset setting:
 function bim wall top attachment setting:
     replacement:
         2401701
+# The plates a wall's top is attached to after the first: the n-th further
+# one (n from 0) at 2401710 + n, at most `bim wall further top attachment
+# limit` of them. A file without them reads as attached to one plate.
+function bim wall further top attachment setting:
+    replacement:
+        2401710
+function bim wall further top attachment limit:
+    replacement:
+        40
+
+# The top constraint of a wall attached to several plates (`the bim top
+# constraint of wall`), and the Top constraint choice Attached to roofs
+# above. It is no element's id.
+function the bim several plates id:
+    execute:
+        return (-2) as a 64 bit integer
 
 # How far wall `wallId`'s top lies above the level it is held at or the
 # underside it is attached to, in metres (negative: below it).
@@ -2536,8 +2558,8 @@ function the bim top offset of wall {a 64 bit integer:wallId} in {bim model reco
         set reading to the bim setting (bim wall top offset setting) of wallId in modelValue
         return (reading's value as a 64 bit floating-point number) / 1000.0
 
-# The plate (floor, roof or ceiling) wall `wallId`'s top is attached to, or
-# the refused id.
+# The plate (floor, roof or ceiling) wall `wallId`'s top is attached to
+# (the first, when it is attached to several), or the refused id.
 function the bim top attachment of wall {a 64 bit integer:wallId} in {bim model record:modelValue}:
     execute:
         set reading to the bim setting (bim wall top attachment setting) of wallId in modelValue
@@ -2545,12 +2567,57 @@ function the bim top attachment of wall {a 64 bit integer:wallId} in {bim model 
             return reading's value
         return the bim refused id
 
+# Every plate wall `wallId`'s top is attached to, the first first; empty
+# when it is attached to none. The caller frees the list.
+function the bim top attachments of wall {a 64 bit integer:wallId} in {bim model record:modelValue}:
+    execute:
+        set plateIds to an empty list of a 64 bit integer
+        set firstReading to the bim setting (bim wall top attachment setting) of wallId in modelValue
+        if firstReading's found:
+            append firstReading's value to plateIds
+            loop slotCursor from 0 to (bim wall further top attachment limit):
+                set furtherReading to the bim setting ((bim wall further top attachment setting) + slotCursor) of wallId in modelValue
+                if furtherReading's found:
+                    append furtherReading's value to plateIds
+        return plateIds
+
+# Setting `slotCode` of wall `wallId` made `slotValue` (or removed when
+# `slotKept` is false), written only when it changes.
+local function put bim wall {a 64 bit integer:wallId} attachment numbered {integer:slotCode} to {a 64 bit integer:slotValue} keeping {boolean:slotKept} in {a pointer to a bim model record:target}:
+    execute:
+        set standingSlot to the bim setting slotCode of wallId in (@intrinsic("dereference", target))
+        set slotChanging to standingSlot's found != slotKept
+        if slotKept and standingSlot's found:
+            set slotChanging to standingSlot's value != slotValue
+        if slotChanging:
+            set bim setting slotCode of wallId to slotValue keeping slotKept in target
+
+# Wall `wallId`'s top kept as attached to plates `plateIds` (none when the
+# list is empty), the first at `bim wall top attachment setting`, the rest
+# after it; its height and contour untouched.
+function keep bim wall {a 64 bit integer:wallId} top attachments {a pointer to a list:plateIds} in {a pointer to a bim model record:target}:
+    execute:
+        set firstPlate to 0 as a 64 bit integer
+        set anyPlate to (the length of plateIds) > 0
+        if anyPlate:
+            set firstPlate to the item at 0 in plateIds
+        put bim wall wallId attachment numbered (bim wall top attachment setting) to firstPlate keeping anyPlate in target
+        loop slotCursor from 0 to (bim wall further top attachment limit):
+            set furtherPlate to 0 as a 64 bit integer
+            set furtherKept to (slotCursor + 1) < (the length of plateIds)
+            if furtherKept:
+                set furtherPlate to the item at (slotCursor + 1) in plateIds
+            put bim wall wallId attachment numbered ((bim wall further top attachment setting) + slotCursor) to furtherPlate keeping furtherKept in target
+
 # What wall `wallValue`'s top is constrained to: the plate it is attached
-# to, else the level it is held at, else the refused id (Unconnected).
+# to (`the bim several plates id` when there are several), else the level
+# it is held at, else the refused id (Unconnected).
 function the bim top constraint of wall {bim wall record:wallValue} in {bim model record:modelValue}:
     execute:
         set attachedTo to the bim top attachment of wall wallValue's id in modelValue
         if attachedTo != the bim refused id:
+            if (the bim setting (bim wall further top attachment setting) of wallValue's id in modelValue)'s found:
+                return the bim several plates id
             return attachedTo
         return wallValue's topLevelId
 
@@ -2623,30 +2690,255 @@ function the bim top fit of wall {bim wall record:wallValue} under plate {bim sl
             set finishTop to levelTop
         return @intrinsic("construct", a bim wall top fit record, true, startTop, finishTop, sloped)
 
-# Wall `wallId`'s top where plate `plateId`'s underside puts it (`the bim
-# top fit of wall`): its height reaching the highest point, its contour the
-# slope along it (none for a level top). Nothing is written when the wall
-# already stands so. False, and the wall unchanged, when the fit is
-# refused.
-function fit bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+# Whether plate `plateValue`'s outline covers plan point `location`; a
+# point within a millimetre of its edge counts as covered.
+function bim plate {bim slab record:plateValue} covers {cad vector2:location}:
+    execute:
+        set cornerTotal to the length of (plateValue's outline's values)
+        if cornerTotal < 3:
+            return false
+        if bim plate point location is inside (plateValue's outline's values):
+            return true
+        loop cornerCursor from 0 to cornerTotal:
+            set edgeStart to the item at cornerCursor in (plateValue's outline's values)
+            set edgeEnd to the item at (the remainder of (cornerCursor + 1) divided by cornerTotal) in (plateValue's outline's values)
+            if (the cad distance from location to the segment from edgeStart to edgeEnd) <= 0.001:
+                return true
+        return false
+
+# Where the line from `axisStart` to `axisEnd` crosses plate `plateValue`'s
+# outline, as fractions of the way along it strictly between 0 and 1,
+# appended to `fractionList`.
+local function add bim outline crossings of plate {bim slab record:plateValue} on axis {cad vector2:axisStart} to {cad vector2:axisEnd} into {a pointer to a list:fractionList}:
+    execute:
+        set cornerTotal to the length of (plateValue's outline's values)
+        set axisX to axisEnd's x - axisStart's x
+        set axisY to axisEnd's y - axisStart's y
+        loop cornerCursor from 0 to cornerTotal:
+            set edgeStart to the item at cornerCursor in (plateValue's outline's values)
+            set edgeEnd to the item at (the remainder of (cornerCursor + 1) divided by cornerTotal) in (plateValue's outline's values)
+            set edgeX to edgeEnd's x - edgeStart's x
+            set edgeY to edgeEnd's y - edgeStart's y
+            set denominator to (axisX * edgeY) - (axisY * edgeX)
+            if (the absolute value of denominator) > 1e-12:
+                set gapX to edgeStart's x - axisStart's x
+                set gapY to edgeStart's y - axisStart's y
+                set axisFraction to ((gapX * edgeY) - (gapY * edgeX)) / denominator
+                set edgeFraction to ((gapX * axisY) - (gapY * axisX)) / denominator
+                if ((axisFraction > 0.0) and (axisFraction < 1.0)) and ((edgeFraction >= 0.0) and (edgeFraction <= 1.0)):
+                    append axisFraction to fractionList
+
+# `fractionList` in ascending order.
+local function sort bim fractions {a pointer to a list:fractionList}:
+    execute:
+        loop outerCursor from 1 to the length of fractionList:
+            set movingFraction to the item at outerCursor in fractionList
+            set slotCursor to outerCursor
+            set shifting to true
+            loop while shifting:
+                if slotCursor = 0:
+                    set shifting to false
+                else if (the item at (slotCursor - 1) in fractionList) > movingFraction:
+                    replace item at index slotCursor in fractionList with (the item at (slotCursor - 1) in fractionList)
+                    set slotCursor to slotCursor - 1
+                else:
+                    set shifting to false
+            replace item at index slotCursor in fractionList with movingFraction
+
+# The lowest underside at plan point `location` of the plates at
+# `platePlaces` (places among the model's plates) whose outline covers it,
+# or of them all when none does.
+local function the bim lowest underside at {cad vector2:location} of plates {a pointer to a list:platePlaces} in {bim model record:modelValue}:
+    execute:
+        set anyCovering to false
+        loop placeCursor from 0 to the length of platePlaces:
+            if bim plate (the item at (the item at placeCursor in platePlaces) in (modelValue's slabs's values)) covers location:
+                set anyCovering to true
+        set lowestHeight to 0.0
+        set lowestFound to false
+        loop placeCursor from 0 to the length of platePlaces:
+            set plateValue to the item at (the item at placeCursor in platePlaces) in (modelValue's slabs's values)
+            set plateUsable to true
+            if anyCovering:
+                set plateUsable to bim plate plateValue covers location
+            if plateUsable:
+                set undersideHeight to the bim underside of plate plateValue at location in modelValue
+                if (lowestFound = false) or (undersideHeight < lowestHeight):
+                    set lowestHeight to undersideHeight
+                    set lowestFound to true
+        return lowestHeight
+
+# Where wall `wallValue`'s top comes under plates `plateIds` (floors, roofs
+# or ceilings): over each stretch of its centreline, the underside of the
+# lowest plate whose outline covers that stretch (`bim plate … covers`),
+# else of the lowest of them all, plus the wall's top offset. Its corners,
+# in metres along the wall from its start (x) and above the project's zero
+# (y), from start to finish: two for a top straight along the wall, more
+# where it bends (a ridge) or steps (where one plate's edge gives way to
+# another). A top within half a millimetre of level is level at its
+# lowest. A curved, leaning or bowed wall stays level at the lowest of its
+# start, middle and finish. One plate gives the top `the bim top fit of
+# wall` gives. Empty when a plate or the wall's storey is gone, or the top
+# would come less than 0.1 m above the foot anywhere. The caller frees the
+# list.
+function the bim top profile of wall {bim wall record:wallValue} under plates {a pointer to a list:plateIds} in {bim model record:modelValue}:
+    execute:
+        set profilePoints to an empty list of a cad vector2
+        set storeyFound to the bim level index of wallValue's levelId in modelValue
+        if (storeyFound's valid = false) or ((the length of plateIds) = 0):
+            return profilePoints
+        set platePlaces to an empty list of an integer
+        set allThere to true
+        loop plateCursor from 0 to the length of plateIds:
+            set plateFound to the bim slab index of (the item at plateCursor in plateIds) in modelValue
+            if plateFound's valid:
+                append plateFound's position to platePlaces
+            else:
+                set allThere to false
+        if allThere = false:
+            free platePlaces
+            return profilePoints
+        set footHeight to (the item at storeyFound's position in (modelValue's levels's values))'s elevation + wallValue's baseOffset
+        set raise to the bim top offset of wall wallValue's id in modelValue
+        set runLength to the cad distance from wallValue's start to wallValue's finish
+        set upright to ((wallValue's bulge = 0.0) and (wallValue's lean = 0.0)) and (wallValue's rise = 0.0)
+        if (upright = false) or (runLength < 1e-9):
+            # The arc's middle lies `bulge` to the right of the chord's.
+            set chordX to wallValue's finish's x - wallValue's start's x
+            set chordY to wallValue's finish's y - wallValue's start's y
+            set middleX to (wallValue's start's x + wallValue's finish's x) * 0.5
+            set middleY to (wallValue's start's y + wallValue's finish's y) * 0.5
+            if runLength > 1e-9:
+                set middleX to middleX + ((wallValue's bulge * chordY) / runLength)
+                set middleY to middleY - ((wallValue's bulge * chordX) / runLength)
+            set startLow to the bim lowest underside at wallValue's start of plates platePlaces in modelValue
+            set finishLow to the bim lowest underside at wallValue's finish of plates platePlaces in modelValue
+            set middleLow to the bim lowest underside at (a cad vector2 with x middleX and y middleY) of plates platePlaces in modelValue
+            set levelTop to (the minimum of (the minimum of startLow and finishLow) and middleLow) + raise
+            append (a cad vector2 with x 0.0 and y levelTop) to profilePoints
+            append (a cad vector2 with x runLength and y levelTop) to profilePoints
+        else:
+            # Each plate's underside runs straight along the wall: it is
+            # known by its heights over the start and the finish. The lowest
+            # covering underside bends only where the centreline crosses an
+            # outline or two undersides cross.
+            set startHeights to an empty list of a 64 bit floating-point number
+            set finishHeights to an empty list of a 64 bit floating-point number
+            set fractionList to an empty list of a 64 bit floating-point number
+            append 0.0 to fractionList
+            append 1.0 to fractionList
+            loop placeCursor from 0 to the length of platePlaces:
+                set plateValue to the item at (the item at placeCursor in platePlaces) in (modelValue's slabs's values)
+                append (the bim underside of plate plateValue at wallValue's start in modelValue) to startHeights
+                append (the bim underside of plate plateValue at wallValue's finish in modelValue) to finishHeights
+                add bim outline crossings of plate plateValue on axis wallValue's start to wallValue's finish into fractionList
+            loop firstCursor from 0 to the length of platePlaces:
+                loop secondCursor from (firstCursor + 1) to the length of platePlaces:
+                    set firstRise to (the item at firstCursor in finishHeights) - (the item at firstCursor in startHeights)
+                    set secondRise to (the item at secondCursor in finishHeights) - (the item at secondCursor in startHeights)
+                    set denominator to firstRise - secondRise
+                    if (the absolute value of denominator) > 1e-12:
+                        set crossingFraction to ((the item at secondCursor in startHeights) - (the item at firstCursor in startHeights)) / denominator
+                        if (crossingFraction > 0.0) and (crossingFraction < 1.0):
+                            append crossingFraction to fractionList
+            sort bim fractions fractionList
+            loop stretchCursor from 0 to ((the length of fractionList) - 1):
+                set lowFraction to the item at stretchCursor in fractionList
+                set highFraction to the item at (stretchCursor + 1) in fractionList
+                if (highFraction - lowFraction) > 1e-9:
+                    set halfway to (lowFraction + highFraction) * 0.5
+                    set middlePlace to a cad vector2 with x (wallValue's start's x + ((wallValue's finish's x - wallValue's start's x) * halfway)) and y (wallValue's start's y + ((wallValue's finish's y - wallValue's start's y) * halfway))
+                    set anyCovering to false
+                    loop placeCursor from 0 to the length of platePlaces:
+                        if bim plate (the item at (the item at placeCursor in platePlaces) in (modelValue's slabs's values)) covers middlePlace:
+                            set anyCovering to true
+                    set lowStart to 0.0
+                    set lowEnd to 0.0
+                    set lowFound to false
+                    loop placeCursor from 0 to the length of platePlaces:
+                        set plateUsable to true
+                        if anyCovering:
+                            set plateUsable to bim plate (the item at (the item at placeCursor in platePlaces) in (modelValue's slabs's values)) covers middlePlace
+                        if plateUsable:
+                            set baseHeight to the item at placeCursor in startHeights
+                            set riseHeight to (the item at placeCursor in finishHeights) - baseHeight
+                            set heightAtLow to baseHeight + (riseHeight * lowFraction)
+                            set heightAtHigh to baseHeight + (riseHeight * highFraction)
+                            if (lowFound = false) or ((heightAtLow + heightAtHigh) < (lowStart + lowEnd)):
+                                set lowStart to heightAtLow
+                                set lowEnd to heightAtHigh
+                                set lowFound to true
+                    set stretchStart to a cad vector2 with x (runLength * lowFraction) and y (lowStart + raise)
+                    set stretchEnd to a cad vector2 with x (runLength * highFraction) and y (lowEnd + raise)
+                    set sameCorner to false
+                    if (the length of profilePoints) > 0:
+                        set sameCorner to (the cad distance from (the last item of profilePoints) to stretchStart) < 0.0005
+                    if sameCorner = false:
+                        append stretchStart to profilePoints
+                    append stretchEnd to profilePoints
+            free startHeights
+            free finishHeights
+            free fractionList
+            # A corner in line with its neighbours goes.
+            set cornerCursor to 1
+            loop while cornerCursor < ((the length of profilePoints) - 1):
+                set priorCorner to the item at (cornerCursor - 1) in profilePoints
+                set thisCorner to the item at cornerCursor in profilePoints
+                set nextCorner to the item at (cornerCursor + 1) in profilePoints
+                set bendArea to ((thisCorner's x - priorCorner's x) * (nextCorner's y - priorCorner's y)) - ((thisCorner's y - priorCorner's y) * (nextCorner's x - priorCorner's x))
+                if (the absolute value of bendArea) < 1e-9:
+                    remove item cornerCursor from profilePoints
+                else:
+                    set cornerCursor to cornerCursor + 1
+        free platePlaces
+        set lowestTop to (the item at 0 in profilePoints)'s y
+        set highestTop to lowestTop
+        loop cornerCursor from 0 to the length of profilePoints:
+            set lowestTop to the minimum of lowestTop and (the item at cornerCursor in profilePoints)'s y
+            set highestTop to the maximum of highestTop and (the item at cornerCursor in profilePoints)'s y
+        if (lowestTop - footHeight) < 0.1:
+            clear profilePoints
+            return profilePoints
+        if (highestTop - lowestTop) <= 0.0005:
+            clear profilePoints
+            append (a cad vector2 with x 0.0 and y lowestTop) to profilePoints
+            append (a cad vector2 with x runLength and y lowestTop) to profilePoints
+        return profilePoints
+
+# Wall `wallId`'s top where the undersides of plates `plateIds` put it
+# (`the bim top profile of wall`): its height reaching the highest point,
+# its contour the top along it (none for a level top). Nothing is written
+# when the wall already stands so. False, and the wall unchanged, when the
+# fit is refused.
+function fit bim wall {a 64 bit integer:wallId} top to plates {a pointer to a list:plateIds} in {a pointer to a bim model record:target}:
     execute:
         set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
-        set plateFound to the bim slab index of plateId in (@intrinsic("dereference", target))
-        if (wallFound's valid = false) or (plateFound's valid = false):
+        if wallFound's valid = false:
             return false
         set wallValue to the item at wallFound's position in (target's walls's values)
-        set topFit to the bim top fit of wall wallValue under plate (the item at plateFound's position in (target's slabs's values)) in (@intrinsic("dereference", target))
-        if topFit's valid = false:
+        set profilePoints to the bim top profile of wall wallValue under plates plateIds in (@intrinsic("dereference", target))
+        if (the length of profilePoints) < 2:
+            free profilePoints
             return false
         set storeyElevation to (the item at (the bim level index of wallValue's levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
-        set fittedHeight to (the maximum of topFit's startTop and topFit's finishTop) - (storeyElevation + wallValue's baseOffset)
+        set highestTop to (the item at 0 in profilePoints)'s y
+        loop cornerCursor from 0 to the length of profilePoints:
+            set highestTop to the maximum of highestTop and (the item at cornerCursor in profilePoints)'s y
+        set fittedHeight to highestTop - (storeyElevation + wallValue's baseOffset)
         set wantedCorners to an empty list of a cad vector2
-        if topFit's sloped:
+        set contoured to (the length of profilePoints) > 2
+        if contoured = false:
+            set contoured to (the item at 0 in profilePoints)'s y != (the item at 1 in profilePoints)'s y
+        if contoured:
             set runLength to the cad distance from wallValue's start to wallValue's finish
             append (a cad vector2 with x 0.0 and y wallValue's baseOffset) to wantedCorners
             append (a cad vector2 with x runLength and y wallValue's baseOffset) to wantedCorners
-            append (a cad vector2 with x runLength and y (topFit's finishTop - storeyElevation)) to wantedCorners
-            append (a cad vector2 with x 0.0 and y (topFit's startTop - storeyElevation)) to wantedCorners
+            set cornerCursor to (the length of profilePoints) - 1
+            loop while cornerCursor >= 0:
+                set topCorner to the item at cornerCursor in profilePoints
+                append (a cad vector2 with x topCorner's x and y (topCorner's y - storeyElevation)) to wantedCorners
+                set cornerCursor to cornerCursor - 1
+        free profilePoints
         set heldCorners to the bim face contour of wallId in (@intrinsic("dereference", target))
         set sameCorners to (the length of heldCorners) = (the length of wantedCorners)
         if sameCorners:
@@ -2662,29 +2954,110 @@ function fit bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:p
             note bim change of wallId in target
         return true
 
-# Wall `wallId`'s top attached to the underside of plate `plateId` (a
-# floor, roof or ceiling), letting go of a level it was held at; refused,
-# and the wall unchanged, when the plate is not there or its underside
-# lies less than 0.1 m above the wall's foot.
-function attach bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+# Wall `wallId`'s top where plate `plateId`'s underside puts it (`fit bim
+# wall … top to plates`).
+function fit bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+    execute:
+        set plateIds to an empty list of a 64 bit integer
+        append plateId to plateIds
+        set fittedNow to fit bim wall wallId top to plates plateIds in target
+        free plateIds
+        return fittedNow
+
+# Wall `wallId`'s top attached to the undersides of plates `plateIds`
+# (floors, roofs or ceilings; `the bim top profile of wall`), letting go of
+# a level it was held at; refused, and the wall unchanged, when the list is
+# empty, longer than a wall keeps, names a plate twice or one that is not
+# there, or the top would come less than 0.1 m above the foot anywhere.
+function attach bim wall {a 64 bit integer:wallId} top to plates {a pointer to a list:plateIds} in {a pointer to a bim model record:target}:
     execute:
         set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
-        set plateFound to the bim slab index of plateId in (@intrinsic("dereference", target))
-        if (wallFound's valid = false) or (plateFound's valid = false):
+        if ((wallFound's valid = false) or ((the length of plateIds) = 0)) or ((the length of plateIds) > ((bim wall further top attachment limit) + 1)):
             return false
-        set topFit to the bim top fit of wall (the item at wallFound's position in (target's walls's values)) under plate (the item at plateFound's position in (target's slabs's values)) in (@intrinsic("dereference", target))
-        if topFit's valid = false:
+        loop firstCursor from 0 to the length of plateIds:
+            loop secondCursor from (firstCursor + 1) to the length of plateIds:
+                if (the item at firstCursor in plateIds) = (the item at secondCursor in plateIds):
+                    return false
+        set profilePoints to the bim top profile of wall (the item at wallFound's position in (target's walls's values)) under plates plateIds in (@intrinsic("dereference", target))
+        set profileFits to (the length of profilePoints) >= 2
+        free profilePoints
+        if profileFits = false:
             return false
-        set bim setting (bim wall top attachment setting) of wallId to plateId keeping true in target
-        return fit bim wall wallId top to plate plateId in target
+        keep bim wall wallId top attachments plateIds in target
+        return fit bim wall wallId top to plates plateIds in target
 
-# Wall `wallId` no longer attached to a plate: its height stays, the
+# Wall `wallId`'s top attached to the underside of plate `plateId` (a
+# floor, roof or ceiling), letting go of a level it was held at and of
+# other plates it was attached to; refused, and the wall unchanged, when
+# the plate is not there or its underside lies less than 0.1 m above the
+# wall's foot.
+function attach bim wall {a 64 bit integer:wallId} top to plate {a 64 bit integer:plateId} in {a pointer to a bim model record:target}:
+    execute:
+        set plateIds to an empty list of a 64 bit integer
+        append plateId to plateIds
+        set attachedNow to attach bim wall wallId top to plates plateIds in target
+        free plateIds
+        return attachedNow
+
+# The roofs over wall `wallValue`, in the model's order: every roof plate
+# whose outline covers some stretch of the wall's centreline (between its
+# crossings of the outline; `bim plate … covers`) where its underside lies
+# at least 0.1 m above the wall's foot. A curved wall is taken along its
+# chord. The caller frees the list.
+function the bim roofs above wall {bim wall record:wallValue} in {bim model record:modelValue}:
+    execute:
+        set roofIds to an empty list of a 64 bit integer
+        set storeyFound to the bim level index of wallValue's levelId in modelValue
+        if storeyFound's valid = false:
+            return roofIds
+        set footHeight to (the item at storeyFound's position in (modelValue's levels's values))'s elevation + wallValue's baseOffset
+        loop plateCursor from 0 to the length of (modelValue's slabs's values):
+            set plateValue to the item at plateCursor in (modelValue's slabs's values)
+            if ((the bim role of plate plateValue in modelValue) = bim roof planar role) and ((the length of (plateValue's outline's values)) >= 3):
+                set fractionList to an empty list of a 64 bit floating-point number
+                append 0.0 to fractionList
+                append 1.0 to fractionList
+                add bim outline crossings of plate plateValue on axis wallValue's start to wallValue's finish into fractionList
+                sort bim fractions fractionList
+                set roofOver to false
+                loop stretchCursor from 0 to ((the length of fractionList) - 1):
+                    set lowFraction to the item at stretchCursor in fractionList
+                    set highFraction to the item at (stretchCursor + 1) in fractionList
+                    if (highFraction - lowFraction) > 1e-9:
+                        set halfway to (lowFraction + highFraction) * 0.5
+                        set middlePlace to a cad vector2 with x (wallValue's start's x + ((wallValue's finish's x - wallValue's start's x) * halfway)) and y (wallValue's start's y + ((wallValue's finish's y - wallValue's start's y) * halfway))
+                        if bim plate plateValue covers middlePlace:
+                            if ((the bim underside of plate plateValue at middlePlace in modelValue) - footHeight) >= 0.1:
+                                set roofOver to true
+                free fractionList
+                if roofOver:
+                    append plateValue's id to roofIds
+        return roofIds
+
+# Wall `wallId`'s top attached to every roof above it (`the bim roofs above
+# wall`); refused, and the wall unchanged, when there is none or the top
+# would come less than 0.1 m above the foot anywhere.
+function attach bim wall {a 64 bit integer:wallId} top to roofs above in {a pointer to a bim model record:target}:
+    execute:
+        set wallFound to the bim wall index of wallId in (@intrinsic("dereference", target))
+        if wallFound's valid = false:
+            return false
+        set roofIds to the bim roofs above wall (the item at wallFound's position in (target's walls's values)) in (@intrinsic("dereference", target))
+        set attachedNow to false
+        if (the length of roofIds) > 0:
+            set attachedNow to attach bim wall wallId top to plates roofIds in target
+        free roofIds
+        return attachedNow
+
+# Wall `wallId` no longer attached to any plate: its height stays, the
 # contour its attachment gave it goes.
 function release bim wall {a 64 bit integer:wallId} top attachment in {a pointer to a bim model record:target}:
     execute:
         if (the bim top attachment of wall wallId in (@intrinsic("dereference", target))) = the bim refused id:
             return nothing
-        set bim setting (bim wall top attachment setting) of wallId to (0 as a 64 bit integer) keeping false in target
+        set noPlates to an empty list of a 64 bit integer
+        keep bim wall wallId top attachments noPlates in target
+        free noPlates
         set noCorners to an empty list of a cad vector2
         keep bim face contour noCorners of wallId in target
         free noCorners
@@ -2709,21 +3082,23 @@ function set bim wall {a 64 bit integer:wallId} top offset to {a 64 bit floating
         set millimetres to (the floor of ((raise * 1000.0) + 0.5)) as a 64 bit integer
         set formerReading to the bim setting (bim wall top offset setting) of wallId in (@intrinsic("dereference", target))
         set bim setting (bim wall top offset setting) of wallId to millimetres keeping (millimetres != (0 as a 64 bit integer)) in target
-        set attachedTo to the bim top attachment of wall wallId in (@intrinsic("dereference", target))
+        set plateIds to the bim top attachments of wall wallId in (@intrinsic("dereference", target))
         set kept to true
-        if attachedTo != the bim refused id:
-            set kept to fit bim wall wallId top to plate attachedTo in target
+        if (the length of plateIds) > 0:
+            set kept to fit bim wall wallId top to plates plateIds in target
         else if wallValue's topLevelId != the bim refused id:
             set kept to hold bim wall wallId top at level wallValue's topLevelId in target
+        free plateIds
         if kept = false:
             set bim setting (bim wall top offset setting) of wallId to formerReading's value keeping formerReading's found in target
         return kept
 
 # Every constrained wall top where its constraint puts it: a wall held at a
 # level reaches it (plus its top offset) and lets go when the level is
-# gone; an attached wall follows its plate's underside and, when the plate
-# is gone, keeps its last height. A top that would come too low stays where
-# it is. Walls already in place are not touched (nothing is journalled).
+# gone; an attached wall follows its plates' undersides, lets go of a plate
+# that is gone and, when all are gone, keeps its last height. A top that
+# would come too low stays where it is. Walls already in place are not
+# touched (nothing is journalled).
 function refresh bim wall tops in {a pointer to a bim model record:target}:
     execute:
         loop cursor from 0 to the length of (target's walls's values):
@@ -2738,23 +3113,30 @@ function refresh bim wall tops in {a pointer to a bim model record:target}:
                     if ((the absolute value of (heldHeight - wallValue's height)) > 1e-7) and (heldHeight >= 0.1):
                         ignore hold bim wall wallValue's id top at level wallValue's topLevelId in target
         set attachedWalls to an empty list of a 64 bit integer
-        set attachedPlates to an empty list of a 64 bit integer
         loop cursor from 0 to the length of (target's settings's values):
             set settingEntry to the item at cursor in (target's settings's values)
             if settingEntry's code = bim wall top attachment setting:
                 append settingEntry's elementId to attachedWalls
-                append settingEntry's value to attachedPlates
         loop cursor from 0 to the length of attachedWalls:
             set attachedWall to the item at cursor in attachedWalls
-            set attachedPlate to the item at cursor in attachedPlates
+            set plateIds to the bim top attachments of wall attachedWall in (@intrinsic("dereference", target))
+            set standingIds to an empty list of a 64 bit integer
+            loop plateCursor from 0 to the length of plateIds:
+                if (the bim slab index of (the item at plateCursor in plateIds) in (@intrinsic("dereference", target)))'s valid:
+                    append (the item at plateCursor in plateIds) to standingIds
             if (the bim wall index of attachedWall in (@intrinsic("dereference", target)))'s valid = false:
-                set bim setting (bim wall top attachment setting) of attachedWall to (0 as a 64 bit integer) keeping false in target
-            else if (the bim slab index of attachedPlate in (@intrinsic("dereference", target)))'s valid = false:
+                set noPlates to an empty list of a 64 bit integer
+                keep bim wall attachedWall top attachments noPlates in target
+                free noPlates
+            else if (the length of standingIds) = 0:
                 release bim wall attachedWall top attachment in target
             else:
-                ignore fit bim wall attachedWall top to plate attachedPlate in target
+                if (the length of standingIds) != (the length of plateIds):
+                    keep bim wall attachedWall top attachments standingIds in target
+                ignore fit bim wall attachedWall top to plates standingIds in target
+            free plateIds
+            free standingIds
         free attachedWalls
-        free attachedPlates
 
 # Level `levelId` lies at `elevationValue` and is `heightValue` high.
 function set bim level {a 64 bit integer:levelId} at {a 64 bit floating-point number:elevationValue} with height {a 64 bit floating-point number:heightValue} in {a pointer to a bim model record:target}:
