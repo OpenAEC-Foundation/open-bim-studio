@@ -1,0 +1,207 @@
+# SPDX-License-Identifier: MPL-2.0
+# A door or window cut by a section, drawn as a cut detail in NEN-ISO 128
+# style (drawing quality plan, item 15), as segments in section coordinates
+# (metres along the section line from its start, height): the sections in
+# the live panel and on sheets draw them through their transform, a test
+# reads them as they are.
+#
+# Where the section line crosses the opening between its jambs: the frame's
+# head and, for a window, its bottom rail as cut rectangles, the glass as a
+# line on the frame's middle between them; for a door the leaf as a thin
+# rectangle shut in the frame on the side it opens to, and on an outer wall
+# a threshold (onderdorpel) under it. Where the line crosses a jamb: the
+# jamb cut over the whole height. On an outer wall a window has an outer
+# sill (waterslag) sloping out past the wall's face with a drip nose, and an
+# inner sill (vensterbank) standing out past the inner face, under the whole
+# rough opening, as the plan symbol draws them. The lintel above and the
+# parapet below are the wall's own cut.
+#
+# The frame is placed as the plan symbol (`bim_opening_symbol.dl`) and the
+# projected frame beyond the cut (`bim_opening_view.dl`) place it: the type's
+# frame width wide, `the bim symbol frame depth` deep (or the wall's
+# thickness when that is less), on the wall's line. The opening stands as
+# the wall's rough opening does in the evaluation: from its sill above its
+# storey to its head height.
+import architectural/openings/bim_opening_symbol.dl
+
+# How thick a sill (waterslag, vensterbank) and a door's threshold are in a
+# section, in metres; neither is a parameter of the opening type.
+function the bim section sill thickness:
+    replacement:
+        0.03
+function the bim section threshold height:
+    replacement:
+        0.02
+
+# The segments of an opening's cut, two points per segment, in section
+# coordinates: `cuts` the frame's cut profiles, threshold and sills (the cut
+# pen); `glazing` the glass and `leaves` a door's leaf (the thin pen).
+class:
+    patterns:
+        [a|] bim opening section record
+    members:
+        cuts as the type of (a cad topology list of a cad vector2)
+        glazing as the type of (a cad topology list of a cad vector2)
+        leaves as the type of (a cad topology list of a cad vector2)
+
+# Where the section line crosses an opening's wall: `crossAlong` metres
+# along the line, and `perAcross` metres along the line for each metre
+# across the wall toward its exterior side (negative when the line runs
+# toward the interior side).
+class:
+    patterns:
+        [a|] bim opening crossing record
+    members:
+        crossAlong as a 64 bit floating-point number
+        perAcross as a 64 bit floating-point number
+
+# The section point `acrossDistance` toward the wall's exterior side from its
+# line, at height `heightValue`.
+local function the bim cut spot of {bim opening crossing record:lineCrossing} at {a 64 bit floating-point number:acrossDistance} rising {a 64 bit floating-point number:heightValue}:
+    execute:
+        return a cad vector2 with x (lineCrossing's crossAlong + (acrossDistance * lineCrossing's perAcross)) and y heightValue
+
+local function append bim cut segment from {cad vector2:firstSpot} to {cad vector2:secondSpot} into {a pointer to a list:pairs}:
+    execute:
+        append firstSpot to pairs
+        append secondSpot to pairs
+
+# The outline of the rectangle across the wall from `lowAcross` to
+# `highAcross` and from height `lowZ` to `highZ`: four segments.
+local function append bim cut box of {bim opening crossing record:lineCrossing} across {a 64 bit floating-point number:lowAcross} through {a 64 bit floating-point number:highAcross} rising {a 64 bit floating-point number:lowZ} up till {a 64 bit floating-point number:highZ} into {a pointer to a list:pairs}:
+    execute:
+        if ((highAcross - lowAcross) <= 0.0) or ((highZ - lowZ) <= 0.0):
+            return nothing
+        set cornerA to the bim cut spot of lineCrossing at lowAcross rising lowZ
+        set cornerB to the bim cut spot of lineCrossing at highAcross rising lowZ
+        set cornerC to the bim cut spot of lineCrossing at highAcross rising highZ
+        set cornerD to the bim cut spot of lineCrossing at lowAcross rising highZ
+        append bim cut segment from cornerA to cornerB into pairs
+        append bim cut segment from cornerB to cornerC into pairs
+        append bim cut segment from cornerC to cornerD into pairs
+        append bim cut segment from cornerD to cornerA into pairs
+
+# The closed outline through `ringCorners` (across, height), one segment per
+# side.
+local function append bim cut ring of {bim opening crossing record:lineCrossing} through {a pointer to a list:ringCorners} into {a pointer to a list:pairs}:
+    execute:
+        set cornerCount to the length of ringCorners
+        loop cornerCursor from 0 to cornerCount:
+            set here to the item at cornerCursor in ringCorners
+            set following to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in ringCorners
+            append bim cut segment from (the bim cut spot of lineCrossing at here's x rising here's y) to (the bim cut spot of lineCrossing at following's x rising following's y) into pairs
+
+# The cut detail of opening `openingValue` in `modelValue` where the section
+# line from `lineStart` to `lineFinish` crosses it; `withFrame` false leaves
+# out a window's frame and glass (a window system hosted in the opening
+# draws its own), keeping its sills. Empty when the line does not cross the
+# opening within its width and the line's run, and for an opening without
+# its wall, type or storey, in a curved, leaning or raked wall, or drawn by
+# its detail (setting 2400100).
+function the bim section cut of opening {bim opening record:openingValue} in {bim model record:modelValue} from {cad vector2:lineStart} to {cad vector2:lineFinish} framed {boolean:withFrame}:
+    execute:
+        set drawnCut to @intrinsic("construct", a bim opening section record, a cad topology list of a cad vector2, a cad topology list of a cad vector2, a cad topology list of a cad vector2)
+        set hostFound to the bim wall index of openingValue's hostId in modelValue
+        set typeFound to the bim opening type index of openingValue's typeId in modelValue
+        if (hostFound's valid = false) or (typeFound's valid = false):
+            return drawnCut
+        set hostValue to the item at hostFound's position in (modelValue's walls's values)
+        if ((hostValue's bulge != 0.0) or (hostValue's lean != 0.0)) or (hostValue's rise != 0.0):
+            return drawnCut
+        if ((the bim setting 2400100 of openingValue's id in modelValue)'s value) = (1 as a 64 bit integer):
+            return drawnCut
+        set levelFound to the bim level index of hostValue's levelId in modelValue
+        if levelFound's valid = false:
+            return drawnCut
+        set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
+        set lineRun to the cad distance from lineStart to lineFinish
+        set wallLength to the cad distance from hostValue's start to hostValue's finish
+        if (lineRun < 1e-9) or (wallLength < 1e-9):
+            return drawnCut
+        set lineX to (lineFinish's x - lineStart's x) / lineRun
+        set lineY to (lineFinish's y - lineStart's y) / lineRun
+        set wallX to hostValue's finish's x - hostValue's start's x
+        set wallY to hostValue's finish's y - hostValue's start's y
+        set denominator to (lineX * wallY) - (lineY * wallX)
+        if (the absolute value of denominator) < 1e-9:
+            return drawnCut
+        set offsetX to hostValue's start's x - lineStart's x
+        set offsetY to hostValue's start's y - lineStart's y
+        set crossAt to ((offsetX * wallY) - (offsetY * wallX)) / denominator
+        set wallFraction to ((offsetX * lineY) - (offsetY * lineX)) / denominator
+        set roughWidth to the bim rough width of openingType
+        set intoOpening to (wallFraction * wallLength) - (openingValue's offset - (roughWidth * 0.5))
+        if ((intoOpening < 0.0) or (intoOpening > roughWidth)) or ((crossAt < 0.0) or (crossAt > lineRun)):
+            return drawnCut
+        # A metre across the wall is 1 / sin(angle) metres along the line, as
+        # `the bim section box of opening` widens the void (at most 20 times).
+        set crossSine to denominator / wallLength
+        set perAcross to 1.0 / (the maximum of (the absolute value of crossSine) and 0.05)
+        if crossSine < 0.0:
+            set perAcross to 0.0 - perAcross
+        set lineCrossing to @intrinsic("construct", a bim opening crossing record, crossAt, perAcross)
+        set base to (the item at levelFound's position in (modelValue's levels's values))'s elevation
+        set bottom to base + openingType's sill
+        set top to base + (the bim head height of openingType)
+        if (roughWidth <= 0.0) or (top <= bottom):
+            return drawnCut
+        set wallThickness to the bim wall thickness of hostValue in modelValue
+        set wallHalf to wallThickness * 0.5
+        set jambWidth to the maximum of 0.0 and (the minimum of (openingType's frame) and (roughWidth * 0.5))
+        set frameHalf to (the minimum of (the bim symbol frame depth) and wallThickness) * 0.5
+        set spanValue to the bim span of hostValue at openingValue's offset reaching (roughWidth * 0.5)
+        set outdoorSide to the bim outdoor side at spanValue beside hostValue in modelValue
+        # The indoor side across the wall: away from the outdoors, or the
+        # wall's interior side on an inner wall (as the plan symbol).
+        set indoorSign to -1.0
+        if outdoorSide = -1:
+            set indoorSign to 1.0
+        set inJamb to (intoOpening < jambWidth) or (intoOpening > (roughWidth - jambWidth))
+        set framePart to withFrame or openingType's isDoor
+        if framePart and (jambWidth > 0.0):
+            if inJamb:
+                append bim cut box of lineCrossing across (0.0 - frameHalf) through frameHalf rising bottom up till top into (drawnCut's cuts's values)
+            else:
+                append bim cut box of lineCrossing across (0.0 - frameHalf) through frameHalf rising (top - jambWidth) up till top into (drawnCut's cuts's values)
+                if openingType's isDoor = false:
+                    append bim cut box of lineCrossing across (0.0 - frameHalf) through frameHalf rising bottom up till (bottom + jambWidth) into (drawnCut's cuts's values)
+        set infillTop to top - jambWidth
+        if openingType's isDoor:
+            if inJamb = false:
+                # The threshold on an outer wall, and the leaf shut in the
+                # frame, flush with its face on the side it opens to.
+                set leafBottom to bottom
+                if outdoorSide != 0:
+                    set leafBottom to bottom + (the bim section threshold height)
+                    append bim cut box of lineCrossing across (0.0 - frameHalf) through frameHalf rising bottom up till leafBottom into (drawnCut's cuts's values)
+                set swingSign to indoorSign
+                if bim door (openingValue's id) opens outward in modelValue:
+                    set swingSign to 0.0 - indoorSign
+                set leafFace to swingSign * frameHalf
+                set leafBack to swingSign * (frameHalf - (the minimum of (the bim symbol leaf thickness) and (frameHalf * 2.0)))
+                append bim cut box of lineCrossing across (the minimum of leafFace and leafBack) through (the maximum of leafFace and leafBack) rising leafBottom up till infillTop into (drawnCut's leaves's values)
+            return drawnCut
+        if (withFrame and (inJamb = false)) and (infillTop > (bottom + jambWidth)):
+            append bim cut segment from (the bim cut spot of lineCrossing at 0.0 rising (bottom + jambWidth)) to (the bim cut spot of lineCrossing at 0.0 rising infillTop) into (drawnCut's glazing's values)
+        if outdoorSide != 0:
+            set outdoorSign to 0.0 - indoorSign
+            set sillReach to the bim symbol sill projection
+            set sillThickness to the bim section sill thickness
+            # The waterslag: from the frame's outer face, its top sloping
+            # down to its front past the wall's face, its nose hanging over
+            # the face.
+            set slopeCorners to an empty list of a cad vector2
+            append (a cad vector2 with x (outdoorSign * frameHalf) and y bottom) to slopeCorners
+            append (a cad vector2 with x (outdoorSign * frameHalf) and y (bottom + sillThickness)) to slopeCorners
+            append (a cad vector2 with x (outdoorSign * (wallHalf + sillReach)) and y bottom) to slopeCorners
+            append (a cad vector2 with x (outdoorSign * (wallHalf + sillReach)) and y (bottom - sillThickness)) to slopeCorners
+            append (a cad vector2 with x (outdoorSign * wallHalf) and y (bottom - sillThickness)) to slopeCorners
+            append (a cad vector2 with x (outdoorSign * wallHalf) and y bottom) to slopeCorners
+            append bim cut ring of lineCrossing through slopeCorners into (drawnCut's cuts's values)
+            free slopeCorners
+            # The vensterbank: level on the parapet from the frame's inner
+            # face to its front past the inner face.
+            set innerFace to indoorSign * frameHalf
+            set innerFront to indoorSign * (wallHalf + sillReach)
+            append bim cut box of lineCrossing across (the minimum of innerFace and innerFront) through (the maximum of innerFace and innerFront) rising bottom up till (bottom + sillThickness) into (drawnCut's cuts's values)
+        return drawnCut
