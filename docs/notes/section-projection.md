@@ -156,6 +156,16 @@ flat roof on the roof level overhanging 0.4 m:
 for walls, tessellating is cheap and the welding and hiding is the cost, so a frame of a
 wall drag pays nearly the whole time. Not measured at -O2 nor on the FZK-Haus.
 
+During a drag (or another continuous edit) the live plan therefore updates the edges it keeps
+(`update bim kept projection`): a mesh's visible edges depend only on its own triangles, on
+the occluding triangles whose boxes touch its edges' boxes and on the cut polygons whose boxes
+touch them, so only the meshes changed and those whose drawing box touches the box of a mesh or
+cut polygon changed, added or gone are worked out again, among the meshes and cut polygons
+touching them; the rest are copied. The edges equal a whole projection to the bit
+(`ui/panels/tests/plan_projection_drag` checks every frame), and the plan is worked out whole
+again when the edit ends. The same probe, a lowered wall dragged over six frames: 3.3 ms a
+frame updated against 82 ms worked out whole (-O0).
+
 ## Not done
 
 - Plans: per-category projection pens and colours; halftone; the opening frames of an
