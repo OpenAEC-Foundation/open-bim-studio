@@ -12,22 +12,36 @@
 #
 # What the plan draws by its own symbols is not drawn again: the cut
 # outlines hide what lies under or on them, the openings of the storey's
-# walls (their symbols draw frames, sills and jambs) hide what lies in
-# their rough opening across the wall, and the storey's slabs and roofs
-# (`record bim slab edges`), stairs, railings, curtain walls, linear
-# elements, component instances and opening details only hide what lies
-# behind them. Elements of other storeys are drawn when they reach into
-# the depth looked through.
+# walls whose symbols the plan draws (frames, sills and jambs) hide what
+# lies in their rough opening across the wall, and the storey's slabs and
+# roofs (`record bim slab edges`), stairs, railings, curtain walls, linear
+# elements, component instances, opening details, masses and free meshes
+# (`draw bim sketches of`) only hide what lies behind them. Only the
+# storey's walls are drawn, and elements of other storeys when they reach
+# into the depth looked through.
 import ui/panels/bim_plan_panel.dl
 import views/drawings/bim_projection.dl
 import viewer/bim_scene.dl
 import bim/bim_pens.dl
 import architectural/openings/bim_opening_symbol.dl
 
+# The triangles of an evaluated element (`id`) as built (`serial`, from
+# `signature`), with the lowest and highest height of their corners
+# (`heights`' x and y).
+class:
+    patterns:
+        [a|] bim plan element mesh record
+    members:
+        id as a 64 bit integer
+        serial as a 64 bit integer
+        signature as a string
+        heights as a cad vector2
+        shape as a fast mesh record
+
 # The edges a plan sees below and above its cut, in plan coordinates, kept
 # until what they show changes (`key`: the model's revision, the
 # evaluation's generation, the storey, the plan view, its cut height, depth,
-# rules and hidden elements, and the scene's meshes and their builds).
+# rules and hidden elements, and a fingerprint of the scene's meshes).
 class:
     patterns:
         [a|] bim plan projection record
@@ -37,10 +51,17 @@ class:
         above as the type of (a cad topology list of a bim projected edge record)
         # How often the edges were worked out, for tests and timing.
         builds as an integer
+        # The evaluated elements' triangles the last build used, by
+        # ascending id: an element not built again since (a wall not
+        # dragged) is not tessellated again.
+        meshes as the type of (a cad topology list of a bim plan element mesh record)
+        # How many elements the last build tessellated, for tests and
+        # timing.
+        tessellated as an integer
 
 function an empty bim plan projection:
     execute:
-        return @intrinsic("construct", a bim plan projection record, (the string form of "unprojected"), a cad topology list of a bim projected edge record, a cad topology list of a bim projected edge record, 0)
+        return @intrinsic("construct", a bim plan projection record, (the string form of "unprojected"), a cad topology list of a bim projected edge record, a cad topology list of a bim projected edge record, 0, a cad topology list of a bim plan element mesh record, 0)
 
 # How far short of the floor (below) or of the next level (above) the
 # depth looked through stops, in metres: what lies on the floor itself is
@@ -68,18 +89,15 @@ local function bim plan editor {bim editor record:planEditor} projects element {
         return true
 
 # Whether the plan of `planEditor` draws element `elementId` by a symbol of
-# its own: a slab or roof, stair, railing, curtain wall, linear element,
-# component instance or opening of its storey.
+# its own: any element of its storey but a wall (a slab or roof, stair,
+# railing, curtain wall, linear element, component instance, opening, mass
+# or free mesh, whose outline `draw bim sketches of` strokes).
 local function bim plan editor {bim editor record:planEditor} symbolises element {a 64 bit integer:elementId}:
     execute:
         set modelValue to planEditor's documentValue's current
         if (the bim level of element elementId in modelValue) != planEditor's levelId:
             return false
         if (the bim wall index of elementId in modelValue)'s valid:
-            return false
-        if (the bim mesh index of elementId in modelValue)'s valid:
-            return false
-        if (the bim sketch index of elementId in modelValue)'s valid:
             return false
         return true
 
@@ -94,21 +112,25 @@ local function the bim height span of {fast mesh record:meshShape}:
             set highest to the maximum of highest and cornerHeight
         return a cad vector2 with x lowest and y highest
 
-# Appends mesh `meshShape` of element `elementId` to `belowMeshes` when it
-# reaches between `floorHeight` and `cutLevel`, and to `aboveMeshes` when
-# it reaches between `cutLevel` and `topHeight`; drawn when `drawsEdges`.
-local function sort bim plan mesh {fast mesh record:meshShape} of {a 64 bit integer:elementId} drawn {boolean:drawsEdges} between {a 64 bit floating-point number:floorHeight}, {a 64 bit floating-point number:cutLevel} and {a 64 bit floating-point number:topHeight} into {a pointer to a list:belowMeshes} and {a pointer to a list:aboveMeshes}:
+# Appends mesh `meshShape` of element `elementId`, its corners from
+# `heightSpan`'s x up to its y high, to `belowMeshes` when it reaches
+# between `floorHeight` and `cutLevel`, and to `aboveMeshes` when it
+# reaches between `cutLevel` and `topHeight`; drawn when `drawsEdges`.
+local function sort bim plan mesh {fast mesh record:meshShape} of {a 64 bit integer:elementId} spanning {cad vector2:heightSpan} drawn {boolean:drawsEdges} between {a 64 bit floating-point number:floorHeight}, {a 64 bit floating-point number:cutLevel} and {a 64 bit floating-point number:topHeight} into {a pointer to a list:belowMeshes} and {a pointer to a list:aboveMeshes}:
     execute:
-        set heightSpan to the bim height span of meshShape
         if (heightSpan's x <= cutLevel) and (heightSpan's y >= floorHeight):
             append (a bim projection mesh of elementId shaped meshShape outlined drawsEdges) to belowMeshes
         if (heightSpan's y >= cutLevel) and (heightSpan's x <= topHeight):
             append (a bim projection mesh of elementId shaped meshShape outlined drawsEdges) to aboveMeshes
 
 # The cut `cutView` with, for each opening in a wall of the plan's storey
-# whose symbol the plan draws (one reaching above the cut), its rough
-# opening across the wall and its sills as one more cut polygon: what lies
-# there (the wall's own sill and jambs) the symbol draws.
+# whose symbol the plan draws (one reaching above the cut, shown as `draw
+# bim openings in plan of` shows it: its category shown, its phase not
+# hidden, its wall not hidden), its rough opening across the wall and its
+# sills as one more cut polygon: what lies there (the wall's own sill and
+# jambs) the symbol draws. Along a curved wall the rectangle stands on the
+# tangent at the opening's middle and reaches as much further across as
+# the wall's inner face falls away from that tangent at the opening's ends.
 local function the bim plan hiding view of {bim editor record:planEditor} cut as {bim view record:cutView}:
     execute:
         set modelValue to planEditor's documentValue's current
@@ -120,14 +142,26 @@ local function the bim plan hiding view of {bim editor record:planEditor} cut as
             set openingValue to the item at openingCursor in (modelValue's openings's values)
             set hostFound to the bim wall index of openingValue's hostId in modelValue
             set typeFound to the bim opening type index of openingValue's typeId in modelValue
-            if hostFound's valid and typeFound's valid:
+            set openingCategory to the bim category of element openingValue's id in modelValue
+            set symbolShown to (the bim phase look of element openingValue's id in plan of planEditor) != bim phase hidden look
+            if bim editor hides (openingValue's hostId) in plan of planEditor:
+                set symbolShown to false
+            if ((hostFound's valid and typeFound's valid) and (bim category openingCategory is visible in planEditor's planRules)) and symbolShown:
                 set hostWall to the item at hostFound's position in (modelValue's walls's values)
                 set openingType to the item at typeFound's position in (modelValue's openingTypes's values)
                 set reachesAbove to (hostWall's baseOffset + (the bim head height of openingType)) > cutAbove
                 if (hostWall's levelId = planEditor's levelId) and reachesAbove:
                     set roughHalf to (the bim rough width of openingType) * 0.5
                     set openingSpan to the bim span of hostWall at openingValue's offset reaching roughHalf
-                    set acrossReach to ((the bim wall thickness of hostWall in modelValue) * 0.5) + ((the bim symbol sill projection) + 0.001)
+                    set wallHalf to (the bim wall thickness of hostWall in modelValue) * 0.5
+                    set acrossReach to wallHalf + ((the bim symbol sill projection) + 0.001)
+                    set hostArc to the bim arc of hostWall
+                    if hostArc's curved:
+                        set innerRadius to hostArc's radius - wallHalf
+                        if innerRadius > roughHalf:
+                            set acrossReach to acrossReach + (innerRadius - (the square root of ((innerRadius * innerRadius) - (roughHalf * roughHalf))))
+                        else:
+                            set acrossReach to acrossReach + roughHalf
                     set acrossX to openingSpan's normal's x * acrossReach
                     set acrossY to openingSpan's normal's y * acrossReach
                     set openingRectangle to a cad topology list of a cad vector2
@@ -194,12 +228,22 @@ local function the bim plan projection key of {bim editor record:planEditor} amo
         set keyText to ((keyText + (the string form of " cut ")) + (the bim exact text of (the bim plan cut height of planEditor))) + ((the string form of " depth ") + (the bim exact text of (the bim plan depth of planEditor)))
         set keyText to (keyText + (the string form of " rules ")) + (the bim rule text of planEditor's planRules)
         set keyText to (keyText + (the string form of " hidden ")) + (the bim hidden key in view planEditor's planViewId among (planEditor's hiddenElements's values))
-        # A mesh built again carries a new serial, also while it is dragged
-        # and the revision stays.
-        set serialSum to 0 as a 64 bit integer
+        # The scene's meshes carry no build serial of their own (it is 0),
+        # so a fingerprint stands for them: each mesh's element, corner
+        # count and first and last corner, weighted by its place. A mesh
+        # moved or remade while the revision stays (dragged) changes it.
+        set fingerprint to 0.0
         loop meshCursor from 0 to the length of sceneMeshes:
-            set serialSum to serialSum + ((the item at meshCursor in sceneMeshes)'s serial)
-        return (keyText + (the string form of " meshes ")) + ((the string form of (the length of sceneMeshes)) + ((the string form of " ") + (the string form of serialSum)))
+            set entry to the item at meshCursor in sceneMeshes
+            set placeWeight to (meshCursor + 1) as a 64 bit floating-point number
+            set cornerTotal to the length of (entry's shape's positions's values)
+            set fingerprint to fingerprint + (placeWeight * ((entry's elementId as a 64 bit floating-point number) + (cornerTotal as a 64 bit floating-point number)))
+            if cornerTotal > 0:
+                set firstCorner to the item at 0 in (entry's shape's positions's values)
+                set lastCorner to the item at (cornerTotal - 1) in (entry's shape's positions's values)
+                set cornerSum to (firstCorner's x + ((3.0 * firstCorner's y) + (7.0 * firstCorner's z))) + ((11.0 * lastCorner's x) + ((13.0 * lastCorner's y) + (17.0 * lastCorner's z)))
+                set fingerprint to fingerprint + (placeWeight * cornerSum)
+        return (keyText + (the string form of " meshes ")) + ((the string form of (the length of sceneMeshes)) + ((the string form of " ") + (the bim exact text of fingerprint)))
 
 # Brings `projection` up to the plan of `planEditor` cut as `cutView`,
 # among the scene's meshes `sceneMeshes` (the 3D view's): worked out again
@@ -221,15 +265,43 @@ function refresh bim plan projection in {a pointer to a bim plan projection reco
         set aboveMeshes to a cad topology list of a bim projection mesh record
         # The walls and plates the evaluation holds; the storey's own
         # slabs and roofs only hide, `record bim slab edges` draws them.
+        # Their triangles are kept from the build before for each element
+        # not built again since (by id, serial and signature, both lists
+        # ascending by id): while a wall is dragged only that wall is
+        # tessellated again.
+        set keptMeshes to projectionHolder's meshes
+        set freshMeshes to a cad topology list of a bim plan element mesh record
+        set keptCursor to 0
+        set projectionHolder's tessellated to 0
         loop elementCursor from 0 to the length of (planEditor's evaluation's elements's values):
             set geometry to the item at elementCursor in (planEditor's evaluation's elements's values)
             if geometry's status = 0:
                 set categoryCode to the bim category of element geometry's id in modelValue
                 if bim plan editor planEditor projects element geometry's id in category categoryCode:
-                    set triangles to an empty fast mesh
-                    append bim mesh of geometry to (the address of triangles)
+                    set seeking to true
+                    loop while seeking:
+                        if keptCursor >= the length of (keptMeshes's values):
+                            set seeking to false
+                        else if (the item at keptCursor in (keptMeshes's values))'s id < geometry's id:
+                            set keptCursor to keptCursor + 1
+                        else:
+                            set seeking to false
+                    set keptSlot to -1
+                    if keptCursor < the length of (keptMeshes's values):
+                        set keptEntry to the item at keptCursor in (keptMeshes's values)
+                        if ((keptEntry's id = geometry's id) and (keptEntry's serial = geometry's serial)) and (keptEntry's signature = geometry's signature):
+                            set keptSlot to keptCursor
+                    if keptSlot >= 0:
+                        append (the item at keptSlot in (keptMeshes's values)) to (freshMeshes's values)
+                    else:
+                        set triangles to an empty fast mesh
+                        append bim mesh of geometry to (the address of triangles)
+                        append (@intrinsic("construct", a bim plan element mesh record, geometry's id, geometry's serial, geometry's signature, the bim height span of triangles, triangles)) to (freshMeshes's values)
+                        set projectionHolder's tessellated to projectionHolder's tessellated + 1
+                    set elementMesh to the last item of (freshMeshes's values)
                     set drawsEdges to (bim plan editor planEditor symbolises element geometry's id) = false
-                    sort bim plan mesh triangles of geometry's id drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
+                    sort bim plan mesh elementMesh's shape of geometry's id spanning elementMesh's heights drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
+        set projectionHolder's meshes to freshMeshes
         # The scene's meshes, less those that hold lines (reinforcement,
         # masonry joints).
         loop meshCursor from 0 to the length of sceneMeshes:
@@ -237,7 +309,7 @@ function refresh bim plan projection in {a pointer to a bim plan projection reco
             if (bim scene mesh entry draws lines) = false:
                 if bim plan editor planEditor projects element entry's elementId in category entry's category:
                     set drawsEdges to (bim plan editor planEditor symbolises element entry's elementId) = false
-                    sort bim plan mesh entry's shape of entry's elementId drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
+                    sort bim plan mesh entry's shape of entry's elementId spanning (the bim height span of entry's shape) drawn drawsEdges between (cutLevel - downDepth), cutLevel and (cutLevel + upDepth) into (belowMeshes's values) and (aboveMeshes's values)
         set hidingView to the bim plan hiding view of planEditor cut as cutView
         # Below: the plan's own plane, looking down; drawing coordinates
         # are plan coordinates.
