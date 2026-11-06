@@ -1,0 +1,221 @@
+# SPDX-License-Identifier: MPL-2.0
+# Sections and elevations drawn with what lies beyond their plane (drawing
+# quality plan, item 15; docs/notes/section-projection.md): the visible
+# edges of the walls, floors and roofs the evaluation holds, of the doors'
+# and windows' frames (`bim_opening_view.dl`), and of every element the 3D
+# view meshes besides (stairs, railings, building systems, columns and
+# beams, placed components, free meshes), seen square onto the view's plane
+# and hidden where something lies in front (`bim_projection.dl`). A section
+# draws them beyond its cut, which hides what lies behind it, up to its
+# view depth; an elevation draws them whole, above a ground line at peil,
+# with its levels marked beside it.
+import ui/properties/bim_editor_properties.dl
+import views/drawings/bim_projection.dl
+import architectural/openings/bim_opening_view.dl
+import architectural/openings/bim_window_actions.dl
+import viewer/bim_scene.dl
+import viewer/bim_canvas.dl
+import bim/bim_pens.dl
+
+# Whether view `viewId` draws element `elementId` of category
+# `categoryCode` (-1: none known) under `viewRules`: its category shown,
+# its phase not hidden, the element not hidden there (HH).
+local function bim view {a 64 bit integer:viewId} for {bim editor record:editor} projects {a 64 bit integer:elementId} in category {integer:categoryCode} under {bim view rules record:viewRules}:
+    execute:
+        if (categoryCode >= 0) and (categoryCode < the bim category count):
+            if (bim category categoryCode is visible in viewRules) = false:
+                return false
+        if (the bim phase look of element elementId in view numbered viewId of editor) = bim phase hidden look:
+            return false
+        if bim editor hides elementId in view numbered viewId of editor:
+            return false
+        return true
+
+# The meshes view `viewId` projects under `viewRules`: the evaluated walls
+# and plates, the meshes of the scene `sceneMeshes` (the 3D view's, less
+# its lines), and each door's and window's frame and infill, unless a
+# window system shown in the opening or the opening's detail draws them.
+function the bim projection meshes of {bim editor record:editor} among {a pointer to a list:sceneMeshes} in view {a 64 bit integer:viewId} under {bim view rules record:viewRules}:
+    execute:
+        set result to a cad topology list of a bim projection mesh record
+        set modelValue to editor's documentValue's current
+        loop cursor from 0 to the length of (editor's evaluation's elements's values):
+            set geometry to the item at cursor in (editor's evaluation's elements's values)
+            if geometry's status = 0:
+                set categoryCode to the bim category of element geometry's id in modelValue
+                if bim view viewId for editor projects geometry's id in category categoryCode under viewRules:
+                    set triangles to an empty fast mesh
+                    append bim mesh of geometry to (the address of triangles)
+                    append (a bim projection mesh of geometry's id shaped triangles outlined true) to (result's values)
+        loop cursor from 0 to the length of sceneMeshes:
+            set entry to the item at cursor in sceneMeshes
+            if (bim scene mesh entry draws lines) = false:
+                if bim view viewId for editor projects entry's elementId in category entry's category under viewRules:
+                    append (a bim projection mesh of entry's elementId shaped entry's shape outlined true) to (result's values)
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            set categoryCode to the bim category of element openingValue's id in modelValue
+            if bim view viewId for editor projects openingValue's id in category categoryCode under viewRules:
+                set framed to true
+                set hostedId to the bim window system in opening openingValue's id in modelValue
+                if hostedId != the bim refused id:
+                    set framed to (bim view viewId for editor projects hostedId in category (the bim category of element hostedId in modelValue) under viewRules) = false
+                if framed:
+                    set openingShapes to the bim opening view of openingValue in modelValue
+                    if openingShapes's valid:
+                        if (the length of (openingShapes's frame's triangles's values)) > 0:
+                            append (a bim projection mesh of openingValue's id shaped openingShapes's frame outlined true) to (result's values)
+                        if (the length of (openingShapes's infill's triangles's values)) > 0:
+                            append (a bim projection mesh of openingValue's id shaped openingShapes's infill outlined false) to (result's values)
+        return result
+
+# The visible edges of view `viewId` (under `viewRules`) looking left of
+# the plan line from `lineStart` to `lineFinish`, within the line's length
+# and `viewDepth` beyond it (0: no limit), behind the cut `cutView`.
+function the bim projected edges of {bim editor record:editor} among {a pointer to a list:sceneMeshes} in view {a 64 bit integer:viewId} under {bim view rules record:viewRules} from {cad vector2:lineStart} to {cad vector2:lineFinish} within {a 64 bit floating-point number:viewDepth} behind {bim view record:cutView}:
+    execute:
+        set run to the cad distance from lineStart to lineFinish
+        if run <= 1e-9:
+            return a cad topology list of a bim projected edge record
+        set meshes to the bim projection meshes of editor among sceneMeshes in view viewId under viewRules
+        return the bim projected edges of (meshes's values) on (the bim section plane from lineStart to lineFinish) from 0.0 to run within viewDepth behind cutView
+
+# The visible edges of section view `viewValue` beyond its cut `cutView`.
+function the bim section projection of {bim editor record:editor} among {a pointer to a list:sceneMeshes} for {bim view definition record:viewValue} cut as {bim view record:cutView}:
+    execute:
+        set viewRules to the bim rules of view viewValue in editor's documentValue's current
+        return the bim projected edges of editor among sceneMeshes in view viewValue's id under viewRules from viewValue's lineStart to viewValue's lineFinish within viewValue's depth behind cutView
+
+# The visible edges of elevation `viewValue`, along its line
+# (`the bim elevation line of`); none when the model has nothing in plan.
+function the bim elevation projection of {bim editor record:editor} among {a pointer to a list:sceneMeshes} for {bim view definition record:viewValue}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set elevationLine to the bim elevation line of (viewValue's detail as an integer) in modelValue
+        if elevationLine's valid = false:
+            return a cad topology list of a bim projected edge record
+        set viewRules to the bim rules of view viewValue in modelValue
+        return the bim projected edges of editor among sceneMeshes in view viewValue's id under viewRules from elevationLine's lineStart to elevationLine's lineFinish within viewValue's depth behind (an empty bim view)
+
+# The height an elevation's ground line stands at: peil, the storey at 0
+# (the lowest storey at or above 0, else the highest), as long as the model
+# keeps no ground level (maaiveld) of its own.
+function the bim ground height of {bim model record:modelValue}:
+    execute:
+        set found to false
+        set groundLevel to 0.0
+        set highest to -1e300
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            set levelElevation to (the item at cursor in (modelValue's levels's values))'s elevation
+            set highest to the maximum of highest and levelElevation
+            if levelElevation >= -0.000001:
+                if (found = false) or (levelElevation < groundLevel):
+                    set groundLevel to levelElevation
+                    set found to true
+        if found:
+            return groundLevel
+        if highest > -1e300:
+            return highest
+        return 0.0
+
+# Edges `projectedEdges` (drawing coordinates) on `canvas`, in the visible
+# pen: black on paper, dark grey on screen. What lies below `groundHeight`
+# is left out (an elevation's earth); a section passes -1e300.
+function record bim projected edges {a pointer to a list:projectedEdges} above {a 64 bit floating-point number:groundHeight} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set pairs to an empty list of a cad vector2
+        loop cursor from 0 to the length of projectedEdges:
+            set edge to the item at cursor in projectedEdges
+            set fromPoint to edge's start
+            set toPoint to edge's finish
+            set keep to true
+            if (fromPoint's y < groundHeight) and (toPoint's y < groundHeight):
+                set keep to false
+            else if (fromPoint's y < groundHeight) or (toPoint's y < groundHeight):
+                set fraction to (groundHeight - fromPoint's y) / (toPoint's y - fromPoint's y)
+                set crossing to a cad vector2 with x (fromPoint's x + ((toPoint's x - fromPoint's x) * fraction)) and y groundHeight
+                if fromPoint's y < groundHeight:
+                    set fromPoint to crossing
+                else:
+                    set toPoint to crossing
+            if keep:
+                append (the bim pixel of fromPoint through transform) to pairs
+                append (the bim pixel of toPoint through transform) to pairs
+        set shade to 60
+        if canvas's paperScale > 0.0:
+            set shade to 0
+        record bim pen (bim visible pen) strokes pairs coloured shade, shade and shade wide 1.0 on canvas
+        free pairs
+
+# Elevation `viewValue` on `canvas` through `transform` (its drawing
+# coordinates, metres along its line and height): its projected edges above
+# the ground line, the ground line itself in the cut pen across the whole
+# line, and its levels as a section marks them, as short dashed lines from
+# the building's right side to the line's end with the level mark past it.
+function record bim elevation {bim view definition record:viewValue} of {bim editor record:editor} among {a pointer to a list:sceneMeshes} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set elevationLine to the bim elevation line of (viewValue's detail as an integer) in modelValue
+        if elevationLine's valid = false:
+            return nothing
+        set run to the cad distance from elevationLine's lineStart to elevationLine's lineFinish
+        set groundHeight to the bim ground height of modelValue
+        set projectedEdges to the bim elevation projection of editor among sceneMeshes for viewValue
+        record bim projected edges (projectedEdges's values) above groundHeight through transform on canvas
+        set groundPairs to an empty list of a cad vector2
+        append (the bim pixel of (a cad vector2 with x 0.0 and y groundHeight) through transform) to groundPairs
+        append (the bim pixel of (a cad vector2 with x run and y groundHeight) through transform) to groundPairs
+        set shade to 60
+        if canvas's paperScale > 0.0:
+            set shade to 0
+        record bim pen (bim cut pen) strokes groundPairs coloured shade, shade and shade wide 2.0 on canvas
+        free groundPairs
+        set levelsShown to editor
+        set levelsShown's sectionViewId to viewValue's id
+        draw bim levels in section of levelsShown spanning (run - (the bim elevation line margin)) until run between -1e300 and 1e300 through transform on canvas
+
+# The projected edges of the section the editor shows, kept until the
+# model, the evaluation, the section's view or its line change: computed
+# again only then, not every frame.
+class:
+    patterns:
+        [a|] bim section projection cache record
+    members:
+        revision as a 64 bit integer
+        generation as a 64 bit integer
+        viewId as a 64 bit integer
+        lineStart as a cad vector2
+        lineFinish as a cad vector2
+        meshCount as an integer
+        edges as the type of (a cad topology list of a bim projected edge record)
+
+function a new bim section projection cache:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim section projection cache record, (-1) as a 64 bit integer, (-1) as a 64 bit integer, the bim refused id, nowhere, nowhere, -1, a cad topology list of a bim projected edge record)
+
+# Brings `cache` up to the section `editor` shows, among the scene's meshes
+# `sceneMeshes`; no edges when it shows none.
+function refresh bim section projection in {a pointer to a bim section projection cache record:cache} of {bim editor record:editor} among {a pointer to a list:sceneMeshes}:
+    execute:
+        set revision to editor's documentValue's revision
+        set generation to editor's evaluation's generation
+        set sameModel to (cache's revision = revision) and (cache's generation = generation)
+        set sameLine to ((cache's lineStart's x = editor's sectionFirst's x) and (cache's lineStart's y = editor's sectionFirst's y)) and ((cache's lineFinish's x = editor's sectionSecond's x) and (cache's lineFinish's y = editor's sectionSecond's y))
+        set sameView to (cache's viewId = editor's sectionViewId) and (cache's meshCount = (the length of sceneMeshes))
+        if (sameModel and sameLine) and sameView:
+            return nothing
+        set cache's revision to revision
+        set cache's generation to generation
+        set cache's viewId to editor's sectionViewId
+        set cache's lineStart to editor's sectionFirst
+        set cache's lineFinish to editor's sectionSecond
+        set cache's meshCount to the length of sceneMeshes
+        if editor's hasSection = false:
+            set cache's edges to a cad topology list of a bim projected edge record
+            return nothing
+        set viewDepth to 0.0
+        set viewFound to the bim view index of editor's sectionViewId in editor's documentValue's current
+        if viewFound's valid:
+            set viewDepth to (the item at viewFound's position in (editor's documentValue's current's views's values))'s depth
+        set cache's edges to the bim projected edges of editor among sceneMeshes in view editor's sectionViewId under editor's sectionRules from editor's sectionFirst to editor's sectionSecond within viewDepth behind editor's section
