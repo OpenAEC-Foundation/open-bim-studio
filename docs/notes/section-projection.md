@@ -71,14 +71,25 @@ between their normals). The rule, decided for item 15 on 6 November 2026:
 - An outline against the background, a true fold and a reveal have no coplanar face
   beyond them, so they stay. Two faces of one mesh meeting on a side with more faces (two
   touching solids) draw nothing there when the only two faces toward the viewer are
-  coplanar.
+  coplanar and lie on either side of it; two lying over each other on one side of it
+  leave it an outline.
 
-The one-sided edges are hashed by their line in the drawing: its angle (bins of 0.1 mrad,
-the angle first turned by an odd 0.414 rad so that the two ends of the angle range fall on
-no usual direction) and its offset from the origin (bins of 1 mm). Each edge looks up the
-nine bins around its own (and, near either end of the angle range, those at the other end
-with the offset turned over), sorted keys and a binary search, so the search costs
-O(n log n) for n edges.
+The one-sided edges are hashed by their line in the drawing and by their depth: the
+line's angle (bins of 0.1 mrad, the angle first turned by an odd 0.414 rad so that the two
+ends of the angle range fall on no usual direction), its offset from the first one-sided
+edge's start (bins of 1 mm, so a model far from its origin keeps its lines apart), and
+every depth bin of 250 mm its ends reach. An edge reaching through more than 32 depth
+bins (running steeply into the depth) is keyed once, in a deep bin that every edge also
+searches. The angle and depth bins are hashed together into 2^16 slots, the offset kept
+below them so that neighbouring offsets follow each other. Each edge scans, for each
+depth bin it reaches and the deep bin, the three angle bins around its own over three
+offset bins (and, near either end of the angle range, those at the other end with the
+offset turned over): sorted keys and a binary search per scan. Edges on one line in the
+drawing but at different depths, such as the storey lines of every wall parallel to an
+elevation, no longer meet. The cost is O(n log n) plus, for each edge, the edges that
+share its line, depth bin and hash slot: those on nearly its line in space (a long facade
+whose windows all sit on one sill line) and the rare hash collision. That last term is not
+bounded in principle, but it no longer grows with the depth of the building.
 
 **Hidden-line removal.** Every triangle is cut to the depths from 0 (the plane) to the
 view depth and kept as an occluder in drawing coordinates. A grid indexes the
@@ -191,9 +202,20 @@ sill:
   window. The sills, heads and jambs, the facade's foot and its top are drawn whole. The
   rest of the old border, along the first window's sill, is still drawn, on top of the
   sill's own edge.
+- A section across the house at y 3 looking south cuts the interior wall and sees the
+  south wall's inner face, which the interior wall meets at a T beyond the cut, with the
+  openings in it. Between the openings, between the door and the T and beyond the last
+  window that face draws nothing: no edge, and no sill or head line running on. The
+  inner face shows the T only as split pieces of its foot line (drawing x 4655 to 4830
+  and 4830 to 4840), which lie on the foot and draw nothing extra. The same test run
+  against the projection before the depth hash gives the same output, so these cases
+  and the two below guard the flush rule rather than show a change; whether the
+  projection before flush edges drew a false line on that inner face was not checked.
 - A first floor of the same walls stacked flush draws no joint at 3 m. Nor does one with
   the same brick outside and a timber inner leaf. One rendered outside keeps the joint
-  over the facade's whole width (8.32 m).
+  over the facade's whole width (8.32 m), and so do the same walls set back 3 mm and the
+  same walls turned a little (the east end 40 mm further north): they do not lie in the
+  ground floor's plane.
 
 `ui/shell/tests/plan_projection` (see its expected output): in the ground floor plan (cut
 at 1.2 m, a roof level at 3 m) of four walls with a window, a knee wall 0.8 m high and a
@@ -239,6 +261,24 @@ to 420 meshes, about a quarter of the projection. The edges left out (13 on one 
 five) are joints between flush faces of different elements, all of one finish in the
 probe, the stacked storeys' facades among them; which joint is which was not checked.
 
+That line hash keyed only the line in the drawing, so every one-sided edge on one storey
+line met every other, at any depth: quadratic in the walls parallel to the view. With the
+depth bins (the same probe, -O0, this computer, 7 November 2026, against a build of the
+previous commit in the same conditions; the same edges drawn in each case):
+
+| Model | Elevation, line and depth hash | Line hash only | Edges |
+|---|---|---|---|
+| 1 storey, 312 walls, 48 windows, 1 slab | 40 to 41 ms | 57 to 58 ms | 99 |
+| 5 storeys, 420 walls, 120 windows, 5 slabs | 42 ms | 65 ms | 177 |
+| 8 storeys, 2496 walls, 2488 meshes | 356 to 357 ms | 887 to 899 ms | 486 |
+| 20 storeys, 6240 walls, 960 windows, 6244 meshes | 799 ms | 2727 ms | 1146 |
+
+The plans of that run: 82, 78 and 75 ms on one storey, 48, 25 and 24 ms on five. On one and
+five storeys the elevation now takes less than the 47 and 51 ms measured for the
+projection without flush edges the day before; those were other runs under other load, so
+the flush handling's remaining cost at that size is within the noise, not shown to be
+zero. Without flush edges the 8- and 20-storey elevations were not measured.
+
 ## Not done
 
 - Plans: per-category projection pens and colours; halftone; the opening frames of an
@@ -270,8 +310,8 @@ probe, the stacked storeys' facades among them; which joint is which was not che
   outline, both are drawn, one on the other. Measured only on generated towers and the
   test house, not on the FZK-Haus itself.
 
-Sections and elevations were not measured on a large model; plans only on generated
-towers, not on the FZK-Haus.
+Sections were not measured on a large model, elevations and plans only on generated
+towers (up to 20 storeys), not on the FZK-Haus.
 
 ## Verdict
 
@@ -281,6 +321,8 @@ below and above the cut. Provisionally it is fast enough, kept between frames, f
 of a few hundred elements: measured at -O0 on generated towers, 20 to 75 ms to work out,
 with up to 190 edges. Leaving out flush edges (same plane, faces toward the viewer on both
 sides, one mesh or one finish) is kept: it removes the false joints of T-vertex
-triangulations and of stacked storeys for about a quarter more time. What is missing to settle it: a measurement on the FZK-Haus and at
+triangulations and of stacked storeys. Hashed by line and depth, its search grows with
+the edges that share a line in space rather than a line in the drawing; a 20-storey
+generated tower's elevation takes 0.8 s at -O0 with it. What is missing to settle it: a measurement on the FZK-Haus and at
 -O2, and the cost of a frame of a drag in the running application. Those, and the
 per-category pens, are the next steps of item 15.
