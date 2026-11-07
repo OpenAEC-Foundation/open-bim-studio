@@ -3048,6 +3048,16 @@ function draw bim dimensions in plan of {bim editor record:editor} through {bim 
         set modelValue to editor's documentValue's current
         if (the length of (modelValue's dimensions's values)) = 0:
             return nothing
+        set storeyDimensions to the bim storey dimensions of editor
+        record bim dimensions storeyDimensions of modelValue at drawing scale (the bim scale of view editor's planViewId in modelValue) through transform on canvas
+        free storeyDimensions
+
+# The dimensions of the active storey's plan: those to its walls, to
+# openings in them and to grids (which run through every storey), not a
+# section's own.
+function the bim storey dimensions of {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
         set storeyDimensions to an empty list of a bim dimension record
         loop cursor from 0 to the length of (modelValue's dimensions's values):
             set dimensionValue to the item at cursor in (modelValue's dimensions's values)
@@ -3066,23 +3076,78 @@ function draw bim dimensions in plan of {bim editor record:editor} through {bim 
             # A section's dimensions are its own.
             if onStorey and (dimensionValue's viewId = the bim refused id):
                 append dimensionValue to storeyDimensions
-        record bim dimensions storeyDimensions of modelValue at drawing scale (the bim scale of view editor's planViewId in modelValue) through transform on canvas
-        free storeyDimensions
+        return storeyDimensions
+
+# How many pixels a paper millimetre takes on screen in a view drawn at
+# 1:`viewDenominator` through `transform` (`scale` pixels to the metre): a
+# metre is 1000 / `viewDenominator` paper millimetres.
+function the bim paper millimetre through {bim drawing transform record:transform} at drawing scale {a 64 bit floating-point number:viewDenominator}:
+    execute:
+        return (transform's scale * viewDenominator) / 1000.0
+
+# The least lettering size, in pixels, at which the screen letters a
+# dimension's value (its 2.5 mm at the view's scale): below it the values
+# are left out and the lines stay, as no reader makes out a smaller figure.
+function the bim least legible dimension pixels:
+    replacement:
+        3.0
 
 # Dimensions `drawnDimensions` (`bim dimension record`s of `modelValue`) drawn at
 # 1:`viewDenominator`: the dimension line, extension lines from the
 # measured features, a tick at each end and the value in millimetres,
 # lettered clear of every other value, line and mark. A plan draws its
 # storey's this way, a section its height chains.
+#
+# Everything about a dimension but its line widths has a size on paper (the
+# tick, the extension line's 1.5 mm gap and 2 mm overshoot, the 2.5 mm
+# value, its gap to the line, the leaders and every clearance of the
+# lettering), and a screen draws those sizes at the view's scale as well (a
+# paper millimetre being `the bim paper millimetre through … at drawing
+# scale`), so that at any zoom the screen shows the sheet's dimensions,
+# values in the same places, magnified or reduced: the values are lettered
+# on a canvas of that many pixels to the millimetre, over the labels the
+# screen canvas holds, as the sheet letters them, and the boxes it keeps
+# clear. The lines keep their screen widths in pixels; values smaller than
+# `the bim least legible dimension pixels` are left out on screen.
 function record bim dimensions {a pointer to a list:drawnDimensions} of {bim model record:modelValue} at drawing scale {a 64 bit floating-point number:viewDenominator} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
     execute:
         if (the length of drawnDimensions) = 0:
             return nothing
+        set dimensionLines to an empty list of a cad vector2
+        set dimensionTicks to an empty list of a cad vector2
+        if canvas's paperScale > 0.0:
+            letter bim dimensions drawnDimensions of modelValue at drawing scale viewDenominator through transform into dimensionLines and dimensionTicks on canvas
+            record bim dimension strokes dimensionLines and dimensionTicks on canvas
+        else:
+            set perMillimetre to the bim paper millimetre through transform at drawing scale viewDenominator
+            if perMillimetre > 0.0:
+                set lettering to a new bim canvas
+                set lettering's paperScale to perMillimetre
+                loop textCursor from 0 to the length of (canvas's texts's values):
+                    append (the item at textCursor in (canvas's texts's values)) to (lettering's texts's values)
+                loop keptCursor from 0 to the length of (canvas's keepClear's values):
+                    append (the item at keptCursor in (canvas's keepClear's values)) to (lettering's keepClear's values)
+                set firstValue to the length of (lettering's texts's values)
+                letter bim dimensions drawnDimensions of modelValue at drawing scale viewDenominator through transform into dimensionLines and dimensionTicks on (the address of lettering)
+                set screenValues to an empty list of a bim canvas text record
+                loop valueCursor from firstValue to the length of (lettering's texts's values):
+                    append (the item at valueCursor in (lettering's texts's values)) to screenValues
+                record bim dimension annotation dimensionLines, dimensionTicks and screenValues lettered at perMillimetre recorded through transform redrawn through transform on canvas
+                free screenValues
+        free dimensionLines
+        free dimensionTicks
+
+# The dimensions `drawnDimensions` laid out on `canvas`, in its units: its
+# lines (dimension lines, extension lines and the values' leaders, as
+# pairs) into `dimensionLines`, its ticks into `dimensionTicks`, its values
+# lettered on `canvas` (`letter bim dimension values`), every size from the
+# canvas's symbol scale and lettering size, so on paper (`paperScale`)
+# paper millimetres.
+function letter bim dimensions {a pointer to a list:drawnDimensions} of {bim model record:modelValue} at drawing scale {a 64 bit floating-point number:viewDenominator} through {bim drawing transform record:transform} into {a pointer to a list:dimensionLines} and {a pointer to a list:dimensionTicks} on {a pointer to a bim canvas record:canvas}:
+    execute:
         set index to the bim join index of modelValue
         set drawingStandard to the bim drawing standard of modelValue
         set onCanvas to @intrinsic("dereference", canvas)
-        set dimensionLines to an empty list of a cad vector2
-        set dimensionTicks to an empty list of a cad vector2
         set pendingValues to an empty list of a bim dimension value record
         loop cursor from 0 to the length of drawnDimensions:
             set dimensionValue to the item at cursor in drawnDimensions
@@ -3096,11 +3161,117 @@ function record bim dimensions {a pointer to a list:drawnDimensions} of {bim mod
         # Every value lettered clear of the others, the lines and the marks
         # already on the canvas (`letter bim dimension values`).
         ignore letter bim dimension values pendingValues among dimensionLines on canvas
+        free pendingValues
+
+# Records the dimension lines `dimensionLines` (with the extension lines
+# and leaders) in the dimension pen and the ticks `dimensionTicks`, black.
+function record bim dimension strokes {a pointer to a list:dimensionLines} and {a pointer to a list:dimensionTicks} on {a pointer to a bim canvas record:canvas}:
+    execute:
         record bim pen (bim dimension pen) strokes dimensionLines coloured 0, 0 and 0 wide 0.7 on canvas
         record bim strokes dimensionTicks coloured 0, 0 and 0 wide 1.4 on canvas
+
+# Where `recordedPixel`, a pixel through `recordedTransform`, stands through
+# `currentTransform`: the same place in the model, after a pan or a zoom.
+function the bim redrawn pixel of {cad vector2:recordedPixel} from {bim drawing transform record:recordedTransform} to {bim drawing transform record:currentTransform}:
+    execute:
+        set sameScale to recordedTransform's scale = currentTransform's scale
+        set sameCentre to (recordedTransform's centre's x = currentTransform's centre's x) and (recordedTransform's centre's y = currentTransform's centre's y)
+        set sameOrigin to (recordedTransform's origin's x = currentTransform's origin's x) and (recordedTransform's origin's y = currentTransform's origin's y)
+        if (sameScale and sameCentre) and sameOrigin:
+            return recordedPixel
+        set modelX to recordedTransform's origin's x + ((recordedPixel's x - recordedTransform's centre's x) / recordedTransform's scale)
+        set modelY to recordedTransform's origin's y - ((recordedPixel's y - recordedTransform's centre's y) / recordedTransform's scale)
+        return the bim pixel of (a cad vector2 with x modelX and y modelY) through currentTransform
+
+# Records on the screen canvas `canvas` the dimensions laid out in the
+# pixels of `recordedTransform` at `perMillimetre` pixels to the paper
+# millimetre (`letter bim dimensions`), moved to `currentTransform`: the
+# lines `dimensionLines` and ticks `dimensionTicks` at their screen widths
+# in pixels, the values `valueLabels` magnified with the drawing (their
+# lettering size the paper text height at the view's scale, through the
+# screen's drawing face: `the bim lettering factor of`), left out when
+# smaller than `the bim least legible dimension pixels`.
+function record bim dimension annotation {a pointer to a list:dimensionLines}, {a pointer to a list:dimensionTicks} and {a pointer to a list:valueLabels} lettered at {a 64 bit floating-point number:perMillimetre} recorded through {bim drawing transform record:recordedTransform} redrawn through {bim drawing transform record:currentTransform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set magnified to currentTransform's scale / recordedTransform's scale
+        set movedLines to an empty list of a cad vector2
+        set movedTicks to an empty list of a cad vector2
+        loop lineCursor from 0 to the length of dimensionLines:
+            append (the bim redrawn pixel of (the item at lineCursor in dimensionLines) from recordedTransform to currentTransform) to movedLines
+        loop tickCursor from 0 to the length of dimensionTicks:
+            append (the bim redrawn pixel of (the item at tickCursor in dimensionTicks) from recordedTransform to currentTransform) to movedTicks
+        record bim dimension strokes movedLines and movedTicks on canvas
+        free movedLines
+        free movedTicks
+        loop valueCursor from 0 to the length of valueLabels:
+            set label to the item at valueCursor in valueLabels
+            set letterPixels to (((the bim paper text height) * perMillimetre) * (the bim lettering factor of label)) * magnified
+            if letterPixels >= (the bim least legible dimension pixels):
+                set spot to the bim redrawn pixel of (a cad vector2 with x label's x and y label's y) from recordedTransform to currentTransform
+                set label's x to spot's x
+                set label's y to spot's y
+                set label's anchor to the bim redrawn pixel of label's anchor from recordedTransform to currentTransform
+                set label's height to ((the bim paper text height) * letterPixels) / (the bim drawing face pixels)
+                append label to (canvas's texts's values)
+
+# A plan's dimensions as the screen last laid them out (`draw bim dimensions
+# in plan of … keeping`): for the plan `key` names, through `transform` at
+# `perMillimetre` pixels to the paper millimetre, their lines, ticks and
+# values (`labels`); `builds` counts the layouts.
+class:
+    patterns:
+        [a|] bim dimension recording record
+    members:
+        key as a string
+        transform as a bim drawing transform record
+        perMillimetre as a 64 bit floating-point number
+        lines as the type of (a cad topology list of a cad vector2)
+        ticks as the type of (a cad topology list of a cad vector2)
+        labels as the type of (a cad topology list of a bim canvas text record)
+        builds as an integer
+
+function an empty bim dimension recording:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        return @intrinsic("construct", a bim dimension recording record, (the string form of "unrecorded"), (@intrinsic("construct", a bim drawing transform record, nowhere, nowhere, 1.0)), 0.0, (a cad topology list of a cad vector2), (a cad topology list of a cad vector2), (a cad topology list of a bim canvas text record), 0)
+
+# Keeps in `recording` the dimensions `drawnDimensions` laid out through
+# `transform` at 1:`viewDenominator` on `lettering`, a canvas of the paper
+# millimetres of that view scale through `transform` (`the bim paper
+# millimetre through … at drawing scale`) holding the labels and marks
+# they keep clear of, under `planKey`.
+function keep bim dimensions {a pointer to a list:drawnDimensions} of {bim model record:modelValue} at drawing scale {a 64 bit floating-point number:viewDenominator} through {bim drawing transform record:transform} lettered on {a pointer to a bim canvas record:lettering} in {a pointer to a bim dimension recording record:recording} keyed {a string:planKey}:
+    execute:
+        set dimensionLines to an empty list of a cad vector2
+        set dimensionTicks to an empty list of a cad vector2
+        set firstValue to the length of (lettering's texts's values)
+        if (the length of drawnDimensions) > 0:
+            letter bim dimensions drawnDimensions of modelValue at drawing scale viewDenominator through transform into dimensionLines and dimensionTicks on lettering
+        set keptLines to a cad topology list of a cad vector2
+        loop lineCursor from 0 to the length of dimensionLines:
+            append (the item at lineCursor in dimensionLines) to (keptLines's values)
+        set keptTicks to a cad topology list of a cad vector2
+        loop tickCursor from 0 to the length of dimensionTicks:
+            append (the item at tickCursor in dimensionTicks) to (keptTicks's values)
+        set keptValues to a cad topology list of a bim canvas text record
+        loop valueCursor from firstValue to the length of (lettering's texts's values):
+            append (the item at valueCursor in (lettering's texts's values)) to (keptValues's values)
+        set recording's lines to keptLines
+        set recording's ticks to keptTicks
+        set recording's labels to keptValues
+        set recording's transform to transform
+        set recording's perMillimetre to lettering's paperScale
+        set recording's key to planKey
+        set recording's builds to recording's builds + 1
         free dimensionLines
         free dimensionTicks
-        free pendingValues
+
+# Records on the screen canvas `canvas` the dimensions kept in `recording`
+# (`keep bim dimensions`), moved to `transform`: a pan or a zoom moves and
+# magnifies them without laying them out again.
+function record bim dimensions kept in {a pointer to a bim dimension recording record:recording} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        record bim dimension annotation (recording's lines's values), (recording's ticks's values) and (recording's labels's values) lettered at recording's perMillimetre recorded through recording's transform redrawn through transform on canvas
 
 # The side of dimension `dimensionValue`, drawn as `shape`, away from what
 # it measures, as a unit direction in the pixels of `transform`: its
