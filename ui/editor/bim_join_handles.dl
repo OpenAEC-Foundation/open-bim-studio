@@ -1,0 +1,226 @@
+# SPDX-License-Identifier: MPL-2.0
+# Join handles: where two walls join, the plan shows a small blue icon, and
+# a click on it selects the join, whose properties change how the two ends
+# join (bim/bim_joins.dl).
+#
+# The icons stand at every join of the active storey (L joins where two
+# wall ends meet, T joins where an end meets another wall's side), while the
+# Select tool is active and walls are shown, on screen only: never on a
+# sheet's paper or in a PDF. An icon stands `bim join icon pixels` from the
+# join point into the corner between the two walls (along the bisector of
+# the directions they leave the point in), not on the point itself, so that
+# the walls' end handles there still drag the ends. Its pick test comes
+# before the walls' (`select bim editor element at`), within the pick
+# tolerance of the icon's centre.
+#
+# A selected join is `bim join picked` with the id of the wall whose end it
+# is named from (at an L join the lower id) and that end in `partCode` (0
+# the start, 1 the finish); the join itself is found again from that end
+# each time (`the bim selected join of`), so it follows the walls. Linear
+# elements (beams and columns, elements/linear) can join the same way
+# later: the join record and the per-end style settings name an element
+# and an end, not a wall.
+import elements/planar/bim_evaluate.dl
+import ui/editor/bim_editor_core.dl
+import ui/editor/bim_grid_handles.dl
+
+# The selection kind of a join (after the reinforcement's 30 and the
+# connection node's 31).
+function bim join picked:
+    replacement:
+        40
+
+# How far an icon stands from its join point, and its radius, in pixels.
+function bim join icon pixels:
+    replacement:
+        18.0
+function bim join icon radius:
+    replacement:
+        6.0
+
+# The icon's distance from its join point in metres, for a pick tolerance
+# of `pickTolerance` metres (which stands for `bim grid pick pixels`).
+function the bim join icon reach at tolerance {a 64 bit floating-point number:pickTolerance}:
+    execute:
+        return (bim join icon pixels) * (pickTolerance / (bim grid pick pixels))
+
+# The direction a wall leaves its start (or its finish) in, into its body.
+local function the bim leaving direction of {bim wall record:wallValue} at finish {boolean:atFinish}:
+    execute:
+        set tangentValue to the bim tangent of wallValue at finish atFinish
+        if atFinish:
+            return a cad vector2 with x (0.0 - tangentValue's x) and y (0.0 - tangentValue's y)
+        return tangentValue
+
+# Where the icon of `joinValue` stands: `reachLength` metres from its point
+# along the bisector of the directions its two walls leave it in (at a T
+# join the ending wall and the host's own direction there); across the
+# first wall when they leave it in opposite directions.
+function the bim join icon point of {bim join record:joinValue} reaching {a 64 bit floating-point number:reachLength} in {bim model record:modelValue}:
+    execute:
+        set firstFound to the bim wall index of joinValue's firstId in modelValue
+        set secondFound to the bim wall index of joinValue's secondId in modelValue
+        if (firstFound's valid = false) or (secondFound's valid = false):
+            return joinValue's place
+        set firstWall to the item at firstFound's position in (modelValue's walls's values)
+        set secondWall to the item at secondFound's position in (modelValue's walls's values)
+        set firstLeaving to the bim leaving direction of firstWall at finish joinValue's firstAtFinish
+        set secondLeaving to (the bim nearest station of joinValue's place on secondWall)'s direction
+        if joinValue's kind = bim l join kind:
+            set secondLeaving to the bim leaving direction of secondWall at finish joinValue's secondAtFinish
+        set bisectorX to firstLeaving's x + secondLeaving's x
+        set bisectorY to firstLeaving's y + secondLeaving's y
+        set bisectorLength to the square root of ((bisectorX * bisectorX) + (bisectorY * bisectorY))
+        if bisectorLength < 1e-6:
+            set bisectorX to firstLeaving's y
+            set bisectorY to 0.0 - firstLeaving's x
+            set bisectorLength to 1.0
+        return a cad vector2 with x (joinValue's place's x + ((bisectorX / bisectorLength) * reachLength)) and y (joinValue's place's y + ((bisectorY / bisectorLength) * reachLength))
+
+# Whether the plan shows join icons: the Select tool active and walls shown.
+function bim editor shows joins {bim editor record:editor}:
+    execute:
+        return (editor's tool = bim select tool) and (bim category bim wall category is visible in editor's planRules)
+
+# The joins whose icons the plan shows: those of the active storey between
+# walls the plan does not hide; none when it shows no icons. The caller
+# frees the list.
+function the bim shown joins of {bim editor record:editor}:
+    execute:
+        set shownJoins to an empty list of a bim join record
+        if (bim editor shows joins editor) = false:
+            return shownJoins
+        set modelValue to editor's documentValue's current
+        set storeyJoins to the bim wall joins on level editor's levelId in modelValue using editor's evaluation's index
+        loop joinCursor from 0 to the length of storeyJoins:
+            set joinValue to the item at joinCursor in storeyJoins
+            set firstHidden to bim editor hides (joinValue's firstId) in plan of editor
+            set secondHidden to bim editor hides (joinValue's secondId) in plan of editor
+            if (firstHidden = false) and (secondHidden = false):
+                append joinValue to shownJoins
+        free storeyJoins
+        return shownJoins
+
+# The join whose icon lies nearest `location`, within `tolerance` metres of
+# its centre (`tolerance` stands for `bim grid pick pixels`); kind `bim no
+# join kind` when none does.
+function the bim join icon near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set nearest to @intrinsic("construct", a bim join record, bim no join kind, the bim refused id, false, the bim refused id, false, location)
+        set bestGap to tolerance
+        set reachLength to the bim join icon reach at tolerance tolerance
+        set shownJoins to the bim shown joins of editor
+        loop joinCursor from 0 to the length of shownJoins:
+            set joinValue to the item at joinCursor in shownJoins
+            set iconGap to the cad distance from location to (the bim join icon point of joinValue reaching reachLength in editor's documentValue's current)
+            if iconGap <= bestGap:
+                set nearest to joinValue
+                set bestGap to iconGap
+        free shownJoins
+        return nearest
+
+# The selected join, found again from the end it is named from; kind `bim
+# no join kind` when no join is selected or its walls no longer meet.
+function the bim selected join of {bim editor record:editor}:
+    execute:
+        if editor's selectionKind != bim join picked:
+            return @intrinsic("construct", a bim join record, bim no join kind, the bim refused id, false, the bim refused id, false, a cad vector2 with x 0.0 and y 0.0)
+        return the bim join of wall editor's selectionId at finish (editor's partCode = 1) in editor's documentValue's current using editor's evaluation's index
+
+# `joinValue` selected.
+function select bim editor join {bim join record:joinValue} in {a pointer to a bim editor record:editor}:
+    execute:
+        select bim editor bim join picked numbered joinValue's firstId in editor
+        set editor's partCode to 0
+        if joinValue's firstAtFinish:
+            set editor's partCode to 1
+        set editor's message to the bim join description of (@intrinsic("dereference", editor))
+
+# A wall as the properties name it: its id and its type's name.
+function the bim join wall text of {a 64 bit integer:wallId} in {bim model record:modelValue}:
+    execute:
+        set written to (the string form of "Wall ") + (the string form of wallId)
+        set wallFound to the bim wall index of wallId in modelValue
+        if wallFound's valid:
+            set typeFound to the bim wall type index of (the item at wallFound's position in (modelValue's walls's values))'s typeId in modelValue
+            if typeFound's valid:
+                set written to ((written + (the string form of " (")) + (the item at typeFound's position in (modelValue's wallTypes's values))'s name) + (the string form of ")")
+        return written
+
+# The wall that runs through at `joinValue` with style `styleCode`, as its
+# first end has it: the host at a T join unless the ending wall runs
+# through; the refused id when neither does (Automatic, Mitre, Not joined).
+function the bim runner of join {bim join record:joinValue} styled {integer:styleCode}:
+    execute:
+        set stopping to (styleCode = bim butt stopped join style) or (styleCode = bim square stopped join style)
+        if bim join style styleCode runs through:
+            return joinValue's firstId
+        if stopping:
+            return joinValue's secondId
+        return the bim refused id
+
+# The status line of a selected join.
+function the bim join description of {bim editor record:editor}:
+    execute:
+        set joinValue to the bim selected join of editor
+        if joinValue's kind = bim no join kind:
+            return the string form of "Join: its walls no longer meet"
+        set modelValue to editor's documentValue's current
+        set styleCode to the bim style of join joinValue in modelValue
+        set written to ((the string form of "Join (") + (the bim join kind name of joinValue's kind)) + (the string form of ") of walls ")
+        set written to ((written + (the string form of joinValue's firstId)) + (the string form of " and ")) + (the string form of joinValue's secondId)
+        set written to (written + (the string form of ": ")) + (the bim join style name of styleCode)
+        set runnerId to the bim runner of join joinValue styled styleCode
+        if runnerId != the bim refused id:
+            set written to ((written + (the string form of ", wall ")) + (the string form of runnerId)) + (the string form of " runs through")
+        return written
+
+# The selected join given style `styleCode` (as its first end has it): one
+# edit, one undo step.
+function give bim editor join style {integer:styleCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set joinValue to the bim selected join of (@intrinsic("dereference", editor))
+        if joinValue's kind = bim no join kind:
+            set editor's message to the string form of "Join: select a join first"
+            return nothing
+        begin bim transaction in (the address of (editor's documentValue))
+        give bim join joinValue style styleCode in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to the bim join description of (@intrinsic("dereference", editor))
+
+# The Join style row clicked: the next style (`the bim join style after`).
+function cycle bim editor join style in {a pointer to a bim editor record:editor}:
+    execute:
+        set joinValue to the bim selected join of (@intrinsic("dereference", editor))
+        if joinValue's kind = bim no join kind:
+            set editor's message to the string form of "Join: select a join first"
+            return nothing
+        set styleCode to the bim style of join joinValue in editor's documentValue's current
+        give bim editor join style (the bim join style after styleCode at kind joinValue's kind) in editor
+
+# The Runs through row clicked: at an L join with a butt or square off,
+# the other wall runs through.
+function swap bim editor join runner in {a pointer to a bim editor record:editor}:
+    execute:
+        set joinValue to the bim selected join of (@intrinsic("dereference", editor))
+        if joinValue's kind != bim l join kind:
+            set editor's message to the string form of "Runs through: only at an L join"
+            return nothing
+        set styleCode to the bim style of join joinValue in editor's documentValue's current
+        if (the bim runner of join joinValue styled styleCode) = the bim refused id:
+            set editor's message to the string form of "Runs through: choose Butt or Square off first"
+            return nothing
+        give bim editor join style (the bim mirrored join style of styleCode) in editor
+
+# The Not joined row clicked: the join is disallowed (both ends square and
+# free), or allowed again as Automatic.
+function toggle bim editor join apart in {a pointer to a bim editor record:editor}:
+    execute:
+        set joinValue to the bim selected join of (@intrinsic("dereference", editor))
+        if joinValue's kind = bim no join kind:
+            set editor's message to the string form of "Join: select a join first"
+            return nothing
+        if (the bim style of join joinValue in editor's documentValue's current) = bim not joined style:
+            give bim editor join style (bim automatic join style) in editor
+        else:
+            give bim editor join style (bim not joined style) in editor

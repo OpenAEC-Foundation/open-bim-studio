@@ -328,6 +328,9 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
         set wallEdges to an empty list of a cad vector2
         set wallEdgeOwners to an empty list of an integer
         collect bim wall edges of viewValue in modelValue into wallEdges owned by wallEdgeOwners
+        # Walls whose join is set to Not joined do not merge there.
+        set apartPairs to an empty list of an integer
+        collect bim unjoined wall pairs of viewValue in modelValue using editor's evaluation's index into apartPairs
         # Outlines whose node overrides the cut lines, with each pair's
         # colour and width, drawn after every fill.
         set ownOutlines to an empty list of a cad vector2
@@ -374,7 +377,7 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
                         clear pieces
                         if elementCategory = bim wall category:
                             # Only what no other wall's cut covers.
-                            append bim uncovered parts of wall edge from cornerHere to cornerNext walled left wallLeft of owner sourceCursor among wallEdges by wallEdgeOwners into pieces
+                            append bim uncovered parts of wall edge from cornerHere to cornerNext walled left wallLeft of owner sourceCursor among wallEdges by wallEdgeOwners unjoined apartPairs into pieces
                         else:
                             append cornerHere to pieces
                             append cornerNext to pieces
@@ -418,6 +421,7 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
         free ownWidths
         free wallEdges
         free wallEdgeOwners
+        free apartPairs
 
 # Records the strokes between the pixel pairs `pairs`, each pair in its
 # colour of `colourList` (packed, `the bim pen colour`) and its width of
@@ -477,6 +481,43 @@ function collect bim wall edges of {bim view record:viewValue} in {bim model rec
                             append cornerHere to edgeList
                         append sourceCursor to ownerList
 
+# The walls of `viewValue` that stand apart at a join set to Not joined
+# (bim/bim_joins.dl): for each wall end that gives itself that style, the
+# position of its source and of its partner's (at an L join the other wall,
+# at a T join the host) among the view's sources, in pairs into `pairList`.
+# Their cut edges cover nothing of each other's (`append bim uncovered parts
+# of wall edge`). `index` indexes the walls of `modelValue`.
+function collect bim unjoined wall pairs of {bim view record:viewValue} in {bim model record:modelValue} using {bim join index record:index} into {a pointer to a list:pairList}:
+    execute:
+        loop sourceCursor from 0 to the length of (viewValue's sources's values):
+            set source to the item at sourceCursor in (viewValue's sources's values)
+            set wallFound to the bim wall index of source's id in modelValue
+            if wallFound's valid:
+                set sourceWall to the item at wallFound's position in (modelValue's walls's values)
+                loop endCursor from 0 to 2:
+                    set endAtFinish to (endCursor = 1)
+                    if (the bim own join style of end sourceWall's id at finish endAtFinish in modelValue) = bim not joined style:
+                        set endJoin to the bim end join of sourceWall at finish endAtFinish in modelValue using index
+                        if endJoin's kind != bim no join kind:
+                            loop partnerCursor from 0 to the length of (viewValue's sources's values):
+                                if (the item at partnerCursor in (viewValue's sources's values))'s id = endJoin's partnerId:
+                                    append sourceCursor to pairList
+                                    append partnerCursor to pairList
+
+# Whether sources `firstSource` and `secondSource` stand apart among the
+# pairs `pairList` (`collect bim unjoined wall pairs of`), either way round.
+local function bim sources {integer:firstSource} and {integer:secondSource} stand apart among {a pointer to a list:pairList}:
+    execute:
+        set standingApart to false
+        set pairCursor to 0
+        loop while (pairCursor + 1) < the length of pairList:
+            set pairFirst to the item at pairCursor in pairList
+            set pairSecond to the item at (pairCursor + 1) in pairList
+            if ((pairFirst = firstSource) and (pairSecond = secondSource)) or ((pairFirst = secondSource) and (pairSecond = firstSource)):
+                set standingApart to true
+            set pairCursor to pairCursor + 2
+        return standingApart
+
 # The point `stationValue` along the edge from `startPoint` to `endPoint`,
 # which is `reach` long: its ends exactly at its ends.
 local function the bim point at station {a 64 bit floating-point number:stationValue} of wall edge from {cad vector2:startPoint} to {cad vector2:endPoint} reaching {a 64 bit floating-point number:reach}:
@@ -499,6 +540,15 @@ local function the bim point at station {a 64 bit floating-point number:stationV
 # walls read as one mass. Parts shorter than 0.1 mm are left out.
 function append bim uncovered parts of wall edge from {cad vector2:startPoint} to {cad vector2:endPoint} walled left {boolean:wallLeft} of owner {integer:ownSource} among {a pointer to a list:edgeList} by {a pointer to a list:ownerList} into {a pointer to a list:pieces}:
     execute:
+        set noPairs to an empty list of an integer
+        append bim uncovered parts of wall edge from startPoint to endPoint walled left wallLeft of owner ownSource among edgeList by ownerList unjoined noPairs into pieces
+        free noPairs
+
+# The same, but an edge of a source that stands apart from this edge's
+# source among `apartPairs` (`collect bim unjoined wall pairs of`: walls
+# whose join is set to Not joined) covers nothing of it.
+function append bim uncovered parts of wall edge from {cad vector2:startPoint} to {cad vector2:endPoint} walled left {boolean:wallLeft} of owner {integer:ownSource} among {a pointer to a list:edgeList} by {a pointer to a list:ownerList} unjoined {a pointer to a list:apartPairs} into {a pointer to a list:pieces}:
+    execute:
         set reach to the cad distance from startPoint to endPoint
         if reach <= 0.0001:
             return nothing
@@ -508,7 +558,8 @@ function append bim uncovered parts of wall edge from {cad vector2:startPoint} t
         set coveredLows to an empty list of a 64 bit floating-point number
         set coveredHighs to an empty list of a 64 bit floating-point number
         loop edgeCursor from 0 to the length of ownerList:
-            if (the item at edgeCursor in ownerList) != ownSource:
+            set otherSource to the item at edgeCursor in ownerList
+            if (otherSource != ownSource) and ((bim sources ownSource and otherSource stand apart among apartPairs) = false):
                 set otherStart to the item at (edgeCursor * 2) in edgeList
                 set otherEnd to the item at ((edgeCursor * 2) + 1) in edgeList
                 set startOffset to ((otherStart's x - startPoint's x) * alongY) - ((otherStart's y - startPoint's y) * alongX)
@@ -1391,6 +1442,70 @@ function shade bim selection {a pointer to a list:outlineRing} through {bim draw
             add a vertex at x (the item at cursor in pixels)'s x and y (the item at cursor in pixels)'s y to frame
         finish triangles in frame
         free pixels
+
+# A filled disc of `radius` pixels centred on `pixel`, in the frame's
+# current colour, between `start triangles` and `finish triangles`.
+function add bim disc at {cad vector2:pixel} of radius {a 64 bit floating-point number:discRadius} in {graphics frame:frame}:
+    execute:
+        set pieces to 16
+        loop piece from 0 to pieces:
+            set fromAngle to ((piece as a 64 bit floating-point number) * 6.283185307179586) / (pieces as a 64 bit floating-point number)
+            set toAngle to (((piece + 1) as a 64 bit floating-point number) * 6.283185307179586) / (pieces as a 64 bit floating-point number)
+            add a vertex at x pixel's x and y pixel's y to frame
+            add a vertex at x (pixel's x + (discRadius * (the cosine of fromAngle))) and y (pixel's y + (discRadius * (the sine of fromAngle))) to frame
+            add a vertex at x (pixel's x + (discRadius * (the cosine of toAngle))) and y (pixel's y + (discRadius * (the sine of toAngle))) to frame
+
+# The icons of the joins `shownJoins` (`the bim shown joins of`,
+# `bim_join_handles.dl`) on the plan on screen: a blue disc with a white
+# halo and a white L or T, `bim join icon pixels` into the corner of its
+# join; the selected join's ringed in blue, and its two walls outlined. A
+# sheet's paper and a PDF never draw them.
+function draw bim join icons {a pointer to a list:shownJoins} of {bim editor record:editor} through {bim drawing transform record:transform} in {graphics frame:frame}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set chosenJoin to the bim selected join of editor
+        if chosenJoin's kind != bim no join kind:
+            loop chosenEnd from 0 to 2:
+                set chosenWallId to chosenJoin's firstId
+                if chosenEnd = 1:
+                    set chosenWallId to chosenJoin's secondId
+                set chosenFound to the bim wall index of chosenWallId in modelValue
+                if chosenFound's valid:
+                    set chosenWall to the item at chosenFound's position in (modelValue's walls's values)
+                    set chosenFootprint to the bim footprint of chosenWall in modelValue using editor's evaluation's index
+                    set chosenRing to the bim outline of chosenWall with chosenFootprint wide (the bim wall thickness of chosenWall in modelValue)
+                    start triangles in frame
+                    use vertex color red 0, green 120 and blue 215 in frame
+                    loop ringCursor from 0 to the length of chosenRing:
+                        set ringHere to the bim pixel of (the item at ringCursor in chosenRing) through transform
+                        set ringNext to the bim pixel of (the item at (the remainder of (ringCursor + 1) divided by (the length of chosenRing)) in chosenRing) through transform
+                        add bim stroke from ringHere to ringNext wide 1.5 in frame
+                    finish triangles in frame
+                    free chosenRing
+        if (the length of shownJoins) = 0:
+            return nothing
+        set reachLength to (bim join icon pixels) / transform's scale
+        set iconRadius to bim join icon radius
+        start triangles in frame
+        loop joinCursor from 0 to the length of shownJoins:
+            set joinValue to the item at joinCursor in shownJoins
+            set iconPixel to the bim pixel of (the bim join icon point of joinValue reaching reachLength in modelValue) through transform
+            set isChosen to (chosenJoin's kind = joinValue's kind) and ((the cad distance from chosenJoin's place to joinValue's place) <= 1e-9)
+            if isChosen:
+                use vertex color red 0, green 120 and blue 215 in frame
+                add bim disc at iconPixel of radius (iconRadius + 4.5) in frame
+            use vertex color red 255, green 255 and blue 255 in frame
+            add bim disc at iconPixel of radius (iconRadius + 1.5) in frame
+            use vertex color red 0, green 120 and blue 215 in frame
+            add bim disc at iconPixel of radius iconRadius in frame
+            use vertex color red 255, green 255 and blue 255 in frame
+            if joinValue's kind = bim t join kind:
+                add bim stroke from (a cad vector2 with x (iconPixel's x - 3.0) and y (iconPixel's y - 2.5)) to (a cad vector2 with x (iconPixel's x + 3.0) and y (iconPixel's y - 2.5)) wide 1.5 in frame
+                add bim stroke from (a cad vector2 with x iconPixel's x and y (iconPixel's y - 2.5)) to (a cad vector2 with x iconPixel's x and y (iconPixel's y + 3.0)) wide 1.5 in frame
+            else:
+                add bim stroke from (a cad vector2 with x (iconPixel's x - 2.0) and y (iconPixel's y - 3.0)) to (a cad vector2 with x (iconPixel's x - 2.0) and y (iconPixel's y + 2.5)) wide 1.5 in frame
+                add bim stroke from (a cad vector2 with x (iconPixel's x - 2.0) and y (iconPixel's y + 2.5)) to (a cad vector2 with x (iconPixel's x + 3.0) and y (iconPixel's y + 2.5)) wide 1.5 in frame
+        finish triangles in frame
 
 function draw bim selection in plan of {bim editor record:editor} through {bim drawing transform record:transform} in {graphics frame:frame}:
     execute:
