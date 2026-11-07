@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: MPL-2.0
+# Joins between elements with two ends, and how each end joins.
+#
+# Joins are found, not stored: two ends that meet are an L join, an end on
+# another element's axis a T join (`the bim end corners of`,
+# elements/planar/bim_evaluate.dl, for walls). What is stored is the style
+# of each end, as an element setting: `bim join style start setting` for the
+# start, `bim join style finish setting` for the finish. Absent, an end is
+# Automatic and joins as it always did. The codes are the element's own, so
+# that a linear element (a beam or column, elements/linear) can carry the
+# same two settings on its ends when its joins become editable; the join
+# record below names its two elements and ends without saying what they are.
+#
+# An end's style is read from the end itself and, at an L join, else from
+# the partner's end, mirrored (`the bim joined style of end`): the editor
+# writes both ends of an L join, so that the two agree, and a file that
+# gives only one of them still reads the same at both.
+import bim/bim_model.dl
+
+function bim join style start setting:
+    replacement:
+        2402600
+function bim join style finish setting:
+    replacement:
+        2402601
+
+# The styles, as the settings store them.
+# Automatic: today's rule (an L join mitres, a T join butts against the
+# host's face).
+function bim automatic join style:
+    replacement:
+        0
+# Mitre: both ends are cut on the line through the crossings of their sides.
+function bim mitre join style:
+    replacement:
+        1
+# Butt, this element running through: its end reaches the other's far face,
+# and the other stops at its near face.
+function bim butt through join style:
+    replacement:
+        2
+# Butt, the other running through: this end stops at the other's near face.
+function bim butt stopped join style:
+    replacement:
+        3
+# Square off: as the butts, but the stopped (or running) end is cut square
+# across its own axis, where its farther corner reached.
+function bim square through join style:
+    replacement:
+        4
+function bim square stopped join style:
+    replacement:
+        5
+# Not joined: the end stays square and free, and cuts nothing.
+function bim not joined style:
+    replacement:
+        6
+
+# The kinds of join.
+function bim no join kind:
+    replacement:
+        0
+# Two ends meeting at one point.
+function bim l join kind:
+    replacement:
+        1
+# An end on another element's axis, away from its ends.
+function bim t join kind:
+    replacement:
+        2
+
+# A join: its kind, its first element and end (at a T join the end that
+# meets the other's side), its second element and end (unused at a T join)
+# and the point where they meet.
+class:
+    patterns:
+        [a|] bim join record
+    members:
+        kind as an integer
+        firstId as a 64 bit integer
+        firstAtFinish as a boolean
+        secondId as a 64 bit integer
+        secondAtFinish as a boolean
+        place as a cad vector2
+
+function the bim join style setting at finish {boolean:atFinish}:
+    execute:
+        if atFinish:
+            return bim join style finish setting
+        return bim join style start setting
+
+# The style end `elementId` (its finish or its start) gives itself, or -1
+# when it gives none.
+function the bim own join style of end {a 64 bit integer:elementId} at finish {boolean:atFinish} in {bim model record:modelValue}:
+    execute:
+        set styleReading to the bim setting (the bim join style setting at finish atFinish) of elementId in modelValue
+        if styleReading's found:
+            set styleValue to styleReading's value as an integer
+            if (styleValue >= bim automatic join style) and (styleValue <= bim not joined style):
+                return styleValue
+        return -1
+
+# A style as the other end of the same join sees it: who runs through
+# changes side, the rest stays.
+function the bim mirrored join style of {integer:styleCode}:
+    execute:
+        if styleCode = bim butt through join style:
+            return bim butt stopped join style
+        if styleCode = bim butt stopped join style:
+            return bim butt through join style
+        if styleCode = bim square through join style:
+            return bim square stopped join style
+        if styleCode = bim square stopped join style:
+            return bim square through join style
+        return styleCode
+
+# The style of end `elementId` at an L join with end `partnerId`: its own,
+# else its partner's mirrored, else Automatic.
+function the bim joined style of end {a 64 bit integer:elementId} at finish {boolean:atFinish} beside {a 64 bit integer:partnerId} finishing {boolean:partnerAtFinish} in {bim model record:modelValue}:
+    execute:
+        set ownStyle to the bim own join style of end elementId at finish atFinish in modelValue
+        if ownStyle >= 0:
+            return ownStyle
+        set partnerStyle to the bim own join style of end partnerId at finish partnerAtFinish in modelValue
+        if partnerStyle >= 0:
+            return the bim mirrored join style of partnerStyle
+        return bim automatic join style
+
+# The style of end `elementId` at a T join: its own, else Automatic.
+function the bim joined style of end {a 64 bit integer:elementId} at finish {boolean:atFinish} in {bim model record:modelValue}:
+    execute:
+        set ownStyle to the bim own join style of end elementId at finish atFinish in modelValue
+        if ownStyle >= 0:
+            return ownStyle
+        return bim automatic join style
+
+# The style of `joinValue` as its first end has it.
+function the bim style of join {bim join record:joinValue} in {bim model record:modelValue}:
+    execute:
+        if joinValue's kind = bim l join kind:
+            return the bim joined style of end joinValue's firstId at finish joinValue's firstAtFinish beside joinValue's secondId finishing joinValue's secondAtFinish in modelValue
+        return the bim joined style of end joinValue's firstId at finish joinValue's firstAtFinish in modelValue
+
+# Join `joinValue` given style `styleCode` as its first end has it: at an
+# L join the second end the mirror of it; Automatic removes the settings.
+# Each changed setting is journalled; the caller holds the transaction.
+function give bim join {bim join record:joinValue} style {integer:styleCode} in {a pointer to a bim model record:target}:
+    execute:
+        set kept to styleCode != bim automatic join style
+        set firstCode to the bim join style setting at finish joinValue's firstAtFinish
+        set bim setting firstCode of joinValue's firstId to (styleCode as a 64 bit integer) keeping kept in target
+        if joinValue's kind = bim l join kind:
+            set secondCode to the bim join style setting at finish joinValue's secondAtFinish
+            set bim setting secondCode of joinValue's secondId to ((the bim mirrored join style of styleCode) as a 64 bit integer) keeping kept in target
+
+# The name of a style as the properties show it, without who runs through.
+function the bim join style name of {integer:styleCode}:
+    execute:
+        if styleCode = bim mitre join style:
+            return the string form of "Mitre"
+        if (styleCode = bim butt through join style) or (styleCode = bim butt stopped join style):
+            return the string form of "Butt"
+        if (styleCode = bim square through join style) or (styleCode = bim square stopped join style):
+            return the string form of "Square off"
+        if styleCode = bim not joined style:
+            return the string form of "Not joined"
+        return the string form of "Automatic"
+
+function the bim join kind name of {integer:kindCode}:
+    execute:
+        if kindCode = bim l join kind:
+            return the string form of "L"
+        if kindCode = bim t join kind:
+            return the string form of "T"
+        return the string form of "none"
+
+# Whether a style lets the end it is read at run through.
+function bim join style {integer:styleCode} runs through:
+    execute:
+        return (styleCode = bim butt through join style) or (styleCode = bim square through join style)
+
+# The next style a click on the Join style row gives: Automatic, Mitre,
+# Butt, Square off and round again (no Mitre at a T join). A butt or square
+# off keeps who runs through; it starts with the first element running
+# through at an L join and the host at a T join. Not joined goes to
+# Automatic.
+function the bim join style after {integer:styleCode} at kind {integer:kindCode}:
+    execute:
+        set throughFirst to bim butt through join style
+        set squareFirst to bim square through join style
+        if kindCode = bim t join kind:
+            set throughFirst to bim butt stopped join style
+            set squareFirst to bim square stopped join style
+        if styleCode = bim automatic join style:
+            if kindCode = bim t join kind:
+                return throughFirst
+            return bim mitre join style
+        if styleCode = bim mitre join style:
+            return throughFirst
+        if styleCode = bim butt through join style:
+            return bim square through join style
+        if styleCode = bim butt stopped join style:
+            return bim square stopped join style
+        return bim automatic join style

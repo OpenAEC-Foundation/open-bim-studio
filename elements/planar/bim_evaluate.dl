@@ -22,6 +22,7 @@
 import bim/bim_model.dl
 import elements/planar/bim_roof_forms.dl
 import bim/bim_index.dl
+import bim/bim_joins.dl
 import kernel/fast/wall.dl
 import kernel/fast/prism.dl
 import kernel/fast/curved_wall.dl
@@ -340,12 +341,133 @@ local function cad bim points {cad vector2:first} and {cad vector2:second} meet:
     execute:
         return (the cad distance from first to second) <= the bim join tolerance
 
-# The corners of one end of a wall. At an L join (exactly one other wall ends
-# at this point) both side lines are cut at their crossings with the partner's
-# matching side lines; at a T join (the end lies inside another wall's
-# centreline) they are cut at the partner's side facing this wall; a free end
-# or a point where more than two walls meet stays square. Candidates come from
-# `index`, which must index the walls of `modelValue`, in ascending id order.
+# How one end of a wall meets the others: an L join (`bim l join kind`)
+# when exactly one other wall ends at the same point, a T join (`bim t join
+# kind`) when none does and the end lies inside another wall's centreline,
+# else none (a free end, or a point where more than two walls end). With
+# the partner's id and place among the model's walls and, at an L join,
+# whether the partner meets it with its finish and whether the two run the
+# same way (meeting start to finish). Candidates come from `index`, which
+# must index the walls of `modelValue`, in ascending id order.
+class:
+    patterns:
+        [a|] bim end join record
+    members:
+        kind as an integer
+        partnerId as a 64 bit integer
+        partnerPosition as an integer
+        partnerAtFinish as a boolean
+        partnerFlipped as a boolean
+
+function the bim end join of {bim wall record:wallValue} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set endPoint to wallValue's start
+        if atFinish:
+            set endPoint to wallValue's finish
+        set partnerCount to 0
+        set partnerIndex to -1
+        set partnerFlipped to false
+        set partnerAtFinish to false
+        set teeIndex to -1
+        set candidates to the bim walls near endPoint on level wallValue's levelId in index
+        loop candidate from 0 to the length of candidates:
+            set candidateFound to the bim wall index of (the item at candidate in candidates) in modelValue
+            if candidateFound's valid:
+                set cursor to candidateFound's position
+                set other to the item at cursor in (modelValue's walls's values)
+                if (other's id != wallValue's id) and (other's levelId = wallValue's levelId):
+                    set atOtherStart to cad bim points endPoint and other's start meet
+                    set atOtherFinish to cad bim points endPoint and other's finish meet
+                    if atOtherStart or atOtherFinish:
+                        set partnerCount to partnerCount + 1
+                        set partnerIndex to cursor
+                        # Walls running the same way meet start-to-finish; walls running
+                        # opposite ways meet start-to-start or finish-to-finish.
+                        set partnerFlipped to (atFinish = atOtherFinish)
+                        set partnerAtFinish to atOtherFinish
+                    else:
+                        set gap to the bim distance from endPoint to the centreline of other
+                        if gap <= the bim join tolerance:
+                            set teeIndex to cursor
+        free candidates
+        if partnerCount = 1:
+            set partner to the item at partnerIndex in (modelValue's walls's values)
+            return @intrinsic("construct", a bim end join record, bim l join kind, partner's id, partnerIndex, partnerAtFinish, partnerFlipped)
+        if (partnerCount = 0) and (teeIndex >= 0):
+            set host to the item at teeIndex in (modelValue's walls's values)
+            return @intrinsic("construct", a bim end join record, bim t join kind, host's id, teeIndex, false, false)
+        return @intrinsic("construct", a bim end join record, bim no join kind, the bim refused id, -1, false, false)
+
+# The corners of one end of a wall cut against `host`'s face: the face
+# toward this wall's body, or with a style that runs through
+# (`bim join style … runs through`) the face away from it. A square-off
+# style then cuts the end square across the wall where its farther corner
+# reached. Against a curved host the face is taken along its tangent at the
+# foot of this end; a curved wall's body lies along its tangent from the end.
+# Square at the end when a side does not cross the face.
+local function the bim end corners of {bim wall record:wallValue} at finish {boolean:atFinish} cut against {bim wall record:host} styled {integer:styleCode} in {bim model record:modelValue}:
+    execute:
+        set direction to the bim tangent of wallValue at finish atFinish
+        set normal to a cad vector2 with x (direction's y) and y (0.0 - direction's x)
+        set half to (the bim wall thickness of wallValue in modelValue) * 0.5
+        set endPoint to wallValue's start
+        if atFinish:
+            set endPoint to wallValue's finish
+        set exteriorOrigin to the bim point endPoint shifted half along normal
+        set interiorOrigin to the bim point endPoint shifted (0.0 - half) along normal
+        set square to @intrinsic("construct", a bim end corners record, exteriorOrigin, interiorOrigin, the bim refused id)
+        set hostDirection to the bim direction of host
+        set hostNormal to the bim exterior normal of host
+        set hostHalf to (the bim wall thickness of host in modelValue) * 0.5
+        set hostOrigin to host's start
+        # The face of the host toward this wall's body.
+        set farPoint to wallValue's finish
+        if atFinish:
+            set farPoint to wallValue's start
+        if ((the absolute value of host's bulge) > 0.0) or ((the absolute value of wallValue's bulge) > 0.0):
+            set foot to the bim nearest station of endPoint on host
+            set hostDirection to foot's direction
+            set hostNormal to a cad vector2 with x (hostDirection's y) and y (0.0 - hostDirection's x)
+            set hostOrigin to foot's point
+            set inward to 1.0
+            if atFinish:
+                set inward to -1.0
+            set farPoint to a cad vector2 with x (endPoint's x + (inward * direction's x)) and y (endPoint's y + (inward * direction's y))
+        set towardBody to ((farPoint's x - hostOrigin's x) * hostNormal's x) + ((farPoint's y - hostOrigin's y) * hostNormal's y)
+        set faceOffset to hostHalf
+        if towardBody < 0.0:
+            set faceOffset to 0.0 - hostHalf
+        if bim join style styleCode runs through:
+            set faceOffset to 0.0 - faceOffset
+        set faceOrigin to the bim point hostOrigin shifted faceOffset along hostNormal
+        set exteriorCrossing to the bim crossing of exteriorOrigin toward direction with faceOrigin toward hostDirection
+        set interiorCrossing to the bim crossing of interiorOrigin toward direction with faceOrigin toward hostDirection
+        if (exteriorCrossing's valid = false) or (interiorCrossing's valid = false):
+            return square
+        set exteriorCorner to exteriorCrossing's point
+        set interiorCorner to interiorCrossing's point
+        if (styleCode = bim square through join style) or (styleCode = bim square stopped join style):
+            set exteriorReach to ((exteriorCorner's x - endPoint's x) * direction's x) + ((exteriorCorner's y - endPoint's y) * direction's y)
+            set interiorReach to ((interiorCorner's x - endPoint's x) * direction's x) + ((interiorCorner's y - endPoint's y) * direction's y)
+            # Past the end is forward at the finish, backward at the start.
+            set squareReach to the minimum of exteriorReach and interiorReach
+            if atFinish:
+                set squareReach to the maximum of exteriorReach and interiorReach
+            set exteriorCorner to the bim point exteriorOrigin shifted squareReach along direction
+            set interiorCorner to the bim point interiorOrigin shifted squareReach along direction
+        return @intrinsic("construct", a bim end corners record, exteriorCorner, interiorCorner, host's id)
+
+# The corners of one end of a wall, by how the end joins
+# (`the bim end join of`) and the style the ends give the join
+# (bim/bim_joins.dl). Automatic, as before there were styles: at an L join
+# both side lines are cut at their crossings with the partner's matching
+# side lines (a mitre); at a T join they are cut at the partner's side
+# facing this wall; a free end or a point where more than two walls meet
+# stays square. A Mitre is the L join's automatic cut; a Butt or Square off
+# cuts against the partner's near face, or its far face when this wall runs
+# through (`the bim end corners of … cut against`); Not joined leaves the
+# end square and names no partner. Candidates come from `index`, which must
+# index the walls of `modelValue`, in ascending id order.
 function the bim end corners of {bim wall record:wallValue} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
     execute:
         # A curved wall's sides leave its ends along the arc's tangent.
@@ -358,42 +480,24 @@ function the bim end corners of {bim wall record:wallValue} at finish {boolean:a
         set exteriorOrigin to the bim point endPoint shifted half along normal
         set interiorOrigin to the bim point endPoint shifted (0.0 - half) along normal
         set square to @intrinsic("construct", a bim end corners record, exteriorOrigin, interiorOrigin, the bim refused id)
-        set partnerCount to 0
-        set partnerIndex to -1
-        set partnerFlipped to false
-        set partnerAtFinish to false
-        set teeIndex to -1
-        set candidates to the bim walls near endPoint on level wallValue's levelId in index
-        loop candidate from 0 to the length of candidates:
-            set cursor to (the bim wall index of (the item at candidate in candidates) in modelValue)'s position
-            set other to the item at cursor in (modelValue's walls's values)
-            if (other's id != wallValue's id) and (other's levelId = wallValue's levelId):
-                set atOtherStart to cad bim points endPoint and other's start meet
-                set atOtherFinish to cad bim points endPoint and other's finish meet
-                if atOtherStart or atOtherFinish:
-                    set partnerCount to partnerCount + 1
-                    set partnerIndex to cursor
-                    # Walls running the same way meet start-to-finish; walls running
-                    # opposite ways meet start-to-start or finish-to-finish.
-                    set partnerFlipped to (atFinish = atOtherFinish)
-                    set partnerAtFinish to atOtherFinish
-                else:
-                    set gap to the bim distance from endPoint to the centreline of other
-                    if gap <= the bim join tolerance:
-                        set teeIndex to cursor
-        free candidates
-        if partnerCount = 1:
-            set partner to the item at partnerIndex in (modelValue's walls's values)
+        set endJoin to the bim end join of wallValue at finish atFinish in modelValue using index
+        if endJoin's kind = bim l join kind:
+            set partner to the item at endJoin's partnerPosition in (modelValue's walls's values)
+            set styleCode to the bim joined style of end wallValue's id at finish atFinish beside partner's id finishing endJoin's partnerAtFinish in modelValue
+            if styleCode = bim not joined style:
+                return square
+            if (styleCode != bim automatic join style) and (styleCode != bim mitre join style):
+                return the bim end corners of wallValue at finish atFinish cut against partner styled styleCode in modelValue
             set partnerDirection to the bim direction of partner
             set partnerNormal to the bim exterior normal of partner
             set partnerHalf to (the bim wall thickness of partner in modelValue) * 0.5
             set partnerOrigin to partner's start
             if (the absolute value of partner's bulge) > 0.0:
-                set partnerDirection to the bim tangent of partner at finish partnerAtFinish
+                set partnerDirection to the bim tangent of partner at finish endJoin's partnerAtFinish
                 set partnerNormal to a cad vector2 with x (partnerDirection's y) and y (0.0 - partnerDirection's x)
                 set partnerOrigin to endPoint
             set exteriorPartnerSide to partnerHalf
-            if partnerFlipped:
+            if endJoin's partnerFlipped:
                 set exteriorPartnerSide to 0.0 - partnerHalf
             set exteriorLine to the bim point partnerOrigin shifted exteriorPartnerSide along partnerNormal
             set interiorLine to the bim point partnerOrigin shifted (0.0 - exteriorPartnerSide) along partnerNormal
@@ -402,38 +506,56 @@ function the bim end corners of {bim wall record:wallValue} at finish {boolean:a
             if exteriorCrossing's valid and interiorCrossing's valid:
                 return @intrinsic("construct", a bim end corners record, exteriorCrossing's point, interiorCrossing's point, partner's id)
             return square
-        if (partnerCount = 0) and (teeIndex >= 0):
-            set host to the item at teeIndex in (modelValue's walls's values)
-            set hostDirection to the bim direction of host
-            set hostNormal to the bim exterior normal of host
-            set hostHalf to (the bim wall thickness of host in modelValue) * 0.5
-            set hostOrigin to host's start
-            # The face of the host toward this wall's body.
-            set farPoint to wallValue's finish
-            if atFinish:
-                set farPoint to wallValue's start
-            if ((the absolute value of host's bulge) > 0.0) or ((the absolute value of wallValue's bulge) > 0.0):
-                # Against a curved host the face is taken along its tangent at
-                # the foot of this end; a curved wall's body lies along its
-                # tangent from the end.
-                set foot to the bim nearest station of endPoint on host
-                set hostDirection to foot's direction
-                set hostNormal to a cad vector2 with x (hostDirection's y) and y (0.0 - hostDirection's x)
-                set hostOrigin to foot's point
-                set inward to 1.0
-                if atFinish:
-                    set inward to -1.0
-                set farPoint to a cad vector2 with x (endPoint's x + (inward * direction's x)) and y (endPoint's y + (inward * direction's y))
-            set towardBody to ((farPoint's x - hostOrigin's x) * hostNormal's x) + ((farPoint's y - hostOrigin's y) * hostNormal's y)
-            set faceOffset to hostHalf
-            if towardBody < 0.0:
-                set faceOffset to 0.0 - hostHalf
-            set faceOrigin to the bim point hostOrigin shifted faceOffset along hostNormal
-            set exteriorCrossing to the bim crossing of exteriorOrigin toward direction with faceOrigin toward hostDirection
-            set interiorCrossing to the bim crossing of interiorOrigin toward direction with faceOrigin toward hostDirection
-            if exteriorCrossing's valid and interiorCrossing's valid:
-                return @intrinsic("construct", a bim end corners record, exteriorCrossing's point, interiorCrossing's point, host's id)
+        if endJoin's kind = bim t join kind:
+            set host to the item at endJoin's partnerPosition in (modelValue's walls's values)
+            set styleCode to the bim joined style of end wallValue's id at finish atFinish in modelValue
+            if styleCode = bim not joined style:
+                return square
+            # A T join has no mitre: Automatic and Mitre butt against the host.
+            if (styleCode = bim automatic join style) or (styleCode = bim mitre join style):
+                set styleCode to bim butt stopped join style
+            return the bim end corners of wallValue at finish atFinish cut against host styled styleCode in modelValue
         return square
+
+# The joins of the walls on storey `levelId`: each L join once (from the
+# wall with the lower id) and each T join from the wall whose end it is,
+# in ascending wall id order, start before finish. The caller frees the
+# list.
+function the bim wall joins on level {a 64 bit integer:levelId} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set foundJoins to an empty list of a bim join record
+        loop wallCursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at wallCursor in (modelValue's walls's values)
+            if wallValue's levelId = levelId:
+                loop endCursor from 0 to 2:
+                    set atFinish to (endCursor = 1)
+                    set endPoint to wallValue's start
+                    if atFinish:
+                        set endPoint to wallValue's finish
+                    set endJoin to the bim end join of wallValue at finish atFinish in modelValue using index
+                    if (endJoin's kind = bim l join kind) and (wallValue's id < endJoin's partnerId):
+                        append (@intrinsic("construct", a bim join record, bim l join kind, wallValue's id, atFinish, endJoin's partnerId, endJoin's partnerAtFinish, endPoint)) to foundJoins
+                    if endJoin's kind = bim t join kind:
+                        append (@intrinsic("construct", a bim join record, bim t join kind, wallValue's id, atFinish, endJoin's partnerId, false, endPoint)) to foundJoins
+        return foundJoins
+
+# The join at the end `atFinish` of wall `wallId` (its kind `bim no join kind`
+# when the end is free), named from that end: at an L join this end is the
+# first, its partner's the second.
+function the bim join of wall {a 64 bit integer:wallId} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set none to @intrinsic("construct", a bim join record, bim no join kind, wallId, atFinish, the bim refused id, false, a cad vector2 with x 0.0 and y 0.0)
+        set wallFound to the bim wall index of wallId in modelValue
+        if wallFound's valid = false:
+            return none
+        set wallValue to the item at wallFound's position in (modelValue's walls's values)
+        set endPoint to wallValue's start
+        if atFinish:
+            set endPoint to wallValue's finish
+        set endJoin to the bim end join of wallValue at finish atFinish in modelValue using index
+        if endJoin's kind = bim no join kind:
+            return none
+        return @intrinsic("construct", a bim join record, endJoin's kind, wallId, atFinish, endJoin's partnerId, endJoin's partnerAtFinish, endPoint)
 
 function the bim footprint of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index}:
     execute:
