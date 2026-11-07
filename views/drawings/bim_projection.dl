@@ -27,8 +27,9 @@
 # storeys). Faces of different finishes, or of meshes without one, keep the
 # joint between them; an outline against the background, a true fold and a
 # reveal have no such face beyond them and stay. The one-sided edges are
-# hashed by their line (angle and offset in the drawing), so each finds its
-# partners among the few on nearly the same line.
+# hashed by their line (angle and offset in the drawing) and their depth
+# (bins of 250 mm), so each finds its partners among the few on nearly the
+# same line in space, not among every edge the drawing shows on that line.
 #
 # Hidden-line removal is exact for triangles, not a painter's guess: each
 # edge is cut against every triangle in front of it that its projection
@@ -158,8 +159,8 @@ local function the bim projection key room:
 # Flush edges (see the head of this file): how far a point of one edge may
 # lie off the other's line (metres), how near the faces' normals must be
 # (the cosine of about a quarter of a degree), and the bins of the line
-# hash: an angle in radians and an offset from the drawing's origin in
-# metres.
+# hash: an angle in radians, an offset from the hash's origin (the first
+# one-sided edge's start) in metres, and a depth in metres.
 local function the bim flush tolerance:
     replacement:
         0.0001
@@ -172,11 +173,30 @@ local function the bim flush angle bin:
 local function the bim flush offset bin:
     replacement:
         0.001
+local function the bim flush depth bin:
+    replacement:
+        0.25
+# The most depth bins an edge is keyed in; an edge reaching through more
+# (one running steeply into the depth) is keyed once, in the deep bin,
+# which every edge searches.
+local function the bim flush depth reach:
+    replacement:
+        32
+local function the bim flush deep bin:
+    replacement:
+        1099511627776
 # 2 to the 25th: the room an offset bin takes in a line key; offsets are
-# counted from half of it, so lines up to 16 km from the origin are keyed.
+# counted from half of it, so lines up to 16 km from the hash's origin are
+# keyed apart.
 local function the bim flush offset room:
     replacement:
         33554432
+# 2 to the 16th: the room the hash of an angle bin and a depth bin takes in
+# a line key; times the offset room and the key room it stays below 2 to
+# the 62nd.
+local function the bim flush hash room:
+    replacement:
+        65536
 
 local function the bim depth axis of {cad plane:viewPlane}:
     execute:
@@ -665,6 +685,18 @@ local function the bim flush inward from {cad vector3:fromCorner} to {cad vector
             return zeroVector
         return acrossVector scaled by (1.0 / acrossLength)
 
+# The unit direction in the plane of face `faceIndex` (corners `indices`
+# from it times 3, in drawing coordinates in `viewCorners` from
+# `cornerOffset`) square to its side from `fromCorner` to `toCorner`, into
+# the face.
+local function the bim flush inward of face {integer:faceIndex} among {a pointer to a list:indices} at {a pointer to a list:viewCorners} offset {integer:cornerOffset} from {cad vector3:fromCorner} to {cad vector3:toCorner}:
+    execute:
+        set firstSpot to the item at (cornerOffset + (the item at (faceIndex * 3) in indices)) in viewCorners
+        set secondSpot to the item at (cornerOffset + (the item at ((faceIndex * 3) + 1) in indices)) in viewCorners
+        set thirdSpot to the item at (cornerOffset + (the item at ((faceIndex * 3) + 2) in indices)) in viewCorners
+        set middleSpot to a cad vector3 with x (((firstSpot's x + secondSpot's x) + thirdSpot's x) / 3.0), y (((firstSpot's y + secondSpot's y) + thirdSpot's y) / 3.0) and z (((firstSpot's z + secondSpot's z) + thirdSpot's z) / 3.0)
+        return the bim flush inward from fromCorner to toCorner reaching middleSpot
+
 # The edges of one outlined mesh, number `meshNumber`, that the projection
 # draws unless they are flush (see the head of this file), appended to
 # `candidateEdges`. Its `cornerCount` corners in drawing coordinates and
@@ -818,8 +850,10 @@ local function append bim drawn edges of {bim projection mesh record:meshEntry} 
             else:
                 # More than two faces: solids of one mesh touching (a frame's
                 # rails and posts). With one face toward the viewer the side
-                # is that face's; with two in one plane they continue each
-                # other and the side draws nothing.
+                # is that face's; with two in one plane on either side of it
+                # they continue each other and the side draws nothing; two
+                # in one plane on the same side of it (faces lying over each
+                # other) give it the first one's.
                 set towardTotal to 0
                 set firstTowardFace to -1
                 set secondTowardFace to -1
@@ -836,7 +870,13 @@ local function append bim drawn edges of {bim projection mesh record:meshEntry} 
                     set sideFace to firstTowardFace
                 if towardTotal = 2:
                     if (the cad dot of (the item at firstTowardFace in faceNormals) and (the item at secondTowardFace in faceNormals)) >= (the bim flush alignment):
-                        set drawsEdge to false
+                        set firstInward to the bim flush inward of face firstTowardFace among indices at viewCorners offset cornerOffset from (the item at lowWeld in weldedCorners) to (the item at highWeld in weldedCorners)
+                        set secondInward to the bim flush inward of face secondTowardFace among indices at viewCorners offset cornerOffset from (the item at lowWeld in weldedCorners) to (the item at highWeld in weldedCorners)
+                        if (the cad dot of firstInward and secondInward) < -0.5:
+                            set drawsEdge to false
+                        else:
+                            set oneSided to true
+                            set sideFace to firstTowardFace
             if drawsEdge:
                 set fromCorner to the item at lowWeld in weldedCorners
                 set toCorner to the item at highWeld in weldedCorners
@@ -845,11 +885,7 @@ local function append bim drawn edges of {bim projection mesh record:meshEntry} 
                 set sideFinish to the string form of ""
                 if oneSided:
                     set sideNormal to the item at sideFace in faceNormals
-                    set firstSpot to the item at (cornerOffset + (the item at (sideFace * 3) in indices)) in viewCorners
-                    set secondSpot to the item at (cornerOffset + (the item at ((sideFace * 3) + 1) in indices)) in viewCorners
-                    set thirdSpot to the item at (cornerOffset + (the item at ((sideFace * 3) + 2) in indices)) in viewCorners
-                    set middleSpot to a cad vector3 with x (((firstSpot's x + secondSpot's x) + thirdSpot's x) / 3.0), y (((firstSpot's y + secondSpot's y) + thirdSpot's y) / 3.0) and z (((firstSpot's z + secondSpot's z) + thirdSpot's z) / 3.0)
-                    set sideInward to the bim flush inward from fromCorner to toCorner reaching middleSpot
+                    set sideInward to the bim flush inward of face sideFace among indices at viewCorners offset cornerOffset from fromCorner to toCorner
                     set sideFinish to the bim finish of face sideFace in meshEntry
                 append (@intrinsic("construct", a bim projection stroke record, meshEntry's elementId, fromCorner, toCorner, oneSided, meshNumber, sideFinish, sideNormal, sideInward)) to candidateEdges
             set runStart to runEnd
@@ -872,9 +908,9 @@ local function the bim half turn:
 
 # The line through `fromCorner` and `toCorner` (drawing coordinates) as the
 # flush hash keys it: its angle turned by `the bim flush turn`, from 0 to
-# pi (x), and its signed distance from the drawing's origin (y); x is -1
-# for a side seen end-on.
-local function the bim flush line of {cad vector3:fromCorner} to {cad vector3:toCorner}:
+# pi (x), and its signed distance from `hashOrigin` (y); x is -1 for a side
+# seen end-on.
+local function the bim flush line of {cad vector3:fromCorner} to {cad vector3:toCorner} around {cad vector2:hashOrigin}:
     execute:
         set runX to toCorner's x - fromCorner's x
         set runY to toCorner's y - fromCorner's y
@@ -891,7 +927,7 @@ local function the bim flush line of {cad vector3:fromCorner} to {cad vector3:to
             set turnedX to 0.0 - turnedX
             set turnedY to 0.0 - turnedY
         set lineAngle to @intrinsic("atan2", turnedY, turnedX)
-        return a cad vector2 with x lineAngle and y ((fromCorner's y * unitX) - (fromCorner's x * unitY))
+        return a cad vector2 with x lineAngle and y (((fromCorner's y - hashOrigin's y) * unitX) - ((fromCorner's x - hashOrigin's x) * unitY))
 
 local function the bim flush angle bin of {a 64 bit floating-point number:lineAngle}:
     execute:
@@ -904,9 +940,24 @@ local function the bim flush offset bin of {a 64 bit floating-point number:lineO
         set binned to the maximum of 0.0 and (the minimum of binned and (((the bim flush offset room) - 1) as a 64 bit floating-point number))
         return binned as a 64 bit integer
 
-local function the bim flush key of angle bin {a 64 bit integer:angleBin} and offset bin {a 64 bit integer:offsetBin}:
+# The depth bin of `depthValue`, kept below the deep bin.
+local function the bim flush depth bin of {a 64 bit floating-point number:depthValue}:
     execute:
-        return (angleBin * ((the bim flush offset room) as a 64 bit integer)) + offsetBin
+        set binned to the floor of (depthValue / (the bim flush depth bin))
+        set binned to the maximum of -1000000000000.0 and (the minimum of binned and 1000000000000.0)
+        return binned as a 64 bit integer
+
+# The line key of an angle bin, a depth bin and an offset bin: the angle
+# and depth hashed (two lines that share a hash only cost a comparison),
+# the offset below them, so that the keys of neighbouring offsets follow
+# each other.
+local function the bim flush key of angle bin {a 64 bit integer:angleBin} depth bin {a 64 bit integer:depthBin} and offset bin {a 64 bit integer:offsetBin}:
+    execute:
+        set hashRoom to (the bim flush hash room) as a 64 bit integer
+        set mixed to the remainder of ((angleBin * (40503 as a 64 bit integer)) + (depthBin * (9973 as a 64 bit integer))) divided by hashRoom
+        if mixed < (0 as a 64 bit integer):
+            set mixed to mixed + hashRoom
+        return (mixed * ((the bim flush offset room) as a 64 bit integer)) + offsetBin
 
 # The first position in the ascending `sortedKeys` whose key is at least
 # `wanted` (the length when none is).
@@ -922,20 +973,35 @@ local function the bim first slot at least {a 64 bit integer:wanted} among {a po
                 set highSlot to middleSlot
         return lowSlot
 
-# The flush hash of `candidateEdges`: for each one-sided edge its line's key
-# times `the bim projection key room` plus its position, ascending.
-local function the bim flush keys of {a pointer to a list:candidateEdges}:
+# The flush hash of `candidateEdges`: for each one-sided edge, in each
+# depth bin its ends reach (in the deep bin when they reach through more
+# than `the bim flush depth reach`), its line's key times `the bim
+# projection key room` plus its position, ascending. Two edges on one line
+# in the drawing but at different depths fall in different bins, so each
+# edge meets only the few that lie on nearly its line in space.
+local function the bim flush keys of {a pointer to a list:candidateEdges} around {cad vector2:hashOrigin}:
     execute:
         set keyRoom to (the bim projection key room) as a 64 bit integer
+        set oneBin to 1 as a 64 bit integer
         set flushKeys to an empty list of a 64 bit integer
         set keyedTotal to the minimum of (the length of candidateEdges) and (the bim projection key room)
         loop candidateCursor from 0 to keyedTotal:
             set candidateEdge to the item at candidateCursor in candidateEdges
             if candidateEdge's oneSided:
-                set lineSpot to the bim flush line of (candidateEdge's fromCorner) to (candidateEdge's toCorner)
+                set lineSpot to the bim flush line of (candidateEdge's fromCorner) to (candidateEdge's toCorner) around hashOrigin
                 if lineSpot's x >= 0.0:
-                    set lineKey to the bim flush key of angle bin (the bim flush angle bin of lineSpot's x) and offset bin (the bim flush offset bin of lineSpot's y)
-                    append ((lineKey * keyRoom) + (candidateCursor as a 64 bit integer)) to flushKeys
+                    set angleBin to the bim flush angle bin of lineSpot's x
+                    set offsetBin to the bim flush offset bin of lineSpot's y
+                    set lowDepth to the bim flush depth bin of (the minimum of candidateEdge's fromCorner's z and candidateEdge's toCorner's z)
+                    set highDepth to the bim flush depth bin of (the maximum of candidateEdge's fromCorner's z and candidateEdge's toCorner's z)
+                    if (highDepth - lowDepth) >= ((the bim flush depth reach) as a 64 bit integer):
+                        set lowDepth to (the bim flush deep bin) as a 64 bit integer
+                        set highDepth to lowDepth
+                    set depthCursor to lowDepth
+                    loop while depthCursor <= highDepth:
+                        set lineKey to the bim flush key of angle bin angleBin depth bin depthCursor and offset bin offsetBin
+                        append ((lineKey * keyRoom) + (candidateCursor as a 64 bit integer)) to flushKeys
+                        set depthCursor to depthCursor + oneBin
         sort and deduplicate bim ids flushKeys
         return flushKeys
 
@@ -966,17 +1032,17 @@ local function take bim flush stretch of {bim projection stroke record:candidate
         take bim stretch (the minimum of fromParameter and toParameter) until (the maximum of fromParameter and toParameter) out of pieceStarts and pieceEnds
 
 # Takes out of the pieces of edge `candidateIndex` what the one-sided
-# edges keyed `angleBin` and an offset bin from `offsetBin` - 1 to
-# `offsetBin` + 1 continue flush; their keys follow each other.
-local function take bim flush matches spanning {integer:candidateIndex} among {a pointer to a list:candidateEdges} keyed by {a pointer to a list:flushKeys} at {a 64 bit integer:angleBin} and {a 64 bit integer:offsetBin} out of {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
+# edges keyed `angleBin`, `depthBin` and an offset bin from `offsetBin` - 1
+# to `offsetBin` + 1 continue flush; their keys follow each other.
+local function take bim flush matches spanning {integer:candidateIndex} among {a pointer to a list:candidateEdges} keyed by {a pointer to a list:flushKeys} at {a 64 bit integer:angleBin} deep {a 64 bit integer:depthBin} and {a 64 bit integer:offsetBin} out of {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
     execute:
         set noBin to 0 as a 64 bit integer
         set oneBin to 1 as a 64 bit integer
         if angleBin < noBin:
             return nothing
         set keyRoom to (the bim projection key room) as a 64 bit integer
-        set lowKey to the bim flush key of angle bin angleBin and offset bin (the maximum of noBin and (offsetBin - oneBin))
-        set highKey to the bim flush key of angle bin angleBin and offset bin (the minimum of (offsetBin + oneBin) and (((the bim flush offset room) as a 64 bit integer) - oneBin))
+        set lowKey to the bim flush key of angle bin angleBin depth bin depthBin and offset bin (the maximum of noBin and (offsetBin - oneBin))
+        set highKey to the bim flush key of angle bin angleBin depth bin depthBin and offset bin (the minimum of (offsetBin + oneBin) and (((the bim flush offset room) as a 64 bit integer) - oneBin))
         set keySlot to the bim first slot at least (lowKey * keyRoom) among flushKeys
         set candidateEdge to the item at candidateIndex in candidateEdges
         set scanning to keySlot < (the length of flushKeys)
@@ -993,12 +1059,14 @@ local function take bim flush matches spanning {integer:candidateIndex} among {a
 
 # Takes out of the pieces of one-sided edge `candidateIndex` every
 # stretch that another one-sided edge continues flush: those keyed in the
-# bins around its line's, and, for a line keyed near angle 0 or pi, those
-# keyed near the other end with the offset turned over.
-local function take bim flush stretches spanning {integer:candidateIndex} among {a pointer to a list:candidateEdges} keyed by {a pointer to a list:flushKeys} out of {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
+# angle and offset bins around its line's, in each depth bin its ends reach
+# (within the tolerance) and in the deep bin, and, for a line keyed near
+# angle 0 or pi, those keyed near the other end with the offset turned
+# over.
+local function take bim flush stretches spanning {integer:candidateIndex} among {a pointer to a list:candidateEdges} keyed by {a pointer to a list:flushKeys} around {cad vector2:hashOrigin} out of {a pointer to a list:pieceStarts} and {a pointer to a list:pieceEnds}:
     execute:
         set candidateEdge to the item at candidateIndex in candidateEdges
-        set lineSpot to the bim flush line of (candidateEdge's fromCorner) to (candidateEdge's toCorner)
+        set lineSpot to the bim flush line of (candidateEdge's fromCorner) to (candidateEdge's toCorner) around hashOrigin
         if lineSpot's x < 0.0:
             return nothing
         set angleBin to the bim flush angle bin of lineSpot's x
@@ -1006,14 +1074,26 @@ local function take bim flush stretches spanning {integer:candidateIndex} among 
         set mirroredBin to the bim flush offset bin of (0.0 - lineSpot's y)
         set lastBin to the bim flush angle bin of (the bim half turn)
         set oneBin to 1 as a 64 bit integer
-        loop angleStep from 0 to 3:
-            take bim flush matches spanning candidateIndex among candidateEdges keyed by flushKeys at ((angleBin + (angleStep as a 64 bit integer)) - oneBin) and offsetBin out of pieceStarts and pieceEnds
-        if (angleBin <= oneBin) or (angleBin >= (lastBin - oneBin)):
-            set otherBin to lastBin
-            if angleBin >= (lastBin - oneBin):
-                set otherBin to 0 as a 64 bit integer
+        set nearEnd to (angleBin <= oneBin) or (angleBin >= (lastBin - oneBin))
+        set otherBin to lastBin
+        if angleBin >= (lastBin - oneBin):
+            set otherBin to 0 as a 64 bit integer
+        set deepBin to (the bim flush deep bin) as a 64 bit integer
+        set lowDepth to the bim flush depth bin of ((the minimum of candidateEdge's fromCorner's z and candidateEdge's toCorner's z) - (the bim flush tolerance))
+        set highDepth to the bim flush depth bin of ((the maximum of candidateEdge's fromCorner's z and candidateEdge's toCorner's z) + (the bim flush tolerance))
+        set depthCursor to lowDepth
+        set searching to true
+        loop while searching:
             loop angleStep from 0 to 3:
-                take bim flush matches spanning candidateIndex among candidateEdges keyed by flushKeys at ((otherBin + (angleStep as a 64 bit integer)) - oneBin) and mirroredBin out of pieceStarts and pieceEnds
+                take bim flush matches spanning candidateIndex among candidateEdges keyed by flushKeys at ((angleBin + (angleStep as a 64 bit integer)) - oneBin) deep depthCursor and offsetBin out of pieceStarts and pieceEnds
+                if nearEnd:
+                    take bim flush matches spanning candidateIndex among candidateEdges keyed by flushKeys at ((otherBin + (angleStep as a 64 bit integer)) - oneBin) deep depthCursor and mirroredBin out of pieceStarts and pieceEnds
+            if depthCursor = deepBin:
+                set searching to false
+            else if depthCursor >= highDepth:
+                set depthCursor to deepBin
+            else:
+                set depthCursor to depthCursor + oneBin
 
 # The visible edges of `meshes` (`bim projection mesh record`s) seen square
 # onto `viewPlane`, in drawing coordinates: within the drawing's width from
@@ -1048,7 +1128,21 @@ function the bim projected edges of {a pointer to a list:meshes} on {cad plane:v
             if projectionMesh's outlined:
                 set cornerOffset to the item at meshCursor in cornerOffsets
                 append bim drawn edges of projectionMesh numbered meshCursor at viewCorners offset cornerOffset counted (the length of (projectionMesh's shape's positions's values)) on viewPlane deep along depthAxis into candidateEdges
-        set flushKeys to the bim flush keys of candidateEdges
+        # The flush hash keys offsets from the first one-sided edge's start,
+        # so a model far from its origin keeps its lines apart.
+        set hashOrigin to a cad vector2 with x 0.0 and y 0.0
+        set seekingOrigin to true
+        set originCursor to 0
+        loop while seekingOrigin:
+            if originCursor >= (the length of candidateEdges):
+                set seekingOrigin to false
+            else if (the item at originCursor in candidateEdges)'s oneSided:
+                set originCorner to (the item at originCursor in candidateEdges)'s fromCorner
+                set hashOrigin to a cad vector2 with x (originCorner's x) and y (originCorner's y)
+                set seekingOrigin to false
+            else:
+                set originCursor to originCursor + 1
+        set flushKeys to the bim flush keys of candidateEdges around hashOrigin
         set edgeNumber to 0 as a 64 bit integer
         set pieceStarts to an empty list of a 64 bit floating-point number
         set pieceEnds to an empty list of a 64 bit floating-point number
@@ -1059,7 +1153,7 @@ function the bim projected edges of {a pointer to a list:meshes} on {cad plane:v
             append 0.0 to pieceStarts
             append 1.0 to pieceEnds
             if candidateEdge's oneSided:
-                take bim flush stretches spanning candidateCursor among candidateEdges keyed by flushKeys out of pieceStarts and pieceEnds
+                take bim flush stretches spanning candidateCursor among candidateEdges keyed by flushKeys around hashOrigin out of pieceStarts and pieceEnds
             set runVector to the cad difference of (candidateEdge's toCorner) and (candidateEdge's fromCorner)
             loop pieceCursor from 0 to the length of pieceStarts:
                 set pieceStart to the item at pieceCursor in pieceStarts
