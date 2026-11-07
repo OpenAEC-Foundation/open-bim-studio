@@ -401,6 +401,31 @@ function apply bim section handle {integer:kind} of {a 64 bit integer:elementId}
         else:
             roll back bim transaction in (the address of (editor's documentValue))
 
+# Where the line from `lineOrigin` along unit vector `lineHeading` crosses
+# the plan ring `cornerRing` (a convex outline): x the nearest and y the
+# farthest crossing, in metres along the line from `lineOrigin`; x greater
+# than y when the line misses it.
+function the bim sightline passage through {a pointer to a list:cornerRing} from {cad vector2:lineOrigin} pointing {cad vector2:lineHeading}:
+    execute:
+        set infinity to 1.0 / 0.0
+        set nearest to infinity
+        set farthest to 0.0 - infinity
+        set cornerCount to the length of cornerRing
+        loop corner from 0 to cornerCount:
+            set fromCorner to the item at corner in cornerRing
+            set toCorner to the item at (the remainder of (corner + 1) divided by cornerCount) in cornerRing
+            set fromSide to (((fromCorner's x) - (lineOrigin's x)) * (0.0 - (lineHeading's y))) + (((fromCorner's y) - (lineOrigin's y)) * (lineHeading's x))
+            set toSide to (((toCorner's x) - (lineOrigin's x)) * (0.0 - (lineHeading's y))) + (((toCorner's y) - (lineOrigin's y)) * (lineHeading's x))
+            set crosses to ((fromSide <= 0.0) and (toSide >= 0.0)) or ((fromSide >= 0.0) and (toSide <= 0.0))
+            if crosses and ((the absolute value of (fromSide - toSide)) > 1e-12):
+                set fraction to fromSide / (fromSide - toSide)
+                set crossX to (fromCorner's x) + (((toCorner's x) - (fromCorner's x)) * fraction)
+                set crossY to (fromCorner's y) + (((toCorner's y) - (fromCorner's y)) * fraction)
+                set onLine to ((crossX - (lineOrigin's x)) * (lineHeading's x)) + ((crossY - (lineOrigin's y)) * (lineHeading's y))
+                set nearest to the minimum of nearest and onLine
+                set farthest to the maximum of farthest and onLine
+        return a cad vector2 with x nearest and y farthest
+
 # The storeys in the section: a dashed line at each storey's level across
 # the cut, with a level head and its name and elevation at the right, as
 # the drawing standard marks them (`bim_drawing_standard.dl`).
@@ -421,7 +446,6 @@ function draw bim linears in section of {bim editor record:editor} through {bim 
             return nothing
         set ux to ((editor's sectionSecond's x) - (origin's x)) / lineRun
         set uy to ((editor's sectionSecond's y) - (origin's y)) / lineRun
-        set infinity to 1.0 / 0.0
         # Black and white on a sheet or a technical section, as its walls.
         set plainCuts to ((the bim display of view editor's sectionViewId in modelValue) = bim hidden line display) or (bim view editor's sectionViewId draws technically on canvas in modelValue)
         set cutEdges to an empty list of a cad vector2
@@ -439,22 +463,9 @@ function draw bim linears in section of {bim editor record:editor} through {bim 
                 set flat to (the absolute value of (run's z)) < 1e-6
                 if upright or flat:
                     set ringValue to the bim plan outline of linear linearValue typed linearType in modelValue cut by (the item at cursor in (sectionCuts's values))
-                    set nearest to infinity
-                    set farthest to 0.0 - infinity
-                    set cornerCount to the length of ringValue
-                    loop corner from 0 to cornerCount:
-                        set fromCorner to the item at corner in ringValue
-                        set toCorner to the item at (the remainder of (corner + 1) divided by cornerCount) in ringValue
-                        set fromSide to (((fromCorner's x) - (origin's x)) * (0.0 - uy)) + (((fromCorner's y) - (origin's y)) * ux)
-                        set toSide to (((toCorner's x) - (origin's x)) * (0.0 - uy)) + (((toCorner's y) - (origin's y)) * ux)
-                        set crosses to ((fromSide <= 0.0) and (toSide >= 0.0)) or ((fromSide >= 0.0) and (toSide <= 0.0))
-                        if crosses and ((the absolute value of (fromSide - toSide)) > 1e-12):
-                            set fraction to fromSide / (fromSide - toSide)
-                            set crossX to (fromCorner's x) + (((toCorner's x) - (fromCorner's x)) * fraction)
-                            set crossY to (fromCorner's y) + (((toCorner's y) - (fromCorner's y)) * fraction)
-                            set onLine to ((crossX - (origin's x)) * ux) + ((crossY - (origin's y)) * uy)
-                            set nearest to the minimum of nearest and onLine
-                            set farthest to the maximum of farthest and onLine
+                    set ringPassage to the bim sightline passage through ringValue from origin pointing (a cad vector2 with x ux and y uy)
+                    set nearest to ringPassage's x
+                    set farthest to ringPassage's y
                     free ringValue
                     if farthest > (nearest + 1e-6):
                         set heights to the bim height range of linear linearValue in modelValue
@@ -471,6 +482,85 @@ function draw bim linears in section of {bim editor record:editor} through {bim 
         record bim pen (bim cut pen) strokes cutEdges coloured 0, 0 and 0 wide 1.0 on canvas
         free cutEdges
 
+# The cut of building system `curtainValue` (as placed: in the wall
+# opening it is hosted in, a window) where the section line from
+# `lineStart` to `lineFinish` crosses it, drawn at 1:`scaleDenominator`
+# and `pixelsPerMetre` (the drawing transform's scale), in section
+# coordinates as `the bim section cut of opening` gives a door's or
+# window's: x along the line, y the height above datum (`the bim height
+# range of linear` adds the parts' storey elevation to their lift above
+# it). The parts are those the plan
+# draws (`the bim parts of curtain wall`, end cuts included), filtered as
+# the plan filters them (`bim window detail ... is resolved at`): glazing
+# beads and seals only at 1:20 and finer and where they resolve. Each
+# plumb or level part is its plan outline raised over its height range,
+# cut where the line crosses that outline, as the section cuts linear
+# elements. At 1:50 and finer each profile (frame, mullion, transom) the
+# line crosses is a cut rectangle and each glass panel a line on its
+# middle; to 1:100 the profiles are one outline round them all; coarser
+# only the glass lines are left. Empty when the line misses every part
+# within its run.
+function the bim section cut of system {bim curtain record:curtainValue} in {bim model record:modelValue} from {cad vector2:lineStart} to {cad vector2:lineFinish} at drawing scale {a 64 bit floating-point number:scaleDenominator} resolving {a 64 bit floating-point number:pixelsPerMetre}:
+    execute:
+        set drawnCut to @intrinsic("construct", a bim opening section record, a cad topology list of a cad vector2, a cad topology list of a cad vector2, a cad topology list of a cad vector2)
+        set lineRun to the cad distance from lineStart to lineFinish
+        if lineRun <= 1e-9:
+            return drawnCut
+        set lineHeading to a cad vector2 with x ((lineFinish's x - lineStart's x) / lineRun) and y ((lineFinish's y - lineStart's y) / lineRun)
+        set fullDetail to scaleDenominator <= ((the bim section detail scale) + 0.5)
+        set inOutline to scaleDenominator <= ((the bim section outline scale) + 0.5)
+        set beadDetail to (scaleDenominator <= 20.5) and (bim window detail (the string form of "Glazing bead") is resolved at pixelsPerMetre)
+        set builtParts to the bim parts of curtain wall curtainValue in modelValue with glazing detail beadDetail
+        set systemParts to a cad topology list of a bim stair part record
+        loop builtCursor from 0 to the length of (builtParts's values):
+            set builtPart to the item at builtCursor in (builtParts's values)
+            if bim window detail builtPart's kind's name is resolved at pixelsPerMetre:
+                append builtPart to (systemParts's values)
+        set partCuts to the bim end cuts of parts (systemParts's values) in modelValue
+        set infinity to 1.0 / 0.0
+        set outlineLow to a cad vector2 with x infinity and y infinity
+        set outlineHigh to a cad vector2 with x (0.0 - infinity) and y (0.0 - infinity)
+        loop partCursor from 0 to the length of (systemParts's values):
+            set systemPart to the item at partCursor in (systemParts's values)
+            set partRun to the cad difference of (systemPart's element's finish) and (systemPart's element's start)
+            set levelRun to the square root of ((partRun's x * partRun's x) + (partRun's y * partRun's y))
+            set upright to (levelRun < 1e-6) and ((the absolute value of (partRun's z)) > 1e-6)
+            set flat to (the absolute value of (partRun's z)) < 1e-6
+            if upright or flat:
+                set ringValue to the bim plan outline of linear systemPart's element typed systemPart's kind in modelValue cut by (the item at partCursor in (partCuts's values))
+                set ringPassage to the bim sightline passage through ringValue from lineStart pointing lineHeading
+                free ringValue
+                set nearest to the maximum of 0.0 and ringPassage's x
+                set farthest to the minimum of lineRun and ringPassage's y
+                if farthest > (nearest + 1e-6):
+                    set heights to the bim height range of linear systemPart's element typed systemPart's kind in modelValue
+                    if (systemPart's kind's material) = (the string form of "glass"):
+                        set glassMiddle to (nearest + farthest) * 0.5
+                        append (a cad vector2 with x glassMiddle and y (heights's x)) to (drawnCut's glazing's values)
+                        append (a cad vector2 with x glassMiddle and y (heights's y)) to (drawnCut's glazing's values)
+                    else:
+                        if fullDetail:
+                            append (a cad vector2 with x nearest and y (heights's x)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x farthest and y (heights's x)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x farthest and y (heights's x)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x farthest and y (heights's y)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x farthest and y (heights's y)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x nearest and y (heights's y)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x nearest and y (heights's y)) to (drawnCut's cuts's values)
+                            append (a cad vector2 with x nearest and y (heights's x)) to (drawnCut's cuts's values)
+                        set outlineLow to a cad vector2 with x (the minimum of (outlineLow's x) and nearest) and y (the minimum of (outlineLow's y) and (heights's x))
+                        set outlineHigh to a cad vector2 with x (the maximum of (outlineHigh's x) and farthest) and y (the maximum of (outlineHigh's y) and (heights's y))
+        if (inOutline and (fullDetail = false)) and (outlineHigh's x > outlineLow's x):
+            append (a cad vector2 with x (outlineLow's x) and y (outlineLow's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineHigh's x) and y (outlineLow's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineHigh's x) and y (outlineLow's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineHigh's x) and y (outlineHigh's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineHigh's x) and y (outlineHigh's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineLow's x) and y (outlineHigh's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineLow's x) and y (outlineHigh's y)) to (drawnCut's cuts's values)
+            append (a cad vector2 with x (outlineLow's x) and y (outlineLow's y)) to (drawnCut's cuts's values)
+        return drawnCut
+
 # The doors and windows the section line cuts, as cut details
 # (`the bim section cut of opening`, architectural/openings/
 # bim_opening_section.dl) at the section view's scale, on screen as on its
@@ -479,11 +569,15 @@ function draw bim linears in section of {bim editor record:editor} through {bim 
 # thin pen, black on a technical drawing and on paper, blue glass and a grey
 # leaf in the model review; grey when the openings' category is halftone.
 # An opening is left out as the projection leaves out its frame: its
-# category hidden, its phase hidden or the opening hidden (HH); a window
-# system shown in the window leaves only the sills, since nothing cuts the
-# system itself yet. The crossing is worked out first: the visibility of an
-# opening the line misses is not looked up (the live section draws this
-# every frame).
+# category hidden, its phase hidden or the opening hidden (HH). A window
+# system shown in a window replaces the frame and glass: the opening
+# keeps its sills and the system is cut where the line crosses its parts
+# (`the bim section cut of system`), in the system's own halftone, as the
+# plan draws the system's parts in place of the window's frame. A system
+# in a door is not cut: the door keeps its frame, threshold and leaf, as
+# the plan keeps its symbol. The crossing is worked out first: the
+# visibility of an opening the line misses is not looked up (the live
+# section draws this every frame).
 function draw bim openings in section of {bim editor record:editor} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
     execute:
         set modelValue to editor's documentValue's current
@@ -510,12 +604,31 @@ function draw bim openings in section of {bim editor record:editor} through {bim
                 if (bim category openingCategory is visible in editor's sectionRules) and openingShown:
                     set hostedId to the bim window system in opening openingValue's id in modelValue
                     if hostedId != the bim refused id:
+                        set hostedCategory to the bim category of element hostedId in modelValue
                         set hostedShown to (the bim phase look of element hostedId in section of editor) != bim phase hidden look
-                        set hostedShown to hostedShown and (bim category (the bim category of element hostedId in modelValue) is visible in editor's sectionRules)
+                        set hostedShown to hostedShown and (bim category hostedCategory is visible in editor's sectionRules)
                         if bim editor hides hostedId in view numbered (editor's sectionViewId) of editor:
                             set hostedShown to false
                         if hostedShown:
                             set openingCut to the bim section cut of opening openingValue in modelValue from (editor's sectionFirst) to (editor's sectionSecond) framed false at drawing scale sectionScale
+                        # In a window the system is cut in place of its frame
+                        # and glass, as the plan draws it there; a door
+                        # keeps its own frame, threshold and leaf (`framed
+                        # false` leaves them), as the plan keeps its symbol.
+                        set hostedFound to the bim curtain index of hostedId in modelValue
+                        set openingTypeFound to the bim opening type index of openingValue's typeId in modelValue
+                        set windowOpening to false
+                        if openingTypeFound's valid:
+                            set windowOpening to (the item at openingTypeFound's position in (modelValue's openingTypes's values))'s isDoor = false
+                        if (hostedShown and windowOpening) and hostedFound's valid:
+                            set systemCut to the bim section cut of system (the item at hostedFound's position in (modelValue's curtains's values)) in modelValue from (editor's sectionFirst) to (editor's sectionSecond) at drawing scale sectionScale resolving (transform's scale)
+                            # In the system's own halftone, not the window's.
+                            if bim category hostedCategory is halftone in editor's sectionRules:
+                                append bim plan pixels of (systemCut's cuts's values) through transform into faintCutPairs
+                                append bim plan pixels of (systemCut's glazing's values) through transform into faintPanePairs
+                            else:
+                                append bim plan pixels of (systemCut's cuts's values) through transform into cutPairs
+                                append bim plan pixels of (systemCut's glazing's values) through transform into panePairs
                     if bim category openingCategory is halftone in editor's sectionRules:
                         append bim plan pixels of (openingCut's cuts's values) through transform into faintCutPairs
                         append bim plan pixels of (openingCut's glazing's values) through transform into faintPanePairs
