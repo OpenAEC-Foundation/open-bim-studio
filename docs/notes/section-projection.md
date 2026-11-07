@@ -8,7 +8,9 @@ the geometry the application already has?
 **Status:** sections, elevations and plans built (drawing quality plan, item 15), 6 November
 2026. The plans' shared code is compiled and tested headless; the live plan's wiring in
 `ui/shell/main.dl` (its cache and call) has not been compiled yet, as the application was not
-built on the branch.
+built on the branch. Flush edges (a facade face triangulated with T-vertices, and walls of
+one finish stacked flush on two storeys) draw no false joint since 6 November 2026
+(`ui/shell/tests/projection_flush_joints`).
 
 ## Approach
 
@@ -42,6 +44,41 @@ other. A side is drawn when:
   - or one face looks toward the viewer and the other does not (a curve's outline).
 
 Coplanar triangles of one face draw nothing between them.
+
+**Flush edges.** An edge is not drawn where, seen in the view, the faces on both sides of
+it look toward the viewer and lie in one plane (within 0.1 mm, and a quarter of a degree
+between their normals). The rule, decided for item 15 on 6 November 2026:
+
+- Only a *one-sided* edge can be flush: one with exactly one face beside it looking toward
+  the viewer, that is an open border, or an outline or fold against faces turned away (a
+  wall's front face against its top). It is flush over the stretch where another one-sided
+  edge on the same line has a face looking the same way, in the same plane, on the other
+  side of the line.
+- That other face must be of the *same mesh*, or of a mesh showing the *same finish*. The
+  same mesh covers T-vertices in a face's triangulation (a triangle side from one window's
+  sill corner to the next window's, met by two triangles on the other side), slivers whose
+  corners lie on one line (now left out of the side keys), and a frame's touching rails
+  and posts. The same finish covers two elements meeting flush, such as the walls of two
+  storeys stacked on one outer face.
+- A projection mesh names its faces' finishes (`finishes`, `faceFinishes`). A section or
+  elevation (`the bim projection meshes of`) gives a plate's faces its material, and a
+  wall's faces toward its exterior its first layer's material, those toward its interior
+  its last layer's (a face counts as toward a side when its normal is within 45 degrees
+  of the side's horizontal normal, radial on a curved wall), and its ends, top, foot and
+  reveals its whole build-up. So a brick outer leaf stacked on a brick outer leaf meets
+  flush whatever the inner leaves are; brick under render keeps its joint, as does any
+  mesh without finishes (stairs, components, systems, frames against walls).
+- An outline against the background, a true fold and a reveal have no coplanar face
+  beyond them, so they stay. Two faces of one mesh meeting on a side with more faces (two
+  touching solids) draw nothing there when the only two faces toward the viewer are
+  coplanar.
+
+The one-sided edges are hashed by their line in the drawing: its angle (bins of 0.1 mrad,
+the angle first turned by an odd 0.414 rad so that the two ends of the angle range fall on
+no usual direction) and its offset from the origin (bins of 1 mm). Each edge looks up the
+nine bins around its own (and, near either end of the angle range, those at the other end
+with the offset turned over), sorted keys and a binary search, so the search costs
+O(n log n) for n edges.
 
 **Hidden-line removal.** Every triangle is cut to the depths from 0 (the plane) to the
 view depth and kept as an occluder in drawing coordinates. A grid indexes the
@@ -129,6 +166,35 @@ Its cost is the number of edges times the occluders in their cells.
 - On a sheet that elevation is 100 by 80 mm at 1:100, black, with a ground line and both
   levels named.
 
+Since flush edges are left out, the frame of the window in that section and elevation no
+longer draws the butt joints of its posts and rails (four short edges each, 50 mm long, in
+the frame's front face), and the posts' inner edges stop at the rails: the section's window
+draws 4 edges instead of 7, the elevation's 4 instead of 8. Every check of the test passes
+as before.
+
+`ui/shell/tests/projection_flush_joints` (see its expected output), the south elevation of
+a house of 320 mm cavity walls (brick, insulation, sand-lime) with an interior wall
+meeting the south wall at a T, and in the south wall, as on the FZK-Haus, a window 2000 by
+1200 on an 800 sill, a window 1000 by 1000 on the same sill, a door and a window on a 950
+sill:
+
+- *Reproduced first, with the projection as it was:* the fast wall's outer face was
+  triangulated with a T-vertex. A triangle below the first two windows has a side from
+  the first window's sill corner to the second's (drawing x 1250 to 3750 at 800). The
+  triangles above the sill line meet it in two pieces, the first window's sill and the
+  stretch between the windows. That side was taken as an open border and drew a line 400
+  mm long between the windows at sill height. The same openings in a wall of one 200 mm
+  layer, or in that wall cut to a gable contour (the boolean path), were triangulated
+  without it, so the T-vertex depends on the face's exact corners.
+- Now the stretch between the windows draws nothing, at sill or head height, and nor do
+  the stretches between the small window and the door and between the door and the last
+  window. The sills, heads and jambs, the facade's foot and its top are drawn whole. The
+  rest of the old border, along the first window's sill, is still drawn, on top of the
+  sill's own edge.
+- A first floor of the same walls stacked flush draws no joint at 3 m. Nor does one with
+  the same brick outside and a timber inner leaf. One rendered outside keeps the joint
+  over the facade's whole width (8.32 m).
+
 `ui/shell/tests/plan_projection` (see its expected output): in the ground floor plan (cut
 at 1.2 m, a roof level at 3 m) of four walls with a window, a knee wall 0.8 m high and a
 flat roof on the roof level overhanging 0.4 m:
@@ -156,6 +222,23 @@ flat roof on the roof level overhanging 0.4 m:
 for walls, tessellating is cheap and the welding and hiding is the cost, so a frame of a
 wall drag pays nearly the whole time. Not measured at -O2 nor on the FZK-Haus.
 
+With flush edges (the same probe, -O0, this computer, 7 November 2026, other compilers
+running beside it) the plans took 81, 76 and 74 ms on one storey and 47, 24 and 23 ms on
+five, against 74, 72, 70 and 45, 22, 22 before: within 10 %, part of it the machine's
+load. The probe now also projects the south elevation of the whole tower, every
+evaluated wall and slab as one mesh of one finish. A throwaway build of the probe that
+also ran the projection as it was, on the same meshes in the same program, measured:
+
+| Model | Elevation, flush edges | Edges | Before | Edges |
+|---|---|---|---|---|
+| 1 storey, 312 walls, 48 windows, 1 slab | 57 ms | 99 | 47 ms | 112 |
+| 5 storeys, 420 walls, 120 windows, 5 slabs | 65 ms | 177 | 51 ms | 302 |
+
+So the line hash and the one-sided edges' bookkeeping cost 10 to 14 ms at -O0 on 300
+to 420 meshes, about a quarter of the projection. The edges left out (13 on one storey, 125 on
+five) are joints between flush faces of different elements, all of one finish in the
+probe, the stacked storeys' facades among them; which joint is which was not checked.
+
 ## Not done
 
 - Plans: per-category projection pens and colours; halftone; the opening frames of an
@@ -178,6 +261,14 @@ wall drag pays nearly the whole time. Not measured at -O2 nor on the FZK-Haus.
 
 - Plans: the live plan's wiring in `ui/shell/main.dl` is not compiled yet; a drag works
   the edges out again every frame.
+- Flush edges: plans give their meshes no finishes, so in a plan only faces of one mesh
+  meet flush (two joined wall tops of one type still draw their joint below the cut).
+  Elements other than walls and plates (stairs, components, systems, opening frames) have
+  no finish and keep every joint with another element. A wall's faces are told apart by
+  their normals, not by the layer they bound: a face leaning more than about 45 degrees
+  off a side counts as an end. Where the rest of a T-vertex border runs along a real
+  outline, both are drawn, one on the other. Measured only on generated towers and the
+  test house, not on the FZK-Haus itself.
 
 Sections and elevations were not measured on a large model; plans only on generated
 towers, not on the FZK-Haus.
@@ -188,6 +279,8 @@ Keep the exact triangle-based hidden-line removal over a painter's or raster met
 reuses the 3D view's meshes and gives exact vector lines for PDF and SVG. Plans now use it
 below and above the cut. Provisionally it is fast enough, kept between frames, for a plan
 of a few hundred elements: measured at -O0 on generated towers, 20 to 75 ms to work out,
-with up to 190 edges. What is missing to settle it: a measurement on the FZK-Haus and at
+with up to 190 edges. Leaving out flush edges (same plane, faces toward the viewer on both
+sides, one mesh or one finish) is kept: it removes the false joints of T-vertex
+triangulations and of stacked storeys for about a quarter more time. What is missing to settle it: a measurement on the FZK-Haus and at
 -O2, and the cost of a frame of a drag in the running application. Those, and the
 per-category pens, are the next steps of item 15.
