@@ -111,10 +111,13 @@ flush edges:
   mesh changes, appears or goes (by its old box and its new one) every mesh whose flush
   stretches it can change is among those worked out again.
 - The meshes worked out again are worked out among the meshes whose boxes touch theirs,
-  as before. The outlined ones among them now give their edges as flush partners without
-  being drawn again (a draw flag per mesh in the projection), so each edge worked out again
-  meets the same partners as in a whole projection; before, they were passed as not
-  outlined and gave none, which would have drawn the joints a whole projection leaves out.
+  as before. The outlined ones among them that name finishes now give their edges as
+  flush partners without being drawn again (a draw flag per mesh in the projection), so
+  each edge worked out again meets the same partners as in a whole projection; before,
+  they were passed as not outlined and gave none, which would have drawn the joints a
+  whole projection leaves out. A mesh without finishes can be no other mesh's partner (the
+  same finish must be named on both sides), so its edges are not worked out at all when it
+  is not drawn: a plan's update, whose meshes name none, costs what it did.
 - The meshes are matched on their finishes and faces' finishes as well as their
   triangles, so a change of material alone is found.
 - The hash is keyed around the same origin in the whole projection and in the part, so
@@ -130,6 +133,21 @@ flush edges:
 Plans still give their meshes no finishes (*Not done*), so in a plan only the faces of one
 mesh meet flush and no flush status there depends on another mesh; the elevation case is
 covered by `ui/shell/tests/projection_flush_joints`.
+
+Measured with `tools/probes/plan_projection_timing` after the merge (-O0, this computer, 7
+November 2026, one other compile running beside it), six drag frames each, updated against
+worked out whole: one storey of 312 walls, a lowered wall 3.5 ms against 76 ms and a
+full-height wall 4.0 to 4.5 ms against 76 ms; two storeys of 624 walls, a lowered wall 5.8
+ms against 118 ms and a full-height wall 12 to 13 ms against 118 ms. Before plans skipped
+the meshes without finishes as partners, the two-storey full-height wall took 21 to 22 ms
+a frame (every mesh above the cut touches the slab worked out again, and all their edges
+were worked out as partners). Against the drag's own measurement before the merge (3.4,
+3.7, 5.5 and 11.7 ms; 71 and 108 ms whole) the updates cost the same within the noise; the
+whole plan took 7 to 9 % more in this run, under other load, in line with the plans within
+10 % that the flush edges were measured at above. The
+probe's south elevation now runs after the drags have moved two walls, so its 41 ms (297
+meshes, 104 edges) on one storey and 92 ms (610 meshes, 160 edges) on two are not
+comparable with the 99 and 177 edges above.
 
 **Hidden-line removal.** Every triangle is cut to the depths from 0 (the plane) to the
 view depth and kept as an occluder in drawing coordinates. A grid indexes the
