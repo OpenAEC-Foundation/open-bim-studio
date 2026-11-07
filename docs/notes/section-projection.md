@@ -279,11 +279,11 @@ sill:
   shows the joint (8.32 m), moved flush again loses it, given render outside without its
   triangles changing shows it, and brick again loses it. Each update works out 9 of the 17
   meshes again, the ground floor's unchanged south wall among them, and equals a fresh
-  projection to the bit, its counts per mesh adding up to its edges. On three storeys of
-  the same walls, the top storey's south wall moved 3 mm back works the middle storey's
-  south wall out again but not the ground floor's, which only lends its edges as flush
-  partners: the joint at 6 m appears, the one at 3 m stays away, and the update equals a
-  fresh projection.
+  projection to the bit, its counts per mesh adding up to its edges and equal to the fresh
+  projection's mesh by mesh. On three storeys of the same walls, the top storey's south
+  wall moved 3 mm back works the middle storey's south wall out again but not the ground
+  floor's, which only lends its edges as flush partners: the joint at 6 m appears, the one
+  at 3 m stays away, and the update equals a fresh projection, edges and counts per mesh.
 
 `ui/shell/tests/plan_projection` (see its expected output): in the ground floor plan (cut
 at 1.2 m, a roof level at 3 m) of four walls with a window, a knee wall 0.8 m high and a
