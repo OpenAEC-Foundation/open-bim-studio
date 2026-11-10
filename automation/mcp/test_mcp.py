@@ -82,6 +82,17 @@ class ProtocolTests(unittest.TestCase):
                 request.assert_called_once_with(*expected)
 
 
+    def test_run_sentence_forwards_one_line_to_native_editor(self):
+        sentence = "set the name of the selected space to \"Küche\""
+        with patch.object(server.MODELLER, "request", return_value={"ok": True, "message": "Name is now Küche"}) as request:
+            result = self.call("run_sentence", {"sentence": sentence})["result"]
+            self.assertNotIn("isError", result)
+            request.assert_called_once_with("run", sentence)
+        with patch.object(server.MODELLER, "request") as request:
+            self.assertTrue(self.call("run_sentence", {"sentence": "  "})["result"]["isError"])
+            request.assert_not_called()
+        self.assertIn("run", http_api.VERBS)
+
     def test_move_and_drag_tools_dispatch_and_reject_bad_arguments(self):
         from unittest.mock import Mock
         window = Mock()

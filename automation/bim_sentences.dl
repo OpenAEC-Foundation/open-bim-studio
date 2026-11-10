@@ -1,0 +1,1323 @@
+# SPDX-License-Identifier: MPL-2.0
+# The command line's language: sentences in DynLex's own style, such as
+# `draw a wall from (0, 0) to (5, 0)` or `set the height of the selected wall
+# to 3000`. Each sentence is one row of `the bim sentence rules`, and each row
+# runs through the automation API's verbs (`bim_api.dl`), so the command line
+# at the bottom of the window, the folder API's `run SENTENCE` and the MCP
+# server's `run_sentence` share one dispatch.
+#
+# A row is a pattern, an action and what it says when it is done:
+#
+#   pattern  the words to type. "a", "an" and "the" are optional wherever
+#            they stand, in the pattern and in what is typed; [x|y] is one of
+#            the words, [x|y|] one or none; {kind:name} is a slot:
+#              point   (x, y) in metres; a number may carry mm, cm or m
+#              id      a whole number (an element's id)
+#              word    one word or one "quoted text"
+#              words   the words up to the pattern's next word, or one
+#                      "quoted text" (names, labels, values)
+#   action   API requests separated by " ; ": a verb of `bim_api.dl` and its
+#            arguments, $name standing for a slot (a point gives x and y).
+#            Verbs starting with @ are the sentences' own: @select and @kind
+#            check the kind of element a sentence names, @property finds a
+#            property by its label, @tab a ribbon tab by its name.
+#   said     the result message: $name a slot as typed, $id the id the last
+#            request made; empty, the editor's message after it.
+#
+# Units: a value typed for a property is in the project's length unit, as
+# the properties panel reads it; a point is in metres, as the API, the MCP
+# server and the plan's coordinates are (`(5000 mm, 0)` also reads).
+#
+# `run bim command sentence` is the one entry. Today it knows sentences only;
+# a line starting with ">" is kept for real DynLex code, which a JIT will run
+# once there is one: that is where such a mode plugs in.
+import automation/bim_api.dl
+import lib/text.dl
+
+function bim sentence word token:
+    replacement:
+        1
+function bim sentence number token:
+    replacement:
+        2
+function bim sentence quoted token:
+    replacement:
+        3
+function bim sentence point token:
+    replacement:
+        4
+
+function bim sentence literal element:
+    replacement:
+        1
+function bim sentence article element:
+    replacement:
+        2
+function bim sentence choice element:
+    replacement:
+        3
+function bim sentence slot element:
+    replacement:
+        4
+
+# Ctrl+L (`bim ui control command` plus L) puts the keys on the command line.
+function bim command line focus command:
+    replacement:
+        1076
+function bim sentence tab key code:
+    replacement:
+        258
+function bim sentence up key code:
+    replacement:
+        265
+function bim sentence down key code:
+    replacement:
+        264
+# How many suggestions and history lines the command line shows at most.
+function bim command line shown rows:
+    replacement:
+        6
+
+class:
+    patterns:
+        [a|] bim sentence rule record
+    members:
+        pattern as a string
+        action as a string
+        said as a string
+
+# A word of what was typed: a word, a number, a "quoted text" (its spelling
+# without the quotes) or a point (its coordinates in metres). `closed` is
+# false for a quote or point still being typed; `readable` false for a point
+# whose coordinates do not read.
+class:
+    patterns:
+        [a|] bim sentence token record
+    members:
+        kind as an integer
+        spelling as a string
+        lowered as a string
+        x as a 64 bit floating-point number
+        y as a 64 bit floating-point number
+        closed as a boolean
+        readable as a boolean
+
+# A part of a pattern: a word, an article, a choice of words (`lowered` holds
+# them joined by "|") or a slot.
+class:
+    patterns:
+        [a|] bim sentence element record
+    members:
+        kind as an integer
+        spelling as a string
+        lowered as a string
+        optional as a boolean
+        slotKind as a string
+        slotName as a string
+
+# What a slot holds after a match.
+class:
+    patterns:
+        [a|] bim sentence slot record
+    members:
+        name as a string
+        spelling as a string
+        x as a 64 bit floating-point number
+        y as a 64 bit floating-point number
+        isPoint as a boolean
+
+# How far typed words follow a pattern. `full`: all of it, nothing left
+# over; `fits`: every typed word follows it so far (the sentence may go on);
+# `progress`: the element where it stopped; `stopToken`: the typed word it
+# stopped at; `partialElement`: the element whose word the last typed word
+# begins (-1 none); `score`: higher is closer.
+class:
+    patterns:
+        [a|] bim sentence match record
+    members:
+        full as a boolean
+        fits as a boolean
+        progress as an integer
+        stopToken as an integer
+        partialElement as an integer
+        partialSpelling as a string
+        score as an integer
+
+# The result of a sentence: done or not, the message for the user, and what
+# the window must do (an API window record; an empty verb when nothing).
+class:
+    patterns:
+        [a|] bim sentence result record
+    members:
+        ok as a boolean
+        message as a string
+        windowPart as a bim api window record
+
+# The command line's state: what is typed, whether the keys go to it, the
+# sentences run with their answers (oldest first), the highlighted
+# suggestion (-1: the best) and the history entry recalled (-1: none).
+class:
+    patterns:
+        [a|] bim command line record
+    members:
+        typed as a string
+        focused as a boolean
+        sentences as the type of (a cad topology list of a string)
+        answers as the type of (a cad topology list of a string)
+        failures as the type of (a cad topology list of a boolean)
+        choice as an integer
+        recalled as an integer
+
+function a new bim command line:
+    execute:
+        return @intrinsic("construct", a bim command line record, the string form of "", false, a cad topology list of a string, a cad topology list of a string, a cad topology list of a boolean, -1, -1)
+
+function no bim api window:
+    execute:
+        return @intrinsic("construct", a bim api window record, the string form of "", 0, the string form of "")
+
+local function the bim sentence success saying {a string:reportText} with {bim api window record:windowValue}:
+    execute:
+        return @intrinsic("construct", a bim sentence result record, true, reportText, windowValue)
+
+local function the bim sentence failure saying {a string:reportText}:
+    execute:
+        return @intrinsic("construct", a bim sentence result record, false, reportText, no bim api window)
+
+# ------------------------------------------------------------------ grammar
+
+local function add bim sentence {a string:patternText} doing {a string:actionText} saying {a string:saidText} to {a pointer to a list:ruleList}:
+    execute:
+        append (@intrinsic("construct", a bim sentence rule record, patternText, actionText, saidText)) to ruleList
+
+# The sentences, one a row: pattern, action, result message. The first row
+# that matches what is typed in full runs; suggestions keep this order.
+function the bim sentence rules:
+    execute:
+        set ruleList to an empty list of a bim sentence rule record
+        add bim sentence (the string form of "draw a wall from {point:start} to {point:end}") doing (the string form of "wall $start $end") saying (the string form of "Wall $id drawn from $start to $end") to ruleList
+        add bim sentence (the string form of "draw a [floor|slab] from {point:start} to {point:end}") doing (the string form of "slab $start $end") saying (the string form of "Floor $id drawn from $start to $end") to ruleList
+        add bim sentence (the string form of "draw a section from {point:start} to {point:end}") doing (the string form of "button Section ; click $start ; click $end") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "draw a grid from {point:start} to {point:end}") doing (the string form of "button Grid ; click $start ; click $end") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "place a door at {point:spot}") doing (the string form of "button Door ; click $spot") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "place a window at {point:spot}") doing (the string form of "button Window ; click $spot") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "place the cursor at {point:spot}") doing (the string form of "cursor $spot") saying (the string form of "The 3D cursor stands at $spot") to ruleList
+        add bim sentence (the string form of "start the {words:tool} tool") doing (the string form of "button $tool") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "press {words:button}") doing (the string form of "ribbon $button") saying (the string form of "Pressed $button") to ruleList
+        add bim sentence (the string form of "select nothing") doing (the string form of "key 256") saying (the string form of "Nothing selected") to ruleList
+        add bim sentence (the string form of "select {id:element}") doing (the string form of "select $element") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "select the {word:kind} {id:element}") doing (the string form of "@select $kind $element") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "set the {words:property} of the selected {word:kind} to {words:value}") doing (the string form of "@kind $kind ; @property $property $value") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "set the {words:property} to {words:value}") doing (the string form of "@property $property $value") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "delete the selected {word:kind}") doing (the string form of "@kind $kind ; key 261") saying (the string form of "Deleted the $kind") to ruleList
+        add bim sentence (the string form of "open the [view|plan|section|elevation|sheet] {words:name}") doing (the string form of "open $name") saying (the string form of "Opening $name") to ruleList
+        add bim sentence (the string form of "export the sheet to PDF") doing (the string form of "ribbon Collaborate/Export: Open sheet/PDF") saying (the string form of "Exporting the sheet to PDF") to ruleList
+        add bim sentence (the string form of "export the sheet to SVG") doing (the string form of "ribbon Collaborate/Export: Open sheet/SVG") saying (the string form of "Exporting the sheet to SVG") to ruleList
+        add bim sentence (the string form of "show the {words:tab} tab") doing (the string form of "@tab $tab") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "fit the view") doing (the string form of "fit") saying (the string form of "Fitted the views") to ruleList
+        add bim sentence (the string form of "save the [model|project|]") doing (the string form of "save") saying (the string form of "Saving the model") to ruleList
+        add bim sentence (the string form of "undo") doing (the string form of "undo") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "redo") doing (the string form of "redo") saying (the string form of "") to ruleList
+        add bim sentence (the string form of "[escape|cancel]") doing (the string form of "key 256") saying (the string form of "Cancelled") to ruleList
+        return ruleList
+
+# ------------------------------------------------------------------- words
+
+function the bim sentence byte at {integer:scanIndex} in {a string:spelled}:
+    execute:
+        return (((the character at scanIndex in spelled) as a 32 bit integer) bitwise and 255) as an integer
+
+# `spelled` without spaces or tabs at either end.
+function the bim sentence trimmed form of {a string:spelled}:
+    execute:
+        set startIndex to 0
+        set endIndex to the length of spelled
+        set scanning to true
+        loop while scanning and (startIndex < endIndex):
+            set byteCode to the bim sentence byte at startIndex in spelled
+            if (byteCode = 32) or (byteCode = 9):
+                set startIndex to startIndex + 1
+            else:
+                set scanning to false
+        set scanning to true
+        loop while scanning and (endIndex > startIndex):
+            set byteCode to the bim sentence byte at (endIndex - 1) in spelled
+            if (byteCode = 32) or (byteCode = 9):
+                set endIndex to endIndex - 1
+            else:
+                set scanning to false
+        return the substring of spelled from startIndex spanning (endIndex - startIndex) bytes
+
+function bim sentence word {a string:spelled} is an article:
+    execute:
+        return ((spelled = (the string form of "a")) or (spelled = (the string form of "an"))) or (spelled = (the string form of "the"))
+
+# Whether one of `alternatives` (words joined by "|") is `spelled`.
+function bim sentence choice {a string:alternatives} takes {a string:spelled}:
+    execute:
+        if (the length of spelled) = 0:
+            return false
+        set offered to alternatives split at "|"
+        set taken to false
+        loop offerCursor from 0 to the length of offered:
+            if (the item at offerCursor in offered) = spelled:
+                set taken to true
+        free offered
+        return taken
+
+# The first of `alternatives` that begins with `spelled`, or "".
+function the bim sentence alternative of {a string:alternatives} beginning {a string:spelled}:
+    execute:
+        set offered to alternatives split at "|"
+        set found to the string form of ""
+        loop offerCursor from 0 to the length of offered:
+            set offer to the item at offerCursor in offered
+            if ((the length of found) = 0) and ((the length of offer) >= (the length of spelled)):
+                if (the lowercase form of (the substring of offer from 0 spanning (the length of spelled) bytes)) = (the lowercase form of spelled):
+                    set found to offer
+        free offered
+        return found
+
+function the bim sentence first choice of {a string:alternatives}:
+    execute:
+        return the bim sentence alternative of alternatives beginning (the string form of "")
+
+# The edit distance (insertions, deletions, changes) between two words.
+function the bim sentence distance from {a string:firstWord} to {a string:secondWord}:
+    execute:
+        set firstLength to the length of firstWord
+        set secondLength to the length of secondWord
+        set previousRow to an empty list of an integer
+        loop columnIndex from 0 to (secondLength + 1):
+            append columnIndex to previousRow
+        loop rowIndex from 1 to (firstLength + 1):
+            set currentRow to an empty list of an integer
+            append rowIndex to currentRow
+            loop columnIndex from 1 to (secondLength + 1):
+                set cost to 1
+                if (the bim sentence byte at (rowIndex - 1) in firstWord) = (the bim sentence byte at (columnIndex - 1) in secondWord):
+                    set cost to 0
+                set costBest to (the item at (columnIndex - 1) in previousRow) + cost
+                set costAbove to (the item at columnIndex in previousRow) + 1
+                set costBeside to (the item at (columnIndex - 1) in currentRow) + 1
+                if costAbove < costBest:
+                    set costBest to costAbove
+                if costBeside < costBest:
+                    set costBest to costBeside
+                append costBest to currentRow
+            free previousRow
+            set previousRow to currentRow
+        set editDistance to the item at secondLength in previousRow
+        free previousRow
+        return editDistance
+
+# A coordinate in metres: a number, or a number with mm, cm or m after it.
+function the bim sentence metres of {a string:spelled}:
+    execute:
+        set trimmedText to the lowercase form of (the bim sentence trimmed form of spelled)
+        set trimmedLength to the length of trimmedText
+        set divisor to 1.0
+        set digitsText to trimmedText
+        if trimmedLength > 2:
+            set endingText to the substring of trimmedText from (trimmedLength - 2) spanning 2 bytes
+            if endingText = (the string form of "mm"):
+                set divisor to 1000.0
+                set digitsText to the substring of trimmedText from 0 spanning (trimmedLength - 2) bytes
+            else if endingText = (the string form of "cm"):
+                set divisor to 100.0
+                set digitsText to the substring of trimmedText from 0 spanning (trimmedLength - 2) bytes
+        if (divisor = 1.0) and (trimmedLength > 1):
+            if (the bim sentence byte at (trimmedLength - 1) in trimmedText) = 109:
+                set digitsText to the substring of trimmedText from 0 spanning (trimmedLength - 1) bytes
+        set reading to the bim real reading of (the bim sentence trimmed form of digitsText)
+        if reading's valid = false:
+            return reading
+        return @intrinsic("construct", a bim real reading record, true, reading's value / divisor)
+
+# What was typed, as words, numbers, quoted texts and points.
+function the bim sentence tokens of {a string:typedText}:
+    execute:
+        set tokenList to an empty list of a bim sentence token record
+        set totalLength to the length of typedText
+        set scanIndex to 0
+        loop while scanIndex < totalLength:
+            set byteCode to the bim sentence byte at scanIndex in typedText
+            if (byteCode = 32) or (byteCode = 9):
+                set scanIndex to scanIndex + 1
+            else if byteCode = 34:
+                set closingIndex to the index of (the string form of "\"") in typedText starting at (scanIndex + 1)
+                set isClosed to (closingIndex >= 0)
+                if isClosed = false:
+                    set closingIndex to totalLength
+                set insideText to the substring of typedText from (scanIndex + 1) spanning (closingIndex - (scanIndex + 1)) bytes
+                append (@intrinsic("construct", a bim sentence token record, bim sentence quoted token, insideText, the lowercase form of insideText, 0.0, 0.0, isClosed, true)) to tokenList
+                set scanIndex to closingIndex + 1
+            else if byteCode = 40:
+                set closingIndex to the index of (the string form of ")") in typedText starting at (scanIndex + 1)
+                set isClosed to (closingIndex >= 0)
+                set spanEnd to closingIndex + 1
+                if isClosed = false:
+                    set closingIndex to totalLength
+                    set spanEnd to totalLength
+                set insideText to the substring of typedText from (scanIndex + 1) spanning (closingIndex - (scanIndex + 1)) bytes
+                set halves to insideText split at ","
+                set readsWell to false
+                set xValue to 0.0
+                set yValue to 0.0
+                if (the length of halves) = 2:
+                    set xReading to the bim sentence metres of (the item at 0 in halves)
+                    set yReading to the bim sentence metres of (the item at 1 in halves)
+                    set readsWell to (xReading's valid) and (yReading's valid)
+                    if readsWell:
+                        set xValue to xReading's value
+                        set yValue to yReading's value
+                free halves
+                set pointSpelling to the substring of typedText from scanIndex spanning (spanEnd - scanIndex) bytes
+                append (@intrinsic("construct", a bim sentence token record, bim sentence point token, pointSpelling, pointSpelling, xValue, yValue, isClosed, readsWell)) to tokenList
+                set scanIndex to spanEnd
+            else:
+                set wordEnd to scanIndex
+                set scanning to true
+                loop while scanning and (wordEnd < totalLength):
+                    set wordByte to the bim sentence byte at wordEnd in typedText
+                    if (((wordByte = 32) or (wordByte = 9)) or (wordByte = 34)) or (wordByte = 40):
+                        set scanning to false
+                    else:
+                        set wordEnd to wordEnd + 1
+                set wordText to the substring of typedText from scanIndex spanning (wordEnd - scanIndex) bytes
+                set scanIndex to wordEnd
+                set wordKind to bim sentence word token
+                if (the bim real reading of wordText)'s valid:
+                    set wordKind to bim sentence number token
+                else if ((the length of wordText) > 1) and (scanIndex >= totalLength):
+                    # A full stop ends the sentence, as in DynLex.
+                    if (the bim sentence byte at ((the length of wordText) - 1) in wordText) = 46:
+                        set wordText to the substring of wordText from 0 spanning ((the length of wordText) - 1) bytes
+                # A full stop alone (after a point or a quote) ends the
+                # sentence too.
+                set fullStop to (wordText = (the string form of ".")) and (scanIndex >= totalLength)
+                if fullStop = false:
+                    append (@intrinsic("construct", a bim sentence token record, wordKind, wordText, the lowercase form of wordText, 0.0, 0.0, true, true)) to tokenList
+        return tokenList
+
+# A pattern's parts (see the head of this file).
+function the bim sentence elements of {a string:patternText}:
+    execute:
+        set elementList to an empty list of a bim sentence element record
+        set pieceList to patternText split at " "
+        loop pieceCursor from 0 to the length of pieceList:
+            set pieceText to the item at pieceCursor in pieceList
+            set pieceLength to the length of pieceText
+            if pieceLength > 0:
+                set firstByte to the bim sentence byte at 0 in pieceText
+                if (firstByte = 123) and (pieceLength > 2):
+                    set innerText to the substring of pieceText from 1 spanning (pieceLength - 2) bytes
+                    set halves to innerText split at ":"
+                    set slotKindText to the item at 0 in halves
+                    set slotNameText to slotKindText
+                    if (the length of halves) > 1:
+                        set slotNameText to the item at 1 in halves
+                    free halves
+                    append (@intrinsic("construct", a bim sentence element record, bim sentence slot element, pieceText, the lowercase form of pieceText, false, slotKindText, slotNameText)) to elementList
+                else if (firstByte = 91) and (pieceLength > 2):
+                    set innerText to the substring of pieceText from 1 spanning (pieceLength - 2) bytes
+                    set optionalChoice to ((the bim sentence byte at 0 in innerText) = 124) or ((the bim sentence byte at ((the length of innerText) - 1) in innerText) = 124)
+                    append (@intrinsic("construct", a bim sentence element record, bim sentence choice element, innerText, the lowercase form of innerText, optionalChoice, the string form of "", the string form of "")) to elementList
+                else:
+                    set loweredPiece to the lowercase form of pieceText
+                    set elementKind to bim sentence literal element
+                    if bim sentence word loweredPiece is an article:
+                        set elementKind to bim sentence article element
+                    append (@intrinsic("construct", a bim sentence element record, elementKind, pieceText, loweredPiece, (elementKind = (bim sentence article element)), the string form of "", the string form of "")) to elementList
+        free pieceList
+        return elementList
+
+# How a part reads in a suggestion: a word as written, a choice by its first
+# word, a point slot as (x, y) and another slot as {name}.
+function the bim sentence display of element {bim sentence element record:patternPart}:
+    execute:
+        if patternPart's kind = bim sentence choice element:
+            return the bim sentence first choice of patternPart's spelling
+        if patternPart's kind = bim sentence slot element:
+            if patternPart's slotKind = (the string form of "point"):
+                return the string form of "(x, y)"
+            return ((the string form of "{") + patternPart's slotName) + (the string form of "}")
+        return patternPart's spelling
+
+# A rule as the suggestions show it: `draw a wall from (x, y) to (x, y)`.
+function the bim sentence display of rule {bim sentence rule record:ruleValue}:
+    execute:
+        set elementList to the bim sentence elements of ruleValue's pattern
+        set shownList to an empty list of a string
+        loop elementCursor from 0 to the length of elementList:
+            set listedPart to the item at elementCursor in elementList
+            set shownPart to the bim sentence display of element listedPart
+            # A choice shows all its words: "open the view/plan/sheet {name}".
+            if listedPart's kind = bim sentence choice element:
+                set choiceWords to listedPart's spelling split at "|"
+                set keptWords to an empty list of a string
+                loop choiceCursor from 0 to the length of choiceWords:
+                    if (the length of (the item at choiceCursor in choiceWords)) > 0:
+                        append (the item at choiceCursor in choiceWords) to keptWords
+                set shownPart to keptWords joined with "/"
+                free keptWords
+                free choiceWords
+            if (the length of shownPart) > 0:
+                append shownPart to shownList
+        set joinedText to shownList joined with " "
+        free shownList
+        free elementList
+        return joinedText
+
+# ----------------------------------------------------------------- matching
+
+# How far `tokenList` follows `elementList`, the slots filled into
+# `slotValues`. With `prefixMode` the words may stop before the pattern does;
+# with `lastOpen` the last word may be the start of the pattern's word.
+function the bim sentence match of {a pointer to a list:tokenList} against {a pointer to a list:elementList} typing {boolean:prefixMode} unfinished {boolean:lastOpen} into {a pointer to a list:slotValues}:
+    execute:
+        set tokenTotal to the length of tokenList
+        set elementTotal to the length of elementList
+        set elementCursor to 0
+        set tokenCursor to 0
+        set failed to false
+        set halted to false
+        set partialAt to -1
+        set partialText to the string form of ""
+        set penalty to 0
+        loop while (halted = false) and (elementCursor < elementTotal):
+            if tokenCursor >= tokenTotal:
+                set halted to true
+            else:
+                set patternPart to the item at elementCursor in elementList
+                set currentToken to the item at tokenCursor in tokenList
+                set isLastToken to (tokenCursor = (tokenTotal - 1))
+                set mayBePartial to isLastToken and lastOpen
+                set plainToken to currentToken's kind != bim sentence quoted token
+                set tokenIsArticle to false
+                if currentToken's kind = bim sentence word token:
+                    set tokenIsArticle to bim sentence word currentToken's lowered is an article
+                set wordSlot to (patternPart's slotKind = (the string form of "word")) or (patternPart's slotKind = (the string form of "words"))
+                if patternPart's kind = bim sentence article element:
+                    if tokenIsArticle:
+                        set tokenCursor to tokenCursor + 1
+                    set elementCursor to elementCursor + 1
+                else if patternPart's kind != bim sentence slot element:
+                    if plainToken and (bim sentence choice patternPart's lowered takes currentToken's lowered):
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else if (mayBePartial and (currentToken's kind = bim sentence word token)) and ((the length of (the bim sentence alternative of patternPart's lowered beginning currentToken's lowered)) > 0):
+                        set partialAt to elementCursor
+                        set partialText to currentToken's lowered
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else if patternPart's optional:
+                        set elementCursor to elementCursor + 1
+                    else:
+                        if plainToken:
+                            set penalty to the bim sentence distance from currentToken's lowered to (the bim sentence first choice of patternPart's lowered)
+                        set failed to true
+                        set halted to true
+                else if tokenIsArticle and wordSlot:
+                    # "the" before a name or a kind belongs to the sentence.
+                    set tokenCursor to tokenCursor + 1
+                else if patternPart's slotKind = (the string form of "point"):
+                    set beingTyped to (prefixMode and isLastToken) and (currentToken's closed = false)
+                    if (currentToken's kind = bim sentence point token) and (currentToken's readable or beingTyped):
+                        append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, currentToken's spelling, currentToken's x, currentToken's y, true)) to slotValues
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else:
+                        set failed to true
+                        set halted to true
+                else if patternPart's slotKind = (the string form of "id"):
+                    if (currentToken's kind = bim sentence number token) and ((the bim whole reading of currentToken's spelling)'s valid):
+                        append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, currentToken's spelling, 0.0, 0.0, false)) to slotValues
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else:
+                        set failed to true
+                        set halted to true
+                else if patternPart's slotKind = (the string form of "number"):
+                    if currentToken's kind = bim sentence number token:
+                        append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, currentToken's spelling, 0.0, 0.0, false)) to slotValues
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else:
+                        set failed to true
+                        set halted to true
+                else if patternPart's slotKind = (the string form of "word"):
+                    if (currentToken's kind = bim sentence word token) or (currentToken's kind = bim sentence quoted token):
+                        append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, currentToken's spelling, 0.0, 0.0, false)) to slotValues
+                        set tokenCursor to tokenCursor + 1
+                        set elementCursor to elementCursor + 1
+                    else:
+                        set failed to true
+                        set halted to true
+                else if currentToken's kind = bim sentence quoted token:
+                    append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, currentToken's spelling, 0.0, 0.0, false)) to slotValues
+                    set tokenCursor to tokenCursor + 1
+                    set elementCursor to elementCursor + 1
+                else:
+                    # Words: up to the pattern's next word.
+                    set stopWords to the string form of ""
+                    if (elementCursor + 1) < elementTotal:
+                        set nextPart to the item at (elementCursor + 1) in elementList
+                        if (nextPart's kind = bim sentence literal element) or (nextPart's kind = bim sentence choice element):
+                            set stopWords to nextPart's lowered
+                    set gathered to an empty list of a string
+                    set gathering to true
+                    loop while gathering and (tokenCursor < tokenTotal):
+                        set upcoming to the item at tokenCursor in tokenList
+                        set nextOpen to (tokenCursor = (tokenTotal - 1)) and lastOpen
+                        set stopsHere to false
+                        if (((the length of gathered) > 0) and ((the length of stopWords) > 0)) and (upcoming's kind != bim sentence quoted token):
+                            if bim sentence choice stopWords takes upcoming's lowered:
+                                set stopsHere to true
+                            else if nextOpen and ((the length of (the bim sentence alternative of stopWords beginning upcoming's lowered)) > 0):
+                                set stopsHere to true
+                        if stopsHere:
+                            set gathering to false
+                        else:
+                            append upcoming's spelling to gathered
+                            set tokenCursor to tokenCursor + 1
+                    append (@intrinsic("construct", a bim sentence slot record, patternPart's slotName, (gathered joined with " "), 0.0, 0.0, false)) to slotValues
+                    free gathered
+                    set elementCursor to elementCursor + 1
+        if (failed = false) and (tokenCursor < tokenTotal):
+            # Words left over after the whole pattern.
+            set failed to true
+        set restOptional to true
+        loop restCursor from elementCursor to elementTotal:
+            set restPart to the item at restCursor in elementList
+            if restPart's optional = false:
+                set restOptional to false
+        set isComplete to ((failed = false) and restOptional) and ((tokenCursor >= tokenTotal) and (partialAt < 0))
+        set isFitting to (failed = false) and (tokenCursor >= tokenTotal)
+        set closeness to (elementCursor * 10) - penalty
+        return @intrinsic("construct", a bim sentence match record, isComplete, isFitting, elementCursor, tokenCursor, partialAt, partialText, closeness)
+
+# Whether `typedText` ends inside a word (no space after its last word).
+function bim sentence text {a string:typedText} ends inside a word:
+    execute:
+        set typedLength to the length of typedText
+        if typedLength = 0:
+            return false
+        set lastByte to the bim sentence byte at (typedLength - 1) in typedText
+        return (lastByte != 32) and (lastByte != 9)
+
+# How far `typedText` follows `rule`, its slots into `slotValues`.
+function the bim sentence fit of {a string:typedText} to rule {bim sentence rule record:ruleValue} typing {boolean:prefixMode} into {a pointer to a list:slotValues}:
+    execute:
+        set tokenList to the bim sentence tokens of typedText
+        set elementList to the bim sentence elements of ruleValue's pattern
+        set lastOpen to prefixMode and (bim sentence text typedText ends inside a word)
+        set matched to the bim sentence match of tokenList against elementList typing prefixMode unfinished lastOpen into slotValues
+        free tokenList
+        free elementList
+        return matched
+
+# The rules (their positions in `rules`) that `typedText` may become, in the
+# table's order; when none can, the three closest.
+function the bim sentence suggestion rules for {a string:typedText} in {a pointer to a list:ruleList}:
+    execute:
+        set ranked to an empty list of an integer
+        set scores to an empty list of an integer
+        set slotValues to an empty list of a bim sentence slot record
+        loop ruleCursor from 0 to the length of ruleList:
+            clear slotValues
+            set matched to the bim sentence fit of typedText to rule (the item at ruleCursor in ruleList) typing true into slotValues
+            if matched's fits:
+                append ruleCursor to ranked
+            append matched's score to scores
+        free slotValues
+        if (the length of ranked) = 0:
+            set picks to 0
+            loop while picks < 3:
+                set bestRule to -1
+                set bestScore to -1000000
+                loop ruleCursor from 0 to the length of scores:
+                    set taken to false
+                    loop rankCursor from 0 to the length of ranked:
+                        if (the item at rankCursor in ranked) = ruleCursor:
+                            set taken to true
+                    if (taken = false) and ((the item at ruleCursor in scores) > bestScore):
+                        set bestRule to ruleCursor
+                        set bestScore to the item at ruleCursor in scores
+                if bestRule >= 0:
+                    append bestRule to ranked
+                set picks to picks + 1
+        free scores
+        return ranked
+
+# The suggestions for `typedText` as they read, at most `limit`.
+function the bim sentence suggestions for {a string:typedText} at most {integer:limit}:
+    execute:
+        set ruleList to the bim sentence rules
+        set ranked to the bim sentence suggestion rules for typedText in ruleList
+        set shownList to an empty list of a string
+        loop rankCursor from 0 to the length of ranked:
+            if rankCursor < limit:
+                append (the bim sentence display of rule (the item at (the item at rankCursor in ranked) in ruleList)) to shownList
+        free ranked
+        free ruleList
+        return shownList
+
+# The words that follow `elementList` from `startElement`: the articles
+# before the next word and that word, or "(" before a point.
+function the bim sentence next words of {a pointer to a list:elementList} from {integer:startElement}:
+    execute:
+        set pieceList to an empty list of a string
+        set cursorIndex to startElement
+        set collecting to true
+        set opensPoint to false
+        loop while collecting and (cursorIndex < (the length of elementList)):
+            set patternPart to the item at cursorIndex in elementList
+            if patternPart's kind = bim sentence article element:
+                append patternPart's spelling to pieceList
+                set cursorIndex to cursorIndex + 1
+            else if patternPart's kind = bim sentence slot element:
+                if patternPart's slotKind = (the string form of "point"):
+                    append (the string form of "(") to pieceList
+                    set opensPoint to true
+                else if (the length of pieceList) > 0:
+                    append (the string form of "") to pieceList
+                set collecting to false
+            else:
+                append (the bim sentence display of element patternPart) to pieceList
+                set collecting to false
+        set joinedText to pieceList joined with " "
+        free pieceList
+        if ((the length of joinedText) > 0) and (opensPoint = false):
+            set joinedText to joinedText + (the string form of " ")
+        return joinedText
+
+# What Tab adds to `typedText` toward `rule`: the rest of the word begun,
+# else the next word (with its articles), ")" or a closing quote; "" when it
+# cannot tell (inside a name, at the end).
+function the bim sentence completion of {a string:typedText} by rule {bim sentence rule record:ruleValue}:
+    execute:
+        set slotValues to an empty list of a bim sentence slot record
+        set tokenList to the bim sentence tokens of typedText
+        set elementList to the bim sentence elements of ruleValue's pattern
+        set lastOpen to bim sentence text typedText ends inside a word
+        set matched to the bim sentence match of tokenList against elementList typing true unfinished lastOpen into slotValues
+        set addition to the string form of ""
+        if matched's fits:
+            set lastKind to 0
+            set lastClosed to true
+            if (the length of tokenList) > 0:
+                set finalToken to the last item of tokenList
+                set lastKind to finalToken's kind
+                set lastClosed to finalToken's closed
+            if matched's partialElement >= 0:
+                set patternPart to the item at matched's partialElement in elementList
+                set wholeWord to the bim sentence alternative of patternPart's spelling beginning matched's partialSpelling
+                set addition to (the substring of wholeWord from (the length of matched's partialSpelling) spanning ((the length of wholeWord) - (the length of matched's partialSpelling)) bytes) + (the string form of " ")
+            else if lastOpen and ((lastKind = bim sentence point token) and (lastClosed = false)):
+                set addition to the string form of ") "
+            else if lastOpen and ((lastKind = bim sentence quoted token) and (lastClosed = false)):
+                set addition to the string form of "\" "
+            else if lastOpen:
+                # After a whole word: the next words, unless the word may be
+                # part of a name that goes on.
+                set inWords to false
+                if matched's progress > 0:
+                    set previousPart to the item at (matched's progress - 1) in elementList
+                    set inWords to (previousPart's kind = bim sentence slot element) and (previousPart's slotKind = (the string form of "words"))
+                set nextPart to the bim sentence next words of elementList from matched's progress
+                if (inWords = false) and ((the length of nextPart) > 0):
+                    set addition to (the string form of " ") + nextPart
+            else:
+                set addition to the bim sentence next words of elementList from matched's progress
+        free slotValues
+        free tokenList
+        free elementList
+        return addition
+
+# ------------------------------------------------------------------ running
+
+# The kind of element (`bim … picked`) a word names: -1 for any element
+# ("element", "object"), -2 for a word that names none.
+function the bim sentence picked kind of word {a string:kindWord}:
+    execute:
+        set lowered to the lowercase form of kindWord
+        if bim sentence choice (the string form of "wall|walls") takes lowered:
+            return bim wall picked
+        if bim sentence choice (the string form of "floor|slab|roof|ceiling") takes lowered:
+            return bim slab picked
+        if bim sentence choice (the string form of "space|room") takes lowered:
+            return bim space object picked
+        if bim sentence choice (the string form of "opening|door|window") takes lowered:
+            return bim opening picked
+        if bim sentence choice (the string form of "grid") takes lowered:
+            return bim grid picked
+        if bim sentence choice (the string form of "system|facade") takes lowered:
+            return bim curtain picked
+        if bim sentence choice (the string form of "beam|column|pile|pipe|duct|member|linear") takes lowered:
+            return bim linear picked
+        if bim sentence choice (the string form of "stair|stairs") takes lowered:
+            return bim stair picked
+        if bim sentence choice (the string form of "railing") takes lowered:
+            return bim railing picked
+        if bim sentence choice (the string form of "level|storey") takes lowered:
+            return bim level picked
+        if bim sentence choice (the string form of "sketch|line") takes lowered:
+            return bim sketch picked
+        if bim sentence choice (the string form of "mesh") takes lowered:
+            return bim mesh picked
+        if bim sentence choice (the string form of "component|instance") takes lowered:
+            return bim instance picked
+        if bim sentence choice (the string form of "element|object|item|selection") takes lowered:
+            return -1
+        return -2
+
+function bim sentence kind {integer:wantedKind} accepts {integer:pickedKind}:
+    execute:
+        if pickedKind = bim nothing picked:
+            return false
+        if wantedKind = -1:
+            return true
+        if (wantedKind = bim space object picked) and (pickedKind = bim space picked):
+            return true
+        return wantedKind = pickedKind
+
+function the bim sentence name of picked {integer:pickedKind}:
+    execute:
+        if pickedKind = bim wall picked:
+            return the string form of "wall"
+        if pickedKind = bim slab picked:
+            return the string form of "floor"
+        if (pickedKind = bim space object picked) or (pickedKind = bim space picked):
+            return the string form of "space"
+        if pickedKind = bim opening picked:
+            return the string form of "opening"
+        if pickedKind = bim grid picked:
+            return the string form of "grid"
+        if pickedKind = bim curtain picked:
+            return the string form of "building system"
+        if pickedKind = bim linear picked:
+            return the string form of "linear element"
+        if pickedKind = bim stair picked:
+            return the string form of "stair"
+        if pickedKind = bim railing picked:
+            return the string form of "railing"
+        if pickedKind = bim level picked:
+            return the string form of "level"
+        if pickedKind = bim sketch picked:
+            return the string form of "sketch"
+        if pickedKind = bim mesh picked:
+            return the string form of "mesh"
+        if pickedKind = bim instance picked:
+            return the string form of "component"
+        if pickedKind = bim nothing picked:
+            return the string form of "nothing"
+        return the string form of "element"
+
+local function the bim sentence kinds hint:
+    execute:
+        return the string form of "use wall, floor, space, door, window, opening, grid, system, beam, column, stair, railing, level, sketch or element"
+
+# The slot named `wanted` in `slotValues`; an empty slot when there is none.
+function the bim sentence slot named {a string:wanted} in {a pointer to a list:slotValues}:
+    execute:
+        loop slotCursor from 0 to the length of slotValues:
+            set held to the item at slotCursor in slotValues
+            if held's name = wanted:
+                return held
+        return @intrinsic("construct", a bim sentence slot record, wanted, the string form of "", 0.0, 0.0, false)
+
+# The number after "id": in an API answer, or "".
+function the bim sentence id in reply {a string:answerText}:
+    execute:
+        set marker to the index of (the string form of "\"id\":") in answerText
+        if marker < 0:
+            return the string form of ""
+        set startIndex to marker + 5
+        set endIndex to startIndex
+        set scanning to true
+        loop while scanning and (endIndex < (the length of answerText)):
+            set digit to the bim sentence byte at endIndex in answerText
+            if ((digit >= 48) and (digit <= 57)) or (digit = 45):
+                set endIndex to endIndex + 1
+            else:
+                set scanning to false
+        return the substring of answerText from startIndex spanning (endIndex - startIndex) bytes
+
+# The "error" of an API answer that refused.
+function the bim sentence error in reply {a string:answerText}:
+    execute:
+        set marker to the index of (the string form of "\"error\":\"") in answerText
+        if marker < 0:
+            return the string form of "refused"
+        set startIndex to marker + 9
+        set endIndex to (the length of answerText) - 2
+        if endIndex <= startIndex:
+            return the string form of "refused"
+        return the substring of answerText from startIndex spanning (endIndex - startIndex) bytes
+
+local function bim sentence reply {a string:answerText} is ok:
+    execute:
+        return (the index of (the string form of "\"ok\":true") in answerText) >= 0
+
+# One API request (`verbText` and its argument lines) as the folder API
+# would serve it: its answer, and its window part into `windowValue`.
+local function the bim sentence request {a string:verbText} with {a pointer to a list:argumentLines} for {a pointer to a bim editor record:editor} window into {a pointer to a bim api window record:windowValue}:
+    execute:
+        set content to (the string form of "sentence\n") + verbText
+        loop argumentCursor from 0 to the length of argumentLines:
+            set content to (content + (the string form of "\n")) + (the item at argumentCursor in argumentLines)
+        set content to content + (the string form of "\n")
+        set answerText to the bim api answer to content for editor
+        if bim sentence reply answerText is ok:
+            set windowNow to the bim api window part of content
+            if (the length of windowNow's verb) > 0:
+                set windowValue's verb to windowNow's verb
+                set windowValue's number to windowNow's number
+                set windowValue's text to windowNow's text
+        return answerText
+
+# The value property `code` shows for the selection, or "".
+local function the bim sentence property value {integer:code} of {a pointer to a bim editor record:editor}:
+    execute:
+        set propertyRows to the bim property rows of (@intrinsic("dereference", editor))
+        set shownList to the string form of ""
+        loop rowCursor from 0 to the length of propertyRows:
+            set propertyRow to the item at rowCursor in propertyRows
+            if propertyRow's code = code:
+                set shownList to propertyRow's value
+        free propertyRows
+        return shownList
+
+# The sentences' own verbs (@kind, @select, @property, @tab): they check
+# what a sentence names before the API's verb runs.
+function the bim sentence own step {a string:verbText} with {a pointer to a list:argumentLines} for {a pointer to a bim editor record:editor} window into {a pointer to a bim api window record:windowValue}:
+    execute:
+        set firstArgument to the string form of ""
+        set secondArgument to the string form of ""
+        if (the length of argumentLines) > 0:
+            set firstArgument to the item at 0 in argumentLines
+        if (the length of argumentLines) > 1:
+            set secondArgument to the item at 1 in argumentLines
+        if verbText = (the string form of "@kind"):
+            set wantedKind to the bim sentence picked kind of word firstArgument
+            if wantedKind = -2:
+                return the bim sentence failure saying ((((the string form of "No element is called \"") + firstArgument) + (the string form of "\": ")) + (the bim sentence kinds hint))
+            if editor's selectionKind = bim nothing picked:
+                return the bim sentence failure saying (((the string form of "Nothing is selected: select the ") + firstArgument) + (the string form of " first (select the KIND ID)"))
+            if (bim sentence kind wantedKind accepts editor's selectionKind) = false:
+                return the bim sentence failure saying ((((the string form of "The selection is a ") + (the bim sentence name of picked editor's selectionKind)) + (the string form of ", not a ")) + firstArgument)
+            return the bim sentence success saying (the string form of "") with no bim api window
+        if verbText = (the string form of "@select"):
+            set wantedKind to the bim sentence picked kind of word firstArgument
+            if wantedKind = -2:
+                return the bim sentence failure saying ((((the string form of "No element is called \"") + firstArgument) + (the string form of "\": ")) + (the bim sentence kinds hint))
+            set idReading to the bim whole reading of secondArgument
+            if idReading's valid = false:
+                return the bim sentence failure saying (the string form of "Give the element's id as a whole number")
+            set pickedKind to the bim kind picked for element idReading's value in editor's documentValue's current
+            if pickedKind = bim nothing picked:
+                return the bim sentence failure saying ((the string form of "There is no element ") + secondArgument)
+            if (bim sentence kind wantedKind accepts pickedKind) = false:
+                return the bim sentence failure saying ((((the string form of "Element ") + secondArgument) + (the string form of " is a ")) + (((the bim sentence name of picked pickedKind) + (the string form of ", not a ")) + firstArgument))
+            set selectLines to an empty list of a string
+            append secondArgument to selectLines
+            set answerText to the bim sentence request (the string form of "select") with selectLines for editor window into windowValue
+            free selectLines
+            if (bim sentence reply answerText is ok) = false:
+                return the bim sentence failure saying (the bim sentence error in reply answerText)
+            return the bim sentence success saying editor's message with no bim api window
+        if verbText = (the string form of "@property"):
+            set wantedLabel to the lowercase form of firstArgument
+            set propertyRows to the bim property rows of (@intrinsic("dereference", editor))
+            set foundCode to -1
+            set foundLabel to the string form of ""
+            set beforeValue to the string form of ""
+            set labels to an empty list of a string
+            loop rowCursor from 0 to the length of propertyRows:
+                set propertyRow to the item at rowCursor in propertyRows
+                if (the lowercase form of propertyRow's label) = wantedLabel:
+                    if (foundCode < 0) or ((the lowercase form of foundLabel) != wantedLabel):
+                        set foundCode to propertyRow's code
+                        set foundLabel to propertyRow's label
+                        set beforeValue to propertyRow's value
+                if propertyRow's code > 0:
+                    append propertyRow's label to labels
+            if foundCode < 0:
+                loop rowCursor from 0 to the length of propertyRows:
+                    set propertyRow to the item at rowCursor in propertyRows
+                    set loweredLabel to the lowercase form of propertyRow's label
+                    if ((foundCode < 0) and (propertyRow's code > 0)) and ((the length of loweredLabel) >= (the length of wantedLabel)):
+                        if (the substring of loweredLabel from 0 spanning (the length of wantedLabel) bytes) = wantedLabel:
+                            set foundCode to propertyRow's code
+                            set foundLabel to propertyRow's label
+                            set beforeValue to propertyRow's value
+            free propertyRows
+            if foundCode < 0:
+                set knownText to labels joined with ", "
+                free labels
+                return the bim sentence failure saying ((((the string form of "No property \"") + firstArgument) + (the string form of "\" here; there are: ")) + knownText)
+            free labels
+            if foundCode = 0:
+                return the bim sentence failure saying (foundLabel + (the string form of " cannot be typed"))
+            set propertyLines to an empty list of a string
+            append (the string form of foundCode) to propertyLines
+            append secondArgument to propertyLines
+            set answerText to the bim sentence request (the string form of "property") with propertyLines for editor window into windowValue
+            free propertyLines
+            if (bim sentence reply answerText is ok) = false:
+                return the bim sentence failure saying (the bim sentence error in reply answerText)
+            set afterValue to the bim sentence property value foundCode of editor
+            if (afterValue = beforeValue) and ((the lowercase form of afterValue) != (the lowercase form of secondArgument)):
+                return the bim sentence failure saying (((foundLabel + (the string form of " stays ")) + afterValue) + ((the string form of ": ") + editor's message))
+            return the bim sentence success saying ((foundLabel + (the string form of " is now ")) + afterValue) with no bim api window
+        if verbText = (the string form of "@tab"):
+            set tabNames to the bim ribbon tab names
+            set wantedTab to the lowercase form of firstArgument
+            set tabIndex to -1
+            loop tabCursor from 0 to the length of tabNames:
+                if (tabIndex < 0) and ((the lowercase form of (the item at tabCursor in tabNames)) = wantedTab):
+                    set tabIndex to tabCursor
+            loop tabCursor from 0 to the length of tabNames:
+                set tabLowered to the lowercase form of (the item at tabCursor in tabNames)
+                if (tabIndex < 0) and ((the length of tabLowered) >= (the length of wantedTab)):
+                    if (the substring of tabLowered from 0 spanning (the length of wantedTab) bytes) = wantedTab:
+                        set tabIndex to tabCursor
+            if tabIndex < 0:
+                set knownText to tabNames joined with ", "
+                free tabNames
+                return the bim sentence failure saying ((((the string form of "No ribbon tab \"") + firstArgument) + (the string form of "\"; there are: ")) + knownText)
+            set tabName to the item at tabIndex in tabNames
+            free tabNames
+            set tabLines to an empty list of a string
+            append (the string form of tabIndex) to tabLines
+            set answerText to the bim sentence request (the string form of "tab") with tabLines for editor window into windowValue
+            free tabLines
+            return the bim sentence success saying (((the string form of "The ") + tabName) + (the string form of " tab")) with no bim api window
+        return the bim sentence failure saying ((the string form of "Unknown step ") + verbText)
+
+# Runs `rule`'s action with its slots: each step in turn, until one refuses.
+function the bim sentence outcome of rule {bim sentence rule record:ruleValue} with {a pointer to a list:slotValues} for {a pointer to a bim editor record:editor}:
+    execute:
+        set steps to ruleValue's action split at " ; "
+        set windowValue to no bim api window
+        set lastReply to the string form of ""
+        set ownMessage to the string form of ""
+        set refusal to the string form of ""
+        set editor's message to the string form of ""
+        loop stepCursor from 0 to the length of steps:
+            if (the length of refusal) = 0:
+                set stepWords to (the item at stepCursor in steps) split at " "
+                set verbText to the item at 0 in stepWords
+                set argumentLines to an empty list of a string
+                loop wordCursor from 1 to the length of stepWords:
+                    set pieceText to the item at wordCursor in stepWords
+                    if ((the length of pieceText) > 1) and ((the bim sentence byte at 0 in pieceText) = 36):
+                        set held to the bim sentence slot named (the substring of pieceText from 1 spanning ((the length of pieceText) - 1) bytes) in slotValues
+                        if held's isPoint:
+                            append (the string form of held's x) to argumentLines
+                            append (the string form of held's y) to argumentLines
+                        else:
+                            append held's spelling to argumentLines
+                    else:
+                        append pieceText to argumentLines
+                free stepWords
+                if (the length of verbText) > 0:
+                    if (the bim sentence byte at 0 in verbText) = 64:
+                        set stepResult to the bim sentence own step verbText with argumentLines for editor window into (the address of windowValue)
+                        if stepResult's ok = false:
+                            set refusal to stepResult's message
+                        else if (the length of stepResult's message) > 0:
+                            set ownMessage to stepResult's message
+                    else:
+                        set lastReply to the bim sentence request verbText with argumentLines for editor window into (the address of windowValue)
+                        if (bim sentence reply lastReply is ok) = false:
+                            set refusal to the bim sentence error in reply lastReply
+                free argumentLines
+        free steps
+        if (the length of refusal) > 0:
+            return the bim sentence failure saying refusal
+        set reportText to ruleValue's said
+        if (the length of reportText) > 0:
+            set reportText to reportText with (the string form of "$id") replaced by (the bim sentence id in reply lastReply)
+            loop slotCursor from 0 to the length of slotValues:
+                set held to the item at slotCursor in slotValues
+                set reportText to reportText with ((the string form of "$") + held's name) replaced by held's spelling
+        else if (the length of ownMessage) > 0:
+            set reportText to ownMessage
+        else if (the length of editor's message) > 0:
+            set reportText to editor's message
+        else:
+            set reportText to the string form of "Done"
+        return the bim sentence success saying reportText with windowValue
+
+# Why `lineText` is no sentence, with the closest pattern: one it begins
+# (it stops short), else the one it follows furthest, with the word where it
+# goes astray.
+function the bim sentence advice for {a string:lineText} among {a pointer to a list:ruleList}:
+    execute:
+        set slotValues to an empty list of a bim sentence slot record
+        set tokenList to the bim sentence tokens of lineText
+        set bestRule to -1
+        set bestScore to -1000000
+        set bestFits to false
+        set bestProgress to 0
+        set bestToken to 0
+        loop ruleCursor from 0 to the length of ruleList:
+            clear slotValues
+            set elementList to the bim sentence elements of (the item at ruleCursor in ruleList)'s pattern
+            set matched to the bim sentence match of tokenList against elementList typing true unfinished false into slotValues
+            free elementList
+            set isBetter to false
+            if matched's fits and (bestFits = false):
+                set isBetter to true
+            else if (matched's fits = bestFits) and (matched's score > bestScore):
+                set isBetter to true
+            if isBetter:
+                set bestRule to ruleCursor
+                set bestScore to matched's score
+                set bestFits to matched's fits
+                set bestProgress to matched's progress
+                set bestToken to matched's stopToken
+        free slotValues
+        set adviceText to (the string form of "Not understood: ") + lineText
+        if bestRule >= 0:
+            set closestRule to the item at bestRule in ruleList
+            set closestText to the bim sentence display of rule closestRule
+            set elementList to the bim sentence elements of closestRule's pattern
+            set expectedText to the string form of ""
+            if bestProgress < (the length of elementList):
+                set expectedText to the bim sentence display of element (the item at bestProgress in elementList)
+            free elementList
+            if bestFits:
+                set adviceText to (((the string form of "Not complete: ") + lineText) + (the string form of " goes on with ")) + ((expectedText + (the string form of "; the sentence is: ")) + closestText)
+            else:
+                set whereText to the string form of ""
+                if bestToken < (the length of tokenList):
+                    set strayWord to (the item at bestToken in tokenList)'s spelling
+                    if (the length of expectedText) > 0:
+                        set whereText to (((the string form of " (") + expectedText) + (the string form of " where \"")) + (strayWord + (the string form of "\" stands)"))
+                    else:
+                        set whereText to ((the string form of " (\"") + strayWord) + (the string form of "\" is more than it takes)")
+                set adviceText to ((adviceText + (the string form of "; closest: ")) + closestText) + whereText
+        free tokenList
+        return adviceText
+
+# Runs one line typed on the command line, or sent as `run SENTENCE` through
+# the API: the first rule it matches in full, else the advice. The result
+# message also becomes the editor's message, so the status line shows it.
+function run bim command sentence {a string:typedLine} for {a pointer to a bim editor record:editor}:
+    execute:
+        set lineText to the bim sentence trimmed form of typedLine
+        if (the length of lineText) = 0:
+            return the bim sentence failure saying (the string form of "Type a sentence, such as: draw a wall from (0, 0) to (5, 0)")
+        # Kept for DynLex code: once a JIT runs code, a line starting with
+        # ">" goes to it instead of to the sentences.
+        if (the bim sentence byte at 0 in lineText) = 62:
+            set refused to the bim sentence failure saying (the string form of "DynLex code on the command line needs the JIT, which is not built yet; type a sentence")
+            set editor's message to refused's message
+            return refused
+        set ruleList to the bim sentence rules
+        set chosen to -1
+        set slotValues to an empty list of a bim sentence slot record
+        loop ruleCursor from 0 to the length of ruleList:
+            if chosen < 0:
+                clear slotValues
+                set matched to the bim sentence fit of lineText to rule (the item at ruleCursor in ruleList) typing false into slotValues
+                if matched's full:
+                    set chosen to ruleCursor
+        if chosen < 0:
+            set outcome to the bim sentence failure saying (the bim sentence advice for lineText among ruleList)
+        else:
+            set outcome to the bim sentence outcome of rule (the item at chosen in ruleList) with slotValues for editor
+        set editor's message to outcome's message
+        free slotValues
+        free ruleList
+        return outcome
+
+# The JSON answer of the API's `run SENTENCE`.
+function the bim api reply of sentence {bim sentence result record:outcome}:
+    execute:
+        set members to an empty list of a string
+        if outcome's ok:
+            append (the bim json member (the string form of "ok") as (the string form of "true")) to members
+            append (the bim json member (the string form of "message") as (the bim json text of outcome's message)) to members
+        else:
+            append (the bim json member (the string form of "ok") as (the string form of "false")) to members
+            append (the bim json member (the string form of "error") as (the bim json text of outcome's message)) to members
+        set answer to the bim json object of members
+        free members
+        return answer
+
+# The sentence of a `run` request: its argument lines joined by spaces.
+function the bim api sentence of request {a string:content}:
+    execute:
+        set lines to content split at "\n"
+        set wordList to an empty list of a string
+        loop lineCursor from 2 to the length of lines:
+            set requestLine to (the item at lineCursor in lines) with "\r" replaced by ""
+            if (the length of requestLine) > 0:
+                append requestLine to wordList
+        set sentenceText to wordList joined with " "
+        free wordList
+        free lines
+        return sentenceText
+
+# ------------------------------------------------------------- command line
+
+# The bytes of one typed character, in UTF-8.
+function the bim sentence utf8 of {integer:codePoint}:
+    execute:
+        set byteCount to 1
+        if codePoint >= 128:
+            set byteCount to 2
+        if codePoint >= 2048:
+            set byteCount to 3
+        if codePoint >= 65536:
+            set byteCount to 4
+        set encoded to a new string buffer containing byteCount bytes
+        if byteCount = 1:
+            store (codePoint as a byte) into the data of encoded at 0
+        if byteCount = 2:
+            store ((192 + (codePoint / 64)) as a byte) into the data of encoded at 0
+            store ((128 + (the remainder of codePoint divided by 64)) as a byte) into the data of encoded at 1
+        if byteCount = 3:
+            store ((224 + (codePoint / 4096)) as a byte) into the data of encoded at 0
+            store ((128 + (the remainder of (codePoint / 64) divided by 64)) as a byte) into the data of encoded at 1
+            store ((128 + (the remainder of codePoint divided by 64)) as a byte) into the data of encoded at 2
+        if byteCount = 4:
+            store ((240 + (codePoint / 262144)) as a byte) into the data of encoded at 0
+            store ((128 + (the remainder of (codePoint / 4096) divided by 64)) as a byte) into the data of encoded at 1
+            store ((128 + (the remainder of (codePoint / 64) divided by 64)) as a byte) into the data of encoded at 2
+            store ((128 + (the remainder of codePoint divided by 64)) as a byte) into the data of encoded at 3
+        return encoded
+
+# A character typed while the command line has the keys.
+function type bim command line character {integer:codePoint} in {a pointer to a bim command line record:prompter}:
+    execute:
+        if (codePoint < 32) or (codePoint = 127):
+            return nothing
+        set prompter's typed to prompter's typed + (the bim sentence utf8 of codePoint)
+        set prompter's choice to -1
+        set prompter's recalled to -1
+
+# The suggestion (its rule's position) the command line highlights, or -1.
+local function the bim command line chosen rule of {a pointer to a bim command line record:prompter} among {a pointer to a list:ruleList}:
+    execute:
+        set ranked to the bim sentence suggestion rules for prompter's typed in ruleList
+        set chosenRule to -1
+        if (the length of ranked) > 0:
+            set pickIndex to prompter's choice
+            if (pickIndex < 0) or (pickIndex >= (the length of ranked)):
+                set pickIndex to 0
+            set chosenRule to the item at pickIndex in ranked
+        free ranked
+        return chosenRule
+
+# The suggestions the command line shows for what is typed.
+function the bim command line suggestions of {bim command line record:prompter}:
+    execute:
+        return the bim sentence suggestions for prompter's typed at most (bim command line shown rows)
+
+# What Tab would add, shown greyed after the caret.
+function the bim command line ghost of {bim command line record:prompter}:
+    execute:
+        set ruleList to the bim sentence rules
+        set held to prompter
+        set chosenRule to the bim command line chosen rule of (the address of held) among ruleList
+        set ghostText to the string form of ""
+        if chosenRule >= 0:
+            set ghostText to the bim sentence completion of prompter's typed by rule (the item at chosenRule in ruleList)
+        free ruleList
+        return ghostText
+
+# A key pressed while the command line has the keys: Enter runs the line
+# (an empty line gives the keys back), Escape clears it (an empty one gives
+# the keys back), Backspace, Tab completes the next word of the highlighted
+# suggestion, Up and Down go through the suggestions, or, on an empty line,
+# through the sentences run before. What a run did: its result, whose window
+# part the window then carries out; an empty message when nothing ran.
+function press bim command line key {integer:keyCode} in {a pointer to a bim command line record:prompter} for {a pointer to a bim editor record:editor}:
+    execute:
+        set idleResult to the bim sentence success saying (the string form of "") with no bim api window
+        if keyCode = bim enter key code:
+            set lineText to the bim sentence trimmed form of prompter's typed
+            if (the length of lineText) = 0:
+                set prompter's focused to false
+                return idleResult
+            set outcome to run bim command sentence lineText for editor
+            append lineText to (prompter's sentences's values)
+            append outcome's message to (prompter's answers's values)
+            append (outcome's ok = false) to (prompter's failures's values)
+            if (the length of (prompter's sentences's values)) > 50:
+                remove item 0 from (prompter's sentences's values)
+                remove item 0 from (prompter's answers's values)
+                remove item 0 from (prompter's failures's values)
+            set prompter's typed to the string form of ""
+            set prompter's choice to -1
+            set prompter's recalled to -1
+            return outcome
+        if keyCode = bim escape key code:
+            if (the length of prompter's typed) > 0:
+                set prompter's typed to the string form of ""
+            else:
+                set prompter's focused to false
+            set prompter's choice to -1
+            set prompter's recalled to -1
+            return idleResult
+        if keyCode = bim backspace key code:
+            set typedLength to the length of prompter's typed
+            if typedLength > 0:
+                set cutIndex to typedLength - 1
+                loop while (cutIndex > 0) and (((the bim sentence byte at cutIndex in prompter's typed) bitwise and 192) = 128):
+                    set cutIndex to cutIndex - 1
+                set prompter's typed to the substring of prompter's typed from 0 spanning cutIndex bytes
+            set prompter's choice to -1
+            set prompter's recalled to -1
+            return idleResult
+        if keyCode = bim sentence tab key code:
+            set ruleList to the bim sentence rules
+            set chosenRule to the bim command line chosen rule of prompter among ruleList
+            if chosenRule >= 0:
+                set prompter's typed to prompter's typed + (the bim sentence completion of prompter's typed by rule (the item at chosenRule in ruleList))
+                set reranked to the bim sentence suggestion rules for prompter's typed in ruleList
+                set prompter's choice to -1
+                loop rankCursor from 0 to the length of reranked:
+                    if (prompter's choice < 0) and ((the item at rankCursor in reranked) = chosenRule):
+                        set prompter's choice to rankCursor
+                free reranked
+            free ruleList
+            set prompter's recalled to -1
+            return idleResult
+        if (keyCode = bim sentence up key code) or (keyCode = bim sentence down key code):
+            set historyCount to the length of (prompter's sentences's values)
+            if ((the length of prompter's typed) = 0) or (prompter's recalled >= 0):
+                if keyCode = bim sentence up key code:
+                    if prompter's recalled < 0:
+                        set prompter's recalled to historyCount - 1
+                    else if prompter's recalled > 0:
+                        set prompter's recalled to prompter's recalled - 1
+                else if prompter's recalled >= 0:
+                    set prompter's recalled to prompter's recalled + 1
+                    if prompter's recalled >= historyCount:
+                        set prompter's recalled to -1
+                        set prompter's typed to the string form of ""
+                if prompter's recalled >= 0:
+                    set prompter's typed to the item at prompter's recalled in (prompter's sentences's values)
+            else:
+                set offeredList to the bim command line suggestions of (@intrinsic("dereference", prompter))
+                set shownCount to the length of offeredList
+                free offeredList
+                if shownCount > 0:
+                    # No choice yet means the first suggestion.
+                    set currentChoice to prompter's choice
+                    if (currentChoice < 0) or (currentChoice >= shownCount):
+                        set currentChoice to 0
+                    if keyCode = bim sentence down key code:
+                        set prompter's choice to the remainder of (currentChoice + 1) divided by shownCount
+                    else if currentChoice = 0:
+                        set prompter's choice to shownCount - 1
+                    else:
+                        set prompter's choice to currentChoice - 1
+            return idleResult
+        return idleResult

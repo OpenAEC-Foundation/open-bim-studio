@@ -49,6 +49,7 @@ import viewer/bim_canvas.dl
 import viewer/bim_vector_gpu.dl
 import views/schedules/bim_schedule.dl
 import ui/panels/bim_ui.dl
+import ui/panels/bim_command_line.dl
 import pattern/grids/bim_grid_controls.dl
 import ui/editor/bim_modify_options.dl
 import ui/editor/bim_modify_preview.dl
@@ -621,6 +622,11 @@ set keypadWasDown to false
 set rightDragged to false
 # What the snap button under the pointer sends, from the last frame drawn.
 set snapHover to -1
+# The command line's sentences (`automation/bim_sentences.dl`): what is
+# typed, whether it has the keys, its history; what a sentence asks of the
+# window (a press, an opened view, a tab), carried out with the API's part.
+set commandLine to a new bim command line
+set commandWindow to no bim api window
 set gridAddOpen to false
 set gridAddId to the bim refused id
 set gridAddText to the string form of ""
@@ -1289,6 +1295,14 @@ loop while window remains open:
                 set editor's snapRefused to editor's snapRefused + snapBit
         else:
             set uiCommand to snapHover
+    # A click in the command line's box gives it the keys; a click anywhere
+    # else takes them back.
+    if leftDown and (previousLeft = false):
+        if (bim command box holds pixel's x and pixel's y in windowWidth by layout's height) and (panelClicked = false):
+            set panelClicked to true
+            set commandLine's focused to true
+        else if commandLine's focused:
+            set commandLine's focused to false
     # Tiled, a click on a view's caption makes it the active view.
     if ((tiledViews and (leftDown and (previousLeft = false))) and ((pixel's y >= (layout's top - (the bim pane caption height))) and (pixel's y < layout's top))) and (panelClicked = false):
         if (pixel's x > layout's planLeft) and (pixel's x < layout's planRight):
@@ -2454,6 +2468,10 @@ loop while window remains open:
     # The commands of the keys pressed this frame and of a ribbon button
     # clicked; Ctrl adds `bim ui control command`.
     set pressedCodes to an empty list of an integer
+    set commandKeys to an empty list of an integer
+    # A dialog that owns the frame takes the keys from the command line.
+    if commandLine's focused and (gridAddOwnsFrame or fileModalOwnsFrame):
+        set commandLine's focused to false
     set canvasTextEntry to ((editor's propertyCode < 0) and (editor's textActive = false)) and ((bim editor accepts point input editor) or (bim editor accepts modify number editor))
     loop cursor from 0 to the length of codes:
         set code to the item at cursor in codes
@@ -2461,7 +2479,11 @@ loop while window remains open:
         if code = 335:
             set code to bim enter key code
         if down and ((the item at cursor in previousKeys) = false):
-            if (code = 264) or (code = 265):
+            if commandLine's focused and (((key 341 is down in window) or (key 345 is down in window)) = false):
+                # The command line has the keys: they reach neither the
+                # editor's letters nor its tools.
+                append code to commandKeys
+            else if (code = 264) or (code = 265):
                 # The arrows move through the type manager's list and an
                 # open choice menu of the properties.
                 if typeManagerOwnsFrame or (bim editor shows a property menu editor):
@@ -2554,11 +2576,55 @@ loop while window remains open:
             else if (gridKey = 65) and ((key 341 is down in window) or (key 345 is down in window)):
                 set gridAddReplace to true
         clear pressedCodes
-    else if canvasTextEntry:
+    else if canvasTextEntry and (commandLine's focused = false):
         # Apply every character before Enter/Tab can confirm this frame.
         loop pointCharacterCursor from 0 to the length of typedNow:
             type bim editor character (the item at pointCharacterCursor in typedNow) in (the address of editor)
         clear typedNow
+    # The command line: `:` or Ctrl+L gives it the keys, when no text is
+    # being typed elsewhere (a property, a text, a dialog); while it has
+    # them, what is typed and the keys pressed go to it (Enter runs the
+    # sentence, Tab completes, Up and Down go through the suggestions and
+    # the history, Escape clears and then gives the keys back).
+    set commandFree to (((editor's propertyCode < 0) and (editor's textActive = false)) and (rulesOpen = false)) and ((gridAddOwnsFrame = false) and (((startScreen or (pendingFileAction != 0)) or (fileScreens's menuOpen or fileScreens's settingsOpen)) = false))
+    if (commandLine's focused = false) and commandFree:
+        set colonAt to -1
+        loop colonCursor from 0 to the length of typedNow:
+            if (the item at colonCursor in typedNow) = 58:
+                set colonAt to colonCursor
+        set focusAt to -1
+        loop focusCursor from 0 to the length of pressedCodes:
+            if (the item at focusCursor in pressedCodes) = bim command line focus command:
+                set focusAt to focusCursor
+        if focusAt >= 0:
+            remove item focusAt from pressedCodes
+        if (colonAt >= 0) or (focusAt >= 0):
+            set commandLine's focused to true
+            set commandLine's choice to -1
+            set commandLine's recalled to -1
+            if colonAt >= 0:
+                # The colon's own key (Shift with ; or .) does nothing else.
+                clear typedNow
+                clear pressedCodes
+    else if commandLine's focused and (commandFree = false):
+        set commandLine's focused to false
+    if commandLine's focused:
+        loop commandCharacterCursor from 0 to the length of typedNow:
+            type bim command line character (the item at commandCharacterCursor in typedNow) in (the address of commandLine)
+        clear typedNow
+        loop commandKeyCursor from 0 to the length of commandKeys:
+            set commandOutcome to press bim command line key (the item at commandKeyCursor in commandKeys) in (the address of commandLine) for (the address of editor)
+            if (the length of commandOutcome's windowPart's verb) > 0:
+                set commandWindow to commandOutcome's windowPart
+        # Ctrl+L again gives the keys back.
+        set focusAgain to -1
+        loop focusCursor from 0 to the length of pressedCodes:
+            if (the item at focusCursor in pressedCodes) = bim command line focus command:
+                set focusAgain to focusCursor
+        if focusAgain >= 0:
+            remove item focusAgain from pressedCodes
+            set commandLine's focused to false
+    free commandKeys
     if gridAddOpen and gridAddApply:
         # Prepare the full batch before beginning an undo step: invalid input
         # must not modify the model or discard an existing redo history.
@@ -3261,64 +3327,71 @@ loop while window remains open:
     set previousLeft to physicalLeftDown
     set previousRight to rightDown
     set previousCursor to cursorPosition
-    # A request of the automation API, one a frame.
+    # A request of the automation API, one a frame, and what a sentence of
+    # the command line asks of the window (the same parts: a press, a view
+    # opened, a tab, a fit, Escape).
+    set apiWindow to no bim api window
     if apiOn:
         set apiWindow to serve bim api in apiFolder for (the address of editor)
-        if apiWindow's verb = (the string form of "fit"):
-            set fitting to true
-        if (apiWindow's verb = (the string form of "tab")) and ((apiWindow's number >= 0) and (apiWindow's number <= 11)):
-            set ribbonTab to apiWindow's number
-        # `ribbon LABEL`: the button's command, next frame, as a click.
-        if apiWindow's verb = (the string form of "press"):
-            set uiCommand to apiWindow's number
-        # Escape through the API closes a dialog of the window that is open;
-        # with none open it was the editor's alone.
-        if apiWindow's verb = (the string form of "escape"):
-            if ((projectWindow's open or rulesOpen) or (fileScreens's settingsOpen or fileScreens's menuOpen)) or typeManager's open:
-                set uiCommand to bim escape key code
-        # `open NAME`: the plan, section, elevation or sheet so named opens
-        # as its tab, made active, as a click in the project browser does.
-        if apiWindow's verb = (the string form of "open"):
-            set apiTarget to the bim api opened target named apiWindow's text in editor's documentValue's current
-            set apiTabKind to -1
-            if apiTarget's kind = 1:
+    if (the length of commandWindow's verb) > 0:
+        if (the length of apiWindow's verb) = 0:
+            set apiWindow to commandWindow
+            set commandWindow to no bim api window
+    if apiWindow's verb = (the string form of "fit"):
+        set fitting to true
+    if (apiWindow's verb = (the string form of "tab")) and ((apiWindow's number >= 0) and (apiWindow's number <= 11)):
+        set ribbonTab to apiWindow's number
+    # `ribbon LABEL`: the button's command, next frame, as a click.
+    if apiWindow's verb = (the string form of "press"):
+        set uiCommand to apiWindow's number
+    # Escape through the API closes a dialog of the window that is open;
+    # with none open it was the editor's alone.
+    if apiWindow's verb = (the string form of "escape"):
+        if ((projectWindow's open or rulesOpen) or (fileScreens's settingsOpen or fileScreens's menuOpen)) or typeManager's open:
+            set uiCommand to bim escape key code
+    # `open NAME`: the plan, section, elevation or sheet so named opens
+    # as its tab, made active, as a click in the project browser does.
+    if apiWindow's verb = (the string form of "open"):
+        set apiTarget to the bim api opened target named apiWindow's text in editor's documentValue's current
+        set apiTabKind to -1
+        if apiTarget's kind = 1:
+            set editor's propertiesViewId to apiTarget's id
+            select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
+            show bim editor plan view apiTarget's id in (the address of editor)
+            set apiTabKind to bim plan tab
+        if apiTarget's kind = 2:
+            set editor's propertiesViewId to apiTarget's id
+            select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
+            show bim editor section view apiTarget's id in (the address of editor)
+            set apiTabKind to bim section tab
+        if apiTarget's kind = 3:
+            set editor's sheetId to apiTarget's id
+            set apiTabKind to bim sheet tab
+        # An elevation: the 3D tab turned level toward its side, fitted,
+        # in its display, as the project browser opens it.
+        if apiTarget's kind = 4:
+            set apiElevationFound to the bim view index of apiTarget's id in editor's documentValue's current
+            if apiElevationFound's valid:
+                set apiElevation to the item at apiElevationFound's position in (editor's documentValue's current's views's values)
                 set editor's propertiesViewId to apiTarget's id
                 select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
-                show bim editor plan view apiTarget's id in (the address of editor)
-                set apiTabKind to bim plan tab
-            if apiTarget's kind = 2:
-                set editor's propertiesViewId to apiTarget's id
-                select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
-                show bim editor section view apiTarget's id in (the address of editor)
-                set apiTabKind to bim section tab
-            if apiTarget's kind = 3:
-                set editor's sheetId to apiTarget's id
-                set apiTabKind to bim sheet tab
-            # An elevation: the 3D tab turned level toward its side, fitted,
-            # in its display, as the project browser opens it.
-            if apiTarget's kind = 4:
-                set apiElevationFound to the bim view index of apiTarget's id in editor's documentValue's current
-                if apiElevationFound's valid:
-                    set apiElevation to the item at apiElevationFound's position in (editor's documentValue's current's views's values)
-                    set editor's propertiesViewId to apiTarget's id
-                    select bim editor bim nothing picked numbered (the bim refused id) in (the address of editor)
-                    set camera's yaw to the bim elevation yaw of (apiElevation's detail as an integer)
-                    set camera's pitch to 0.0
-                    set apiElevationFit to the bim camera fitting editor in layout keeping camera
-                    set camera's target to apiElevationFit's target
-                    set camera's viewScale to apiElevationFit's viewScale
-                    set viewMode to the bim view mode of display apiElevation's displayMode
-                    set elevationLocked to true
-                    set apiTabKind to bim model tab
-            if apiTabKind >= 0:
-                set apiTab to the bim tab of kind apiTabKind detail apiTarget's id among tabKinds and tabDetails
-                if apiTab < 0:
-                    append apiTabKind to tabKinds
-                    append apiTarget's id to tabDetails
-                    set apiTab to (the length of tabKinds) - 1
-                if apiTabKind = bim model tab:
-                    replace item at index apiTab in tabDetails with apiTarget's id
-                set activeTab to apiTab
+                set camera's yaw to the bim elevation yaw of (apiElevation's detail as an integer)
+                set camera's pitch to 0.0
+                set apiElevationFit to the bim camera fitting editor in layout keeping camera
+                set camera's target to apiElevationFit's target
+                set camera's viewScale to apiElevationFit's viewScale
+                set viewMode to the bim view mode of display apiElevation's displayMode
+                set elevationLocked to true
+                set apiTabKind to bim model tab
+        if apiTabKind >= 0:
+            set apiTab to the bim tab of kind apiTabKind detail apiTarget's id among tabKinds and tabDetails
+            if apiTab < 0:
+                append apiTabKind to tabKinds
+                append apiTarget's id to tabDetails
+                set apiTab to (the length of tabKinds) - 1
+            if apiTabKind = bim model tab:
+                replace item at index apiTab in tabDetails with apiTarget's id
+            set activeTab to apiTab
     # The active tab follows the plan the editor shows now, after typed keys
     # and an API request alike: a storey changed (Page Up, Page Down, a new
     # level) opens its plan's tab, so the next frame does not show the old
@@ -4157,7 +4230,7 @@ loop while window remains open:
         set propertiesMicros to (the bim microseconds now) - propertiesStarted
     if ((sheetOwnsCanvas = false) and (explorerGraph = false)) and (typeManager's open = false):
         draw bim input options of editor in layout pointing at pixel using typeface in frame
-    draw bim command line saying prompt and status uiStatus in windowWidth by layout's height using typeface in frame
+    draw bim sentence line commandLine saying prompt and status uiStatus in windowWidth by layout's height using typeface in frame
     if rulesOpen:
         set rulesHit to draw bim drawing rules of editor choosing rulesTypeId on tab rulesTab opening rulesOpenCategories renaming rulesRenaming as rulesText across windowWidth by layout's height pointing at pixel's x and pixel's y using typeface in frame
     set snapHover to draw bim snap toggles of editor grid gridShown in windowWidth by layout's height pointing at pixel's x and pixel's y using typeface in frame
