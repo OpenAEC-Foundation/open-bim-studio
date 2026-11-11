@@ -65,6 +65,86 @@ function the bim steel surface of {bim linear type record:profile} along {cad ve
         free rings
         return @intrinsic("construct", a bim steel surface record, distanceValue < 1000000.0, distanceValue, outward)
 
+# A secondary may end beside the primary's axis, as a floor beam whose top is
+# flush with a deeper girder does: at the node's station, within the primary's
+# section envelope.
+function bim connection point {cad vector3:spot} lies in the section of {bim linear record:primaryHost} around {cad vector3:nodeSpot} in {bim model record:modelValue}:
+    execute:
+        set hostFrame to the bim frame of linear primaryHost in modelValue
+        set hostType to the bim type of linear primaryHost in modelValue
+        set offset to the cad difference of spot and nodeSpot
+        if (the absolute value of (the cad dot of offset and hostFrame's along)) > 0.001:
+            return false
+        if (the absolute value of (the cad dot of offset and hostFrame's widthAxis)) > ((hostType's width * 0.5) + 0.001):
+            return false
+        return (the absolute value of (the cad dot of offset and hostFrame's depthAxis)) <= ((hostType's depth * 0.5) + 0.001)
+
+# How a secondary's end is notched where it would run into the flanges of an
+# I-shaped primary it meets at the web. Depths are measured from the
+# secondary's outer faces; `low` and `high` bound the clear web bay of the
+# primary along the secondary's depth axis (reversed at its finish, as the
+# recipe frame is), `length` runs from the primary's web face.
+class:
+    patterns:
+        [a|] bim connection cope record
+    members:
+        # 0 nothing to cope, 1 coped, 2 not copeable, 3 too little web left.
+        state as an integer
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+        lowDepth as a 64 bit floating-point number
+        highDepth as a 64 bit floating-point number
+        length as a 64 bit floating-point number
+
+# The cope of `secondaryHost`'s end `endCode` (0 start, 1 finish) at the web of
+# `primaryHost`. The notch passes the primary's flange and root by 10 mm and
+# its flange tip by 10 mm, and takes at least the secondary's own flange and
+# root. Only a square approach with parallel depth axes can be coped.
+function the bim connection cope of {bim linear record:secondaryHost} end {integer:endCode} at {bim linear record:primaryHost} in {bim model record:modelValue}:
+    execute:
+        set copeValue to @intrinsic("construct", a bim connection cope record, 0, -1000000.0, 1000000.0, 0.0, 0.0, 0.0)
+        set hostFrame to the bim frame of linear primaryHost in modelValue
+        set hostType to the bim type of linear primaryHost in modelValue
+        set hostShape to the bim profile of linear type hostType in modelValue
+        if hostShape's kind != bim i shape profile:
+            return copeValue
+        set ownFrame to the bim frame of linear secondaryHost in modelValue
+        set ownType to the bim type of linear secondaryHost in modelValue
+        set ownShape to the bim profile of linear type ownType in modelValue
+        set endSpot to ownFrame's first
+        set inwardAxis to ownFrame's along
+        set riseAxis to ownFrame's depthAxis
+        if endCode = 1:
+            set endSpot to ownFrame's last
+            set inwardAxis to inwardAxis scaled by -1.0
+            set riseAxis to riseAxis scaled by -1.0
+        set copeValue's state to 2
+        if (the absolute value of (the cad dot of inwardAxis and hostFrame's widthAxis)) <= 0.999999:
+            return copeValue
+        set senseValue to the cad dot of riseAxis and hostFrame's depthAxis
+        if (the absolute value of senseValue) <= 0.999999:
+            return copeValue
+        set riseValue to (the cad dot of (the cad difference of endSpot and hostFrame's first) and hostFrame's depthAxis) * senseValue
+        set flangeLimit to (hostType's depth * 0.5) - hostShape's flange
+        set bayLimit to (flangeLimit - hostShape's fillet) - 0.01
+        set copeValue's low to (0.0 - bayLimit) - riseValue
+        set copeValue's high to bayLimit - riseValue
+        set halfDepth to ownType's depth * 0.5
+        set ownFlange to 0.0
+        if ownShape's kind = bim i shape profile:
+            set ownFlange to ownShape's flange + ownShape's fillet
+        if halfDepth >= (flangeLimit - riseValue):
+            set copeValue's highDepth to the maximum of ownFlange and (halfDepth - copeValue's high)
+        if halfDepth >= (flangeLimit + riseValue):
+            set copeValue's lowDepth to the maximum of ownFlange and (halfDepth + copeValue's low)
+        set copeValue's state to 0
+        if (copeValue's highDepth > 0.0) or (copeValue's lowDepth > 0.0):
+            set copeValue's state to 1
+            set copeValue's length to ((hostType's width * 0.5) + 0.01) - (hostShape's web * 0.5)
+            if ((ownType's depth - copeValue's highDepth) - copeValue's lowDepth) < (ownType's depth * 0.6):
+                set copeValue's state to 3
+        return copeValue
+
 function the bim connection evaluation of {connection definition:spec} in {bim model record:modelValue}:
     execute:
         set issue to the connection issue of spec
@@ -122,6 +202,13 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
         set jointUp to upward
         set jointOut to forward
         set seatRise to 0.0
+        # A secondary ending beside the primary's axis, and its cope.
+        set offsetEnd to false
+        set secondaryEnd to anchor
+        set copeValue to @intrinsic("construct", a bim connection cope record, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        set copeWidth to 0.0
+        set copeHalfDepth to 0.0
+        set copeMember to 0 as a 64 bit integer
         if recipe:
             set secondaryCursor to (the length of frames) - 1
             if secondaryCursor > 1:
@@ -135,11 +222,20 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
             if secondaryRef's end = 1:
                 set upward to upward scaled by -1.0
                 set forward to forward scaled by -1.0
-            # Every member must still meet the semantic node after edits.
+            set secondaryEnd to (the item at secondaryCursor in frames)'s endpoint
+            # Every member must still meet the semantic node after edits: at
+            # the node itself or, for a plate or cleat recipe's secondary,
+            # beside it within the primary's section.
             loop cursor from 1 to the length of frames:
                 if (the cad distance from anchor to (the item at cursor in frames)'s endpoint) > 0.001:
-                    free frames
-                    return a connection refusal saying (the string form of "Connection member no longer meets its host")
+                    set withinSection to false
+                    if ((spec's style >= 3) and (spec's style <= 5)) and (cursor = 1):
+                        set nodeHost to the item at (the bim linear index of (the item at 0 in frames)'s elementId in modelValue)'s position in (modelValue's linears's values)
+                        set withinSection to bim connection point (the item at cursor in frames)'s endpoint lies in the section of nodeHost around anchor in modelValue
+                    if withinSection = false:
+                        free frames
+                        return a connection refusal saying (the string form of "Connection member no longer meets its host")
+                    set offsetEnd to true
             if spec's style = 6:
                 set primaryHost to the item at (the bim linear index of (the item at 0 in frames)'s elementId in modelValue)'s position in (modelValue's linears's values)
                 set primaryProfile to the bim type of linear primaryHost in modelValue
@@ -188,6 +284,9 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                     if incidence < 0.999999:
                         free frames
                         return a connection refusal saying (the string form of "This flat plate recipe requires an approach normal to a profile face")
+                if offsetEnd:
+                    # The supporting face is met from the secondary's own end.
+                    set supportAdvance to supportAdvance + ((the cad dot of (the cad difference of anchor and secondaryEnd) and jointOut) / incidence)
                 set primaryShape to the bim profile of linear type primaryProfile in modelValue
                 if (primaryShape's kind = bim i shape profile) and ((the absolute value of (the cad dot of jointOut and primarySection's widthAxis)) > 0.999999):
                     set secondaryProfile to the bim type of linear secondaryHost in modelValue
@@ -195,9 +294,21 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                     set projectedDepth to the cad difference of upward and (forward scaled by ((the cad dot of upward and jointOut) / incidence))
                     set depthReach to ((the absolute value of (the cad dot of projectedWidth and primarySection's depthAxis)) * secondaryProfile's width) * 0.5
                     set depthReach to depthReach + (((the absolute value of (the cad dot of projectedDepth and primarySection's depthAxis)) * secondaryProfile's depth) * 0.5)
-                    if depthReach >= ((primaryProfile's depth * 0.5) - primaryShape's flange):
-                        free frames
-                        return a connection refusal saying (the string form of "Member intersects primary flanges; a cope or different connection is required")
+                    set riseValue to 0.0
+                    if offsetEnd:
+                        set riseValue to the cad dot of (the cad difference of (the cad sum of secondaryEnd and (forward scaled by supportAdvance)) and anchor) and primarySection's depthAxis
+                    if (depthReach + (the absolute value of riseValue)) >= ((primaryProfile's depth * 0.5) - primaryShape's flange):
+                        # The end is notched around the flanges where it can be.
+                        set copeValue to the bim connection cope of secondaryHost end secondaryRef's end at primaryHost in modelValue
+                        if copeValue's state = 3:
+                            free frames
+                            return a connection refusal saying (the string form of "A cope would leave under 60% of the member depth; a different connection is required")
+                        if copeValue's state != 1:
+                            free frames
+                            return a connection refusal saying (the string form of "Member intersects primary flanges; a cope or different connection is required")
+                        set copeMember to secondaryHost's id
+                        set copeWidth to secondaryProfile's width
+                        set copeHalfDepth to secondaryProfile's depth * 0.5
                 if (spec's style = 7) or (spec's style = 4):
                     if (the absolute value of (the cad dot of across and jointOut)) > 0.000001:
                         free frames
@@ -206,6 +317,9 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                     set jointUp to jointUp scaled by (1.0 / (the cad length of jointUp))
                     if (the length of (spec's additions's values)) > 0:
                         set seatRise to (the item at 0 in (spec's additions's values))'s origin's z * (the cad dot of forward and jointUp)
+                if offsetEnd:
+                    # Parts are authored on the secondary: they follow its end.
+                    set anchor to secondaryEnd
                 set anchor to the cad sum of anchor and (forward scaled by supportAdvance)
             # Evaluate part grids in the local frame, then place their output.
             set resolved's origin to a cad vector3 with x 0.0, y 0.0 and z 0.0
@@ -219,7 +333,9 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                 set coverReference to the item at ((the length of (spec's members's values)) - 1) in (spec's members's values)
                 set coverHost to the item at (the bim linear index of coverReference's elementId in modelValue)'s position in (modelValue's linears's values)
                 set hostProfile to the bim type of linear coverHost in modelValue
-                if ((cover's kind != 0) or (cover's width < hostProfile's width)) or (cover's height < hostProfile's depth):
+                # A coped end is covered over the depth the cope leaves.
+                set coveredDepth to (hostProfile's depth - copeValue's highDepth) - copeValue's lowDepth
+                if ((cover's kind != 0) or (cover's width < hostProfile's width)) or (cover's height < coveredDepth):
                     free frames
                     return a connection refusal saying (the string form of "End plate must cover the member section")
                 loop cursor from 0 to the length of (spec's additions's values):
@@ -227,7 +343,7 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                     if bolts's kind = 1:
                         set spanX to ((bolts's columns - 1) as a 64 bit floating-point number) * bolts's columnPitch
                         set spanY to ((bolts's rows - 1) as a 64 bit floating-point number) * bolts's rowPitch
-                        if ((spanX + bolts's holeDiameter + (2.0 * (the absolute value of bolts's origin's x))) >= cover's width) or ((spanY + bolts's holeDiameter + (2.0 * (the absolute value of bolts's origin's y))) >= cover's height):
+                        if ((spanX + bolts's holeDiameter + (2.0 * (the absolute value of (bolts's origin's x - cover's origin's x)))) >= cover's width) or ((spanY + bolts's holeDiameter + (2.0 * (the absolute value of (bolts's origin's y - cover's origin's y)))) >= cover's height):
                             free frames
                             return a connection refusal saying (the string form of "Bolt holes must lie inside the end plate")
             loop cursor from 0 to the length of (generated's plates's values):
@@ -278,6 +394,14 @@ function the bim connection evaluation of {connection definition:spec} in {bim m
                             free frames
                             return a connection refusal saying (the string form of "Connection consumes the secondary member")
                 replace item at index cursor in (generated's voids's values) with cutValue
+            if copeValue's state = 1:
+                # Box voids from the web face past the flange tip, entering at
+                # the secondary's outer faces.
+                set copeStart to the cad sum of secondaryEnd and (forward scaled by supportAdvance)
+                if copeValue's highDepth > 0.0:
+                    append (@intrinsic("construct", a connection void, copeMember, 2, (the cad sum of copeStart and (upward scaled by copeHalfDepth)), (upward scaled by -1.0), copeValue's length, copeValue's highDepth, 0, forward, copeWidth)) to (generated's voids's values)
+                if copeValue's lowDepth > 0.0:
+                    append (@intrinsic("construct", a connection void, copeMember, 2, (the cad difference of copeStart and (upward scaled by copeHalfDepth)), upward, copeValue's length, copeValue's lowDepth, 0, forward, copeWidth)) to (generated's voids's values)
         if basePlate and generated's valid:
             set plateValue to the item at 0 in (generated's plates's values)
             set firstHost to the item at (the bim linear index of (the item at 0 in (spec's members's values))'s elementId in modelValue)'s position in (modelValue's linears's values)

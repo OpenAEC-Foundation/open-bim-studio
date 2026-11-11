@@ -4,6 +4,77 @@ import elements/connection/bim_connections.dl
 import elements/linear/bim_profiles.dl
 import structural/steel/bim_baseplate.dl
 
+# Keep a recipe's parts in the clear web bay beside a coped end: between
+# `lowest` and `highest` along the secondary's depth (local y), and no further
+# out than the leading plate reached. Plates and welds are shortened and
+# shifted; bolt groups keep 1.5 hole diameters to those bounds, closing their
+# pitch and then dropping lines down to 2.2 hole diameters apart.
+function fit steel connection parts {a pointer to a list:parts} between {a 64 bit floating-point number:lowest} and {a 64 bit floating-point number:highest}:
+    execute:
+        set floorValue to lowest
+        set ceilingValue to highest
+        set seekingPlate to true
+        loop cursor from 0 to the length of parts:
+            set part to the item at cursor in parts
+            set sideOn to (the absolute value of part's axis's x) > 0.9
+            set faceOn to (the absolute value of part's axis's z) > 0.9
+            if (part's kind = 0) and (sideOn or faceOn):
+                set extent to part's height
+                if sideOn:
+                    set extent to part's width
+                if seekingPlate:
+                    set seekingPlate to false
+                    set floorValue to the maximum of floorValue and (part's origin's y - (extent * 0.5))
+                    set ceilingValue to the minimum of ceilingValue and (part's origin's y + (extent * 0.5))
+                    if (ceilingValue - floorValue) < 0.02:
+                        return nothing
+                set extent to the minimum of extent and (ceilingValue - floorValue)
+                set part's origin's y to (part's origin's y clamped between (floorValue + (extent * 0.5)) and (ceilingValue - (extent * 0.5)))
+                if sideOn:
+                    set part's width to extent
+                else:
+                    set part's height to extent
+            else if (seekingPlate = false) and ((part's kind >= 4) and ((the absolute value of part's axis's y) > 0.9)):
+                set beginning to part's origin's y
+                set ending to part's origin's y + (part's length * part's axis's y)
+                set flipped to ending < beginning
+                if flipped:
+                    set beginning to ending
+                    set ending to part's origin's y
+                set extent to the minimum of (ending - beginning) and (ceilingValue - floorValue)
+                set beginning to (beginning clamped between floorValue and (ceilingValue - extent))
+                set part's length to extent
+                set part's origin's y to beginning
+                if flipped:
+                    set part's origin's y to beginning + extent
+            else if (seekingPlate = false) and (((part's kind >= 1) and (part's kind <= 3)) and (sideOn or faceOn)):
+                set lineCount to part's rows
+                set pitchValue to part's rowPitch
+                if sideOn:
+                    set lineCount to part's columns
+                    set pitchValue to part's columnPitch
+                set roomValue to (ceilingValue - floorValue) - (3.0 * part's holeDiameter)
+                if roomValue < 0.0:
+                    set roomValue to 0.0
+                loop while (lineCount > 1) and ((roomValue / ((lineCount - 1) as a 64 bit floating-point number)) < (2.2 * part's holeDiameter)):
+                    set lineCount to lineCount - 1
+                set spanValue to 0.0
+                if lineCount > 1:
+                    set pitchValue to the minimum of pitchValue and (roomValue / ((lineCount - 1) as a 64 bit floating-point number))
+                    set spanValue to pitchValue * ((lineCount - 1) as a 64 bit floating-point number)
+                set midValue to (floorValue + ceilingValue) * 0.5
+                if roomValue > spanValue:
+                    set midValue to (part's origin's y clamped between ((floorValue + (1.5 * part's holeDiameter)) + (spanValue * 0.5)) and ((ceilingValue - (1.5 * part's holeDiameter)) - (spanValue * 0.5)))
+                set part's origin's y to midValue
+                if sideOn:
+                    set part's columns to lineCount
+                    set part's columnPitch to pitchValue
+                else:
+                    set part's rows to lineCount
+                    set part's rowPitch to pitchValue
+            replace item at index cursor in parts with part
+        return nothing
+
 function add bim steel connection among {a pointer to a list:identities} style {integer:styleCode} in {a pointer to a bim model record:target}:
     execute:
         set count to the length of identities
@@ -36,7 +107,15 @@ function add bim steel connection among {a pointer to a list:identities} style {
                 set anchor to lastProjection
                 set secondaryEnd to 1
             if (the minimum of firstDistance and lastDistance) > 0.001:
-                return the bim refused id
+                # A plate or cleat recipe also takes an end beside the axis
+                # within the primary's section (a top-flush floor beam).
+                if (styleCode < 3) or (styleCode > 5):
+                    return the bim refused id
+                set endSpot to secondaryFrame's first
+                if secondaryEnd = 1:
+                    set endSpot to secondaryFrame's last
+                if (bim connection point endSpot lies in the section of primaryHost around anchor in modelValue) = false:
+                    return the bim refused id
         set primaryEnd to 2
         set positionValue to (the cad dot of (the cad difference of anchor and primaryFrame's first) and primaryFrame's along) / primaryFrame's length
         if (the cad distance from anchor to primaryFrame's first) <= 0.001:
@@ -68,6 +147,10 @@ function add bim steel connection among {a pointer to a list:identities} style {
                 if (bolts's kind = 1) and ((the absolute value of bolts's axis's z) > 0.999):
                     set bolts's memberId to primaryHost's id
                     replace item at index cursor in (recipeAdditions's values) with bolts
+        if (count = 2) and ((styleCode >= 3) and (styleCode <= 5)):
+            set copeValue to the bim connection cope of secondaryHost end secondaryEnd at primaryHost in modelValue
+            if copeValue's state = 1:
+                fit steel connection parts (recipeAdditions's values) between copeValue's low and copeValue's high
         set label to ((the steel connection style name of styleCode) + (the string form of " ")) + (the string form of target's nextId)
         set spec to @intrinsic("construct", a connection definition, the bim refused id, primaryHost's levelId, label, 1, styleCode, anchor, members, recipeAdditions)
         return store bim connection spec in target

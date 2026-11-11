@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 import structural/steel/bim_steel_connections.dl
 import exchange/ifcx/bim_file.dl
+import structural/steel/bim_swept_perforations.dl
+import viewer/bim_scene.dl
 
 function check steel connection {boolean:passed} named {a string:label}:
     execute:
@@ -8,6 +10,15 @@ function check steel connection {boolean:passed} named {a string:label}:
             print ((the string form of "FAIL: ") + label) as a line
             @intrinsic("call", "libc", "exit", nothing, 1)
         print ((the string form of "PASS: ") + label) as a line
+
+function the steel cope count of {connection result:generated} on {a 64 bit integer:memberId}:
+    execute:
+        set copes to 0
+        loop cursor from 0 to the length of (generated's voids's values):
+            set cutValue to the item at cursor in (generated's voids's values)
+            if (cutValue's kind = 2) and (cutValue's memberId = memberId):
+                set copes to copes + 1
+        return copes
 
 set documentValue to a new bim document
 set target to the address of (documentValue's current)
@@ -61,3 +72,89 @@ check steel connection ((the bim connection evaluation of spec in documentValue'
 ignore undo bim transaction in (the address of documentValue)
 check steel connection ((the bim file text of documentValue's current) = saved) named (the string form of "undo restores connection and hosts")
 free identities
+
+# A floor beam whose top is flush with a deeper girder ends beside the girder's
+# axis and is coped around its top flange.
+set floorDocument to a new bim document
+set floorTarget to the address of (floorDocument's current)
+set deck to add bim level named (the string form of "Floor datum") at 2.0 with height 6.0 to floorTarget
+set girderType to add bim linear type named (the string form of "Test girder") as role bim beam role sized 0.18 by 0.3 round false of (the string form of "steel") to floorTarget
+give bim linear type girderType profile bim i shape profile web 0.008 flange 0.012 fillet 0.0 fourth 0.0 series 0 in floorTarget
+set joistType to add bim linear type named (the string form of "Test joist") as role bim beam role sized 0.1 by 0.16 round false of (the string form of "steel") to floorTarget
+give bim linear type joistType profile bim i shape profile web 0.006 flange 0.008 fillet 0.0 fourth 0.0 series 0 in floorTarget
+set girderId to add bim linear typed girderType on deck from (a cad vector3 with x 0.0, y 0.0 and z 3.0) to (a cad vector3 with x 4.0, y 0.0 and z 3.0) turned 0.0 to floorTarget
+set flushId to add bim linear typed joistType on deck from (a cad vector3 with x 2.0, y 0.0 and z 3.07) to (a cad vector3 with x 2.0, y 2.0 and z 3.07) turned 0.0 to floorTarget
+set centredId to add bim linear typed joistType on deck from (a cad vector3 with x 2.0, y 0.0 and z 3.0) to (a cad vector3 with x 2.0, y -2.0 and z 3.0) turned 0.0 to floorTarget
+set highId to add bim linear typed joistType on deck from (a cad vector3 with x 1.0, y 0.0 and z 3.4) to (a cad vector3 with x 1.0, y 2.0 and z 3.4) turned 0.0 to floorTarget
+set flushPair to an empty list of a 64 bit integer
+append girderId to flushPair
+append flushId to flushPair
+loop styleCode from 3 to 6:
+    begin bim transaction in (the address of floorDocument)
+    set nodeId to add bim steel connection among flushPair style styleCode in floorTarget
+    check steel connection (nodeId != the bim refused id) named ((the steel connection style name of styleCode) + (the string form of " created on a top-flush beam"))
+    set spec to the item at (the bim connection index of nodeId in floorDocument's current)'s position in (floorTarget's connections's values)
+    set hostReference to the item at 0 in (spec's members's values)
+    set girderFrame to the bim frame of linear (the item at (the bim linear index of girderId in floorDocument's current)'s position in (floorTarget's linears's values)) in floorDocument's current
+    check steel connection (((hostReference's end = 2) and (hostReference's position = 0.5)) and ((the cad distance from spec's origin to (the bim connection anchor of hostReference on girderFrame)) < 1e-9)) named (the string form of "node stays on the girder axis")
+    set generated to the bim connection evaluation of spec in floorDocument's current
+    check steel connection (generated's valid and ((the steel cope count of generated on flushId) = 1)) named (the string form of "evaluation holds one cope")
+    loop cursor from 0 to the length of (generated's voids's values):
+        set cutValue to the item at cursor in (generated's voids's values)
+        if cutValue's kind = 2:
+            # From the web face to 10 mm past the flange tip; 10 mm below the flange.
+            check steel connection (((the absolute value of (cutValue's diameter - 0.096)) < 1e-9) and (((the absolute value of (cutValue's depth - 0.022)) < 1e-9) and (cutValue's width = 0.1))) named (the string form of "cope clears flange and root")
+            check steel connection (((the absolute value of (cutValue's origin's y - 0.004)) < 1e-9) and ((the absolute value of (cutValue's origin's z - 5.15)) < 1e-9)) named (the string form of "cope starts at the web face on the beam's top")
+    # Plates, welds and bolt lines stay below the cope.
+    set fitted to true
+    loop cursor from 0 to the length of (spec's additions's values):
+        set part to the item at cursor in (spec's additions's values)
+        set reach to part's origin's y
+        if part's kind = 0:
+            set reach to reach + (part's height * 0.5)
+            if (the absolute value of part's axis's x) > 0.9:
+                set reach to part's origin's y + (part's width * 0.5)
+        else if part's kind >= 4:
+            set reach to reach + part's length
+        else if (the absolute value of part's axis's x) > 0.9:
+            set reach to reach + (((((part's columns - 1) as a 64 bit floating-point number) * part's columnPitch) * 0.5) + (part's holeDiameter * 0.5))
+        else:
+            set reach to reach + (((((part's rows - 1) as a 64 bit floating-point number) * part's rowPitch) * 0.5) + (part's holeDiameter * 0.5))
+        if reach > 0.058000001:
+            set fitted to false
+    check steel connection fitted named (the string form of "parts fit the remaining web")
+    set saved to the bim file text of floorDocument's current
+    set parsed to the bim model parsed from saved
+    check steel connection (parsed's valid and ((the bim file text of parsed's modelValue) = saved)) named (the string form of "coped recipe round trip")
+    roll back bim transaction in (the address of floorDocument)
+set centredPair to an empty list of a 64 bit integer
+append girderId to centredPair
+append centredId to centredPair
+set centredNode to add bim steel connection among centredPair style 4 in floorTarget
+set centredSpec to the item at (the bim connection index of centredNode in floorDocument's current)'s position in (floorTarget's connections's values)
+set generated to the bim connection evaluation of centredSpec in floorDocument's current
+check steel connection ((centredNode != the bim refused id) and (generated's valid and ((the steel cope count of generated on centredId) = 0))) named (the string form of "centred beam needs no cope")
+set highPair to an empty list of a 64 bit integer
+append girderId to highPair
+append highId to highPair
+check steel connection ((add bim steel connection among highPair style 4 in floorTarget) = the bim refused id) named (the string form of "beam outside the girder section refused")
+begin bim transaction in (the address of floorDocument)
+set flushNode to add bim steel connection among flushPair style 4 in floorTarget
+commit bim transaction in (the address of floorDocument)
+# The coped, drilled beam is a solid of the expected volume: its section over
+# the trimmed length, less the notch and four twelve-sided web holes.
+set flushBeam to the item at (the bim linear index of flushId in floorDocument's current)'s position in (floorTarget's linears's values)
+set flushShape to the bim linear shape of flushBeam in floorDocument's current
+set expectedVolume to ((0.002464 * 1.986) - (0.000884 * 0.086)) - ((4.0 * (3.0 * 0.000121)) * 0.006)
+check steel connection ((the absolute value of ((the fast mesh volume of flushShape) - expectedVolume)) < 0.000002) named (the string form of "coped beam solid has the notched volume")
+begin bim transaction in (the address of floorDocument)
+ignore move bim linear girderId to (a cad vector3 with x 0.0, y 1.0 and z 3.0) and (a cad vector3 with x 4.0, y 1.0 and z 3.0) turned 0.0 in floorTarget
+commit bim transaction in (the address of floorDocument)
+set flushBeam to the item at (the bim linear index of flushId in floorDocument's current)'s position in (floorTarget's linears's values)
+check steel connection ((flushBeam's start's y = 1.0) and (flushBeam's start's z = 3.07)) named (the string form of "moved girder carries the offset beam end")
+set flushSpec to the item at (the bim connection index of flushNode in floorDocument's current)'s position in (floorTarget's connections's values)
+set generated to the bim connection evaluation of flushSpec in floorDocument's current
+check steel connection (generated's valid and ((the steel cope count of generated on flushId) = 1)) named (the string form of "moved node keeps its cope")
+free flushPair
+free centredPair
+free highPair
