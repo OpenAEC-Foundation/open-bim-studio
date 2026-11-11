@@ -24,7 +24,8 @@
 #     key CODE                      a key or command code, as typed
 #     pointer X Y                   the pointer to plan point X, Y (metres)
 #     click X Y                     the pointer there, pressed and released
-#     select ID                     selects element ID (any kind)
+#     select ID [ID...]             selects element ID (any kind); further
+#                                   ids are added as with Shift, in order
 #     properties                    the selection's property rows
 #     property CODE TEXT            types TEXT into property CODE
 #     wall X1 Y1 X2 Y2              a wall of the current type on the storey
@@ -114,6 +115,11 @@ local function the bim json boolean of {boolean:flagValue}:
 function the bim json point of {cad vector2:spot}:
     execute:
         return ((the string form of "[") + (the bim json number of spot's x)) + (((the string form of ",") + (the bim json number of spot's y)) + (the string form of "]"))
+
+# A point in space as [x,y,z].
+function the bim json spot of {cad vector3:spot}:
+    execute:
+        return ((the string form of "[") + (the bim json number of spot's x)) + (((the string form of ",") + (the bim json number of spot's y)) + (((the string form of ",") + (the bim json number of spot's z)) + (the string form of "]")))
 
 # `key`: `value` as a JSON member.
 function the bim json member {a string:key} as {a string:value}:
@@ -287,9 +293,42 @@ local function the bim api elements of {bim model record:modelValue}:
             append (the bim json member (the string form of "high") as (the bim json number of gridValue's high)) to fields
             append (the bim json object of fields) to grids
             free fields
+        # Columns, beams and other linear elements: their axis ends with the
+        # height as the third figure.
+        set linears to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            set linearType to the bim type of linear linearValue in modelValue
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of linearValue's id)) to fields
+            append (the bim json member (the string form of "storeyId") as (the string form of linearValue's levelId)) to fields
+            append (the bim json member (the string form of "start") as (the bim json spot of linearValue's start)) to fields
+            append (the bim json member (the string form of "end") as (the bim json spot of linearValue's finish)) to fields
+            append (the bim json member (the string form of "role") as (the string form of linearType's role)) to fields
+            append (the bim json member (the string form of "type") as (the bim json text of linearType's name)) to fields
+            append (the bim json object of fields) to linears
+            free fields
+        set connections to an empty list of a string
+        loop cursor from 0 to the length of (modelValue's connections's values):
+            set nodeValue to the item at cursor in (modelValue's connections's values)
+            set memberIds to an empty list of a string
+            loop memberCursor from 0 to the length of (nodeValue's members's values):
+                append (the string form of (the item at memberCursor in (nodeValue's members's values))'s elementId) to memberIds
+            set fields to an empty list of a string
+            append (the bim json member (the string form of "id") as (the string form of nodeValue's id)) to fields
+            append (the bim json member (the string form of "name") as (the bim json text of nodeValue's name)) to fields
+            append (the bim json member (the string form of "style") as (the string form of nodeValue's style)) to fields
+            append (the bim json member (the string form of "origin") as (the bim json spot of nodeValue's origin)) to fields
+            append (the bim json member (the string form of "members") as (the bim json array of memberIds)) to fields
+            append (the bim json member (the string form of "parts") as (the string form of (the length of (nodeValue's additions's values)))) to fields
+            append (the bim json object of fields) to connections
+            free fields
+            free memberIds
         set members to an empty list of a string
         append (the bim json member (the string form of "levels") as (the bim json array of levels)) to members
         append (the bim json member (the string form of "walls") as (the bim json array of walls)) to members
+        append (the bim json member (the string form of "linears") as (the bim json array of linears)) to members
+        append (the bim json member (the string form of "connections") as (the bim json array of connections)) to members
         append (the bim json member (the string form of "slabs") as (the bim json array of slabs)) to members
         append (the bim json member (the string form of "systems") as (the bim json array of systems)) to members
         append (the bim json member (the string form of "openings") as (the bim json array of openings)) to members
@@ -297,6 +336,8 @@ local function the bim api elements of {bim model record:modelValue}:
         set answer to the bim api success with members
         free members
         free walls
+        free linears
+        free connections
         free slabs
         free systems
         free openings
@@ -769,16 +810,27 @@ function the bim api answer to {a string:content} for {a pointer to a bim editor
             else:
                 set reply to the bim api failure saying (the string form of "give X and Y in metres")
         if verb = (the string form of "select"):
-            if numeric and ((the length of numbers) = 1):
-                set wantedId to (the item at 0 in numbers) as a 64 bit integer
-                set kindCode to the bim kind picked for element wantedId in editor's documentValue's current
-                if kindCode = bim nothing picked:
+            # One id selects that element; further ids are added to it as
+            # with Shift held, in their order (a connection's primary
+            # member first, then its secondary).
+            if numeric and ((the length of numbers) >= 1):
+                set missing to false
+                loop pick from 0 to the length of numbers:
+                    set pickedId to (the item at pick in numbers) as a 64 bit integer
+                    if (the bim kind picked for element pickedId in editor's documentValue's current) = bim nothing picked:
+                        set missing to true
+                if missing:
                     set reply to the bim api failure saying (the string form of "no element with that id")
                 else:
-                    select bim editor kindCode numbered wantedId in editor
+                    set heldBefore to editor's extending
+                    loop pick from 0 to the length of numbers:
+                        set pickedId to (the item at pick in numbers) as a 64 bit integer
+                        set editor's extending to pick > 0
+                        select bim editor (the bim kind picked for element pickedId in editor's documentValue's current) numbered pickedId in editor
+                    set editor's extending to heldBefore
                     set reply to the bim api state of (@intrinsic("dereference", editor))
             else:
-                set reply to the bim api failure saying (the string form of "give an element id")
+                set reply to the bim api failure saying (the string form of "give an element id, or several to select together")
         if verb = (the string form of "grid"):
             set reply to the bim api grid from arguments for editor
         if verb = (the string form of "gridrepeat"):

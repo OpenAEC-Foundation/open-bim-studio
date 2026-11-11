@@ -484,9 +484,13 @@ def pointer_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("pointer", number(arguments["x"], "x"), number(arguments["y"], "y")))
 
 
-@tool("select", "Select element `id` (from `elements`).", {"id": {"type": "integer"}}, ["id"])
+@tool("select", "Select element `id` (from `elements`). `also` adds further elements to the selection as "
+      "Shift-clicking them would, in order: a steel connection takes its primary member as `id` and the "
+      "secondary in `also`.",
+      {"id": {"type": "integer"}, "also": {"type": "array", "items": {"type": "integer"}}}, ["id"])
 def select_tool(arguments: dict) -> dict:
-    return text_result(current_modeller().request("select", int(arguments["id"])))
+    further = [int(value) for value in arguments.get("also") or []]
+    return text_result(current_modeller().request("select", int(arguments["id"]), *further))
 
 
 @tool("properties", "The selection's properties panel rows: label, value and the code to set it (0: read only, "
