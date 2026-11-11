@@ -73,6 +73,7 @@ def main(path):
                     mesh = body["attributes"]["usd::usdgeom::mesh"]
                     assert len(mesh["faceVertexIndices"]) % 3 == 0
                     assert max(mesh["faceVertexIndices"]) < len(mesh["points"])
+                    assert len({tuple(point) for point in mesh["points"]}) == len(mesh["points"]), "a mesh point written twice"
                 if len(bodies) > 1:
                     layered += 1
                     for body in bodies:

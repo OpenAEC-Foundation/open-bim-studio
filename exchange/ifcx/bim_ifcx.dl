@@ -6,7 +6,9 @@
 # component instances, and under a wall its openings.
 #
 # - Geometry is `usd::usdgeom::mesh` (triangles, metres, Z up) on a `Body`
-#   child, in plan coordinates; a layered wall has one body per layer.
+#   child, in plan coordinates; a layered wall has one body per layer. A
+#   mesh's points are rounded to a tenth of a micrometre and each is written
+#   once, the triangles sharing them.
 # - Materials are separate nodes (`bsi::ifc::material` with a colour) that
 #   elements and layer bodies reach through `inherits`, as IFC5 does.
 # - A component is a type node holding its parts in its own coordinates; each
@@ -22,6 +24,7 @@ import ifc/bim_ifc.dl
 import viewer/bim_scene.dl
 import exchange/ifcx/bim_file.dl
 import bim/bim_project_settings.dl
+import kernel/core/pair_index.dl
 
 # One JSON text being written, kept as pieces and joined once.
 class:
@@ -166,22 +169,148 @@ local function write bim ifcx node {a string:path} with children {a pointer to a
         write bim ifcx (((the string form of "    { ") + (parts joined with ",\n      ")) + (the string form of " }")) to writer
         free parts
 
+# A mesh coordinate in whole tenths of a micrometre, the precision mesh
+# points are written to; 0 for a value that is no number or lies beyond what
+# 64 bits hold.
+local function the bim ifcx mesh quantum of {a 64 bit floating-point number:coordinate}:
+    execute:
+        if (coordinate != coordinate) or ((the absolute value of coordinate) > 1e11):
+            return 0 as a 64 bit integer
+        return @intrinsic("call", "libc", "llround", a 64 bit integer, coordinate * 10000000.0)
+
+# Writes the decimal digits of `amount` (zero or more) into `buffer` from
+# `startPlace` and gives the place after them.
+local function the bim ifcx end of digits {a 64 bit integer:amount} written into {a string:buffer} from {integer:startPlace}:
+    execute:
+        set ten to 10 as a 64 bit integer
+        set digitTotal to 1
+        set remaining to amount
+        loop while remaining >= ten:
+            set remaining to remaining / ten
+            set digitTotal to digitTotal + 1
+        set remaining to amount
+        set digitPlace to (startPlace + digitTotal) - 1
+        loop while digitPlace >= startPlace:
+            store ((((the remainder of remaining divided by ten) as an integer) + 48) as a byte) into the data of buffer at digitPlace
+            set remaining to remaining / ten
+            set digitPlace to digitPlace - 1
+        return startPlace + digitTotal
+
+# Writes `quantum` (tenths of a micrometre) in metres into `buffer` from
+# `startPlace`, as the shortest decimal that names it (no exponent, no
+# trailing zeros), and gives the place after it.
+local function the bim ifcx end of quantum {a 64 bit integer:quantum} written into {a string:buffer} from {integer:startPlace}:
+    execute:
+        set writePlace to startPlace
+        set magnitude to quantum
+        if quantum < (0 as a 64 bit integer):
+            store (45 as a byte) into the data of buffer at writePlace
+            set writePlace to writePlace + 1
+            set magnitude to (0 as a 64 bit integer) - quantum
+        set perMetre to 10000000 as a 64 bit integer
+        set writePlace to the bim ifcx end of digits (magnitude / perMetre) written into buffer from writePlace
+        set decimals to (the remainder of magnitude divided by perMetre) as an integer
+        if decimals > 0:
+            store (46 as a byte) into the data of buffer at writePlace
+            set keptDigits to 7
+            loop while (the remainder of decimals divided by 10) = 0:
+                set decimals to decimals / 10
+                set keptDigits to keptDigits - 1
+            set digitPlace to writePlace + keptDigits
+            loop while digitPlace > writePlace:
+                store (((the remainder of decimals divided by 10) + 48) as a byte) into the data of buffer at digitPlace
+                set decimals to decimals / 10
+                set digitPlace to digitPlace - 1
+            set writePlace to writePlace + (keptDigits + 1)
+        return writePlace
+
+# Copies `label` into `buffer` from `startPlace` and gives the place after it.
+local function the bim ifcx end of label {a string:label} written into {a string:buffer} from {integer:startPlace}:
+    execute:
+        copy label into (the data of buffer) at offset startPlace
+        return startPlace + (the length of label)
+
 # The `usd::usdgeom::mesh` attribute of `triangles`, its points shifted by
 # `shift` (to place a component's parts in its own coordinates).
-local function the bim ifcx mesh of {fast mesh record:triangles} shifted by {cad vector3:shift}:
+#
+# The kernel's meshes carry a point per triangle corner (each with its own
+# normal); the file needs positions only, so points that are written with
+# the same text are written once and the corners refer to that one. Points
+# are rounded to a tenth of a micrometre and welded on those whole numbers,
+# through two pair indices (x and y to a number, that number and z to the
+# point), so welding takes time in proportion to the points. The triangles
+# keep their order and their corners' order. The text is written into one
+# buffer, sized beforehand, rather than joined from a string per number.
+function the bim ifcx mesh of {fast mesh record:triangles} shifted by {cad vector3:shift}:
     execute:
-        set points to an empty list of a string
-        loop cursor from 0 to the length of (triangles's positions's values):
-            set point to the item at cursor in (triangles's positions's values)
-            append (((the string form of "[") + (the bim json number of (point's x - shift's x))) + ((the string form of ",") + ((the bim json number of (point's y - shift's y)) + ((the string form of ",") + ((the bim json number of (point's z - shift's z)) + (the string form of "]")))))) to points
-        set indices to an empty list of a string
-        loop cursor from 0 to the length of (triangles's triangles's values):
-            append (the string form of (the item at cursor in (triangles's triangles's values))) to indices
-        set text to (the string form of "\"usd::usdgeom::mesh\": {\"points\": [") + (points joined with ",")
-        set text to (text + (the string form of "], \"faceVertexIndices\": [")) + ((indices joined with ",") + (the string form of "]}"))
-        free points
-        free indices
-        return text
+        set sourcePoints to triangles's positions's values
+        set sourceCorners to triangles's triangles's values
+        set sourceTotal to the length of sourcePoints
+        set planTable to a cad pair index with room for sourceTotal entries
+        set pointTable to a cad pair index with room for sourceTotal entries
+        set planTotal to 0
+        set quanta to an empty list of a 64 bit integer
+        set weldedNumbers to an empty list of an integer
+        loop cursor from 0 to sourceTotal:
+            set point to the item at cursor in sourcePoints
+            set quantumX to the bim ifcx mesh quantum of (point's x - shift's x)
+            set quantumY to the bim ifcx mesh quantum of (point's y - shift's y)
+            set quantumZ to the bim ifcx mesh quantum of (point's z - shift's z)
+            set planNumber to the cad pair value for key quantumX and quantumY in planTable
+            if planNumber < 0:
+                set planNumber to planTotal
+                set planTotal to planTotal + 1
+                put cad pair value planNumber for key quantumX and quantumY in planTable
+            set pointNumber to the cad pair value for key (planNumber as a 64 bit integer) and quantumZ in pointTable
+            if pointNumber < 0:
+                set pointNumber to (the length of quanta) / 3
+                put cad pair value pointNumber for key (planNumber as a 64 bit integer) and quantumZ in pointTable
+                append quantumX to quanta
+                append quantumY to quanta
+                append quantumZ to quanta
+            append pointNumber to weldedNumbers
+        # A coordinate takes at most 21 bytes (a sign, twelve digits, a point
+        # and seven decimals), a point three of them, its brackets and three
+        # commas; a corner at most ten digits and a comma.
+        set weldedTotal to (the length of quanta) / 3
+        set buffer to a new string buffer containing (((weldedTotal * 68) + ((the length of sourceCorners) * 11)) + 96) bytes
+        set writePlace to the bim ifcx end of label (the string form of "\"usd::usdgeom::mesh\": {\"points\": [") written into buffer from 0
+        loop cursor from 0 to weldedTotal:
+            if cursor > 0:
+                store (44 as a byte) into the data of buffer at writePlace
+                set writePlace to writePlace + 1
+            store (91 as a byte) into the data of buffer at writePlace
+            set writePlace to the bim ifcx end of quantum (the item at (cursor * 3) in quanta) written into buffer from (writePlace + 1)
+            store (44 as a byte) into the data of buffer at writePlace
+            set writePlace to the bim ifcx end of quantum (the item at ((cursor * 3) + 1) in quanta) written into buffer from (writePlace + 1)
+            store (44 as a byte) into the data of buffer at writePlace
+            set writePlace to the bim ifcx end of quantum (the item at ((cursor * 3) + 2) in quanta) written into buffer from (writePlace + 1)
+            store (93 as a byte) into the data of buffer at writePlace
+            set writePlace to writePlace + 1
+        set writePlace to the bim ifcx end of label (the string form of "], \"faceVertexIndices\": [") written into buffer from writePlace
+        # Whole triangles only, and none with a corner that names no point.
+        set cornerCursor to 0
+        set writtenCorners to 0
+        loop while (cornerCursor + 2) < the length of sourceCorners:
+            set cornerA to the item at cornerCursor in sourceCorners
+            set cornerB to the item at (cornerCursor + 1) in sourceCorners
+            set cornerC to the item at (cornerCursor + 2) in sourceCorners
+            set cornerCursor to cornerCursor + 3
+            set inside to ((cornerA >= 0) and (cornerA < sourceTotal)) and (((cornerB >= 0) and (cornerB < sourceTotal)) and ((cornerC >= 0) and (cornerC < sourceTotal)))
+            if inside:
+                if writtenCorners > 0:
+                    store (44 as a byte) into the data of buffer at writePlace
+                    set writePlace to writePlace + 1
+                set writePlace to the bim ifcx end of digits ((the item at cornerA in weldedNumbers) as a 64 bit integer) written into buffer from writePlace
+                store (44 as a byte) into the data of buffer at writePlace
+                set writePlace to the bim ifcx end of digits ((the item at cornerB in weldedNumbers) as a 64 bit integer) written into buffer from (writePlace + 1)
+                store (44 as a byte) into the data of buffer at writePlace
+                set writePlace to the bim ifcx end of digits ((the item at cornerC in weldedNumbers) as a 64 bit integer) written into buffer from (writePlace + 1)
+                set writtenCorners to writtenCorners + 3
+        set writePlace to the bim ifcx end of label (the string form of "]}") written into buffer from writePlace
+        free quanta
+        free weldedNumbers
+        return the substring of buffer from 0 spanning writePlace bytes
 
 # The volume a closed triangle mesh encloses (the divergence theorem).
 function the bim volume of mesh {fast mesh record:triangles}:
