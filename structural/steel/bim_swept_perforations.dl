@@ -2,6 +2,7 @@
 import structural/steel/bim_plate_mesh.dl
 import elements/connection/bim_connections.dl
 import kernel/fast/perforation.dl
+import kernel/fast/notched_prism.dl
 
 function the bim drilled sweep of {bim linear record:element} typed {bim linear type record:kind} in {bim model record:modelValue} using {a pointer to a list:cutters} at {integer:roundCorners} round corners cut by {bim end cut record:endCut}:
     execute:
@@ -18,34 +19,93 @@ function the bim drilled sweep of {bim linear record:element} typed {bim linear 
         if (the length of profiles) = 0:
             free profiles
             return refused
-        set cavities to an empty list of the type of (an empty list of a cad vector2)
-        loop cursor from 1 to the length of profiles:
-            append (the item at cursor in profiles) to cavities
-        set built to the fast prism over (the item at 0 in profiles) with holes cavities from 0.0 rising frame's length within 1e-9
-        free cavities
+        # A cope keeps a band of the section over a length from an end: the
+        # stock is then notched as it is built, without a boolean.
+        set zeroFlat to a cad vector2 with x 0.0 and y 0.0
+        set startCentre to the bim placed profile point zeroFlat of element framed frame at end 0 cut by resolvedCut
+        set finishCentre to the bim placed profile point zeroFlat of element framed frame at end 1 cut by resolvedCut
+        set trimmedLength to the cad dot of (the cad difference of finishCentre and startCentre) and frame's along
+        set startLow to -1e300
+        set startHigh to 1e300
+        set startLength to 0.0
+        set endLow to -1e300
+        set endHigh to 1e300
+        set endLength to 0.0
+        set coped to false
+        loop cursor from 0 to the length of cutters:
+            set cutValue to the item at cursor in cutters
+            if cutValue's kind = 2:
+                set coped to true
+                if trimmedLength <= 1e-9:
+                    return refused
+                set entryAxis to cutValue's direction scaled by (1.0 / (the cad length of cutValue's direction))
+                set reachAxis to cutValue's across scaled by (1.0 / (the cad length of cutValue's across))
+                set entering to the cad dot of entryAxis and frame's depthAxis
+                # Only a cope entering square through the top or the bottom.
+                if ((the absolute value of entering) < 0.999999) or ((the absolute value of (the cad dot of reachAxis and frame's along)) < 0.999999):
+                    return refused
+                set floorSpot to the cad sum of cutValue's origin and (entryAxis scaled by cutValue's depth)
+                set floorLevel to the cad dot of (the cad difference of floorSpot and startCentre) and frame's depthAxis
+                set farSpot to the cad sum of cutValue's origin and (reachAxis scaled by cutValue's diameter)
+                set farStation to ((the cad dot of (the cad difference of farSpot and startCentre) and frame's along) / trimmedLength) * frame's length
+                if (the cad dot of reachAxis and frame's along) > 0.0:
+                    if (startLength > 0.0) and ((the absolute value of (startLength - farStation)) > 1e-9):
+                        return refused
+                    set startLength to farStation
+                    if entering < 0.0:
+                        set startHigh to floorLevel
+                    else:
+                        set startLow to floorLevel
+                else:
+                    if (endLength > 0.0) and ((the absolute value of (endLength - (frame's length - farStation))) > 1e-9):
+                        return refused
+                    set endLength to frame's length - farStation
+                    if entering < 0.0:
+                        set endHigh to floorLevel
+                    else:
+                        set endLow to floorLevel
+        set built to @intrinsic("construct", a fast prism result record, fast prism degenerate, an empty fast polyhedron)
+        if coped:
+            if ((the length of profiles) = 1) and ((startLength >= 0.0) and (endLength >= 0.0)):
+                set built to the fast notched prism over (the item at 0 in profiles) from 0.0 rising frame's length keeping startLow to startHigh for startLength and endLow to endHigh for endLength within 1e-9
+        else:
+            set cavities to an empty list of the type of (an empty list of a cad vector2)
+            loop cursor from 1 to the length of profiles:
+                append (the item at cursor in profiles) to cavities
+            set built to the fast prism over (the item at 0 in profiles) with holes cavities from 0.0 rising frame's length within 1e-9
+            free cavities
         loop cursor from 0 to the length of profiles:
             free (the item at cursor in profiles)
         free profiles
         if built's reason != fast prism built:
             return refused
         set stock to built's shape
+        # Where a face lay along the stock, before its points are placed.
+        set stations to an empty list of a 64 bit floating-point number
         loop cursor from 0 to the length of (stock's positions's values):
             set localPoint to the item at cursor in (stock's positions's values)
-            set endIndex to 0
-            if localPoint's z > (frame's length * 0.5):
-                set endIndex to 1
-            set placed to the bim placed profile point (a cad vector2 with x localPoint's x and y localPoint's y) of element framed frame at end endIndex cut by resolvedCut
+            append localPoint's z to stations
+            set flat to a cad vector2 with x localPoint's x and y localPoint's y
+            set placed to the bim placed profile point flat of element framed frame at end 0 cut by resolvedCut
+            if localPoint's z > 1e-9:
+                set finishPlaced to the bim placed profile point flat of element framed frame at end 1 cut by resolvedCut
+                if localPoint's z >= (frame's length - 1e-9):
+                    set placed to finishPlaced
+                else:
+                    # A point between the ends lies on the line between them.
+                    set placed to the cad sum of placed and ((the cad difference of finishPlaced and placed) scaled by (localPoint's z / frame's length))
             replace item at index cursor in (stock's positions's values) with placed
         loop cursor from 0 to the length of (stock's faces's values):
             set face to the item at cursor in (stock's faces's values)
             set localNormal to face's normal
             set normalValue to the cad sum of (frame's widthAxis scaled by localNormal's x) and (the cad sum of (frame's depthAxis scaled by localNormal's y) and (frame's along scaled by localNormal's z))
-            if (localNormal's z < -0.5) and resolvedCut's startCut:
+            set faceStation to the item at (the item at (the item at face's firstLoop in (stock's loopStarts's values)) in (stock's indices's values)) in stations
+            if ((localNormal's z < -0.5) and resolvedCut's startCut) and (faceStation <= 1e-9):
                 if (the absolute value of (the cad dot of frame's along and resolvedCut's startNormal)) > 0.05:
                     set normalValue to resolvedCut's startNormal scaled by (1.0 / (the cad length of resolvedCut's startNormal))
                     if (the cad dot of normalValue and frame's along) > 0.0:
                         set normalValue to normalValue scaled by -1.0
-            if (localNormal's z > 0.5) and resolvedCut's finishCut:
+            if ((localNormal's z > 0.5) and resolvedCut's finishCut) and (faceStation >= (frame's length - 1e-9)):
                 if (the absolute value of (the cad dot of frame's along and resolvedCut's finishNormal)) > 0.05:
                     set normalValue to resolvedCut's finishNormal scaled by (1.0 / (the cad length of resolvedCut's finishNormal))
                     if (the cad dot of normalValue and frame's along) < 0.0:
@@ -57,11 +117,14 @@ function the bim drilled sweep of {bim linear record:element} typed {bim linear 
         set bores to an empty list of a fast bore record
         loop cursor from 0 to the length of cutters:
             set cutValue to the item at cursor in cutters
-            if cutValue's kind != 1:
+            if (cutValue's kind != 1) and (cutValue's kind != 2):
                 free bores
+                free stations
                 return refused
-            set extendedStart to the cad difference of cutValue's origin and (cutValue's direction scaled by 0.00001)
-            append (@intrinsic("construct", a fast bore record, extendedStart, cutValue's direction, (cutValue's diameter * 0.5), (cutValue's depth + 0.00002))) to bores
+            if cutValue's kind = 1:
+                set extendedStart to the cad difference of cutValue's origin and (cutValue's direction scaled by 0.00001)
+                append (@intrinsic("construct", a fast bore record, extendedStart, cutValue's direction, (cutValue's diameter * 0.5), (cutValue's depth + 0.00002))) to bores
+        free stations
         set boreResult to the fast stock stock perforated by bores within 1e-8
         free bores
         if boreResult's valid = false:

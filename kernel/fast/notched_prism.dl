@@ -1,0 +1,220 @@
+# SPDX-License-Identifier: MPL-2.0
+# A prism over a plan polygon whose ends are notched: over a length at its
+# start and at its end only the band of the polygon between two levels of y
+# is kept, as the web of a steel beam coped around a girder's flanges. It is
+# built directly as one closed planar polyhedron, so a notch costs a handful
+# of faces and no boolean. A level must cross the outline at exactly two
+# points (or lie outside it); anything else is refused.
+import kernel/fast/prism.dl
+
+# Whether `value` lies in the band from `low` to `high`.
+local function fast band from {a 64 bit floating-point number:low} to {a 64 bit floating-point number:high} holds {a 64 bit floating-point number:value} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        if value < (low - tolerance):
+            return false
+        return value <= (high + tolerance)
+
+# Whether a notch ends at `station` on the level `value`: the first station
+# past a notched start, the last before a notched end.
+local function fast station {integer:station} of {integer:segmentCount} segments notched {boolean:startNotched} and {boolean:endNotched} ends a notch at {a 64 bit floating-point number:value} between {a pointer to a list:lows} and {a pointer to a list:highs} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set shortened to -1
+        if startNotched and (station = 1):
+            set shortened to 0
+        if endNotched and (station = (segmentCount - 1)):
+            set shortened to segmentCount - 1
+        if shortened < 0:
+            return false
+        if (the absolute value of (value - (the item at shortened in lows))) <= tolerance:
+            return true
+        return (the absolute value of (value - (the item at shortened in highs))) <= tolerance
+
+# `outline` is the ring in plan; the prism rises from `elevation` by
+# `prismHeight`. Over `startLength` from its bottom only y from `startLow` to
+# `startHigh` is kept, over `endLength` below its top only y from `endLow` to
+# `endHigh`; a length of zero leaves that end whole.
+function the fast notched prism over {a pointer to a list:outline} from {a 64 bit floating-point number:elevation} rising {a 64 bit floating-point number:prismHeight} keeping {a 64 bit floating-point number:startLow} to {a 64 bit floating-point number:startHigh} for {a 64 bit floating-point number:startLength} and {a 64 bit floating-point number:endLow} to {a 64 bit floating-point number:endHigh} for {a 64 bit floating-point number:endLength} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set refused to @intrinsic("construct", a fast prism result record, fast prism degenerate, an empty fast polyhedron)
+        set startNotched to startLength > tolerance
+        set endNotched to endLength > tolerance
+        if ((the length of outline) < 3) or ((startLength + endLength) >= (prismHeight - tolerance)):
+            return refused
+        # The outline with a corner wherever a level crosses it.
+        set levels to an empty list of a 64 bit floating-point number
+        if startNotched:
+            append startLow to levels
+            append startHigh to levels
+        if endNotched:
+            append endLow to levels
+            append endHigh to levels
+        set ring to an empty list of a cad vector2
+        loop corner from 0 to the length of outline:
+            append (the item at corner in outline) to ring
+        loop levelCursor from 0 to the length of levels:
+            set level to the item at levelCursor in levels
+            set divided to an empty list of a cad vector2
+            set ringCount to the length of ring
+            loop corner from 0 to ringCount:
+                set here to the item at corner in ring
+                set there to the item at (the remainder of (corner + 1) divided by ringCount) in ring
+                append here to divided
+                set hereRise to here's y - level
+                set thereRise to there's y - level
+                if ((hereRise * thereRise) < 0.0) and (((the absolute value of hereRise) > tolerance) and ((the absolute value of thereRise) > tolerance)):
+                    set share to hereRise / (hereRise - thereRise)
+                    append (a cad vector2 with x (here's x + (share * (there's x - here's x))) and y level) to divided
+            free ring
+            set ring to divided
+        set count to the length of ring
+        loop levelCursor from 0 to the length of levels:
+            set level to the item at levelCursor in levels
+            set onLevel to 0
+            loop corner from 0 to count:
+                if (the absolute value of ((the item at corner in ring)'s y - level)) <= tolerance:
+                    set onLevel to onLevel + 1
+            if (onLevel != 0) and (onLevel != 2):
+                free levels
+                free ring
+                return refused
+        free levels
+        set turn to 1.0
+        set doubled to 0.0
+        loop corner from 0 to count:
+            set here to the item at corner in ring
+            set there to the item at (the remainder of (corner + 1) divided by count) in ring
+            set doubled to doubled + ((here's x * there's y) - (there's x * here's y))
+        if doubled < 0.0:
+            set turn to -1.0
+        # The stations along the prism and the band kept between them.
+        set stations to an empty list of a 64 bit floating-point number
+        set lows to an empty list of a 64 bit floating-point number
+        set highs to an empty list of a 64 bit floating-point number
+        append elevation to stations
+        if startNotched:
+            append startLow to lows
+            append startHigh to highs
+            append (elevation + startLength) to stations
+        append -1e300 to lows
+        append 1e300 to highs
+        if endNotched:
+            append ((elevation + prismHeight) - endLength) to stations
+            append endLow to lows
+            append endHigh to highs
+        append (elevation + prismHeight) to stations
+        set shape to an empty fast polyhedron
+        set target to the address of shape
+        loop station from 0 to the length of stations:
+            loop corner from 0 to count:
+                set location to the item at corner in ring
+                ignore add fast position (a cad vector3 with x location's x, y location's y and z (the item at station in stations)) to target
+        set noHoles to an empty list of the type of (an empty list of an integer)
+        set sound to true
+        set segmentCount to the length of lows
+        loop segment from 0 to segmentCount:
+            set kept to an empty list of an integer
+            loop corner from 0 to count:
+                if fast band from (the item at segment in lows) to (the item at segment in highs) holds (the item at corner in ring)'s y within tolerance:
+                    append corner to kept
+            set keptCount to the length of kept
+            if keptCount < 3:
+                set sound to false
+            else:
+                if segment = 0:
+                    set cap to an empty list of an integer
+                    loop cursor from 0 to keptCount:
+                        append (the item at cursor in kept) to cap
+                    add fast face cap with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z -1.0) to target
+                    free cap
+                if segment = (segmentCount - 1):
+                    set cap to an empty list of an integer
+                    loop cursor from 0 to keptCount:
+                        append ((segment + 1) * count + (the item at cursor in kept)) to cap
+                    add fast face cap with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z 1.0) to target
+                    free cap
+                loop cursor from 0 to keptCount:
+                    set corner to the item at cursor in kept
+                    set nextCorner to the item at (the remainder of (cursor + 1) divided by keptCount) in kept
+                    set here to the item at corner in ring
+                    set there to the item at nextCorner in ring
+                    set dx to there's x - here's x
+                    set dy to there's y - here's y
+                    set magnitude to the square root of ((dx * dx) + (dy * dy))
+                    # An edge of the outline is one face over all the
+                    # segments that keep it, made at the first of them; the
+                    # edge closing a notch is a face of its own segment.
+                    set ownEdge to nextCorner = (the remainder of (corner + 1) divided by count)
+                    set earlier to false
+                    if ownEdge and (segment > 0):
+                        set earlier to (fast band from (the item at (segment - 1) in lows) to (the item at (segment - 1) in highs) holds here's y within tolerance) and (fast band from (the item at (segment - 1) in lows) to (the item at (segment - 1) in highs) holds there's y within tolerance)
+                    if (magnitude > 0.0) and (earlier = false):
+                        set lastSegment to segment
+                        if ownEdge:
+                            set running to true
+                            loop later from (segment + 1) to segmentCount:
+                                if ((fast band from (the item at later in lows) to (the item at later in highs) holds here's y within tolerance) and (fast band from (the item at later in lows) to (the item at later in highs) holds there's y within tolerance)) = false:
+                                    set running to false
+                                if running:
+                                    set lastSegment to later
+                        # Between its ends a corner's line takes a point only
+                        # where a notch ends on it.
+                        set quad to an empty list of an integer
+                        loop station from segment to (lastSegment + 2):
+                            set wanted to (station = segment) or (station = (lastSegment + 1))
+                            if wanted = false:
+                                set wanted to fast station station of segmentCount segments notched startNotched and endNotched ends a notch at here's y between lows and highs within tolerance
+                            if wanted:
+                                append ((station * count) + corner) to quad
+                        set station to lastSegment + 1
+                        loop while station >= segment:
+                            set wanted to (station = segment) or (station = (lastSegment + 1))
+                            if wanted = false:
+                                set wanted to fast station station of segmentCount segments notched startNotched and endNotched ends a notch at there's y between lows and highs within tolerance
+                            if wanted:
+                                append ((station * count) + nextCorner) to quad
+                            set station to station - 1
+                        add fast face quad with holes noHoles facing (a cad vector3 with x ((turn * dy) / magnitude), y ((0.0 - (turn * dx)) / magnitude) and z 0.0) to target
+                        free quad
+            free kept
+        # The steps where a notch ends: what the notched end left out there.
+        loop station from 1 to segmentCount:
+            set shortened to station
+            set facing to 1.0
+            if startNotched and (station = 1):
+                set shortened to 0
+                set facing to -1.0
+            loop bandSide from 0 to 2:
+                set stepLow to (the item at shortened in highs)
+                set stepHigh to 1e300
+                if bandSide = 1:
+                    set stepLow to -1e300
+                    set stepHigh to (the item at shortened in lows)
+                set members to 0
+                set opening to -1
+                loop corner from 0 to count:
+                    if fast band from stepLow to stepHigh holds (the item at corner in ring)'s y within tolerance:
+                        set members to members + 1
+                        if (fast band from stepLow to stepHigh holds (the item at (the remainder of ((corner + count) - 1) divided by count) in ring)'s y within tolerance) = false:
+                            set opening to corner
+                if (members >= 3) and (opening >= 0):
+                    set step to an empty list of an integer
+                    set walking to true
+                    loop cursor from 0 to count:
+                        set corner to the remainder of (opening + cursor) divided by count
+                        if (fast band from stepLow to stepHigh holds (the item at corner in ring)'s y within tolerance) = false:
+                            set walking to false
+                        if walking:
+                            append ((station * count) + corner) to step
+                    if (the length of step) = members:
+                        add fast face step with holes noHoles facing (a cad vector3 with x 0.0, y 0.0 and z facing) to target
+                    else:
+                        set sound to false
+                    free step
+        free noHoles
+        free stations
+        free lows
+        free highs
+        free ring
+        if sound = false:
+            return refused
+        return @intrinsic("construct", a fast prism result record, fast prism built, shape)
