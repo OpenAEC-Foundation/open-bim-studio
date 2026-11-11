@@ -63,6 +63,43 @@ local function the bim ray from {cad vector2:origin} heading {cad vector2:headin
         set segmentReach to ((offsetX * heading's y) - (offsetY * heading's x)) / denominator
         return ((rayReach > 0.0) and (rayReach < 100.0)) and ((segmentReach >= 0.0) and (segmentReach <= 1.0))
 
+# Whether the plans hold a dimension from `first` to `second` standing
+# `paperMillimetres` off already (a section's dimensions are its own).
+local function bim plans measure from {bim reference record:first} to {bim reference record:second} at {a 64 bit floating-point number:paperMillimetres} in {bim model record:modelValue}:
+    execute:
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set kept to the item at cursor in (modelValue's dimensions's values)
+            if (kept's viewId = the bim refused id) and ((the absolute value of (kept's paperOffset - paperMillimetres)) < 0.001):
+                if ((kept's first's elementId = first's elementId) and (kept's first's feature = first's feature)) and ((kept's second's elementId = second's elementId) and (kept's second's feature = second's feature)):
+                    return true
+        return false
+
+# Whether the plans dimension a grid line (the chains between the grids).
+local function bim plans measure the grids in {bim model record:modelValue}:
+    execute:
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set kept to the item at cursor in (modelValue's dimensions's values)
+            if (kept's viewId = the bim refused id) and (kept's first's feature = bim grid line feature):
+                return true
+        return false
+
+# Whether the plan of level `levelId` holds a dimension from one of its
+# walls or their openings (the chains along its outer walls).
+local function bim plans measure the walls of level {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set kept to the item at cursor in (modelValue's dimensions's values)
+            if kept's viewId = the bim refused id:
+                set hostId to kept's first's elementId
+                set openingFound to the bim opening index of hostId in modelValue
+                if openingFound's valid:
+                    set hostId to (the item at openingFound's position in (modelValue's openings's values))'s hostId
+                set wallFound to the bim wall index of hostId in modelValue
+                if wallFound's valid:
+                    if (the item at wallFound's position in (modelValue's walls's values))'s levelId = levelId:
+                        return true
+        return false
+
 # Adds the stops of `stops` in order of `along` as a chain of dimensions
 # `paperMillimetres` on paper outside the face at `faceOrigin`; the number of
 # dimensions made.
@@ -88,8 +125,10 @@ local function add bim chain {a pointer to a list:stops} beside {cad vector2:fac
             if (ontoStop's along - fromStop's along) > 0.005:
                 set middle to (fromStop's along + ontoStop's along) * 0.5
                 set base to the cad sum of faceOrigin and (alongDir scaled by middle)
-                ignore add bim dimension from fromStop's reference to ontoStop's reference through base outward outwardDir at paperMillimetres paper millimetres to target
-                set made to made + 1
+                # One that stands there already is not made twice.
+                if (bim plans measure from fromStop's reference to ontoStop's reference at paperMillimetres in (@intrinsic("dereference", target))) = false:
+                    ignore add bim dimension from fromStop's reference to ontoStop's reference through base outward outwardDir at paperMillimetres paper millimetres to target
+                    set made to made + 1
         return made
 
 # An outer wall of a storey and the facade it stands in: its outer side
@@ -389,10 +428,18 @@ function add bim editor exterior dimensions in {a pointer to a bim editor record
         begin bim transaction in (the address of (editor's documentValue))
         set made to add bim exterior dimensions on level editor's levelId to (the address of (editor's documentValue's current))
         if made = 0:
+            # Pressed again: the chains made before stand, none is doubled.
+            if bim plans measure the walls of level editor's levelId in editor's documentValue's current:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Exterior dimensions: the chains along the outer walls are there already"
+                return nothing
             set gridMade to add bim grid dimensions to (the address of (editor's documentValue's current))
             if gridMade = 0:
                 roll back bim transaction in (the address of (editor's documentValue))
-                set editor's message to the string form of "Exterior dimensions: no outer walls on this storey and no parallel grids"
+                if bim plans measure the grids in editor's documentValue's current:
+                    set editor's message to the string form of "Exterior dimensions: the chains between the grids are there already (every plan shows them)"
+                else:
+                    set editor's message to the string form of "Exterior dimensions: no outer walls on this storey and no parallel grids"
                 return nothing
             commit bim transaction in (the address of (editor's documentValue))
             set editor's viewsDirty to true
