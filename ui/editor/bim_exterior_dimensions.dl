@@ -10,6 +10,8 @@
 # wall face, a wall end, an opening edge), so the chains follow the model
 # when a wall or an opening moves. The chains lie 8, 14 and 20 mm off the
 # outer face on paper, whatever the scale of the view that draws them.
+# A storey without outer walls (a structural plan of columns and beams)
+# gets chains between the grids instead (`add bim grid dimensions`).
 import ui/editor/bim_editor_core.dl
 
 # How far outside the outer face the three chains lie, in millimetres on
@@ -311,15 +313,90 @@ local function add bim exterior chains of facade {a pointer to a list:facadeWall
         free wallStops
         return made
 
+# Chains between the grids ("stramienmaten"), as a structural plan of
+# columns and beams has them where no outer wall gives a facade to
+# dimension. Per family of parallel grids with more than one line, beyond
+# the ends the lines begin at (below lines that run up the sheet, left of
+# lines that run across it):
+# - the bays: from grid to grid, 8 mm on paper off those ends;
+# - the whole: the outermost grids, 14 mm off, when there are several bays.
+# Each step is an ordinary dimension between two grid lines, so the chains
+# follow the grids. The number of dimensions made.
+function add bim grid dimensions to {a pointer to a bim model record:target}:
+    execute:
+        set modelValue to @intrinsic("dereference", target)
+        set gridCount to the length of (modelValue's grids's values)
+        # Each grid's direction, turned to point right (up when it runs
+        # straight up) so that lines drawn either way are parallel, and its
+        # family (-1 before, and for a grid without length).
+        set gridHeadings to an empty list of a cad vector2
+        set gridFamilies to an empty list of an integer
+        loop cursor from 0 to gridCount:
+            set gridValue to the item at cursor in (modelValue's grids's values)
+            set gridRun to the cad distance from gridValue's start to gridValue's finish
+            set gridHeading to a cad vector2 with x 0.0 and y 0.0
+            if gridRun > 1e-9:
+                set gridHeading to a cad vector2 with x ((gridValue's finish's x - gridValue's start's x) / gridRun) and y ((gridValue's finish's y - gridValue's start's y) / gridRun)
+                if (gridHeading's x < -1e-9) or (((the absolute value of gridHeading's x) <= 1e-9) and (gridHeading's y < 0.0)):
+                    set gridHeading to a cad vector2 with x (0.0 - gridHeading's x) and y (0.0 - gridHeading's y)
+            append gridHeading to gridHeadings
+            append -1 to gridFamilies
+        set familyHeadings to an empty list of a cad vector2
+        loop seedCursor from 0 to gridCount:
+            set seedHeading to the item at seedCursor in gridHeadings
+            if ((the item at seedCursor in gridFamilies) < 0) and ((the bim dot of seedHeading and seedHeading) > 0.5):
+                loop memberCursor from seedCursor to gridCount:
+                    set memberHeading to the item at memberCursor in gridHeadings
+                    set skew to (seedHeading's x * memberHeading's y) - (seedHeading's y * memberHeading's x)
+                    if ((the item at memberCursor in gridFamilies) < 0) and (((the bim dot of seedHeading and memberHeading) > 0.5) and ((the absolute value of skew) < 1e-6)):
+                        replace item at index memberCursor in gridFamilies with ((the length of familyHeadings) as an integer)
+                append seedHeading to familyHeadings
+        set total to 0
+        loop familyCursor from 0 to the length of familyHeadings:
+            set lineDir to the item at familyCursor in familyHeadings
+            set outwardDir to a cad vector2 with x (0.0 - lineDir's x) and y (0.0 - lineDir's y)
+            set alongDir to the bim facade direction of outwardDir
+            # The face the chains stand off: through the lowest end of the
+            # family's lines.
+            set lowEnd to 1e300
+            set gridStops to an empty list of a bim chain stop record
+            loop cursor from 0 to gridCount:
+                if (the item at cursor in gridFamilies) = familyCursor:
+                    set gridValue to the item at cursor in (modelValue's grids's values)
+                    set lowEnd to the minimum of lowEnd and (the minimum of (the bim dot of gridValue's start and lineDir) and (the bim dot of gridValue's finish and lineDir))
+                    append (a bim chain stop of gridValue's id feature (bim grid line feature) at (the bim dot of gridValue's start and alongDir)) to gridStops
+            if (the length of gridStops) > 1:
+                set faceOrigin to lineDir scaled by lowEnd
+                set bays to add bim chain gridStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 0) to target
+                set total to total + bays
+                if bays > 1:
+                    set wholeStops to an empty list of a bim chain stop record
+                    append (the item at 0 in gridStops) to wholeStops
+                    append (the last item of gridStops) to wholeStops
+                    set total to total + (add bim chain wholeStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 1) to target)
+                    free wholeStops
+            free gridStops
+        free familyHeadings
+        free gridFamilies
+        free gridHeadings
+        return total
+
 # 2461 (Annotate > Exterior dimensions): the chains of the active storey, as
-# one undo step.
+# one undo step. A storey without outer walls gets the chains between the
+# grids instead.
 function add bim editor exterior dimensions in {a pointer to a bim editor record:editor}:
     execute:
         begin bim transaction in (the address of (editor's documentValue))
         set made to add bim exterior dimensions on level editor's levelId to (the address of (editor's documentValue's current))
         if made = 0:
-            roll back bim transaction in (the address of (editor's documentValue))
-            set editor's message to the string form of "Exterior dimensions: no outer walls on this storey"
+            set gridMade to add bim grid dimensions to (the address of (editor's documentValue's current))
+            if gridMade = 0:
+                roll back bim transaction in (the address of (editor's documentValue))
+                set editor's message to the string form of "Exterior dimensions: no outer walls on this storey and no parallel grids"
+                return nothing
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's viewsDirty to true
+            set editor's message to ((the string form of "Exterior dimensions: ") + (the string form of gridMade)) + (the string form of " dimensions in chains between the grids")
             return nothing
         commit bim transaction in (the address of (editor's documentValue))
         set editor's viewsDirty to true
