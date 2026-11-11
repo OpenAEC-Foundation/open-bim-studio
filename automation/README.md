@@ -57,6 +57,7 @@ Windows; request and response contents are UTF-8.
 | `press_button`, `key`, `click`, `move_pointer` | Native editor commands and plan points in metres |
 | `fit_view`, `ribbon_tab` | Native view fitting and ribbon tab selection |
 | `screenshot` | MCP `image/png` content; optional `save_to` path |
+| `run_sentence` | One sentence of the command line, e.g. `draw a wall from (0, 0) to (5, 0)` |
 | `ui_window`, `ui_click`, `ui_move`, `ui_drag`, `ui_key`, `ui_type`, `ui_scroll` | Windows window binding and visible UI control |
 
 Model creation and plan coordinates use metres. `set_property` values use
@@ -71,6 +72,37 @@ and optional `unit_code` (0 mm, 1 cm, 2 m; otherwise the project unit).
 `ui_click`. `elements` lists storeys, walls, floors, systems, openings and
 grids. Direct file open/save/export and full view management are not native
 API verbs yet.
+
+### Sentences: the command line's language
+
+`run_sentence` (native verb `run SENTENCE`) runs the sentence a user would type
+on the command line at the bottom left of the window, through the same
+dispatch (`automation/bim_sentences.dl`): each sentence is one row of a table,
+a pattern with slots and an action of native verbs. The answer is
+`{"ok":true,"message":…}`, or `{"ok":false,"error":…}` naming the closest
+sentence when it is not understood. A sentence that needs the window (press,
+open, export, save, a tab, fit) answers at once and takes effect on the
+window's next frame, as `ribbon` and `open` do.
+
+Points are `(x, y)` in metres, a coordinate optionally with `mm`, `cm` or `m`;
+property values are in the project's length unit. Articles are optional.
+
+```text
+draw a wall from (0, 0) to (5, 0)            draw a floor from (0, 0) to (5, 4)
+draw a section from (2, -1) to (2, 5)        draw a grid from (0, 0) to (0, 10)
+place a door at (2.5, 0)                     place a window at (2.5, 4)
+place the cursor at (1, 2)                   start the wall tool
+press "View/Section"                         select the wall 162 / select 162 / select nothing
+set the height of the selected wall to 3000  set the name of the selected space to "Küche"
+set the name to "Ground floor"               delete the selected wall
+open the view "A-A"                          open the sheet "A-101"
+export the sheet to PDF / SVG                show the View tab
+fit the view   save   undo   redo   escape
+```
+
+A new sentence is one line in `the bim sentence rules`. A line starting with
+`>` is reserved for real DynLex code once a JIT can run it; the dispatch
+(`run bim command sentence`) is where that mode plugs in.
 
 ### Windows screenshot and UI coordinates
 
@@ -144,7 +176,7 @@ Invoke-RestMethod http://127.0.0.1:8765/tools/screenshot -Method Post -ContentTy
   `release`, `select`, `properties`, `property`, `wall`, `slab`, `system`,
   `systemtypes`, `grid`, `gridrepeat`, `cursor`, `types`, `typeadd`,
   `typeduplicate`, `typeset`, `typeapply`, `typedelete`, `options`, `undo`,
-  `redo`, `fit`, `tab`.
+  `redo`, `fit`, `tab`, `run`.
 - `POST /tools/NAME`: the body is the MCP tool's argument object; returns
   its MCP content blocks, including base64 PNGs for screenshots.
 

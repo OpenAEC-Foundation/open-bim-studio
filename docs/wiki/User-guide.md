@@ -43,6 +43,56 @@ The Discipline menu chooses which tabs the ribbon shows; the choice is remembere
 
 Buttons with a key can also be typed, for example `PI` for Pile, `CV` for Crop, `DV` for Duplicate view. Zooming (`ZR`, `ZP`), Fit (`F`) and storey up/down (Page Up/Page Down) are keys only.
 
+## The command line
+
+The strip at the bottom left is a command line in DynLex's own style: you type
+English sentences. Press `:` or Ctrl+L, or click the box, to give it the keys;
+while it has them, keys and letters go to it and not to the tools (the letter
+shortcuts such as `CO` work again once it lets go). Without the keys it shows
+the active tool's prompt, as before.
+
+- As you type, the list above the box shows the sentences that fit, with their
+  open places: `draw a wall from (x, y) to (x, y)`. The greyed text after the
+  caret is what **Tab** adds: the rest of the word, or the next word.
+- **Up**/**Down** pick another suggestion; on an empty line they go through the
+  sentences run before. **Enter** runs the line; **Escape** clears it, and on an
+  empty line gives the keys back (as do Enter on an empty line, a click
+  elsewhere, and Ctrl+L).
+- On an empty line the list shows the last sentences with their answers.
+- A tool's prompt stays in the list's first row while the line has the keys,
+  so a sentence can be typed while a tool runs. A dialog that opens (the type
+  manager, the project window, a file screen) takes the keys from the line.
+- "a", "an" and "the" may be left out; a full stop at the end is fine.
+- **Points** are `(x, y)` in metres; a coordinate may carry its unit, as in
+  `(5000 mm, 0)`. **Values** for properties are in the project's length unit,
+  as the properties panel reads them (millimetres by default).
+- A sentence that is not understood is answered with the closest one and the
+  word where it goes astray.
+
+| Sentence | What it does |
+|---|---|
+| `draw a wall from (0, 0) to (5, 0)` | a wall of the current type on the active storey |
+| `draw a floor from (0, 0) to (5, 4)` | a floor over that rectangle (`slab` also reads) |
+| `draw a section from (2, -1) to (2, 5)` | a section line, as two clicks with the Section tool |
+| `draw a grid from (0, 0) to (0, 10)` | a grid line, as two clicks with the Grid tool |
+| `place a door at (2.5, 0)`, `place a window at …` | the Door or Window tool, clicked there |
+| `place the cursor at (1, 2)` | the 3D cursor |
+| `start the wall tool` | any tool by its ribbon label (`start the curtain wall tool`) |
+| `press "View/Section"` | any ribbon button by its label, `Tab/Label` or `Tab/Group/Label` |
+| `select the wall 162`, `select 162`, `select nothing` | selection; the kind is checked |
+| `set the height of the selected wall to 3000` | a property by its label; the kind is checked |
+| `set the name of the selected space to "Küche"` | text values in quotes |
+| `set the name to "Ground floor"` | a property of the selection, or of the storey and plan when nothing is selected |
+| `delete the selected wall` | |
+| `open the view "A-A"`, `open the sheet "A-101"` | a plan, section, elevation or sheet as its tab (`plan`, `section`, `elevation` also read) |
+| `export the sheet to PDF`, `export the sheet to SVG` | the open sheet |
+| `show the View tab` | a ribbon tab |
+| `fit the view`, `save`, `undo`, `redo`, `escape` | |
+
+The same sentences run through the automation API (`run SENTENCE`) and the MCP
+server (`run_sentence`). A line starting with `>` is kept for real DynLex code,
+which needs a JIT that is not built yet.
+
 ## Modelling
 
 - **Wall** (Home > Plane) is one tool. Its shape is chosen in the floating toolbar: Line (chain), Arc (3 points), Tangent arc, Rectangle, Circle, Pick lines; *Location line* switches between centre, exterior and interior face. `AW` starts the three-point arc. Shift keeps the wall straight.

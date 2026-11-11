@@ -648,6 +648,19 @@ def open_view_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("open", arguments["name"]))
 
 
+@tool("run_sentence", "Run one sentence of the command line, in the same language the user types at the bottom "
+      "left of the window, e.g. 'draw a wall from (0, 0) to (5, 0)', 'select the wall 12', "
+      "'set the height of the selected wall to 3000', 'open the sheet \"A-101\"', 'export the sheet to PDF', "
+      "'undo'. Points are (x, y) in metres (or with mm, cm, m); property values are in the project's length "
+      "unit. Returns the result message; a sentence that is not understood is an error naming the closest one.",
+      {"sentence": {"type": "string"}}, ["sentence"])
+def run_sentence_tool(arguments: dict) -> dict:
+    sentence = arguments["sentence"]
+    if not isinstance(sentence, str) or not sentence.strip():
+        raise ToolError("`sentence` must be a nonblank string")
+    return text_result(current_modeller().request("run", sentence))
+
+
 @tool("save", "Save the model to its file, as File > Save (Ctrl+S) does, on the window's next frame.")
 def save_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("save"))
@@ -692,7 +705,8 @@ def _handle(message: dict) -> dict | None:
             result = {"protocolVersion": requested, "capabilities": {"tools": {"listChanged": False}},
                       "serverInfo": SERVER_INFO,
                       "instructions": "Drive Open BIM Studio: call `launch` (or `connect`), look with "
-                                      "`screenshot`, `state` and `elements`, act with `press_button` + `click`, "
+                                      "`screenshot`, `state` and `elements`, act with `run_sentence` (the command line's "
+                                      "sentences), `press_button` + `click`, "
                                       "the create_* tools, `select` + `set_property`, `undo`."}
         elif method == "ping":
             result = {}
