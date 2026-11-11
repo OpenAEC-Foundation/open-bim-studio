@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: MPL-2.0
+# Which elements each undoable edit changed, so that undo and redo make
+# again only the meshes of those elements. The model's journal names what
+# the edits since it began changed, but undo and redo replace the model by a
+# snapshot with a new, empty journal: nothing then says what differs from
+# the model the meshes were made of. This history keeps, beside the
+# document's undo and redo stacks, the ids each edit journalled; when an
+# edit is undone or redone it writes those ids into the new journal, and the
+# caches that follow the journal (`the bim connection cache of`,
+# `the bim linear cache of`) keep everything else.
+import bim/bim_model.dl
+
+# `undoIds` holds the ids of the edits on the undo stack, one after the
+# other, `undoEnds` where each edit's ids end; the redo stack alike.
+# `journal`, `mark`, `revision` and `redoLength` are the document's journal,
+# how much of it is accounted for, its revision and the length of its redo
+# stack when the history last followed it.
+class:
+    patterns:
+        [a|] bim change history record
+    members:
+        undoIds as the type of (a cad topology list of a 64 bit integer)
+        undoEnds as the type of (a cad topology list of an integer)
+        redoIds as the type of (a cad topology list of a 64 bit integer)
+        redoEnds as the type of (a cad topology list of an integer)
+        journal as the type of (a cad topology list of a 64 bit integer)
+        mark as an integer
+        revision as a 64 bit integer
+        redoLength as an integer
+
+function a new bim change history:
+    execute:
+        return @intrinsic("construct", a bim change history record, a cad topology list of a 64 bit integer, a cad topology list of an integer, a cad topology list of a 64 bit integer, a cad topology list of an integer, a cad topology list of a 64 bit integer, 0, (-1) as a 64 bit integer, 0)
+
+local function forget bim change history {a pointer to a bim change history record:history}:
+    execute:
+        set history's undoIds to a cad topology list of a 64 bit integer
+        set history's undoEnds to a cad topology list of an integer
+        set history's redoIds to a cad topology list of a 64 bit integer
+        set history's redoEnds to a cad topology list of an integer
+
+# Where the last edit of `ends` begins in its ids.
+local function the bim last change start among {a pointer to a list:ends}:
+    execute:
+        if (the length of ends) < 2:
+            return 0
+        return the item at ((the length of ends) - 2) in ends
+
+# Takes the last edit off `ids` and `ends`.
+local function drop bim last change of {a pointer to a list:ids} ending {a pointer to a list:ends}:
+    execute:
+        if (the length of ends) = 0:
+            return nothing
+        set begins to the bim last change start among ends
+        loop while (the length of ids) > begins:
+            remove item ((the length of ids) - 1) from ids
+        remove item ((the length of ends) - 1) from ends
+
+# Follows `documentValue` since the last call. True when an undo or redo was
+# seen and the ids of what it changed were written into the model's new
+# journal: the meshes made before it then stand for everything else.
+function follow bim change history {a pointer to a bim change history record:history} of {a pointer to a bim document record:documentValue}:
+    execute:
+        set journalNow to documentValue's current's journal
+        set journalLength to the length of (journalNow's values)
+        set undoLength to the length of (documentValue's undoStack's values)
+        set redoLength to the length of (documentValue's redoStack's values)
+        set sameJournal to journalNow's references = history's journal's references
+        if documentValue's revision = history's revision:
+            if sameJournal = false:
+                # A transaction given up: its edits were never made.
+                set history's journal to journalNow
+                set history's mark to journalLength
+                loop while (the length of (history's undoEnds's values)) > undoLength:
+                    drop bim last change of (history's undoIds's values) ending (history's undoEnds's values)
+            return false
+        set history's revision to documentValue's revision
+        if sameJournal:
+            # Edits committed, or shown before their commit.
+            if redoLength = 0:
+                set history's redoIds to a cad topology list of a 64 bit integer
+                set history's redoEnds to a cad topology list of an integer
+            # At the undo depth the oldest snapshots go: the edits no longer
+            # stand beside the stack one for one.
+            if undoLength >= (the bim undo depth):
+                forget bim change history history
+            else:
+                loop while (the length of (history's undoEnds's values)) > undoLength:
+                    drop bim last change of (history's undoIds's values) ending (history's undoEnds's values)
+                # More of the edit already kept (a preview, then its commit).
+                if ((the length of (history's undoEnds's values)) = undoLength) and (undoLength > 0):
+                    remove item (undoLength - 1) from (history's undoEnds's values)
+                # Several edits at once: each stands for all of their ids.
+                set pushing to true
+                loop while pushing:
+                    loop idCursor from history's mark to journalLength:
+                        append (the item at idCursor in (journalNow's values)) to (history's undoIds's values)
+                    append (the length of (history's undoIds's values)) to (history's undoEnds's values)
+                    set pushing to (the length of (history's undoEnds's values)) < undoLength
+            set history's mark to journalLength
+            set history's redoLength to redoLength
+            return false
+        # The model replaced: undo, redo, or another model altogether.
+        set moved to redoLength - history's redoLength
+        set written to false
+        set undoCount to the length of (history's undoEnds's values)
+        set redoCount to the length of (history's redoEnds's values)
+        if ((moved > 0) and (undoCount >= moved)) and (((undoCount - moved) = undoLength) and ((redoCount + moved) = redoLength)):
+            loop moveCursor from 0 to moved:
+                set begins to the bim last change start among (history's undoEnds's values)
+                loop idCursor from begins to the length of (history's undoIds's values):
+                    append (the item at idCursor in (history's undoIds's values)) to (journalNow's values)
+                    append (the item at idCursor in (history's undoIds's values)) to (history's redoIds's values)
+                append (the length of (history's redoIds's values)) to (history's redoEnds's values)
+                drop bim last change of (history's undoIds's values) ending (history's undoEnds's values)
+            set written to true
+        else if ((moved < 0) and (redoCount >= (0 - moved))) and (((redoCount + moved) = redoLength) and ((undoCount - moved) = undoLength)):
+            loop moveCursor from 0 to (0 - moved):
+                set begins to the bim last change start among (history's redoEnds's values)
+                loop idCursor from begins to the length of (history's redoIds's values):
+                    append (the item at idCursor in (history's redoIds's values)) to (journalNow's values)
+                    append (the item at idCursor in (history's redoIds's values)) to (history's undoIds's values)
+                append (the length of (history's undoIds's values)) to (history's undoEnds's values)
+                drop bim last change of (history's redoIds's values) ending (history's redoEnds's values)
+            set written to true
+        else:
+            forget bim change history history
+        set history's journal to journalNow
+        set history's mark to the length of (journalNow's values)
+        set history's redoLength to redoLength
+        return written

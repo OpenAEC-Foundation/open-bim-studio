@@ -20,12 +20,15 @@ function append bim scene meshes of {bim model record:modelValue} within {a 64 b
             set linearValue to the item at cursor in (modelValue's linears's values)
             set linearSlot to -1
             if (the length of previous) > 0:
-                set linearType to the bim type of linear linearValue in modelValue
-                set perforations to the bim connection perforations of linearValue's id in modelValue
-                if (linearType's round = false) or ((the length of (perforations's values)) > 0):
-                    set linearSlot to the bim kept slot of linearValue's id part (bim linear part) among keys
-                else:
-                    set linearSlot to the bim kept slot of linearValue's id part (bim linear part) among keys unless remadeIds
+                set linearSlot to the bim kept slot of linearValue's id part (bim linear part) among keys
+                # Only a kept round one asks for its perforations: they
+                # evaluate its connections.
+                if linearSlot >= 0:
+                    set linearType to the bim type of linear linearValue in modelValue
+                    if linearType's round and (bim element linearValue's id is remade among remadeIds):
+                        set perforations to the bim connection perforations of linearValue's id in modelValue
+                        if (the length of (perforations's values)) = 0:
+                            set linearSlot to -1
             append linearSlot to linearSlots
             if linearSlot < 0:
                 set anyLinearMade to true
@@ -47,3 +50,85 @@ function append bim scene meshes of {bim model record:modelValue} within {a 64 b
                     set linearColour to the bim colour of discipline (the item at (the bim system index of systemId in modelValue)'s position in (modelValue's systems's values))'s discipline
                 append (@intrinsic("construct", a bim scene mesh record, linearValue's id, 0 as a 64 bit integer, bim linear part, the bim linear shape of linearValue typed linearType in modelValue within tolerance cut by (the item at cursor in (modelCuts's values)), the bim category of linear role linearType's role, linearColour, linearType's material)) to result
         free linearSlots
+
+local function bim spots {cad vector3:a} and {cad vector3:b} are identical:
+    execute:
+        return ((a's x = b's x) and (a's y = b's y)) and (a's z = b's z)
+
+# Whether the end cuts `one` and `two` shape an element's ends alike.
+local function bim end cuts {bim end cut record:one} and {bim end cut record:two} are alike:
+    execute:
+        if (one's startCut != two's startCut) or (one's finishCut != two's finishCut):
+            return false
+        if one's startCut:
+            if ((bim spots one's startPoint and two's startPoint are identical) = false) or ((bim spots one's startNormal and two's startNormal are identical) = false):
+                return false
+        if one's finishCut:
+            if ((bim spots one's finishPoint and two's finishPoint are identical) = false) or ((bim spots one's finishNormal and two's finishNormal are identical) = false):
+                return false
+        return true
+
+# The linear meshes of `previous` that the edits journalled since `seen`
+# left as they are, to be kept across those edits as the connections are
+# (`the bim connection cache of`). An element is made again when the journal
+# names it or its type (a connection's change names its members), or when
+# its joins cut its ends differently than before: `cutsNow` are the model's
+# end cuts, `idsBefore` and `cutsBefore` the elements and their end cuts when
+# `previous` was made. A project setting, a level, a system or a pile tip
+# level among the changes makes them all again, and so does a journal that
+# is not `journal` continued (a file opened).
+function the bim linear cache of {bim model record:modelValue} following {cad topology list:journal} since {integer:seen} among {a pointer to a list:previous} cut as {a pointer to a list:cutsNow} after {a pointer to a list:idsBefore} cut as {a pointer to a list:cutsBefore}:
+    execute:
+        set kept to a cad topology list of a bim scene mesh record
+        set journalLength to the length of (modelValue's journal's values)
+        if (modelValue's journal's references != journal's references) or (journalLength < seen):
+            return kept
+        set linearCount to the length of (modelValue's linears's values)
+        if (the length of cutsNow) != linearCount:
+            return kept
+        set remadeLinears to an empty list of a 64 bit integer
+        loop changeCursor from seen to journalLength:
+            set changedId to the item at changeCursor in (modelValue's journal's values)
+            if (the bim linear index of changedId in modelValue)'s valid:
+                append changedId to remadeLinears
+            else if (the bim linear type index of changedId in modelValue)'s valid:
+                loop cursor from 0 to linearCount:
+                    set linearValue to the item at cursor in (modelValue's linears's values)
+                    if linearValue's typeId = changedId:
+                        append linearValue's id to remadeLinears
+            else:
+                # What shapes or colours every element it reaches: a project
+                # setting, a level, a system, a pile tip level.
+                set reachesAll to (changedId = (0 as a 64 bit integer)) or (the bim level index of changedId in modelValue)'s valid
+                if (the bim system index of changedId in modelValue)'s valid or (the bim pile tip level index of changedId in modelValue)'s valid:
+                    set reachesAll to true
+                if reachesAll:
+                    free remadeLinears
+                    return kept
+        loop cursor from 0 to linearCount:
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            set beforeSlot to -1
+            if cursor < (the length of idsBefore):
+                if (the item at cursor in idsBefore) = linearValue's id:
+                    set beforeSlot to cursor
+            if beforeSlot < 0:
+                loop searchCursor from 0 to the length of idsBefore:
+                    if (the item at searchCursor in idsBefore) = linearValue's id:
+                        set beforeSlot to searchCursor
+            set cutKept to false
+            if (beforeSlot >= 0) and (beforeSlot < (the length of cutsBefore)):
+                set cutKept to bim end cuts (the item at cursor in cutsNow) and (the item at beforeSlot in cutsBefore) are alike
+            if cutKept = false:
+                append linearValue's id to remadeLinears
+        sort and deduplicate bim ids remadeLinears
+        loop cursor from 0 to the length of previous:
+            set entry to the item at cursor in previous
+            if (entry's part = bim linear part) and (the bim linear index of entry's elementId in modelValue)'s valid:
+                set at to the bim first id at or above entry's elementId in remadeLinears
+                set madeAgain to false
+                if at < (the length of remadeLinears):
+                    set madeAgain to (the item at at in remadeLinears) = entry's elementId
+                if madeAgain = false:
+                    append entry to (kept's values)
+        free remadeLinears
+        return kept

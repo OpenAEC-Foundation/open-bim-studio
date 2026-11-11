@@ -69,6 +69,7 @@ import ui/shell/bim_loading.dl
 import ifc/bim_ifc_promote.dl
 import views/common/bim_section_box.dl
 import ui/shell/bim_app_files.dl
+import ui/shell/bim_change_history.dl
 import ui/shell/bim_ui_files.dl
 import ui/shell/bim_navigation.dl
 import ui/shell/bim_grid_spacing.dl
@@ -399,6 +400,13 @@ set sketchMeshes to a cad topology list of a bim scene mesh record
 set sectionProjection to a new bim section projection cache
 set connectionSceneJournal to a cad topology list of a 64 bit integer
 set connectionSceneSeen to 0
+# What each undoable edit changed, for the meshes undo and redo keep.
+set changeHistory to a new bim change history
+# What the GPU upload learnt of the meshes it grouped into instances.
+set nativeMemory to an empty bim native memory
+# The linear elements and their end cuts when the meshes were last made.
+set linearIdsSeen to an empty list of a 64 bit integer
+set linearCutsSeen to a cad topology list of a bim end cut record
 # Which grid heads in the 3D view stand behind an element, for the view key
 # they were found for.
 set headCovers to an empty list of a boolean
@@ -497,6 +505,11 @@ set sectionBoxHigh to a cad vector3 with x 1.0, y 1.0 and z 1.0
 set boxKeySeen to the string form of ""
 # True for the frame of a commit that stored only the section box.
 set viewOnlyCommit to false
+# Whether the meshes were last made in the middle of a drag.
+set meshedInDrag to false
+# A press on an element while the meshes followed the model's journal.
+set pressIntact to false
+set pressGeneration to 0 as a 64 bit integer
 set boxDragFace to -1
 # A selected level's extent handle being dragged in the 3D view: the sides
 # it moves (bits, 0 none) and the level.
@@ -3436,6 +3449,27 @@ loop while window remains open:
     # Native display geometry uses a fixed high-detail policy. Camera motion
     # changes transforms only, including closeups of round parts. Model edits
     # and drag previews rebuild geometry; exports derive from the model.
+    # Undo and redo name what they changed in the model's new journal: the
+    # meshes made before them stand for everything else.
+    if follow bim change history (the address of changeHistory) of (the address of (editor's documentValue)):
+        if (meshedInDrag = false) and (editor's dragging = false):
+            set connectionSceneJournal to editor's documentValue's current's journal
+            set connectionSceneSeen to 0
+    # A press that is let go without a move gives its transaction up: the
+    # model is as it was meshed, under a new journal. Follow that one, so
+    # that the next edit still keeps the connections it does not touch.
+    set journalFollowed to editor's documentValue's current's journal's references = connectionSceneJournal's references
+    if editor's dragging and (editor's dragMoved = false):
+        if journalFollowed and (editor's documentValue's revision = meshedRevision):
+            set pressIntact to true
+            set pressGeneration to meshGeneration
+    else if editor's dragging:
+        set pressIntact to false
+    else:
+        if (pressIntact and (journalFollowed = false)) and ((editor's documentValue's revision = meshedRevision) and (meshGeneration = pressGeneration)):
+            set connectionSceneJournal to editor's documentValue's current's journal
+            set connectionSceneSeen to the length of (connectionSceneJournal's values)
+        set pressIntact to false
     # A commit that touched only views, sheets or the section box leaves the
     # geometry as it is: the meshes and their GPU copies stay. The journal
     # names what the edits since the last meshing changed.
@@ -3455,10 +3489,24 @@ loop while window remains open:
                 set meshedRevision to editor's documentValue's revision
                 set connectionSceneSeen to journalLength
     set viewOnlyCommit to false
-    set modelChanged to ((editor's documentValue's revision != meshedRevision) or editor's dragging) or (rebarDetail != meshedRebarDetail)
+    # A press that has not moved yet (a click to select) changes nothing; a
+    # drag given up after it moved leaves the meshes of its last step behind.
+    set movedDrag to editor's dragging and editor's dragMoved
+    set modelChanged to (((editor's documentValue's revision != meshedRevision) or movedDrag) or (meshedInDrag and (editor's dragging = false))) or (rebarDetail != meshedRebarDetail)
     if modelChanged:
+        set meshedInDrag to movedDrag
         set meshes to the bim scene meshes of editor's evaluation after (meshes's values) layered fineDetail
         set keptConnections to the bim connection cache of editor's documentValue's current following connectionSceneJournal since connectionSceneSeen among (sketchMeshes's values)
+        # The linear elements the edits left alone keep their meshes too.
+        set linearPartsNow to the bim linear parts of editor's documentValue's current
+        set linearCutsNow to the bim end cuts of parts (linearPartsNow's values) in editor's documentValue's current
+        set keptLinears to the bim linear cache of editor's documentValue's current following connectionSceneJournal since connectionSceneSeen among (sketchMeshes's values) cut as (linearCutsNow's values) after linearIdsSeen cut as (linearCutsSeen's values)
+        loop keptCursor from 0 to the length of (keptLinears's values):
+            append (the item at keptCursor in (keptLinears's values)) to (keptConnections's values)
+        set linearCutsSeen to linearCutsNow
+        clear linearIdsSeen
+        loop keptCursor from 0 to the length of (editor's documentValue's current's linears's values):
+            append (the item at keptCursor in (editor's documentValue's current's linears's values))'s id to linearIdsSeen
         set sketchMeshes to the bim sketch meshes of editor's documentValue's current within (the bim resident display tolerance) reusing (keptConnections's values) with reinforcement detail rebarDetail
         set connectionSceneJournal to editor's documentValue's current's journal
         set connectionSceneSeen to the length of (connectionSceneJournal's values)
@@ -3796,7 +3844,7 @@ loop while window remains open:
         if nativeKey != nativeUploadKey:
             if (the length of (imported's meshes's values)) = 0:
                 set gpuScene's origin to the bim gpu origin for imported and (meshes's values)
-            upload bim gpu native of (meshes's values) for editor in mode viewMode leaving out (occludedRebar's values) into (the address of gpuScene) on window
+            upload bim gpu native of (meshes's values) for editor in mode viewMode leaving out (occludedRebar's values) remembering (the address of nativeMemory) into (the address of gpuScene) on window
             set nativeUploadKey to nativeKey
             set uploadedAny to true
         set groundKey to (importUploadKey + (the string form of " native ")) + nativeUploadKey
