@@ -398,6 +398,110 @@ function anchor bim canvas text since {integer:firstText} at {cad vector2:anchor
             set label's anchor to anchor
             replace item at index cursor in (canvas's texts's values) with label
 
+# How far `spot` lies inside edge `edgeCode` of the rectangle `low` to `high`
+# (0 its left, 1 its right, 2 its lower and 3 its upper edge); negative
+# outside it.
+local function the bim clip depth of {cad vector2:spot} past edge {integer:edgeCode} of {cad vector2:low} to {cad vector2:high}:
+    execute:
+        if edgeCode = 0:
+            return spot's x - low's x
+        if edgeCode = 1:
+            return high's x - spot's x
+        if edgeCode = 2:
+            return spot's y - low's y
+        return high's y - spot's y
+
+# The part of the polygon `corners` inside edge `edgeCode` of the rectangle.
+local function append bim polygon {a pointer to a list:corners} kept past edge {integer:edgeCode} of {cad vector2:low} to {cad vector2:high} into {a pointer to a list:kept}:
+    execute:
+        set cornerCount to the length of corners
+        loop cursor from 0 to cornerCount:
+            set thisCorner to the item at cursor in corners
+            set nextCorner to the item at (the remainder of (cursor + 1) divided by cornerCount) in corners
+            set thisDepth to the bim clip depth of thisCorner past edge edgeCode of low to high
+            set nextDepth to the bim clip depth of nextCorner past edge edgeCode of low to high
+            if thisDepth >= 0.0:
+                append thisCorner to kept
+            if ((thisDepth >= 0.0) and (nextDepth < 0.0)) or ((thisDepth < 0.0) and (nextDepth >= 0.0)):
+                set share to thisDepth / (thisDepth - nextDepth)
+                append (a cad vector2 with x (thisCorner's x + ((nextCorner's x - thisCorner's x) * share)) and y (thisCorner's y + ((nextCorner's y - thisCorner's y) * share))) to kept
+
+# Whether `spot` lies in the rectangle `low` to `high`, its edges included.
+local function bim canvas spot {cad vector2:spot} lies within {cad vector2:low} to {cad vector2:high}:
+    execute:
+        return ((spot's x >= low's x) and (spot's x <= high's x)) and ((spot's y >= low's y) and (spot's y <= high's y))
+
+# Clips what `canvas` holds from batch `firstBatch` and text `firstText` on
+# to the rectangle `low` to `high` (canvas pixels): strokes are cut at its
+# edges, fills clipped to it and lettering placed outside it dropped. A
+# cropped view on a sheet shows no more than its crop.
+function clip bim canvas {a pointer to a bim canvas record:canvas} past {integer:firstBatch} batches and {integer:firstText} texts to {cad vector2:low} and {cad vector2:high}:
+    execute:
+        loop batchCursor from firstBatch to the length of (canvas's batches's values):
+            set batch to the item at batchCursor in (canvas's batches's values)
+            set clipped to a cad topology list of a cad vector2
+            set corner to 0
+            if batch's stroked:
+                loop while (corner + 5) < the length of (batch's pixels's values):
+                    set first to the bim stroke anchor of (batch's pixels's values) at corner
+                    set second to the bim stroke anchor of (batch's pixels's values) at (corner + 2)
+                    set shown to true
+                    loop edgeCode from 0 to 4:
+                        if shown:
+                            set firstDepth to the bim clip depth of first past edge edgeCode of low to high
+                            set secondDepth to the bim clip depth of second past edge edgeCode of low to high
+                            if (firstDepth < 0.0) and (secondDepth < 0.0):
+                                set shown to false
+                            else if firstDepth < 0.0:
+                                set share to firstDepth / (firstDepth - secondDepth)
+                                set first to a cad vector2 with x (first's x + ((second's x - first's x) * share)) and y (first's y + ((second's y - first's y) * share))
+                            else if secondDepth < 0.0:
+                                set share to firstDepth / (firstDepth - secondDepth)
+                                set second to a cad vector2 with x (first's x + ((second's x - first's x) * share)) and y (first's y + ((second's y - first's y) * share))
+                    if shown:
+                        append bim stroke quad from first to second wide batch's breadth into (clipped's values)
+                    set corner to corner + 6
+            else:
+                loop while (corner + 2) < the length of (batch's pixels's values):
+                    set cornerA to the item at corner in (batch's pixels's values)
+                    set cornerB to the item at (corner + 1) in (batch's pixels's values)
+                    set cornerC to the item at (corner + 2) in (batch's pixels's values)
+                    if ((bim canvas spot cornerA lies within low to high) and (bim canvas spot cornerB lies within low to high)) and (bim canvas spot cornerC lies within low to high):
+                        append cornerA to (clipped's values)
+                        append cornerB to (clipped's values)
+                        append cornerC to (clipped's values)
+                    else:
+                        set whole to an empty list of a cad vector2
+                        append cornerA to whole
+                        append cornerB to whole
+                        append cornerC to whole
+                        set pastLeft to an empty list of a cad vector2
+                        append bim polygon whole kept past edge 0 of low to high into pastLeft
+                        set pastRight to an empty list of a cad vector2
+                        append bim polygon pastLeft kept past edge 1 of low to high into pastRight
+                        set pastLower to an empty list of a cad vector2
+                        append bim polygon pastRight kept past edge 2 of low to high into pastLower
+                        set pastUpper to an empty list of a cad vector2
+                        append bim polygon pastLower kept past edge 3 of low to high into pastUpper
+                        loop fan from 1 to ((the length of pastUpper) - 1):
+                            append (the item at 0 in pastUpper) to (clipped's values)
+                            append (the item at fan in pastUpper) to (clipped's values)
+                            append (the item at (fan + 1) in pastUpper) to (clipped's values)
+                        free whole
+                        free pastLeft
+                        free pastRight
+                        free pastLower
+                        free pastUpper
+                    set corner to corner + 3
+            set batch's pixels to clipped
+            replace item at index batchCursor in (canvas's batches's values) with batch
+        set textCursor to (the length of (canvas's texts's values)) - 1
+        loop while textCursor >= firstText:
+            set label to the item at textCursor in (canvas's texts's values)
+            if (bim canvas spot (a cad vector2 with x label's x and y label's y) lies within low to high) = false:
+                remove item textCursor from (canvas's texts's values)
+            set textCursor to textCursor - 1
+
 # Lettering follows model anchors, with unscaled font size and local offsets.
 function the bim canvas text position of {bim canvas text record:label} scaled by {a 64 bit floating-point number:scale} shifted by {a 64 bit floating-point number:dx} and {a 64 bit floating-point number:dy}:
     execute:
