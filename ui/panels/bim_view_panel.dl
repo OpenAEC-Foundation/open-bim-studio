@@ -448,18 +448,139 @@ function the bim halftone text of {bim view rules record:viewRules}:
                 set written to written + (the string form of "-")
         return written
 
-# Writes the triangles of `shape`, less `offset`, into `target` from vertex
-# `base` and index `position` on, for element `ordinal` in `tint`: each
-# distinct corner once (the shaders find each face's normal per pixel), and
-# for round surfaces once per smooth group; and, when `edged`, the shape's
-# feature edges as pairs of the vertices written, appended to `edgeEnds`.
-# The number of vertices written.
-function write bim gpu triangles of {fast mesh record:shape} less {cad vector3:offset} for element {integer:ordinal} in {cad vector3:tint} from vertex {integer:base} and index {integer:position} edged {boolean:withEdges} into {gpu mesh slot record:target} adding edges to {a pointer to a list:edgeEnds}:
+# The triangles of a mesh as the GPU takes them, made once and written again
+# for as long as the mesh stays: each distinct corner once (the shaders find
+# each face's normal per pixel), and for round surfaces once per smooth
+# group, with its normal packed; the triangles' corners as those; and, when
+# `edged`, the feature edges as pairs of them. `ready` is false for one not
+# made yet.
+class:
+    patterns:
+        [a|] bim gpu preparation record
+    members:
+        ready as a boolean
+        edged as a boolean
+        spots as the type of (a cad topology list of a cad vector3)
+        normals as the type of (a cad topology list of an integer)
+        corners as the type of (a cad topology list of an integer)
+        edges as the type of (a cad topology list of an integer)
+
+function a bim gpu preparation to make:
     execute:
-        set red to tint's x as an integer
-        set green to tint's y as an integer
-        set blue to tint's z as an integer
-        set slot to position
+        return @intrinsic("construct", a bim gpu preparation record, false, false, a cad topology list of a cad vector3, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer)
+
+# What the native upload keeps of the meshes it wrote last: each mesh with
+# its extent and its preparation, the shared shapes with theirs, and the
+# extent of all. A mesh whose lists are the very same again (a mesh kept
+# across an edit) is not measured, welded or smoothed again. `entries` holds
+# the meshes, so that none of their lists is released and its place taken
+# by another.
+class:
+    patterns:
+        [a|] bim gpu preparations record
+    members:
+        entries as the type of (a cad topology list of a bim scene mesh record)
+        lows as the type of (a cad topology list of a cad vector3)
+        highs as the type of (a cad topology list of a cad vector3)
+        prepared as the type of (a cad topology list of a bim gpu preparation record)
+        classShapes as the type of (a cad topology list of a fast mesh record)
+        classPrepared as the type of (a cad topology list of a bim gpu preparation record)
+        low as a cad vector3
+        high as a cad vector3
+
+function empty bim gpu preparations:
+    execute:
+        set nowhere to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        return @intrinsic("construct", a bim gpu preparations record, a cad topology list of a bim scene mesh record, a cad topology list of a cad vector3, a cad topology list of a cad vector3, a cad topology list of a bim gpu preparation record, a cad topology list of a fast mesh record, a cad topology list of a bim gpu preparation record, nowhere, nowhere)
+
+# Brings `held` to `nativeMeshes`: the extent and the preparation of every
+# mesh it knows carried over, the extent of the others measured and their
+# preparation left to make; and the extent of all (low above high when
+# there is no corner).
+function refresh bim gpu preparations {a pointer to a bim gpu preparations record:held} over {a pointer to a list:nativeMeshes}:
+    execute:
+        set keys to the bim kept mesh keys of (held's entries's values)
+        set entriesNow to a cad topology list of a bim scene mesh record
+        set lowsNow to a cad topology list of a cad vector3
+        set highsNow to a cad topology list of a cad vector3
+        set preparedNow to a cad topology list of a bim gpu preparation record
+        set unmade to a bim gpu preparation to make
+        set infinity to 1.0 / 0.0
+        set allLowX to infinity
+        set allLowY to infinity
+        set allLowZ to infinity
+        set allHighX to 0.0 - infinity
+        set allHighY to 0.0 - infinity
+        set allHighZ to 0.0 - infinity
+        loop cursor from 0 to the length of nativeMeshes:
+            set entry to the item at cursor in nativeMeshes
+            set slot to the bim kept slot of entry's elementId part entry's part among keys
+            set carried to false
+            if slot >= 0:
+                set remembered to the item at slot in (held's entries's values)
+                if (remembered's shape's positions's references = entry's shape's positions's references) and (remembered's shape's triangles's references = entry's shape's triangles's references):
+                    set carried to true
+            set lower to a cad vector3 with x infinity, y infinity and z infinity
+            set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
+            if carried:
+                set lower to the item at slot in (held's lows's values)
+                set upper to the item at slot in (held's highs's values)
+                append (the item at slot in (held's prepared's values)) to (preparedNow's values)
+            else:
+                set lowX to infinity
+                set lowY to infinity
+                set lowZ to infinity
+                set highX to 0.0 - infinity
+                set highY to 0.0 - infinity
+                set highZ to 0.0 - infinity
+                set points to entry's shape's positions's values
+                loop point from 0 to the length of points:
+                    set p to the item at point in points
+                    if p's x < lowX:
+                        set lowX to p's x
+                    if p's x > highX:
+                        set highX to p's x
+                    if p's y < lowY:
+                        set lowY to p's y
+                    if p's y > highY:
+                        set highY to p's y
+                    if p's z < lowZ:
+                        set lowZ to p's z
+                    if p's z > highZ:
+                        set highZ to p's z
+                set lower to a cad vector3 with x lowX, y lowY and z lowZ
+                set upper to a cad vector3 with x highX, y highY and z highZ
+                append unmade to (preparedNow's values)
+            append entry to (entriesNow's values)
+            append lower to (lowsNow's values)
+            append upper to (highsNow's values)
+            if lower's x < allLowX:
+                set allLowX to lower's x
+            if lower's y < allLowY:
+                set allLowY to lower's y
+            if lower's z < allLowZ:
+                set allLowZ to lower's z
+            if upper's x > allHighX:
+                set allHighX to upper's x
+            if upper's y > allHighY:
+                set allHighY to upper's y
+            if upper's z > allHighZ:
+                set allHighZ to upper's z
+        set held's entries to entriesNow
+        set held's lows to lowsNow
+        set held's highs to highsNow
+        set held's prepared to preparedNow
+        set held's low to a cad vector3 with x allLowX, y allLowY and z allLowZ
+        set held's high to a cad vector3 with x allHighX, y allHighY and z allHighZ
+        free keys
+
+# The preparation of `shape`, with its feature edges when `withEdges`.
+function the bim gpu preparation of {fast mesh record:shape} edged {boolean:withEdges}:
+    execute:
+        set madeSpots to a cad topology list of a cad vector3
+        set madeNormals to a cad topology list of an integer
+        set madeCorners to a cad topology list of an integer
+        set madeEdges to a cad topology list of an integer
         # The corners welded by position: each triangle corner as the
         # spot it lies on.
         set welds to the bim welding of shape
@@ -531,15 +652,15 @@ function write bim gpu triangles of {fast mesh record:shape} less {cad vector3:o
             if chosen < 0:
                 set chosen to made
                 if (the item at weld in chainHead) < 0:
-                    replace item at index weld in spotVertex with (base + made)
+                    replace item at index weld in spotVertex with made
                 append smoothNormal to chainNormal
                 append (the item at weld in chainHead) to chainNext
                 replace item at index weld in chainHead with made
                 set spot to the item at weld in spots
-                put gpu mesh vertex (base + made) at (spot's x - offset's x), (spot's y - offset's y) and (spot's z - offset's z) of element ordinal coloured red, green and blue facing smoothNormal's x, smoothNormal's y and smoothNormal's z in target
+                append spot to (madeSpots's values)
+                append (the gpu packed normal of smoothNormal's x, smoothNormal's y and smoothNormal's z) to (madeNormals's values)
                 set made to made + 1
-            put gpu mesh index slot as (base + chosen) in target
-            set slot to slot + 1
+            append chosen to (madeCorners's values)
         free faceNormals
         free incidentStart
         free incidentFill
@@ -553,11 +674,67 @@ function write bim gpu triangles of {fast mesh record:shape} less {cad vector3:o
             set pairs to an empty list of an integer
             append bim feature edge pairs of spots and triangleCorners to pairs
             loop pairCursor from 0 to the length of pairs:
-                append (the item at (the item at pairCursor in pairs) in spotVertex) to edgeEnds
+                append (the item at (the item at pairCursor in pairs) in spotVertex) to (madeEdges's values)
             free pairs
         free spotVertex
         free bim welding (the address of welds)
-        return made
+        return @intrinsic("construct", a bim gpu preparation record, true, withEdges, madeSpots, madeNormals, madeCorners, madeEdges)
+
+
+# Writes `prepared`, less `offset`, into `target` from vertex `base` and
+# index `position` on, for element `ordinal` in `tint`, its feature edges as
+# pairs of the vertices written appended to `edgeEnds` when `withEdges`. The
+# number of vertices written.
+function write bim gpu preparation {bim gpu preparation record:prepared} less {cad vector3:offset} for element {integer:ordinal} in {cad vector3:tint} from vertex {integer:base} and index {integer:position} edged {boolean:withEdges} into {gpu mesh slot record:target} adding edges to {a pointer to a list:edgeEnds}:
+    execute:
+        set colourWord to the gpu colour word of (tint's x as an integer), (tint's y as an integer) and (tint's z as an integer)
+        set spots to prepared's spots's values
+        set normals to prepared's normals's values
+        set corners to prepared's corners's values
+        set offsetX to offset's x
+        set offsetY to offset's y
+        set offsetZ to offset's z
+        loop corner from 0 to the length of spots:
+            set spot to the item at corner in spots
+            put gpu mesh vertex (base + corner) at (spot's x - offsetX), (spot's y - offsetY) and (spot's z - offsetZ) of element ordinal in colour word colourWord with packed normal (the item at corner in normals) in target
+        loop corner from 0 to the length of corners:
+            put gpu mesh index (position + corner) as (base + (the item at corner in corners)) in target
+        if withEdges:
+            set pairs to prepared's edges's values
+            loop pairCursor from 0 to the length of pairs:
+                append (base + (the item at pairCursor in pairs)) to edgeEnds
+        return the length of spots
+
+# The same, the feature edges written straight into `target`'s edges from
+# edge end `edgeBase` on (`prepare gpu mesh slot … of … edge ends`), when
+# `withEdges`.
+function write bim gpu preparation {bim gpu preparation record:prepared} less {cad vector3:offset} for element {integer:ordinal} in {cad vector3:tint} from vertex {integer:base} and index {integer:position} edged {boolean:withEdges} into {gpu mesh slot record:target} with edges from {integer:edgeBase}:
+    execute:
+        set colourWord to the gpu colour word of (tint's x as an integer), (tint's y as an integer) and (tint's z as an integer)
+        set spots to prepared's spots's values
+        set normals to prepared's normals's values
+        set corners to prepared's corners's values
+        set offsetX to offset's x
+        set offsetY to offset's y
+        set offsetZ to offset's z
+        loop corner from 0 to the length of spots:
+            set spot to the item at corner in spots
+            put gpu mesh vertex (base + corner) at (spot's x - offsetX), (spot's y - offsetY) and (spot's z - offsetZ) of element ordinal in colour word colourWord with packed normal (the item at corner in normals) in target
+        loop corner from 0 to the length of corners:
+            put gpu mesh index (position + corner) as (base + (the item at corner in corners)) in target
+        if withEdges:
+            set pairs to prepared's edges's values
+            loop pairCursor from 0 to the length of pairs:
+                put gpu mesh edge end (edgeBase + pairCursor) as (base + (the item at pairCursor in pairs)) in target
+        return the length of spots
+
+# Writes the triangles of `shape`, less `offset`, into `target` from vertex
+# `base` and index `position` on, for element `ordinal` in `tint`: its
+# preparation, made and written at once. The number of vertices written.
+function write bim gpu triangles of {fast mesh record:shape} less {cad vector3:offset} for element {integer:ordinal} in {cad vector3:tint} from vertex {integer:base} and index {integer:position} edged {boolean:withEdges} into {gpu mesh slot record:target} adding edges to {a pointer to a list:edgeEnds}:
+    execute:
+        set prepared to the bim gpu preparation of shape edged withEdges
+        return write bim gpu preparation prepared less offset for element ordinal in tint from vertex base and index position edged withEdges into target adding edges to edgeEnds
 
 # Widens `low` and `high` (pointers to cad vector3) over the corners of `meshes`.
 local function widen bim gpu extent {a pointer to a cad vector3:low} and {a pointer to a cad vector3:high} over {a pointer to a list:meshes}:
@@ -796,6 +973,15 @@ function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim ed
 # across an edit is not placed, hashed and matched again).
 function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim editor record:editor} in mode {integer:viewMode} leaving out {a pointer to a list:hiddenIds} remembering {a pointer to a bim native memory record:memory} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
     execute:
+        set unkept to empty bim gpu preparations
+        refresh bim gpu preparations (the address of unkept) over nativeMeshes
+        upload bim gpu native of nativeMeshes for editor in mode viewMode leaving out hiddenIds remembering memory preparing (the address of unkept) into scene on window
+
+# The same, the meshes' extents and preparations in `held`, brought to
+# `nativeMeshes` before (`refresh bim gpu preparations … over`): a mesh kept
+# across an edit is written from what was made of it before.
+function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim editor record:editor} in mode {integer:viewMode} leaving out {a pointer to a list:hiddenIds} remembering {a pointer to a bim native memory record:memory} preparing {a pointer to a bim gpu preparations record:held} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+    execute:
         set context to the gpu context of window
         set origin to scene's origin
         set withEdges to viewMode != bim shaded view mode
@@ -803,54 +989,76 @@ function upload bim gpu native of {a pointer to a list:nativeMeshes} for {bim ed
         set meshOrdinals to an empty list of an integer
         ignore the bim gpu ordinals after numbering nativeMeshes from (the length of (scene's importIds's values)) into meshOrdinals naming (scene's nativeIds's values)
         set nativeBatch to the bim native instances among nativeMeshes leaving out hiddenIds remembering memory
-        upload bim native instances nativeBatch from nativeMeshes numbered meshOrdinals edged withEdges into scene on window
+        upload bim native instances nativeBatch from nativeMeshes numbered meshOrdinals edged withEdges preparing held into scene on window
+        # What each mesh writes: 0 nothing (left out, or an instance of a
+        # shared shape), 1 its triangles, 2 its lines. The triangles'
+        # preparations are made first, so that the edges are counted
+        # before the slot is given its room.
+        # A preparation is made with its edges whatever the view mode, so
+        # that another mode writes the meshes without making them again.
+        set writes to an empty list of an integer
         set vertexBound to 0
-        loop cursor from 0 to the length of nativeMeshes:
-            if ((bim element ((the item at cursor in nativeMeshes)'s elementId) is among hiddenIds) = false) and ((bim native entry cursor is shared in nativeBatch) = false):
-                set vertexBound to vertexBound + (the length of ((the item at cursor in nativeMeshes)'s shape's triangles's values))
-                if bim scene mesh (the item at cursor in nativeMeshes) draws lines:
-                    set vertexBound to vertexBound + (the length of ((the item at cursor in nativeMeshes)'s shape's positions's values))
-        set infinity to 1.0 / 0.0
-        set lower to a cad vector3 with x infinity, y infinity and z infinity
-        set upper to a cad vector3 with x (0.0 - infinity), y (0.0 - infinity) and z (0.0 - infinity)
-        widen bim gpu extent (the address of lower) and (the address of upper) over nativeMeshes
-        set scene's nativeLow to lower
-        set scene's nativeHigh to upper
-        prepare gpu mesh slot (bim gpu native slot) of vertexBound vertices and vertexBound indices in context
-        set target to the gpu mesh held in slot (bim gpu native slot) of context
-        set edgeEnds to an empty list of an integer
-        # Meshes of lines (reinforcement as its centre lines) give vertices
-        # and edges, no triangles: their edges follow the feature edges.
-        set lineEnds to an empty list of an integer
-        set base to 0
-        set position to 0
+        set edgeTotal to 0
+        set lineTotal to 0
         loop cursor from 0 to the length of nativeMeshes:
             set entry to the item at cursor in nativeMeshes
-            if bim element entry's elementId is among hiddenIds:
-                set entry to entry
-            else if bim native entry cursor is shared in nativeBatch:
-                set entry to entry
-            else if bim scene mesh entry draws lines:
+            set written to 0
+            if ((bim element entry's elementId is among hiddenIds) = false) and ((bim native entry cursor is shared in nativeBatch) = false):
+                if bim scene mesh entry draws lines:
+                    set written to 2
+                    set vertexBound to vertexBound + (the length of (entry's shape's positions's values))
+                    set lineTotal to lineTotal + (the length of (entry's shape's positions's values))
+                else:
+                    set written to 1
+                    set vertexBound to vertexBound + (the length of (entry's shape's triangles's values))
+                    set piece to the item at cursor in (held's prepared's values)
+                    if (piece's ready = false) or (withEdges and (piece's edged = false)):
+                        set piece to the bim gpu preparation of entry's shape edged true
+                        replace item at index cursor in (held's prepared's values) with piece
+                    if withEdges:
+                        set edgeTotal to edgeTotal + (the length of (piece's edges's values))
+            append written to writes
+        set scene's nativeLow to held's low
+        set scene's nativeHigh to held's high
+        prepare gpu mesh slot (bim gpu native slot) of vertexBound vertices and vertexBound indices in context
+        prepare gpu mesh slot (bim gpu native slot) of (edgeTotal + lineTotal) edge ends in context
+        set target to the gpu mesh held in slot (bim gpu native slot) of context
+        # Meshes of lines (reinforcement as its centre lines) give vertices
+        # and edges, no triangles: their edges follow the feature edges.
+        set originX to origin's x
+        set originY to origin's y
+        set originZ to origin's z
+        set base to 0
+        set position to 0
+        set edgeCursor to 0
+        set lineCursor to edgeTotal
+        loop cursor from 0 to the length of nativeMeshes:
+            set written to the item at cursor in writes
+            if written = 2:
+                set entry to the item at cursor in nativeMeshes
                 set linePoints to entry's shape's positions's values
                 set lineTint to the bim gpu base colour of entry
+                set lineColour to the gpu colour word of (lineTint's x as an integer), (lineTint's y as an integer) and (lineTint's z as an integer)
+                set lineOrdinal to the item at cursor in meshOrdinals
                 loop lineCorner from 0 to the length of linePoints:
                     set linePoint to the item at lineCorner in linePoints
-                    put gpu mesh vertex (base + lineCorner) at (linePoint's x - origin's x), (linePoint's y - origin's y) and (linePoint's z - origin's z) of element (the item at cursor in meshOrdinals) coloured (lineTint's x as an integer), (lineTint's y as an integer) and (lineTint's z as an integer) in target
-                    append (base + lineCorner) to lineEnds
+                    put gpu mesh vertex (base + lineCorner) at (linePoint's x - originX), (linePoint's y - originY) and (linePoint's z - originZ) of element lineOrdinal in colour word lineColour with packed normal 0 in target
+                    put gpu mesh edge end (lineCursor + lineCorner) as (base + lineCorner) in target
                 set base to base + (the length of linePoints)
-            else:
-                set made to write bim gpu triangles of entry's shape less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged withEdges into target adding edges to edgeEnds
+                set lineCursor to lineCursor + (the length of linePoints)
+            else if written = 1:
+                set entry to the item at cursor in nativeMeshes
+                set piece to the item at cursor in (held's prepared's values)
+                set made to write bim gpu preparation piece less origin for element (the item at cursor in meshOrdinals) in (the bim gpu base colour of entry) from vertex base and index position edged withEdges into target with edges from edgeCursor
                 set base to base + made
                 set position to position + (the length of (entry's shape's triangles's values))
-        set scene's nativeLineFirst to the length of edgeEnds
-        set scene's nativeLineCount to the length of lineEnds
-        loop lineCursor from 0 to the length of lineEnds:
-            append (the item at lineCursor in lineEnds) to edgeEnds
-        set gpu mesh slot (bim gpu native slot) edges to edgeEnds in context
+                if withEdges:
+                    set edgeCursor to edgeCursor + (the length of (piece's edges's values))
+        set scene's nativeLineFirst to edgeTotal
+        set scene's nativeLineCount to lineTotal
         set scene's nativeIndexCount to position
-        set scene's nativeEdgeCount to the length of edgeEnds
-        free edgeEnds
-        free lineEnds
+        set scene's nativeEdgeCount to edgeTotal + lineTotal
+        free writes
         free meshOrdinals
         settle bim gpu extent of scene
 
@@ -2944,7 +3152,7 @@ function draw bim space objects of {bim editor record:editor} on level {a 64 bit
 
 # Repeated native solids use their own instance slot. Unique geometry stays
 # in the existing native mesh, avoiding one draw call per unique object.
-function upload bim native instances {bim native instances record:batch} from {a pointer to a list:entries} numbered {a pointer to a list:ordinals} edged {boolean:withEdges} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
+function upload bim native instances {bim native instances record:batch} from {a pointer to a list:entries} numbered {a pointer to a list:ordinals} edged {boolean:withEdges} preparing {a pointer to a bim gpu preparations record:held} into {a pointer to a bim gpu scene record:scene} on {pointer:window}:
     execute:
         set context to the gpu context of window
         set vertexBound to 0
@@ -2964,18 +3172,42 @@ function upload bim native instances {bim native instances record:batch} from {a
         set vertexCursor to 0
         set indexCursor to 0
         set instanceCursor to 0
+        # The shared shapes' preparations, kept from the upload before: a
+        # shape is looked for where it stood then first.
+        set shapesNow to a cad topology list of a fast mesh record
+        set preparedNow to a cad topology list of a bim gpu preparation record
+        set shapesBefore to the length of (held's classShapes's values)
         loop prototypeCursor from 0 to the length of (batch's prototypes's values):
             append instanceCursor to nextPlacement
             set placedCount to the item at prototypeCursor in (batch's counts's values)
             if placedCount > 1:
                 set prototypeShape to the item at prototypeCursor in (batch's prototypes's values)
                 set firstEdge to the length of edgeEnds
-                set written to write bim gpu triangles of prototypeShape less zero for element 0 in zero from vertex vertexCursor and index indexCursor edged withEdges into gpuTarget adding edges to edgeEnds
+                set found to -1
+                set hint to the length of (shapesNow's values)
+                if hint < shapesBefore:
+                    if (the item at hint in (held's classShapes's values))'s positions's references = prototypeShape's positions's references:
+                        set found to hint
+                set seek to 0
+                loop while (seek < shapesBefore) and (found < 0):
+                    if (the item at seek in (held's classShapes's values))'s positions's references = prototypeShape's positions's references:
+                        set found to seek
+                    set seek to seek + 1
+                set piece to a bim gpu preparation to make
+                if found >= 0:
+                    set piece to the item at found in (held's classPrepared's values)
+                if (piece's ready = false) or (withEdges and (piece's edged = false)):
+                    set piece to the bim gpu preparation of prototypeShape edged true
+                append prototypeShape to (shapesNow's values)
+                append piece to (preparedNow's values)
+                set written to write bim gpu preparation piece less zero for element 0 in zero from vertex vertexCursor and index indexCursor edged withEdges into gpuTarget adding edges to edgeEnds
                 set indexCount to the length of (prototypeShape's triangles's values)
                 append (@intrinsic("construct", a bim gpu shape draw record, indexCursor, indexCount, firstEdge, (the length of edgeEnds) - firstEdge, instanceCursor, placedCount)) to (scene's nativeShapes's values)
                 set vertexCursor to vertexCursor + written
                 set indexCursor to indexCursor + indexCount
                 set instanceCursor to instanceCursor + placedCount
+        set held's classShapes to shapesNow
+        set held's classPrepared to preparedNow
         set gpu mesh slot (bim gpu native instance slot) edges to edgeEnds in context
         set rows to an empty list of a 64 bit floating-point number
         loop entryCursor from 0 to the length of entries:
