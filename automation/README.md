@@ -49,7 +49,7 @@ Windows; request and response contents are UTF-8.
 |---|---|
 | `launch`, `connect`, `close` | Start/attach; close only processes this adapter launched |
 | `state`, `elements`, `properties`, `buttons`, `system_types` | Inspect the model/editor |
-| `create_wall`, `create_floor`, `create_building_system` | Native model creation, one undo step each |
+| `create_wall`, `create_floor`, `create_building_system`, `create_linear` (after `use_profile` or `apply_type`) | Native model creation, one undo step each |
 | `create_grid`, `repeat_grid`, `set_cursor` | Grid creation/repetition and the model cursor |
 | `select`, `set_property`, `undo`, `redo` | Native selection, properties and transactions |
 | `list_types`, `create_type`, `duplicate_type`, `set_type_field`, `apply_type`, `delete_type` | Native IfcTypes library and undoable definition edits |

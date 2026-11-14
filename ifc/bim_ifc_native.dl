@@ -21,6 +21,14 @@
 # extrusion of a rectangle, circle or I-shape becomes a linear element from
 # its profile's centre along its sweep, of a linear type of that size and
 # material (an I-shape as its outer rectangle).
+#
+# A wall or member in any other representation (a B-rep, a mapped shape, a
+# boolean) is measured from its triangles: a wall when they are an upright
+# prism on a straight footprint, a member when every corner lies on its
+# section's rectangle or circle. A member of another section (an I, a hollow
+# section) is kept apart as `shaped`, with its section's area, for the
+# profile catalogue to give it its type (`elements/linear/
+# bim_ifc_profiles.dl`); without one it stays an imported element.
 import ifc/bim_ifc_read.dl
 import ifc/bim_ifc_psets.dl
 import ifc/bim_ifc_grid.dl
@@ -71,6 +79,14 @@ class:
         material as a string
         role as an integer
         turn as a 64 bit floating-point number
+        # A shaped member's (its `round` then says its section's outline is
+        # a circle): the area of its section, whether it has corners near a
+        # middle line of its section (a web), whether its web lies along
+        # its width, and the catalogue profile it was fitted to (0 none).
+        sectionArea as a 64 bit floating-point number
+        webbed as a boolean
+        webAcross as a boolean
+        catalogueKey as a 64 bit integer
 
 class:
     patterns:
@@ -92,6 +108,10 @@ class:
         slabSources as the type of (a cad topology list of an integer)
         linearSources as the type of (a cad topology list of an integer)
         psets as the type of (a cad topology list of a bim pset entry record)
+        # The members of a section the model has no plain type for, and the
+        # STEP instance of each.
+        shaped as the type of (a cad topology list of a bim ifc native linear record)
+        shapedSources as the type of (a cad topology list of an integer)
 
 # The extrusions of a representation in the world: the corners of each
 # one's profile at its start (`bottoms`) and its sweep (`sweeps`); `found`
@@ -316,10 +336,285 @@ function the bim ifc section of representation {integer:representationId} throug
             set result's xAxis to profileFrame's xAxis
         return result
 
+# ---------------------------------------------------------------- solids measured from their triangles
+
+# The triangles of representation `representationId` through `frame`, three
+# points each (none when it has no geometry).
+function the bim ifc corners of representation {integer:representationId} through {bim ifc frame record:frame} in {a pointer to a bim ifc reader record:reader}:
+    execute:
+        set cornerList to an empty list of a cad vector3
+        if (bim step file (reader's stepFile) holds representationId) = false:
+            return cornerList
+        set painted to an empty bim ifc painted mesh
+        set noColour to -1
+        add bim ifc representation representationId through frame coloured noColour to (the address of painted) in reader
+        loop groupCursor from 0 to the length of (painted's groups):
+            set colourGroup to the item at groupCursor in (painted's groups)
+            set indexList to colourGroup's triangles's values
+            loop indexCursor from 0 to the length of indexList:
+                append (the item at (the item at indexCursor in indexList) in (colourGroup's positions's values)) to cornerList
+        free bim ifc painted (the address of painted)
+        return cornerList
+
+# The direction most of the edges of the triangles `cornerList` run in, by
+# their length (seen in plan when `onPlan`); of length 0 when there is none.
+function the bim ifc main run of {a pointer to a list:cornerList} seen in plan {boolean:onPlan}:
+    execute:
+        set runList to an empty list of a cad vector3
+        set weightList to an empty list of a 64 bit floating-point number
+        set longestList to an empty list of a 64 bit floating-point number
+        set cornerCount to the length of cornerList
+        set firstCorner to 0
+        loop while (firstCorner + 2) < cornerCount:
+            loop sideIndex from 0 to 3:
+                set fromPoint to the item at (firstCorner + sideIndex) in cornerList
+                set toPoint to the item at (firstCorner + (the remainder of (sideIndex + 1) divided by 3)) in cornerList
+                set edgeVector to the cad difference of toPoint and fromPoint
+                if onPlan:
+                    set edgeVector to a cad vector3 with x edgeVector's x, y edgeVector's y and z 0.0
+                set edgeLength to the cad length of edgeVector
+                if edgeLength >= 0.02:
+                    set unitEdge to edgeVector scaled by (1.0 / edgeLength)
+                    set matched to -1
+                    loop runCursor from 0 to the length of runList:
+                        if matched < 0:
+                            if (the absolute value of (the cad dot of (the item at runCursor in runList) and unitEdge)) > 0.9999:
+                                set matched to runCursor
+                    if matched >= 0:
+                        replace item at index matched in weightList with ((the item at matched in weightList) + edgeLength)
+                        if edgeLength > (the item at matched in longestList):
+                            replace item at index matched in longestList with edgeLength
+                            replace item at index matched in runList with unitEdge
+                    else if (the length of runList) < 64:
+                        append unitEdge to runList
+                        append edgeLength to weightList
+                        append edgeLength to longestList
+            set firstCorner to firstCorner + 3
+        set mainRun to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set mainWeight to 0.0
+        loop runCursor from 0 to the length of runList:
+            if (the item at runCursor in weightList) > mainWeight:
+                set mainWeight to the item at runCursor in weightList
+                set mainRun to the item at runCursor in runList
+        free runList
+        free weightList
+        free longestList
+        return mainRun
+
+# From where to where the points `cornerList` reach along `axis`.
+class:
+    patterns:
+        [a|] bim ifc span record
+    members:
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+
+function the bim ifc span of {a pointer to a list:cornerList} along {cad vector3:axis}:
+    execute:
+        set reach to @intrinsic("construct", a bim ifc span record, 1.0e30, -1.0e30)
+        loop cursor from 0 to the length of cornerList:
+            set alongValue to the cad dot of (the item at cursor in cornerList) and axis
+            set reach's low to the minimum of reach's low and alongValue
+            set reach's high to the maximum of reach's high and alongValue
+        return reach
+
+# The volume the triangles `cornerList` enclose (a closed shell's).
+function the bim ifc volume of {a pointer to a list:cornerList}:
+    execute:
+        set cornerCount to the length of cornerList
+        if cornerCount < 3:
+            return 0.0
+        set anchor to the item at 0 in cornerList
+        set sixfold to 0.0
+        set firstCorner to 0
+        loop while (firstCorner + 2) < cornerCount:
+            set first to the cad difference of (the item at firstCorner in cornerList) and anchor
+            set second to the cad difference of (the item at (firstCorner + 1) in cornerList) and anchor
+            set third to the cad difference of (the item at (firstCorner + 2) in cornerList) and anchor
+            set sixfold to sixfold + (the cad dot of first and (the cad cross of second and third))
+            set firstCorner to firstCorner + 3
+        return (the absolute value of sixfold) / 6.0
+
+# The plan area of the triangles of `cornerList` that lie level at `height`.
+function the bim ifc level area of {a pointer to a list:cornerList} at {a 64 bit floating-point number:height}:
+    execute:
+        set cornerCount to the length of cornerList
+        set levelArea to 0.0
+        set firstCorner to 0
+        loop while (firstCorner + 2) < cornerCount:
+            set first to the item at firstCorner in cornerList
+            set second to the item at (firstCorner + 1) in cornerList
+            set third to the item at (firstCorner + 2) in cornerList
+            if ((the absolute value of (first's z - height)) < 0.002) and (((the absolute value of (second's z - height)) < 0.002) and ((the absolute value of (third's z - height)) < 0.002)):
+                set levelArea to levelArea + ((the absolute value of (((second's x - first's x) * (third's y - first's y)) - ((third's x - first's x) * (second's y - first's y)))) * 0.5)
+            set firstCorner to firstCorner + 3
+        return levelArea
+
+# A wall measured from its triangles: `found` when they are an upright prism
+# (its top as large as its foot, its volume their area times its height) on
+# a footprint about a rectangle as thick as a wall; its centre line from
+# `start` to `finish`, its foot and head, and its thickness.
+class:
+    patterns:
+        [a|] bim ifc measured wall record
+    members:
+        found as a boolean
+        start as a cad vector2
+        finish as a cad vector2
+        foot as a 64 bit floating-point number
+        head as a 64 bit floating-point number
+        thickness as a 64 bit floating-point number
+
+function the bim ifc wall measured in {a pointer to a list:cornerList}:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        set wallResult to @intrinsic("construct", a bim ifc measured wall record, false, nowhere, nowhere, 0.0, 0.0, 0.0)
+        if (the length of cornerList) < 12:
+            return wallResult
+        set wallRun to the bim ifc main run of cornerList seen in plan true
+        if (the cad length of wallRun) < 0.5:
+            return wallResult
+        set acrossAxis to a cad vector3 with x (0.0 - wallRun's y), y wallRun's x and z 0.0
+        set alongSpan to the bim ifc span of cornerList along wallRun
+        set acrossSpan to the bim ifc span of cornerList along acrossAxis
+        set heightSpan to the bim ifc span of cornerList along (a cad vector3 with x 0.0, y 0.0 and z 1.0)
+        set wallLength to alongSpan's high - alongSpan's low
+        set wallThickness to acrossSpan's high - acrossSpan's low
+        set wallHeight to heightSpan's high - heightSpan's low
+        if ((wallThickness < 0.03) or (wallThickness > 1.5)) or ((wallLength < 0.1) or (wallHeight < 0.1)):
+            return wallResult
+        set footArea to the bim ifc level area of cornerList at heightSpan's low
+        set topArea to the bim ifc level area of cornerList at heightSpan's high
+        set solidVolume to the bim ifc volume of cornerList
+        set upright to ((the absolute value of (topArea - footArea)) <= (0.02 * footArea)) and ((the absolute value of (solidVolume - (footArea * wallHeight))) <= (0.02 * solidVolume))
+        if upright and (footArea >= ((0.75 * wallLength) * wallThickness)):
+            set middle to (acrossSpan's low + acrossSpan's high) * 0.5
+            set wallResult's found to true
+            set wallResult's start to a cad vector2 with x ((wallRun's x * alongSpan's low) + (acrossAxis's x * middle)) and y ((wallRun's y * alongSpan's low) + (acrossAxis's y * middle))
+            set wallResult's finish to a cad vector2 with x ((wallRun's x * alongSpan's high) + (acrossAxis's x * middle)) and y ((wallRun's y * alongSpan's high) + (acrossAxis's y * middle))
+            set wallResult's foot to heightSpan's low
+            set wallResult's head to heightSpan's high
+            set wallResult's thickness to wallThickness
+        return wallResult
+
+# A member measured from its triangles, along the direction most of its
+# edges run in (an upright one first tried along the height): `kind` 1 when
+# every corner lies on a corner of its section's box (a rectangle, whatever
+# cuts its ends), 2 when every corner lies on its circle, 3 for another
+# section, 0 when it has none. Its axis from `start` to `finish` through the
+# middle of its section's box, the box's `width` and `depth`, the `turn` of
+# an upright one's width from the x axis, its section's area, and whether
+# its corners lie further out along its width than along its depth (an I
+# shape's web then lies along its width). For another section also what
+# tells its kind: whether no corner lies outside the circle in its box (a
+# tube), and whether corners lie near a middle line of its box (a web: an I
+# shape has them, a hollow section does not).
+class:
+    patterns:
+        [a|] bim ifc measured member record
+    members:
+        kind as an integer
+        start as a cad vector3
+        finish as a cad vector3
+        width as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+        turn as a 64 bit floating-point number
+        sectionArea as a 64 bit floating-point number
+        webAcross as a boolean
+        roundOutline as a boolean
+        webbed as a boolean
+
+function the bim ifc member measured in {a pointer to a list:cornerList} standing {boolean:isStanding}:
+    execute:
+        set nowhere to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set memberResult to @intrinsic("construct", a bim ifc measured member record, 0, nowhere, nowhere, 0.0, 0.0, 0.0, 0.0, false, false, false)
+        set cornerCount to the length of cornerList
+        if (cornerCount < 12) or (cornerCount > 30000):
+            return memberResult
+        set upward to a cad vector3 with x 0.0, y 0.0 and z 1.0
+        set solidVolume to the bim ifc volume of cornerList
+        loop attempt from 0 to 2:
+            set trying to (memberResult's kind = 0) or (memberResult's kind = 3)
+            set memberAxis to upward
+            if attempt = 1:
+                set memberAxis to the bim ifc main run of cornerList seen in plan false
+            if (attempt = 0) and (isStanding = false):
+                set trying to false
+            if (the cad length of memberAxis) < 0.5:
+                set trying to false
+            if trying:
+                if memberAxis's z < 0.0:
+                    set memberAxis to memberAxis scaled by -1.0
+                set isUpright to (the absolute value of memberAxis's z) >= 0.99
+                set widthAxis to the cad cross of memberAxis and upward
+                if isUpright:
+                    set widthAxis to the bim ifc main run of cornerList seen in plan true
+                    if (the cad length of widthAxis) < 0.5:
+                        set widthAxis to a cad vector3 with x 1.0, y 0.0 and z 0.0
+                # Square to the axis.
+                set widthAxis to the cad difference of widthAxis and (memberAxis scaled by (the cad dot of widthAxis and memberAxis))
+                set widthSize to the cad length of widthAxis
+                if widthSize > 0.000001:
+                    set widthAxis to widthAxis scaled by (1.0 / widthSize)
+                    set depthAxis to the cad cross of memberAxis and widthAxis
+                    set widthSpan to the bim ifc span of cornerList along widthAxis
+                    set depthSpan to the bim ifc span of cornerList along depthAxis
+                    set lengthSpan to the bim ifc span of cornerList along memberAxis
+                    set boxWidth to widthSpan's high - widthSpan's low
+                    set boxDepth to depthSpan's high - depthSpan's low
+                    set memberLength to lengthSpan's high - lengthSpan's low
+                    if ((boxWidth > 0.001) and (boxDepth > 0.001)) and (memberLength > 0.01):
+                        set middleAcross to (widthSpan's low + widthSpan's high) * 0.5
+                        set middleDeep to (depthSpan's low + depthSpan's high) * 0.5
+                        set cornered to true
+                        set ringed to true
+                        set spreadAcross to 0.0
+                        set spreadDeep to 0.0
+                        set farthest to 0.0
+                        set nearMiddle to 0
+                        loop cursor from 0 to cornerCount:
+                            set spot to the item at cursor in cornerList
+                            set acrossValue to the cad dot of spot and widthAxis
+                            set deepValue to the cad dot of spot and depthAxis
+                            set onSide to ((the absolute value of (acrossValue - widthSpan's low)) < 0.0005) or ((the absolute value of (acrossValue - widthSpan's high)) < 0.0005)
+                            set onFace to ((the absolute value of (deepValue - depthSpan's low)) < 0.0005) or ((the absolute value of (deepValue - depthSpan's high)) < 0.0005)
+                            if (onSide and onFace) = false:
+                                set cornered to false
+                            set radial to the square root of (((acrossValue - middleAcross) * (acrossValue - middleAcross)) + ((deepValue - middleDeep) * (deepValue - middleDeep)))
+                            if (the absolute value of (radial - (boxWidth * 0.5))) > (0.01 * boxWidth):
+                                set ringed to false
+                            set farthest to the maximum of farthest and radial
+                            if ((the absolute value of (acrossValue - middleAcross)) < (0.15 * boxWidth)) or ((the absolute value of (deepValue - middleDeep)) < (0.15 * boxDepth)):
+                                set nearMiddle to nearMiddle + 1
+                            set spreadAcross to spreadAcross + (the absolute value of (acrossValue - middleAcross))
+                            set spreadDeep to spreadDeep + (the absolute value of (deepValue - middleDeep))
+                        set filled to solidVolume / ((boxWidth * boxDepth) * memberLength)
+                        set foundKind to 0
+                        if cornered and (filled >= 0.7):
+                            set foundKind to 1
+                        else if (ringed and ((the absolute value of (boxWidth - boxDepth)) < (0.01 * boxWidth))) and ((filled >= 0.7) and (filled <= 0.8)):
+                            set foundKind to 2
+                        else if attempt = 1:
+                            set foundKind to 3
+                        if foundKind > 0:
+                            set memberResult's kind to foundKind
+                            set memberResult's start to the cad sum of (the cad sum of (widthAxis scaled by middleAcross) and (depthAxis scaled by middleDeep)) and (memberAxis scaled by lengthSpan's low)
+                            set memberResult's finish to the cad sum of memberResult's start and (memberAxis scaled by memberLength)
+                            set memberResult's width to boxWidth
+                            set memberResult's depth to boxDepth
+                            set memberResult's turn to 0.0
+                            if isUpright:
+                                set memberResult's turn to @intrinsic("atan2", widthAxis's y, widthAxis's x)
+                            set memberResult's sectionArea to solidVolume / memberLength
+                            set memberResult's webAcross to (spreadAcross / boxWidth) > (spreadDeep / boxDepth)
+                            set memberResult's roundOutline to (farthest <= (0.53 * boxWidth)) and ((the absolute value of (boxWidth - boxDepth)) < (0.02 * boxWidth))
+                            set memberResult's webbed to nearMiddle > 0
+        return memberResult
+
 # The native walls and slabs of `stepFile` (see the top of this file).
 function the bim ifc natives of {bim step file record:stepFile}:
     execute:
-        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record)
+        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer)
         if stepFile's valid = false:
             return nativeSet
         set reader to a fresh bim ifc reading of stepFile
@@ -522,6 +817,23 @@ function the bim ifc natives of {bim step file record:stepFile}:
                         note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
                         append wallId to (nativeSet's skipped's values)
                         set made to true
+            # Any other body, measured from its triangles.
+            if made = false:
+                set wallCorners to the bim ifc corners of representation bodyId through frame in r
+                set measuredWall to the bim ifc wall measured in wallCorners
+                free wallCorners
+                if measuredWall's found:
+                    set layerList to the bim ifc layers of material (the item at wallId in materialOf) thick measuredWall's thickness in r
+                    set layerSum to 0.0
+                    loop layerCursor from 0 to the length of (layerList's values):
+                        set layerSum to layerSum + (the item at layerCursor in (layerList's values))'s thickness
+                    if (the absolute value of (layerSum - measuredWall's thickness)) > 0.005:
+                        set layerList to a cad topology list of a bim layer record
+                        append (@intrinsic("construct", a bim layer record, the string form of "concrete", measuredWall's thickness)) to (layerList's values)
+                    append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, a cad topology list of a bim ifc native opening record)) to (nativeSet's walls's values)
+                    append wallId to (nativeSet's wallSources's values)
+                    note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
+                    append wallId to (nativeSet's skipped's values)
         free wallIds
         # The slabs (a roof's too).
         set slabIds to the bim step instances of type (the string form of "IFCSLAB") in stepFile
@@ -593,10 +905,29 @@ function the bim ifc natives of {bim step file record:stepFile}:
                 set memberTurn to 0.0
                 if (the absolute value of section's sweep's z) >= (0.99 * (the cad length of section's sweep)):
                     set memberTurn to @intrinsic("atan2", section's xAxis's y, section's xAxis's x)
-                append (@intrinsic("construct", a bim ifc native linear record, (the bim ifc storey of memberId among containerOf and storeyAt), section's centre, (the cad sum of section's centre and section's sweep), section's width, section's depth, section's round, memberMaterial, (the item at memberCursor in memberRoles), memberTurn)) to (nativeSet's linears's values)
+                append (@intrinsic("construct", a bim ifc native linear record, (the bim ifc storey of memberId among containerOf and storeyAt), section's centre, (the cad sum of section's centre and section's sweep), section's width, section's depth, section's round, memberMaterial, (the item at memberCursor in memberRoles), memberTurn, 0.0, false, false, 0 as a 64 bit integer)) to (nativeSet's linears's values)
                 append memberId to (nativeSet's linearSources's values)
                 note bim ifc attributes of memberId in stepFile to (nativeSet's psets's values)
                 append memberId to (nativeSet's skipped's values)
+            else:
+                # Any other body, measured from its triangles.
+                set memberCorners to the bim ifc corners of representation (the bim ifc body of shape shapeId in stepFile) through frame in r
+                set measuredMember to the bim ifc member measured in memberCorners standing ((the item at memberCursor in memberRoles) = bim column role)
+                free memberCorners
+                if measuredMember's kind > 0:
+                    set memberLayers to the bim ifc layers of material (the item at memberId in materialOf) thick measuredMember's width in r
+                    set memberMaterial to the string form of "concrete"
+                    if (the length of (memberLayers's values)) > 0:
+                        set memberMaterial to (the item at 0 in (memberLayers's values))'s material
+                    set measuredLinear to @intrinsic("construct", a bim ifc native linear record, (the bim ifc storey of memberId among containerOf and storeyAt), measuredMember's start, measuredMember's finish, measuredMember's width, measuredMember's depth, ((measuredMember's kind = 2) or measuredMember's roundOutline), memberMaterial, (the item at memberCursor in memberRoles), measuredMember's turn, measuredMember's sectionArea, measuredMember's webbed, measuredMember's webAcross, 0 as a 64 bit integer)
+                    note bim ifc attributes of memberId in stepFile to (nativeSet's psets's values)
+                    if measuredMember's kind = 3:
+                        append measuredLinear to (nativeSet's shaped's values)
+                        append memberId to (nativeSet's shapedSources's values)
+                    else:
+                        append measuredLinear to (nativeSet's linears's values)
+                        append memberId to (nativeSet's linearSources's values)
+                        append memberId to (nativeSet's skipped's values)
         free memberIds
         # The property sets of what was made native and of the storeys.
         set wanted to an empty list of a boolean
@@ -606,6 +937,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
         mark bim ifc sources (nativeSet's wallSources's values) in wanted
         mark bim ifc sources (nativeSet's slabSources's values) in wanted
         mark bim ifc sources (nativeSet's linearSources's values) in wanted
+        mark bim ifc sources (nativeSet's shapedSources's values) in wanted
         set gathered to the bim ifc psets of stepFile wanted wanted scaled reader's lengthScale
         loop psetCursor from 0 to the length of gathered:
             append (the item at psetCursor in gathered) to (nativeSet's psets's values)
@@ -729,6 +1061,10 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
         # listed as taken over, by its GlobalId.
         refresh bim shared grid heights in target
         set takenIds to the bim promoted ids of (@intrinsic("dereference", target))
+        # The properties by the instance they belong to, and the GlobalIds
+        # listed in this pass.
+        set psetIndex to the bim pset index of (nativeSet's psets's values)
+        set notedIds to an empty list of a string
         loop gridCursor from 0 to the length of (nativeSet's grids's values):
             set nativeGrid to the item at gridCursor in (nativeSet's grids's values)
             if (bim guid nativeGrid's sourceKey is among takenIds) = false:
@@ -746,7 +1082,7 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
         loop wallCursor from 0 to the length of (nativeSet's walls's values):
             set nativeWall to the item at wallCursor in (nativeSet's walls's values)
             set wallSource to the item at wallCursor in (nativeSet's wallSources's values)
-            set wallGuid to the bim ifc global id of source wallSource in (nativeSet's psets's values)
+            set wallGuid to the bim ifc global id of indexed source wallSource through psetIndex of (nativeSet's psets's values)
             if (bim guid wallGuid is among takenIds) = false:
                 set levelId to the bim level for ifc storey nativeWall's storey of nativeSet in target counting (the address of counts)
                 set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
@@ -754,8 +1090,8 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                 set fresh to add bim wall typed typeId on levelId from nativeWall's start to nativeWall's finish to target
                 if fresh != the bim refused id:
                     set counts's walls to counts's walls + 1
-                    give bim ifc psets of wallSource in (nativeSet's psets's values) to fresh in target
-                    note bim guid wallGuid promoted as fresh in target
+                    hand bim ifc psets of source wallSource through psetIndex of (nativeSet's psets's values) to fresh in target
+                    note bim guid wallGuid first promoted as fresh besides notedIds in target
                     ignore set bim wall fresh base to (nativeWall's foot - levelElevation) and height to (nativeWall's head - nativeWall's foot) in target
                     loop openingCursor from 0 to the length of (nativeWall's openings's values):
                         set nativeOpening to the item at openingCursor in (nativeWall's openings's values)
@@ -787,21 +1123,21 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
         loop slabCursor from 0 to the length of (nativeSet's slabs's values):
             set nativeSlab to the item at slabCursor in (nativeSet's slabs's values)
             set slabSource to the item at slabCursor in (nativeSet's slabSources's values)
-            set slabGuid to the bim ifc global id of source slabSource in (nativeSet's psets's values)
+            set slabGuid to the bim ifc global id of indexed source slabSource through psetIndex of (nativeSet's psets's values)
             if (bim guid slabGuid is among takenIds) = false:
                 set levelId to the bim level for ifc storey nativeSlab's storey of nativeSet in target counting (the address of counts)
                 set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
                 set fresh to add bim slab on levelId around (nativeSlab's outline's values) thick nativeSlab's thickness to target
                 if fresh != the bim refused id:
                     set counts's slabs to counts's slabs + 1
-                    give bim ifc psets of slabSource in (nativeSet's psets's values) to fresh in target
-                    note bim guid slabGuid promoted as fresh in target
+                    hand bim ifc psets of source slabSource through psetIndex of (nativeSet's psets's values) to fresh in target
+                    note bim guid slabGuid first promoted as fresh besides notedIds in target
                     ignore set bim slab fresh material to nativeSlab's material in target
                     ignore set bim plate fresh top to (nativeSlab's top - levelElevation) pitch 0.0 heading 0.0 in target
         loop linearCursor from 0 to the length of (nativeSet's linears's values):
             set nativeLinear to the item at linearCursor in (nativeSet's linears's values)
             set linearSource to the item at linearCursor in (nativeSet's linearSources's values)
-            set linearGuid to the bim ifc global id of source linearSource in (nativeSet's psets's values)
+            set linearGuid to the bim ifc global id of indexed source linearSource through psetIndex of (nativeSet's psets's values)
             if (bim guid linearGuid is among takenIds) = false:
                 set levelId to the bim level for ifc storey nativeLinear's storey of nativeSet in target counting (the address of counts)
                 set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
@@ -811,9 +1147,11 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                 set freshLinear to add bim linear typed typeId on levelId from fromSpot to toSpot turned nativeLinear's turn to target
                 if freshLinear != the bim refused id:
                     set counts's linears to counts's linears + 1
-                    give bim ifc psets of linearSource in (nativeSet's psets's values) to freshLinear in target
-                    note bim guid linearGuid promoted as freshLinear in target
+                    hand bim ifc psets of source linearSource through psetIndex of (nativeSet's psets's values) to freshLinear in target
+                    note bim guid linearGuid first promoted as freshLinear besides notedIds in target
         free takenIds
+        free notedIds
+        free bim pset index psetIndex
         return counts
 
 # The IFC file at `path` imported: its walls and slabs made native elements
@@ -847,7 +1185,7 @@ function the bim ifc natives {bim ifc native set record:nativeSet} made in {a po
 # No natives (nothing to make native).
 function no bim ifc natives:
     execute:
-        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record)
+        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer)
 
 # What was made native, for a message: "12 walls, 30 openings, 4 floors
 # made native, 2 storeys added; ".

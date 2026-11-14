@@ -525,6 +525,28 @@ def wall_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("wall", *rectangle_arguments(arguments)))
 
 
+@tool("create_linear", "A column, beam or other linear element of the current linear type (see `use_profile` and "
+      "`apply_type`) on the active storey along the axis (x1, y1, z1)-(x2, y2, z2), heights above the storey, "
+      "its profile turned `turn` radians about the axis.",
+      {"x1": POINT, "y1": POINT, "z1": POINT, "x2": POINT, "y2": POINT, "z2": POINT, "turn": {"type": "number"}},
+      ["x1", "y1", "z1", "x2", "y2", "z2"])
+def linear_tool(arguments: dict) -> dict:
+    values = [number(arguments[key], key) for key in ("x1", "y1", "z1", "x2", "y2", "z2")]
+    if arguments.get("turn") is not None:
+        values.append(number(arguments["turn"], "turn"))
+    return text_result(current_modeller().request("linear", *values))
+
+
+@tool("use_profile", "Make the catalogue profile `name` (such as 'HEB 220' or 'SHS 80x80x4') a linear type of "
+      "`role` (0 column, 1 beam) and the type `create_linear` draws; answers the type's id.",
+      {"name": {"type": "string"}, "role": {"type": "integer", "enum": [0, 1]}}, ["name"])
+def profile_tool(arguments: dict) -> dict:
+    name = arguments["name"]
+    if not isinstance(name, str) or not name.strip():
+        raise ToolError("`name` must be a nonblank string")
+    return text_result(current_modeller().request("profile", name.strip(), int(arguments.get("role", 0))))
+
+
 @tool("create_floor", "A floor slab over the rectangle (x1, y1)-(x2, y2) on the active storey.",
       RECTANGLE, ["x1", "y1", "x2", "y2"])
 def slab_tool(arguments: dict) -> dict:

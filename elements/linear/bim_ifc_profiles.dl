@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: MPL-2.0
+# Members read from IFC whose section is no plain rectangle or circle given
+# the catalogue profile they are. `ifc/bim_ifc_native.dl` measures such a
+# member from its triangles and keeps it apart as `shaped`: the box of its
+# section, the section's area and where its web lies. Here it is fitted to
+# the steel series of the profile catalogue: a profile whose width and depth
+# are the box's (within 1.5 mm) and whose area is the section's or up to 15
+# per cent more (copes and end cuts take some away; the member's area is
+# its volume over its length), the nearest in area when several fit, and of
+# the kind its corners tell (a tube, an I shape, a box).
+# Only the sections that are the same mirrored both ways are fitted (I
+# shapes, rectangular and circular hollow sections): an angle or a channel
+# would need its side known. A member that fits none stays an imported
+# element.
+import ifc/bim_ifc_native.dl
+import elements/linear/bim_profile_catalogue.dl
+
+# The area of `shapeProfile`'s section (its fillets as its rings draw them).
+function the bim area of profile {bim profile record:shapeProfile}:
+    execute:
+        set ringList to the bim rings of profile shapeProfile at 48 round corners
+        set doubled to 0.0
+        loop ringCursor from 0 to the length of ringList:
+            set doubled to doubled + (the bim profile winding of (the item at ringCursor in ringList))
+            free (the item at ringCursor in ringList)
+        free ringList
+        return (the absolute value of doubled) * 0.5
+
+# The shaped members of `nativeSet` fitted to the catalogue: each that fits
+# keeps its profile's catalogue key (turned a quarter when the profile lies
+# on its side) and is listed as made native, for the import to leave out.
+# How many were fitted.
+function fit bim catalogue profiles to {a pointer to a bim ifc native set record:nativeSet}:
+    execute:
+        set shapedCount to the length of (nativeSet's shaped's values)
+        if shapedCount = 0:
+            return 0
+        set candidates to an empty list of a bim catalogue profile record
+        set candidateAreas to an empty list of a 64 bit floating-point number
+        loop seriesCode from 1 to 14:
+            set seriesProfiles to the bim catalogue profiles of series seriesCode
+            loop cursor from 0 to the length of seriesProfiles:
+                set entry to the item at cursor in seriesProfiles
+                if ((entry's kind = bim i shape profile) or (entry's kind = bim rectangle hollow profile)) or (entry's kind = bim circle hollow profile):
+                    append entry to candidates
+                    append (the bim area of profile (the bim profile of catalogue profile entry)) to candidateAreas
+            free seriesProfiles
+        set fitted to 0
+        loop shapedCursor from 0 to shapedCount:
+            set shapedMember to the item at shapedCursor in (nativeSet's shaped's values)
+            set bestKey to 0 as a 64 bit integer
+            set bestGap to 0.15
+            set bestTurned to false
+            loop cursor from 0 to the length of candidates:
+                set entry to the item at cursor in candidates
+                set wantedArea to the item at cursor in candidateAreas
+                set standsRight to ((the absolute value of (shapedMember's width - entry's width)) < 0.0015) and ((the absolute value of (shapedMember's depth - entry's depth)) < 0.0015)
+                set liesTurned to ((the absolute value of (shapedMember's width - entry's depth)) < 0.0015) and ((the absolute value of (shapedMember's depth - entry's width)) < 0.0015)
+                # The kind of section the corners tell: a tube when none lies
+                # outside the circle, an I shape when some lie near a middle
+                # line (its web, which says how it lies), else a box.
+                set sameKind to (entry's kind = bim circle hollow profile) = shapedMember's round
+                if entry's kind = bim i shape profile:
+                    set sameKind to shapedMember's webbed and (shapedMember's round = false)
+                    if shapedMember's webAcross:
+                        set standsRight to false
+                    else:
+                        set liesTurned to false
+                if entry's kind = bim rectangle hollow profile:
+                    set sameKind to (shapedMember's webbed = false) and (shapedMember's round = false)
+                if sameKind = false:
+                    set standsRight to false
+                    set liesTurned to false
+                if (standsRight or liesTurned) and (wantedArea > 0.0):
+                    # What is cut from a member takes from its measured
+                    # area, nothing adds to it: a profile lighter than the
+                    # member (by more than its rounded corners) is not it.
+                    set areaGap to (wantedArea - shapedMember's sectionArea) / wantedArea
+                    if (areaGap >= -0.05) and (areaGap < bestGap):
+                        set bestGap to areaGap
+                        set bestKey to the bim catalogue key of entry
+                        set bestTurned to standsRight = false
+            if bestKey > (0 as a 64 bit integer):
+                set fittedTurn to shapedMember's turn
+                set fittedWidth to shapedMember's width
+                set fittedDepth to shapedMember's depth
+                if bestTurned:
+                    set fittedTurn to fittedTurn + 1.5707963267948966
+                    set fittedWidth to shapedMember's depth
+                    set fittedDepth to shapedMember's width
+                replace item at index shapedCursor in (nativeSet's shaped's values) with (@intrinsic("construct", a bim ifc native linear record, shapedMember's storey, shapedMember's start, shapedMember's finish, fittedWidth, fittedDepth, shapedMember's round, shapedMember's material, shapedMember's role, fittedTurn, shapedMember's sectionArea, shapedMember's webbed, shapedMember's webAcross, bestKey))
+                append (the item at shapedCursor in (nativeSet's shapedSources's values)) to (nativeSet's skipped's values)
+                set fitted to fitted + 1
+        free candidates
+        free candidateAreas
+        return fitted
+
+# The fitted members of `nativeSet` added to `target` (inside a transaction
+# the caller opens), each of the linear type of its catalogue profile, with
+# its properties, listed as taken over by its GlobalId. How many were made.
+function add bim ifc profiled members of {bim ifc native set record:nativeSet} to {a pointer to a bim model record:target}:
+    execute:
+        set made to 0
+        set levelCounts to @intrinsic("construct", a bim ifc native count record, 0, 0, 0, 0, 0, 0)
+        set takenIds to the bim promoted ids of (@intrinsic("dereference", target))
+        set psetIndex to the bim pset index of (nativeSet's psets's values)
+        set notedIds to an empty list of a string
+        loop shapedCursor from 0 to the length of (nativeSet's shaped's values):
+            set shapedMember to the item at shapedCursor in (nativeSet's shaped's values)
+            if shapedMember's catalogueKey > (0 as a 64 bit integer):
+                set shapedSource to the item at shapedCursor in (nativeSet's shapedSources's values)
+                set shapedGuid to the bim ifc global id of indexed source shapedSource through psetIndex of (nativeSet's psets's values)
+                set fittedProfile to the bim catalogue profile of key shapedMember's catalogueKey
+                if ((bim guid shapedGuid is among takenIds) = false) and fittedProfile's found:
+                    set levelId to the bim level for ifc storey shapedMember's storey of nativeSet in target counting (the address of levelCounts)
+                    set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
+                    set typeId to add bim catalogue profile fittedProfile's value as role shapedMember's role to target
+                    if typeId != the bim refused id:
+                        set fromSpot to a cad vector3 with x shapedMember's start's x, y shapedMember's start's y and z (shapedMember's start's z - levelElevation)
+                        set toSpot to a cad vector3 with x shapedMember's finish's x, y shapedMember's finish's y and z (shapedMember's finish's z - levelElevation)
+                        set freshLinear to add bim linear typed typeId on levelId from fromSpot to toSpot turned shapedMember's turn to target
+                        if freshLinear != the bim refused id:
+                            set made to made + 1
+                            hand bim ifc psets of source shapedSource through psetIndex of (nativeSet's psets's values) to freshLinear in target
+                            note bim guid shapedGuid first promoted as freshLinear besides notedIds in target
+        free takenIds
+        free notedIds
+        free bim pset index psetIndex
+        return made
+
+# Everything `nativeSet` makes native landed in `documentValue`'s model as
+# one undoable step: its walls, slabs, members and grids, and the members
+# fitted to the catalogue. What was made, counted.
+function the bim ifc landing of {bim ifc native set record:nativeSet} in {a pointer to a bim document record:documentValue}:
+    execute:
+        set fittedCount to 0
+        loop shapedCursor from 0 to the length of (nativeSet's shaped's values):
+            if (the item at shapedCursor in (nativeSet's shaped's values))'s catalogueKey > (0 as a 64 bit integer):
+                set fittedCount to fittedCount + 1
+        if fittedCount = 0:
+            return the bim ifc natives nativeSet made in documentValue
+        begin bim transaction in documentValue
+        set madeCounts to add bim ifc natives nativeSet to (the address of (documentValue's current))
+        set madeCounts's linears to madeCounts's linears + (add bim ifc profiled members of nativeSet to (the address of (documentValue's current)))
+        commit bim transaction in documentValue
+        return madeCounts
