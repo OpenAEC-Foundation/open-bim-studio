@@ -51,6 +51,26 @@ test-by-test comparison are in issue 11.
 | `build.sh test component_solids` / `modify_preview` | seam step 5 branch | 65.6 / 252.45 s | 1.54 GB | same | same | 2026-10-29 |
 | `build.sh test` (all 242, `BIM_JOBS=8`) | after the seam on `main` (`b152310`) | 33:35.07 | 2.47 GB per process | same | same | 2026-10-29 |
 | `build.sh app` (`-O2`, alone) | after the seam on `main` (`b152310`) | 7:28.50 | 3.38 GB | same | same | 2026-10-29 |
+| `build.sh dev` (`-O0 -g`) | `main` at `c7ca6cb` | 18:34.52 | 4.20 GB | same | same | 2026-11-12 |
+| `build.sh dev` (`-O1 -g`, fresh checkout, kernel library included) | `main` at `c7ca6cb` | 24:46.10 | 5.90 GB | same | same | 2026-11-12 |
+
+## The development build's optimisation level
+
+`build.sh dev` compiles at `-O1` since 14 November 2026 (`BIM_DEV_OPT_LEVEL`,
+default 1; 0 gives the former unoptimised build). Measured on 12 November 2026
+on `main` at `c7ca6cb`, the two builds of the table above, headless under Xvfb
+with a software Vulkan driver, three runs each:
+
+| measurement | `-O0 -g` | `-O1 -g` |
+|---|---|---|
+| start and load a steel frame of 98 members and 166 connections | 4.8 s | 0.87 s |
+| start with `--generate 300` | 27.5 s | 1.2 s |
+| add one wall to that generated model | 23 s | 0.72 s |
+| add one wall to the steel frame, or undo it | 0.06 s | 0.04 s |
+
+The `-O1` build time is of a fresh worktree and so includes the kernel library;
+the `-O0` build followed it in the same worktree. Not measured: `dev-test` at
+`-O1`, and an `-O1` build without `-g`.
 
 Earlier observations, recorded in `findings.md` rather than measured for this
 table: the application 40 to 51 minutes at `-O2`; `tests/ifc_read.dl` 13 to 18

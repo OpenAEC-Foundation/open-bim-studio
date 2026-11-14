@@ -3,7 +3,7 @@
 #
 #   ./build.sh generate                      the two generated import files (every other command runs it first)
 #   ./build.sh app                           optimised editor (build/open-bim-studio)
-#   ./build.sh dev                           unoptimised editor with debug info
+#   ./build.sh dev                           editor at -O1 with debug info (BIM_DEV_OPT_LEVEL=0|1|2)
 #   ./build.sh dev-test NAME [NAME...]       editor and up to 3 headless checks in one compile
 #   ./build.sh run-dev [ARGS...]             run the development build
 #   ./build.sh run [ARGS...]                 run the editor (--example, FILE, --import ...)
@@ -168,7 +168,10 @@ case "$command" in
         "$dynlex" ui/shell/main.dl -O2 -o "$out/open-bim-studio"
         echo "built $out/open-bim-studio" ;;
     dev|dev-test)
-        dev_opt=${BIM_DEV_OPT_LEVEL:-0}
+        # -O1 by default: six minutes more to compile than -O0, 5 to 30 times
+        # faster to run (docs/notes/build-times.md). BIM_DEV_OPT_LEVEL=0 is
+        # the quicker compile when only the type check matters.
+        dev_opt=${BIM_DEV_OPT_LEVEL:-1}
         case "$dev_opt" in
             0|1|2) ;;
             *) echo 'BIM_DEV_OPT_LEVEL must be 0, 1 or 2' >&2; exit 2 ;;
