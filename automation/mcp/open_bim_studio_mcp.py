@@ -573,10 +573,10 @@ def duplicate_type_tool(arguments: dict) -> dict:
 
 @tool("set_type_field", "Edit an IfcTypes field directly by id, without selecting or placing an instance. "
       "Fields: 0 name, 1 material, 2 width or layer thickness, 3 depth or opening height, 4 opening sill, "
-      "5 NL-SfB, 6 OmniClass. Numeric lengths use PROJECT units (lengthUnit 0 mm, 1 cm, 2 m); "
+      "5 NL-SfB, 6 OmniClass, 16 opening frame (the margin the rough opening keeps beside and above). Numeric lengths use PROJECT units (lengthUnit 0 mm, 1 cm, 2 m); "
       "list_types dimensions are metres. layer is zero-based, defaults 0, and applies to planar types. "
       "Unsupported fields, invalid dimensions and stale ids are refused atomically.",
-      {"tab": TYPE_TAB, "id": TYPE_ID, "field": {"type": "integer", "enum": list(range(7))},
+      {"tab": TYPE_TAB, "id": TYPE_ID, "field": {"type": "integer", "enum": list(range(7)) + [16]},
        "value": {"type": "string"}, "layer": {"type": "integer", "description": "zero-based layer index, default 0"}},
       ["tab", "id", "field", "value"])
 def set_type_field_tool(arguments: dict) -> dict:
@@ -665,9 +665,19 @@ def run_sentence_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("run", sentence))
 
 
-@tool("save", "Save the model to its file, as File > Save (Ctrl+S) does, on the window's next frame.")
+@tool("zoom_plan", "Show model point x, y (metres) at the centre of the plan, `scale` pixels to the metre. "
+      "The same three numbers give the same picture, so plans can be compared pixel by pixel.",
+      {"x": {"type": "number"}, "y": {"type": "number"}, "scale": {"type": "number"}}, ["x", "y", "scale"])
+def zoom_plan_tool(arguments: dict) -> dict:
+    return text_result(current_modeller().request("zoom", arguments["x"], arguments["y"], arguments["scale"]))
+
+
+@tool("save", "Save the model to its file, as File > Save (Ctrl+S) does, on the window's next frame. "
+      "With `path` it saves to that file instead, which becomes the model's own; no dialog opens.",
+      {"path": {"type": "string", "description": "Absolute path of the file to save to (.ifcx or .bim)."}}, [])
 def save_tool(arguments: dict) -> dict:
-    return text_result(current_modeller().request("save"))
+    path = arguments.get("path", "")
+    return text_result(current_modeller().request("save", path) if path else current_modeller().request("save"))
 
 
 # The tab codes of `ui/panels/bim_ui.dl`; the discipline (Discipline menu) decides which of them show.

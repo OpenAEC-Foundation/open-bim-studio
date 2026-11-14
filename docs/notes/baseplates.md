@@ -1,6 +1,6 @@
 # Steel column base plates
 
-Select a vertical steel column and choose **Connections → Column base → Base plate**.
+Select a vertical steel column and choose **Structural Steel → Connections → Base plate**.
 The node owns the lower column end, including columns drawn downwards. Move or
 rotate the column to regenerate the connection. Select the connection to edit
 its plate dimensions and anchor grid in Properties; edits participate in undo.

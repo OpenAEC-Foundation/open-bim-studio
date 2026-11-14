@@ -36,7 +36,7 @@ The Discipline menu chooses which tabs the ribbon shows; the choice is remembere
 | **Model** | Project (Settings, IfcTypes) · Levels (Level, Levels) · Checks (Decimals, Round to mm) · Library (Export, Import, NL doors) |
 | **Collaborate** | **Import** (a chooser: DWG/DXF, PDF, Image, IFC, Storeys from IFC, IfcX) · **Export** (active plan as DWG/DXF; open sheet as PDF/SVG; model as IFC, IFC 4.3, IFC5, 3D DWG/DXF) · Clashes · API / MCP |
 | **Concrete+Rebar** | Bar, L bar, U bar, Cage, Mesh, Area · 3D reinforcement |
-| **Structural Steel** | Butt, Miter · Base plate · Node, Plate, Bolts, Screws · steel recipes (End plate, Fin plate, Double cleat, Splice, Gusset, End cap) · welds and connection types |
+| **Structural Steel** | members (Grid, Column, Beam) · connections (End plate, Fin plate, Base plate, Double cleat, Splice, Gusset) · member ends (Butt, Miter, End cap) · custom node (Node, Plate, Bolts, Screws, Fillet weld, Butt weld) · connection types (Save, Apply, Next) · document (Structural plan, Section, Detail, Dimension, Schedule) |
 | **Wood/Steel Framing** | Building System, Frame |
 | **Fabrication** | Bending schedule · M8–M40 fastener library, CSG detail · IFC 4.3 and 3D DWG/DXF for production |
 | **Structural** | Piles (Pile, Pile tip level) · Pile plan, Drawing Rules · Frame (Grid, Column, Beam, Structural plan) |
