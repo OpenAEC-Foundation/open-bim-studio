@@ -29,6 +29,18 @@
 # section) is kept apart as `shaped`, with its section's area, for the
 # profile catalogue to give it its type (`elements/linear/
 # bim_ifc_profiles.dl`); without one it stays an imported element.
+#
+# A measured wall may have holes: upright, right through it, each a
+# rectangle, and each filled by a door or window (measured from its
+# triangles too). They become its openings; a wall with a hole nothing
+# fills stays imported, for the model has no opening without a filling.
+#
+# A door or window that stands between two pieces of wall on one line (the
+# file gives the wall in pieces round its frame: one either side, maybe one
+# under it and one over it) has no wall to be an opening of. The pieces are
+# then made one wall, from the far end of the one to the far end of the
+# other, with the gap between them as its opening; the model lists the
+# pieces' GlobalIds as taken over into that wall.
 import ifc/bim_ifc_read.dl
 import ifc/bim_ifc_psets.dl
 import ifc/bim_ifc_grid.dl
@@ -112,6 +124,9 @@ class:
         # STEP instance of each.
         shaped as the type of (a cad topology list of a bim ifc native linear record)
         shapedSources as the type of (a cad topology list of an integer)
+        # For each wall the wall it was made part of (a piece beside a door
+        # or window joined to the piece on its other side), or -1.
+        wallAbsorbed as the type of (a cad topology list of an integer)
 
 # The extrusions of a representation in the world: the corners of each
 # one's profile at its start (`bottoms`) and its sweep (`sweeps`); `found`
@@ -450,6 +465,26 @@ function the bim ifc level area of {a pointer to a list:cornerList} at {a 64 bit
             set firstCorner to firstCorner + 3
         return levelArea
 
+# A hole right through a measured wall, and a band of level triangles (see
+# `the bim ifc level bands of`).
+class:
+    patterns:
+        [a|] bim ifc wall hole record
+    members:
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+        sill as a 64 bit floating-point number
+        head as a 64 bit floating-point number
+
+class:
+    patterns:
+        [a|] bim ifc band record
+    members:
+        height as a 64 bit floating-point number
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+        area as a 64 bit floating-point number
+
 # A wall measured from its triangles: `found` when they are an upright prism
 # (its top as large as its foot, its volume their area times its height) on
 # a footprint about a rectangle as thick as a wall; its centre line from
@@ -464,16 +499,92 @@ class:
         foot as a 64 bit floating-point number
         head as a 64 bit floating-point number
         thickness as a 64 bit floating-point number
+        # Its holes, each from `low` to `high` along it from its start and
+        # from `sill` to `head` in height.
+        holes as the type of (a cad topology list of a bim ifc wall hole record)
+
+# The level triangles of `cornerList` that face down (or up), gathered into
+# bands: those at one height whose reaches along `axis` touch, with their
+# area together. Only those higher than `lowLimit` and lower than
+# `highLimit` count; reaches are measured from `origin` along the axis.
+function the bim ifc level bands of {a pointer to a list:cornerList} along {cad vector3:axis} from {a 64 bit floating-point number:origin} facing down {boolean:facesDown} above {a 64 bit floating-point number:lowLimit} below {a 64 bit floating-point number:highLimit}:
+    execute:
+        set bandList to an empty list of a bim ifc band record
+        set cornerCount to the length of cornerList
+        set firstCorner to 0
+        loop while (firstCorner + 2) < cornerCount:
+            set first to the item at firstCorner in cornerList
+            set second to the item at (firstCorner + 1) in cornerList
+            set third to the item at (firstCorner + 2) in cornerList
+            set firstCorner to firstCorner + 3
+            if ((the absolute value of (second's z - first's z)) < 0.001) and ((the absolute value of (third's z - first's z)) < 0.001):
+                set doubled to ((second's x - first's x) * (third's y - first's y)) - ((third's x - first's x) * (second's y - first's y))
+                set wanted to doubled > 0.0
+                if facesDown:
+                    set wanted to doubled < 0.0
+                if wanted and ((first's z > lowLimit) and (first's z < highLimit)):
+                    set reachOne to (the cad dot of first and axis) - origin
+                    set reachTwo to (the cad dot of second and axis) - origin
+                    set reachThree to (the cad dot of third and axis) - origin
+                    set reachLow to the minimum of reachOne and (the minimum of reachTwo and reachThree)
+                    set reachHigh to the maximum of reachOne and (the maximum of reachTwo and reachThree)
+                    set pieceArea to (the absolute value of doubled) * 0.5
+                    set matched to -1
+                    loop bandCursor from 0 to the length of bandList:
+                        if matched < 0:
+                            set levelBand to the item at bandCursor in bandList
+                            if ((the absolute value of (levelBand's height - first's z)) < 0.002) and ((reachLow <= (levelBand's high + 0.002)) and (reachHigh >= (levelBand's low - 0.002))):
+                                set matched to bandCursor
+                    if matched >= 0:
+                        set levelBand to the item at matched in bandList
+                        replace item at index matched in bandList with (@intrinsic("construct", a bim ifc band record, levelBand's height, the minimum of levelBand's low and reachLow, the maximum of levelBand's high and reachHigh, levelBand's area + pieceArea))
+                    else:
+                        append (@intrinsic("construct", a bim ifc band record, first's z, reachLow, reachHigh, pieceArea)) to bandList
+        return bandList
+
+# The stretches from 0 to `fullLength` that the bands of `bandList` leave
+# uncovered, each at least 0.1 long, as holes whose height is not yet known.
+function the bim ifc gaps between {a pointer to a list:bandList} up to {a 64 bit floating-point number:fullLength}:
+    execute:
+        set gapList to an empty list of a bim ifc wall hole record
+        set covered to 0.0
+        set growing to true
+        loop while growing:
+            # As far as the bands that start within what is covered reach.
+            set stretching to true
+            loop while stretching:
+                set stretching to false
+                loop bandCursor from 0 to the length of bandList:
+                    set levelBand to the item at bandCursor in bandList
+                    if (levelBand's low <= (covered + 0.002)) and (levelBand's high > (covered + 0.000001)):
+                        set covered to levelBand's high
+                        set stretching to true
+            # The next band after that, if any.
+            set nextLow to fullLength
+            loop bandCursor from 0 to the length of bandList:
+                set levelBand to the item at bandCursor in bandList
+                if (levelBand's low > (covered + 0.002)) and (levelBand's low < nextLow):
+                    set nextLow to levelBand's low
+            if (nextLow - covered) >= 0.1:
+                append (@intrinsic("construct", a bim ifc wall hole record, covered, nextLow, 0.0, 0.0)) to gapList
+            if nextLow >= (fullLength - 0.002):
+                set growing to false
+            else:
+                set covered to nextLow
+        return gapList
 
 function the bim ifc wall measured in {a pointer to a list:cornerList}:
     execute:
         set nowhere to a cad vector2 with x 0.0 and y 0.0
-        set wallResult to @intrinsic("construct", a bim ifc measured wall record, false, nowhere, nowhere, 0.0, 0.0, 0.0)
+        set wallResult to @intrinsic("construct", a bim ifc measured wall record, false, nowhere, nowhere, 0.0, 0.0, 0.0, a cad topology list of a bim ifc wall hole record)
         if (the length of cornerList) < 12:
             return wallResult
         set wallRun to the bim ifc main run of cornerList seen in plan true
         if (the cad length of wallRun) < 0.5:
             return wallResult
+        # Of the two ways along its line, the one toward greater x (or y).
+        if (wallRun's x < -0.000000001) or (((the absolute value of wallRun's x) <= 0.000000001) and (wallRun's y < 0.0)):
+            set wallRun to wallRun scaled by -1.0
         set acrossAxis to a cad vector3 with x (0.0 - wallRun's y), y wallRun's x and z 0.0
         set alongSpan to the bim ifc span of cornerList along wallRun
         set acrossSpan to the bim ifc span of cornerList along acrossAxis
@@ -495,7 +606,311 @@ function the bim ifc wall measured in {a pointer to a list:cornerList}:
             set wallResult's foot to heightSpan's low
             set wallResult's head to heightSpan's high
             set wallResult's thickness to wallThickness
+            return wallResult
+        # Not one prism: its box with rectangular holes right through it?
+        # Where its top does not cover its length it is cut from above (a
+        # window up to its head), where its foot does not, from below (a
+        # door); cut both ways over the same stretch it is open over its
+        # whole height. A cut from above ends on a band of triangles facing
+        # up (its sill), one from below under a band facing down (its
+        # head), and a hole inside it has both. The wall is its box less
+        # those holes when its volume says so.
+        set headBands to the bim ifc level bands of cornerList along wallRun from alongSpan's low facing down true above (heightSpan's low + 0.01) below (heightSpan's high + 1.0)
+        set sillBands to the bim ifc level bands of cornerList along wallRun from alongSpan's low facing down false above (heightSpan's low + 0.01) below (heightSpan's high - 0.01)
+        set topBands to the bim ifc level bands of cornerList along wallRun from alongSpan's low facing down false above (heightSpan's high - 0.002) below (heightSpan's high + 1.0)
+        set footBands to the bim ifc level bands of cornerList along wallRun from alongSpan's low facing down true above (heightSpan's low - 1.0) below (heightSpan's low + 0.002)
+        set topGaps to the bim ifc gaps between topBands up to wallLength
+        set footGaps to the bim ifc gaps between footBands up to wallLength
+        free topBands
+        free footBands
+        set holesFit to true
+        set headUsed to an empty list of a boolean
+        loop bandCursor from 0 to the length of headBands:
+            append false to headUsed
+        set sillUsed to an empty list of a boolean
+        loop bandCursor from 0 to the length of sillBands:
+            append false to sillUsed
+        set footUsed to an empty list of a boolean
+        loop gapCursor from 0 to the length of footGaps:
+            append false to footUsed
+        # Cut from above: open to the foot too, or down to a sill.
+        loop gapCursor from 0 to the length of topGaps:
+            set topGap to the item at gapCursor in topGaps
+            set cutSill to heightSpan's low
+            set cutFound to false
+            loop footCursor from 0 to the length of footGaps:
+                set footGap to the item at footCursor in footGaps
+                if ((the absolute value of (footGap's low - topGap's low)) < 0.003) and ((the absolute value of (footGap's high - topGap's high)) < 0.003):
+                    replace item at index footCursor in footUsed with true
+                    set cutFound to true
+            if cutFound = false:
+                loop sillCursor from 0 to the length of sillBands:
+                    set sillBand to the item at sillCursor in sillBands
+                    if ((the absolute value of (sillBand's low - topGap's low)) < 0.003) and ((the absolute value of (sillBand's high - topGap's high)) < 0.003):
+                        if (cutFound = false) or (sillBand's height > cutSill):
+                            set cutSill to sillBand's height
+                        set cutFound to true
+                        replace item at index sillCursor in sillUsed with true
+            if cutFound:
+                append (@intrinsic("construct", a bim ifc wall hole record, topGap's low, topGap's high, cutSill, heightSpan's high)) to (wallResult's holes's values)
+            else:
+                set holesFit to false
+        # Cut from below only: up to a head.
+        loop footCursor from 0 to the length of footGaps:
+            if (the item at footCursor in footUsed) = false:
+                set footGap to the item at footCursor in footGaps
+                set cutHead to heightSpan's high
+                set cutFound to false
+                loop bandCursor from 0 to the length of headBands:
+                    set headBand to the item at bandCursor in headBands
+                    if ((the absolute value of (headBand's low - footGap's low)) < 0.003) and ((the absolute value of (headBand's high - footGap's high)) < 0.003):
+                        if (cutFound = false) or (headBand's height < cutHead):
+                            set cutHead to headBand's height
+                        set cutFound to true
+                        replace item at index bandCursor in headUsed with true
+                if cutFound:
+                    append (@intrinsic("construct", a bim ifc wall hole record, footGap's low, footGap's high, heightSpan's low, cutHead)) to (wallResult's holes's values)
+                else:
+                    set holesFit to false
+        # Holes inside it: a head over a sill.
+        loop bandCursor from 0 to the length of headBands:
+            if (the item at bandCursor in headUsed) = false:
+                set headBand to the item at bandCursor in headBands
+                set holeWide to headBand's high - headBand's low
+                set holeSill to heightSpan's low
+                set sillFound to false
+                loop sillCursor from 0 to the length of sillBands:
+                    set sillBand to the item at sillCursor in sillBands
+                    if ((the absolute value of (sillBand's low - headBand's low)) < 0.003) and (((the absolute value of (sillBand's high - headBand's high)) < 0.003) and (sillBand's height < headBand's height)):
+                        set holeSill to the maximum of holeSill and sillBand's height
+                        set sillFound to true
+                        replace item at index sillCursor in sillUsed with true
+                if (sillFound = false) or ((the absolute value of (headBand's area - (holeWide * wallThickness))) > (0.03 * (holeWide * wallThickness))):
+                    set holesFit to false
+                append (@intrinsic("construct", a bim ifc wall hole record, headBand's low, headBand's high, holeSill, headBand's height)) to (wallResult's holes's values)
+        # A sill under nothing is a step, not a hole.
+        loop sillCursor from 0 to the length of sillBands:
+            if (the item at sillCursor in sillUsed) = false:
+                set holesFit to false
+        set holesArea to 0.0
+        loop holeCursor from 0 to the length of (wallResult's holes's values):
+            set cutOut to the item at holeCursor in (wallResult's holes's values)
+            set holesArea to holesArea + ((cutOut's high - cutOut's low) * (cutOut's head - cutOut's sill))
+            if ((cutOut's high - cutOut's low) < 0.1) or ((cutOut's head - cutOut's sill) < 0.1):
+                set holesFit to false
+        if (the length of (wallResult's holes's values)) = 0:
+            set holesFit to false
+        free headBands
+        free sillBands
+        free topGaps
+        free footGaps
+        free headUsed
+        free sillUsed
+        free footUsed
+        set boxedVolume to wallThickness * ((wallLength * wallHeight) - holesArea)
+        if holesFit and ((the absolute value of (solidVolume - boxedVolume)) <= (0.02 * solidVolume)):
+            set middle to (acrossSpan's low + acrossSpan's high) * 0.5
+            set wallResult's found to true
+            set wallResult's start to a cad vector2 with x ((wallRun's x * alongSpan's low) + (acrossAxis's x * middle)) and y ((wallRun's y * alongSpan's low) + (acrossAxis's y * middle))
+            set wallResult's finish to a cad vector2 with x ((wallRun's x * alongSpan's high) + (acrossAxis's x * middle)) and y ((wallRun's y * alongSpan's high) + (acrossAxis's y * middle))
+            set wallResult's foot to heightSpan's low
+            set wallResult's head to heightSpan's high
+            set wallResult's thickness to wallThickness
         return wallResult
+
+# A door or window measured from its triangles, for the wall it stands in to
+# be found: the middle of its box on the plan, the direction it runs in,
+# half its length along that and half its depth across it, its foot and
+# head, and whether a wall has taken it as its opening's filling. `halfLong`
+# 0 when it has no box to speak of.
+class:
+    patterns:
+        [a|] bim ifc filling record
+    members:
+        source as an integer
+        isDoor as a boolean
+        centre as a cad vector2
+        direction as a cad vector2
+        halfLong as a 64 bit floating-point number
+        halfDeep as a 64 bit floating-point number
+        foot as a 64 bit floating-point number
+        head as a 64 bit floating-point number
+        taken as a boolean
+
+function the bim ifc filling of {integer:sourceId} door {boolean:fillsDoor} boxed from {a pointer to a list:cornerList}:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        set fillingBox to @intrinsic("construct", a bim ifc filling record, sourceId, fillsDoor, nowhere, nowhere, 0.0, 0.0, 0.0, 0.0, false)
+        if (the length of cornerList) < 12:
+            return fillingBox
+        set fillingRun to the bim ifc main run of cornerList seen in plan true
+        if (the cad length of fillingRun) < 0.5:
+            return fillingBox
+        set acrossAxis to a cad vector3 with x (0.0 - fillingRun's y), y fillingRun's x and z 0.0
+        set alongSpan to the bim ifc span of cornerList along fillingRun
+        set acrossSpan to the bim ifc span of cornerList along acrossAxis
+        set heightSpan to the bim ifc span of cornerList along (a cad vector3 with x 0.0, y 0.0 and z 1.0)
+        set middleAlong to (alongSpan's low + alongSpan's high) * 0.5
+        set middleAcross to (acrossSpan's low + acrossSpan's high) * 0.5
+        set fillingBox's centre to a cad vector2 with x ((fillingRun's x * middleAlong) + (acrossAxis's x * middleAcross)) and y ((fillingRun's y * middleAlong) + (acrossAxis's y * middleAcross))
+        set fillingBox's direction to a cad vector2 with x fillingRun's x and y fillingRun's y
+        set fillingBox's halfLong to (alongSpan's high - alongSpan's low) * 0.5
+        set fillingBox's halfDeep to (acrossSpan's high - acrossSpan's low) * 0.5
+        set fillingBox's foot to heightSpan's low
+        set fillingBox's head to heightSpan's high
+        return fillingBox
+
+# The thickness of a native wall: the sum of its layers.
+function the bim ifc layer sum of {bim ifc native wall record:nativeWall}:
+    execute:
+        set layerSum to 0.0
+        loop layerCursor from 0 to the length of (nativeWall's layers's values):
+            set layerSum to layerSum + (the item at layerCursor in (nativeWall's layers's values))'s thickness
+        return layerSum
+
+# Whether two native walls have the same layers.
+function bim ifc pieces {bim ifc native wall record:firstWall} and {bim ifc native wall record:secondWall} are layered alike:
+    execute:
+        if (the length of (firstWall's layers's values)) != (the length of (secondWall's layers's values)):
+            return false
+        loop layerCursor from 0 to the length of (firstWall's layers's values):
+            set firstLayer to the item at layerCursor in (firstWall's layers's values)
+            set secondLayer to the item at layerCursor in (secondWall's layers's values)
+            if (firstLayer's material != secondLayer's material) or ((the absolute value of (firstLayer's thickness - secondLayer's thickness)) > 0.0005):
+                return false
+        return true
+
+# From where to where native wall `nativeWall` reaches along `axis` from
+# `origin`, and how far its line lies across that (to the axis's left).
+class:
+    patterns:
+        [a|] bim ifc wall stretch record
+    members:
+        low as a 64 bit floating-point number
+        high as a 64 bit floating-point number
+        across as a 64 bit floating-point number
+        forward as a boolean
+
+function the bim ifc stretch of {bim ifc native wall record:nativeWall} along {cad vector2:axis} from {cad vector2:origin}:
+    execute:
+        set startAlong to ((nativeWall's start's x - origin's x) * axis's x) + ((nativeWall's start's y - origin's y) * axis's y)
+        set finishAlong to ((nativeWall's finish's x - origin's x) * axis's x) + ((nativeWall's finish's y - origin's y) * axis's y)
+        set acrossValue to ((nativeWall's start's y - origin's y) * axis's x) - ((nativeWall's start's x - origin's x) * axis's y)
+        return @intrinsic("construct", a bim ifc wall stretch record, the minimum of startAlong and finishAlong, the maximum of startAlong and finishAlong, acrossValue, startAlong <= finishAlong)
+
+# The doors and windows of `fillings` that stand between two pieces of wall
+# on one line given the wall they lack: the two pieces (and one under and
+# one over the gap, when the file has them) made one wall of `nativeSet`
+# with the gap as its opening (see the top of this file). The pieces must
+# be of one thickness, one line, one foot and head and the same layers, the
+# gap free of other walls, and the door or window must fill it. How many
+# were given a wall.
+function join bim ifc wall pieces round {a pointer to a list:fillings} in {a pointer to a bim ifc native set record:nativeSet}:
+    execute:
+        set joined to 0
+        loop fillingCursor from 0 to the length of fillings:
+            set standing to the item at fillingCursor in fillings
+            if (standing's taken = false) and ((standing's halfLong >= 0.15) and ((standing's head - standing's foot) >= 0.3)):
+                set middleHeight to (standing's foot + standing's head) * 0.5
+                set beforeIndex to -1
+                set afterIndex to -1
+                loop wallCursor from 0 to the length of (nativeSet's walls's values):
+                    if (the item at wallCursor in (nativeSet's wallAbsorbed's values)) < 0:
+                        set candidate to the item at wallCursor in (nativeSet's walls's values)
+                        set lineX to candidate's finish's x - candidate's start's x
+                        set lineY to candidate's finish's y - candidate's start's y
+                        set lineLong to the square root of ((lineX * lineX) + (lineY * lineY))
+                        if lineLong > 0.001:
+                            if (the absolute value of (((lineX * standing's direction's y) - (lineY * standing's direction's x)) / lineLong)) < 0.02:
+                                set pieceStretch to the bim ifc stretch of candidate along standing's direction from standing's centre
+                                set touching to (the absolute value of pieceStretch's across) <= (((the bim ifc layer sum of candidate) * 0.5) + (standing's halfDeep + 0.02))
+                                if touching and ((candidate's foot < middleHeight) and (candidate's head > middleHeight)):
+                                    if (the absolute value of (pieceStretch's high + standing's halfLong)) < 0.08:
+                                        set beforeIndex to wallCursor
+                                    if (the absolute value of (pieceStretch's low - standing's halfLong)) < 0.08:
+                                        set afterIndex to wallCursor
+                if ((beforeIndex >= 0) and (afterIndex >= 0)) and (beforeIndex != afterIndex):
+                    set beforeWall to the item at beforeIndex in (nativeSet's walls's values)
+                    set afterWall to the item at afterIndex in (nativeSet's walls's values)
+                    set beforeStretch to the bim ifc stretch of beforeWall along standing's direction from standing's centre
+                    set afterStretch to the bim ifc stretch of afterWall along standing's direction from standing's centre
+                    set wallThick to the bim ifc layer sum of beforeWall
+                    set alike to ((the absolute value of (wallThick - (the bim ifc layer sum of afterWall))) < 0.002) and ((the absolute value of (beforeStretch's across - afterStretch's across)) < 0.002)
+                    set alike to alike and (((the absolute value of (beforeWall's foot - afterWall's foot)) < 0.003) and ((the absolute value of (beforeWall's head - afterWall's head)) < 0.003))
+                    set alike to alike and (bim ifc pieces beforeWall and afterWall are layered alike)
+                    set gapLow to beforeStretch's high
+                    set gapHigh to afterStretch's low
+                    # The pieces under and over the gap, and anything else in it.
+                    set underIndex to -1
+                    set overIndex to -1
+                    set blocked to false
+                    loop wallCursor from 0 to the length of (nativeSet's walls's values):
+                        if ((the item at wallCursor in (nativeSet's wallAbsorbed's values)) < 0) and ((wallCursor != beforeIndex) and (wallCursor != afterIndex)):
+                            set candidate to the item at wallCursor in (nativeSet's walls's values)
+                            set lineX to candidate's finish's x - candidate's start's x
+                            set lineY to candidate's finish's y - candidate's start's y
+                            set lineLong to the square root of ((lineX * lineX) + (lineY * lineY))
+                            if lineLong > 0.001:
+                                if (the absolute value of (((lineX * standing's direction's y) - (lineY * standing's direction's x)) / lineLong)) < 0.02:
+                                    set pieceStretch to the bim ifc stretch of candidate along standing's direction from standing's centre
+                                    set inLine to (the absolute value of (pieceStretch's across - beforeStretch's across)) < (wallThick * 0.5)
+                                    set inGap to (pieceStretch's low < (gapHigh - 0.003)) and (pieceStretch's high > (gapLow + 0.003))
+                                    set inHeight to (candidate's foot < (beforeWall's head - 0.003)) and (candidate's head > (beforeWall's foot + 0.003))
+                                    if inLine and (inGap and inHeight):
+                                        set fitsGap to ((the absolute value of (pieceStretch's low - gapLow)) < 0.003) and ((the absolute value of (pieceStretch's high - gapHigh)) < 0.003)
+                                        set fitsGap to fitsGap and (((the absolute value of (pieceStretch's across - beforeStretch's across)) < 0.002) and ((the absolute value of ((the bim ifc layer sum of candidate) - wallThick)) < 0.002))
+                                        set fitsGap to fitsGap and (bim ifc pieces beforeWall and candidate are layered alike)
+                                        if fitsGap and (((the absolute value of (candidate's foot - beforeWall's foot)) < 0.003) and (underIndex < 0)):
+                                            set underIndex to wallCursor
+                                        else if fitsGap and (((the absolute value of (candidate's head - beforeWall's head)) < 0.003) and (overIndex < 0)):
+                                            set overIndex to wallCursor
+                                        else:
+                                            set blocked to true
+                    set gapSill to beforeWall's foot
+                    if underIndex >= 0:
+                        set gapSill to (the item at underIndex in (nativeSet's walls's values))'s head
+                    set gapHead to beforeWall's head
+                    if overIndex >= 0:
+                        set gapHead to (the item at overIndex in (nativeSet's walls's values))'s foot
+                    set gapWide to gapHigh - gapLow
+                    set gapTall to gapHead - gapSill
+                    # The door or window fills the gap.
+                    set filledWide to (the minimum of standing's halfLong and gapHigh) - (the maximum of (0.0 - standing's halfLong) and gapLow)
+                    set filledTall to (the minimum of standing's head and gapHead) - (the maximum of standing's foot and gapSill)
+                    set fills to ((gapWide >= 0.3) and (gapTall >= 0.3)) and ((filledWide >= (0.8 * gapWide)) and (filledTall >= (0.8 * gapTall)))
+                    if (alike and fills) and (blocked = false):
+                        set beforeLong to beforeStretch's high - beforeStretch's low
+                        set afterLong to afterStretch's high - afterStretch's low
+                        set fromPoint to beforeWall's start
+                        if beforeStretch's forward = false:
+                            set fromPoint to beforeWall's finish
+                        set toPoint to afterWall's finish
+                        if afterStretch's forward = false:
+                            set toPoint to afterWall's start
+                        set openingList to a cad topology list of a bim ifc native opening record
+                        loop openingCursor from 0 to the length of (beforeWall's openings's values):
+                            set carried to the item at openingCursor in (beforeWall's openings's values)
+                            set carriedAt to carried's along
+                            if beforeStretch's forward = false:
+                                set carriedAt to beforeLong - carried's along
+                            append (@intrinsic("construct", a bim ifc native opening record, carriedAt, carried's width, carried's height, carried's sillHeight, carried's isDoor)) to (openingList's values)
+                        append (@intrinsic("construct", a bim ifc native opening record, beforeLong + (gapWide * 0.5), gapWide, gapTall, gapSill, standing's isDoor)) to (openingList's values)
+                        loop openingCursor from 0 to the length of (afterWall's openings's values):
+                            set carried to the item at openingCursor in (afterWall's openings's values)
+                            set carriedAt to carried's along
+                            if afterStretch's forward = false:
+                                set carriedAt to afterLong - carried's along
+                            append (@intrinsic("construct", a bim ifc native opening record, (beforeLong + gapWide) + carriedAt, carried's width, carried's height, carried's sillHeight, carried's isDoor)) to (openingList's values)
+                        replace item at index beforeIndex in (nativeSet's walls's values) with (@intrinsic("construct", a bim ifc native wall record, beforeWall's storey, fromPoint, toPoint, beforeWall's foot, beforeWall's head, beforeWall's layers, openingList))
+                        replace item at index afterIndex in (nativeSet's wallAbsorbed's values) with beforeIndex
+                        if underIndex >= 0:
+                            replace item at index underIndex in (nativeSet's wallAbsorbed's values) with beforeIndex
+                        if overIndex >= 0:
+                            replace item at index overIndex in (nativeSet's wallAbsorbed's values) with beforeIndex
+                        replace item at index fillingCursor in fillings with (@intrinsic("construct", a bim ifc filling record, standing's source, standing's isDoor, standing's centre, standing's direction, standing's halfLong, standing's halfDeep, standing's foot, standing's head, true))
+                        append standing's source to (nativeSet's skipped's values)
+                        set joined to joined + 1
+        return joined
 
 # A member measured from its triangles, along the direction most of its
 # edges run in (an upright one first tried along the height): `kind` 1 when
@@ -614,7 +1029,7 @@ function the bim ifc member measured in {a pointer to a list:cornerList} standin
 # The native walls and slabs of `stepFile` (see the top of this file).
 function the bim ifc natives of {bim step file record:stepFile}:
     execute:
-        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer)
+        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer)
         if stepFile's valid = false:
             return nativeSet
         set reader to a fresh bim ifc reading of stepFile
@@ -687,6 +1102,28 @@ function the bim ifc natives of {bim step file record:stepFile}:
                 replace item at index opening in fillerOf with (the bim step reference of (the bim step argument 5 of relation) in relation)
             free bim step instance relation
         free relations
+        # The doors and windows, each boxed from its triangles, and where
+        # each instance's box is kept (-1 none).
+        set fillings to an empty list of a bim ifc filling record
+        set fillingAt to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to fillingAt
+        loop classCursor from 0 to 2:
+            set fillingClass to the string form of "IFCDOOR"
+            if classCursor = 1:
+                set fillingClass to the string form of "IFCWINDOW"
+            set fillingIds to the bim step instances of type fillingClass in stepFile
+            loop cursor from 0 to the length of fillingIds:
+                set fillingId to the item at cursor in fillingIds
+                set fillingValue to the bim step instance fillingId in stepFile
+                set fillingFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of fillingValue) in fillingValue) in r
+                set fillingBody to the bim ifc body of shape (the bim step reference of (the bim step argument 6 of fillingValue) in fillingValue) in stepFile
+                free bim step instance fillingValue
+                set fillingCorners to the bim ifc corners of representation fillingBody through fillingFrame in r
+                replace item at index fillingId in fillingAt with (the length of fillings)
+                append (the bim ifc filling of fillingId door (classCursor = 0) boxed from fillingCorners) to fillings
+                free fillingCorners
+            free fillingIds
         # The walls.
         set wallIds to the bim step instances of type (the string form of "IFCWALL") in stepFile
         set standardIds to the bim step instances of type (the string form of "IFCWALLSTANDARDCASE") in stepFile
@@ -810,10 +1247,14 @@ function the bim ifc natives of {bim step file record:stepFile}:
                                     append (@intrinsic("construct", a bim ifc native opening record, ((openingLow + openingHigh) * 0.5), openingWidth, (openingHead - openingFoot), openingFoot, fillingDoor)) to (nativeWall's openings's values)
                                     if filler >= 0:
                                         append filler to (nativeSet's skipped's values)
+                                        if (the item at filler in fillingAt) >= 0:
+                                            set takenBox to the item at (the item at filler in fillingAt) in fillings
+                                            replace item at index (the item at filler in fillingAt) in fillings with (@intrinsic("construct", a bim ifc filling record, takenBox's source, takenBox's isDoor, takenBox's centre, takenBox's direction, takenBox's halfLong, takenBox's halfDeep, takenBox's foot, takenBox's head, true))
                                     append openingAt to (nativeSet's skipped's values)
                             set openingAt to the item at openingAt in nextOpening
                         append nativeWall to (nativeSet's walls's values)
                         append wallId to (nativeSet's wallSources's values)
+                        append -1 to (nativeSet's wallAbsorbed's values)
                         note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
                         append wallId to (nativeSet's skipped's values)
                         set made to true
@@ -830,11 +1271,58 @@ function the bim ifc natives of {bim step file record:stepFile}:
                     if (the absolute value of (layerSum - measuredWall's thickness)) > 0.005:
                         set layerList to a cad topology list of a bim layer record
                         append (@intrinsic("construct", a bim layer record, the string form of "concrete", measuredWall's thickness)) to (layerList's values)
-                    append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, a cad topology list of a bim ifc native opening record)) to (nativeSet's walls's values)
-                    append wallId to (nativeSet's wallSources's values)
-                    note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
-                    append wallId to (nativeSet's skipped's values)
+                    # Each hole takes the door or window that fills most of it;
+                    # a hole nothing fills leaves the wall imported.
+                    set holeOpenings to a cad topology list of a bim ifc native opening record
+                    set holeFillings to an empty list of an integer
+                    set runX to measuredWall's finish's x - measuredWall's start's x
+                    set runY to measuredWall's finish's y - measuredWall's start's y
+                    set runLong to the square root of ((runX * runX) + (runY * runY))
+                    set runX to runX / runLong
+                    set runY to runY / runLong
+                    set holesFilled to true
+                    loop holeCursor from 0 to the length of (measuredWall's holes's values):
+                        set wallHole to the item at holeCursor in (measuredWall's holes's values)
+                        set bestFilling to -1
+                        set bestCover to 0.6 * ((wallHole's high - wallHole's low) * (wallHole's head - wallHole's sill))
+                        loop fillingCursor from 0 to the length of fillings:
+                            set standing to the item at fillingCursor in fillings
+                            set already to false
+                            loop usedCursor from 0 to the length of holeFillings:
+                                if (the item at usedCursor in holeFillings) = fillingCursor:
+                                    set already to true
+                            if ((standing's taken = false) and (already = false)) and ((standing's halfLong > 0.0) and ((the absolute value of ((runX * standing's direction's y) - (runY * standing's direction's x))) < 0.02)):
+                                set offX to standing's centre's x - measuredWall's start's x
+                                set offY to standing's centre's y - measuredWall's start's y
+                                set alongCentre to (offX * runX) + (offY * runY)
+                                set acrossCentre to (offY * runX) - (offX * runY)
+                                if (the absolute value of acrossCentre) <= ((measuredWall's thickness * 0.5) + (standing's halfDeep + 0.02)):
+                                    set coverWide to (the minimum of (alongCentre + standing's halfLong) and wallHole's high) - (the maximum of (alongCentre - standing's halfLong) and wallHole's low)
+                                    set coverTall to (the minimum of standing's head and wallHole's head) - (the maximum of standing's foot and wallHole's sill)
+                                    if ((coverWide > 0.0) and (coverTall > 0.0)) and ((coverWide * coverTall) > bestCover):
+                                        set bestCover to coverWide * coverTall
+                                        set bestFilling to fillingCursor
+                        if bestFilling < 0:
+                            set holesFilled to false
+                        else:
+                            append bestFilling to holeFillings
+                            append (@intrinsic("construct", a bim ifc native opening record, (wallHole's low + wallHole's high) * 0.5, wallHole's high - wallHole's low, wallHole's head - wallHole's sill, wallHole's sill, (the item at bestFilling in fillings)'s isDoor)) to (holeOpenings's values)
+                    if holesFilled:
+                        loop usedCursor from 0 to the length of holeFillings:
+                            set takenBox to the item at (the item at usedCursor in holeFillings) in fillings
+                            replace item at index (the item at usedCursor in holeFillings) in fillings with (@intrinsic("construct", a bim ifc filling record, takenBox's source, takenBox's isDoor, takenBox's centre, takenBox's direction, takenBox's halfLong, takenBox's halfDeep, takenBox's foot, takenBox's head, true))
+                            append takenBox's source to (nativeSet's skipped's values)
+                        append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, holeOpenings)) to (nativeSet's walls's values)
+                        append wallId to (nativeSet's wallSources's values)
+                        append -1 to (nativeSet's wallAbsorbed's values)
+                        note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
+                        append wallId to (nativeSet's skipped's values)
+                    free holeFillings
         free wallIds
+        # The doors and windows left standing between pieces of wall.
+        ignore join bim ifc wall pieces round fillings in (the address of nativeSet)
+        free fillings
+        free fillingAt
         # The slabs (a roof's too).
         set slabIds to the bim step instances of type (the string form of "IFCSLAB") in stepFile
         set standardSlabs to the bim step instances of type (the string form of "IFCSLABSTANDARDCASE") in stepFile
@@ -1079,16 +1567,24 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                     set counts's grids to counts's grids + 1
                     note bim guid nativeGrid's sourceKey promoted as freshGrid in target
                     append nativeGrid's sourceKey to takenIds
+        # The element each wall became (the refused id for none), for the
+        # pieces made part of another wall to be listed as taken over into it.
+        set wallElements to an empty list of a 64 bit integer
         loop wallCursor from 0 to the length of (nativeSet's walls's values):
             set nativeWall to the item at wallCursor in (nativeSet's walls's values)
             set wallSource to the item at wallCursor in (nativeSet's wallSources's values)
             set wallGuid to the bim ifc global id of indexed source wallSource through psetIndex of (nativeSet's psets's values)
-            if (bim guid wallGuid is among takenIds) = false:
+            append (the bim refused id) to wallElements
+            set standsAlone to true
+            if wallCursor < (the length of (nativeSet's wallAbsorbed's values)):
+                set standsAlone to (the item at wallCursor in (nativeSet's wallAbsorbed's values)) < 0
+            if standsAlone and ((bim guid wallGuid is among takenIds) = false):
                 set levelId to the bim level for ifc storey nativeWall's storey of nativeSet in target counting (the address of counts)
                 set levelElevation to (the item at (the bim level index of levelId in (@intrinsic("dereference", target)))'s position in (target's levels's values))'s elevation
                 set typeId to the bim wall type with layers (nativeWall's layers's values) in target
                 set fresh to add bim wall typed typeId on levelId from nativeWall's start to nativeWall's finish to target
                 if fresh != the bim refused id:
+                    replace item at index wallCursor in wallElements with fresh
                     set counts's walls to counts's walls + 1
                     hand bim ifc psets of source wallSource through psetIndex of (nativeSet's psets's values) to fresh in target
                     note bim guid wallGuid first promoted as fresh besides notedIds in target
@@ -1112,14 +1608,32 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                         set hostAlong to nativeWall's finish's y - nativeWall's start's y
                         set hostLong to the square root of ((hostAcross * hostAcross) + (hostAlong * hostAlong))
                         set besideClear to the minimum of (nativeOpening's along - (openingWide * 0.5)) and ((hostLong - nativeOpening's along) - (openingWide * 0.5))
-                        if (besideClear <= 0.000001) or (openingHead >= (nativeWall's head - levelElevation)):
+                        set reachesEnd to besideClear <= 0.000001
+                        set reachesHead to openingHead >= ((nativeWall's head - levelElevation) - 0.000001)
+                        if reachesEnd or reachesHead:
                             set openingFrame to 0.0
-                            set openingWide to openingWide - 0.1
-                            set openingHigh to openingHigh - 0.05
+                            if reachesEnd:
+                                set openingWide to openingWide - 0.1
+                            if reachesHead:
+                                set openingHigh to openingHigh - 0.05
                         set openingTypeId to the bim opening type sized openingWide by openingHigh on openingSill framed openingFrame door nativeOpening's isDoor in target
                         if openingTypeId != the bim refused id:
                             if (add bim opening typed openingTypeId in fresh at nativeOpening's along to target) != the bim refused id:
                                 set counts's openings to counts's openings + 1
+        loop wallCursor from 0 to the length of (nativeSet's wallAbsorbed's values):
+            set intoWall to the item at wallCursor in (nativeSet's wallAbsorbed's values)
+            if intoWall >= 0:
+                # The wall it is part of may itself have been made part of another.
+                set hops to 0
+                loop while ((the item at intoWall in (nativeSet's wallAbsorbed's values)) >= 0) and (hops < 64):
+                    set intoWall to the item at intoWall in (nativeSet's wallAbsorbed's values)
+                    set hops to hops + 1
+                set intoElement to the item at intoWall in wallElements
+                if intoElement != the bim refused id:
+                    set pieceGuid to the bim ifc global id of indexed source (the item at wallCursor in (nativeSet's wallSources's values)) through psetIndex of (nativeSet's psets's values)
+                    if (bim guid pieceGuid is among takenIds) = false:
+                        note bim guid pieceGuid first promoted as intoElement besides notedIds in target
+        free wallElements
         loop slabCursor from 0 to the length of (nativeSet's slabs's values):
             set nativeSlab to the item at slabCursor in (nativeSet's slabs's values)
             set slabSource to the item at slabCursor in (nativeSet's slabSources's values)
@@ -1185,7 +1699,7 @@ function the bim ifc natives {bim ifc native set record:nativeSet} made in {a po
 # No natives (nothing to make native).
 function no bim ifc natives:
     execute:
-        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer)
+        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer)
 
 # What was made native, for a message: "12 walls, 30 openings, 4 floors
 # made native, 2 storeys added; ".
