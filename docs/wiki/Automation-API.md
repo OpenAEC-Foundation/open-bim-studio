@@ -33,6 +33,7 @@ or switch it on in the app: **Collaborate > API / MCP**.
 | `properties`, `property CODE TEXT` | the selection's property rows; type TEXT into a row |
 | `wall X1 Y1 X2 Y2`, `slab X1 Y1 X2 Y2` | a wall of the current type, a floor over a rectangle |
 | `linear X1 Y1 Z1 X2 Y2 Z2 [TURN]` | a column, beam or other linear element of the current linear type along that axis (heights above the storey), its profile turned TURN radians |
+| `lineartype ROLE WIDTH DEPTH [ROUND [MATERIAL]]` | the linear type of that role (0 column, 1 beam, 2 frame, 4 pipe, 6 duct, 7 cable tray, 8 pile), size in metres, shape (1 round) and material, made when the model has none such, and the one `linear` draws |
 | `profile NAME [ROLE]` | the catalogue profile of that name (such as `HEB 220`) made a linear type of ROLE (0 column, 1 beam) and the one `linear` draws |
 | `system X1 Y1 X2 Y2 [TYPE [ORIENT [PITCH [LENGTH]]]]`, `systemtypes` | a building system (TYPE -1 for none; ORIENT 0 vertical along the line, 1 horizontal over the rectangle, 2 tilted at PITCH degrees from level, LENGTH metres up the slope to the line's left); the available system types, with each recipe's orientation |
 | `grid NAME X1 Y1 X2 Y2 LOW HIGH`, `gridrepeat SOURCE PATTERN [UNIT]` | a grid line; copies by a spacing pattern |

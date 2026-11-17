@@ -537,6 +537,17 @@ def linear_tool(arguments: dict) -> dict:
     return text_result(current_modeller().request("linear", *values))
 
 
+@tool("use_linear_type", "Make the linear type of `role` (0 column, 1 beam, 2 frame, 4 pipe, 6 duct, 7 cable tray, "
+      "8 pile), `width` by `depth` metres, round or rectangular, of `material`, the type `create_linear` draws; "
+      "the model's own type when it has one such, else a new one. Answers the type's id.",
+      {"role": {"type": "integer", "enum": [0, 1, 2, 4, 6, 7, 8]}, "width": {"type": "number"}, "depth": {"type": "number"},
+       "round": {"type": "boolean"}, "material": {"type": "string"}}, ["role", "width", "depth"])
+def linear_type_tool(arguments: dict) -> dict:
+    return text_result(current_modeller().request(
+        "lineartype", int(arguments["role"]), number(arguments["width"], "width"), number(arguments["depth"], "depth"),
+        1 if arguments.get("round") else 0, str(arguments.get("material") or "steel")))
+
+
 @tool("use_profile", "Make the catalogue profile `name` (such as 'HEB 220' or 'SHS 80x80x4') a linear type of "
       "`role` (0 column, 1 beam) and the type `create_linear` draws; answers the type's id.",
       {"name": {"type": "string"}, "role": {"type": "integer", "enum": [0, 1]}}, ["name"])
