@@ -75,17 +75,94 @@ function fit steel connection parts {a pointer to a list:parts} between {a 64 bi
             replace item at index cursor in parts with part
         return nothing
 
-function add bim steel connection among {a pointer to a list:identities} style {integer:styleCode} in {a pointer to a bim model record:target}:
+# The parts the recipe of `styleCode` gives end `secondaryEnd` (0 start, 1
+# finish) of `secondaryHost` at `primaryHost`, from the sections they have
+# now: bolts through a plate's face hold the primary, and beside a coped end
+# of a `paired` joint the parts keep to the clear web bay.
+function the bim steel recipe parts for style {integer:styleCode} joining {bim linear record:primaryHost} to end {integer:secondaryEnd} of {bim linear record:secondaryHost} paired {boolean:paired} in {bim model record:modelValue}:
+    execute:
+        set sectionType to the bim type of linear secondaryHost in modelValue
+        set shape to the bim profile of linear type sectionType in modelValue
+        set webSize to shape's web
+        if (webSize <= 0.0) or (shape's kind != bim i shape profile):
+            set webSize to sectionType's width
+        set recipeAdditions to the steel connection parts for style styleCode on secondaryHost's id wide sectionType's width deep sectionType's depth web webSize
+        if (styleCode = 3) or (styleCode = 5):
+            # Axial fasteners attach plates/cleat feet to the primary.
+            loop cursor from 0 to the length of (recipeAdditions's values):
+                set bolts to the item at cursor in (recipeAdditions's values)
+                if (bolts's kind = 1) and ((the absolute value of bolts's axis's z) > 0.999):
+                    set bolts's memberId to primaryHost's id
+                    replace item at index cursor in (recipeAdditions's values) with bolts
+        if paired and ((styleCode >= 3) and (styleCode <= 5)):
+            set copeValue to the bim connection cope of secondaryHost end secondaryEnd at primaryHost in modelValue
+            if copeValue's state = 1:
+                fit steel connection parts (recipeAdditions's values) between copeValue's low and copeValue's high
+        return recipeAdditions
+
+# Whether two lists of parts are the same parts with the same measures.
+function bim steel parts {a pointer to a list:first} match {a pointer to a list:second}:
+    execute:
+        if (the length of first) != (the length of second):
+            return false
+        loop cursor from 0 to the length of first:
+            set one to the item at cursor in first
+            set other to the item at cursor in second
+            if ((one's key != other's key) or (one's memberId != other's memberId)) or ((one's kind != other's kind) or ((one's rows != other's rows) or (one's columns != other's columns))):
+                return false
+            if ((the cad distance from one's origin to other's origin) > 1e-9) or ((the cad distance from one's axis to other's axis) > 1e-9):
+                return false
+            set gap to (the absolute value of (one's width - other's width)) + (the absolute value of (one's height - other's height))
+            set gap to (gap + (the absolute value of (one's thickness - other's thickness))) + (the absolute value of (one's diameter - other's diameter))
+            set gap to (gap + (the absolute value of (one's length - other's length))) + (the absolute value of (one's rowPitch - other's rowPitch))
+            set gap to (gap + (the absolute value of (one's columnPitch - other's columnPitch))) + (the absolute value of (one's holeDiameter - other's holeDiameter))
+            if gap > 1e-9:
+                return false
+        return true
+
+# Parametric nodes follow their members: when a member's profile, or how a
+# coped end meets its support, changed, the node's parts are its recipe's
+# again. Answers how many nodes changed. A node whose new parts are refused
+# keeps the old ones.
+function follow bim steel recipes in {a pointer to a bim model record:target}:
+    execute:
+        set followed to 0
+        loop cursor from 0 to the length of (target's connections's values):
+            set spec to the item at cursor in (target's connections's values)
+            set memberCount to the length of (spec's members's values)
+            if ((spec's category = 2) and (memberCount >= 1)) and ((spec's style >= 3) and (spec's style <= 8)):
+                set modelValue to @intrinsic("dereference", target)
+                set secondaryRef to the item at (memberCount - 1) in (spec's members's values)
+                set primaryFound to the bim linear index of (the item at 0 in (spec's members's values))'s elementId in modelValue
+                set secondaryFound to the bim linear index of secondaryRef's elementId in modelValue
+                if primaryFound's valid and secondaryFound's valid:
+                    set fresh to the bim steel recipe parts for style spec's style joining (the item at primaryFound's position in (modelValue's linears's values)) to end secondaryRef's end of (the item at secondaryFound's position in (modelValue's linears's values)) paired (memberCount = 2) in modelValue
+                    if (bim steel parts (fresh's values) match (spec's additions's values)) = false:
+                        set spec's additions to fresh
+                        if (store bim connection spec in target) != the bim refused id:
+                            set followed to followed + 1
+        return followed
+
+# No joint: a definition of category -1 whose name says why.
+local function no bim steel connection saying {a string:reason}:
+    execute:
+        return @intrinsic("construct", a connection definition, the bim refused id, the bim refused id, reason, -1, 0, the cad zero vector3, a cad topology list of a connection member, a cad topology list of a connection addition)
+
+# The Parametric node the recipe of `styleCode` makes of the members
+# `identities` (the primary, then the secondary; an end cap takes one), not
+# yet stored; of category -1, named after the reason, when they make none.
+function the bim steel connection draft among {a pointer to a list:identities} style {integer:styleCode} in {bim model record:modelValue}:
     execute:
         set count to the length of identities
         if (styleCode < 3) or (styleCode > 8):
-            return the bim refused id
+            return no bim steel connection saying (the string form of "Unknown steel recipe")
         if (count != 2) and (((styleCode = 8) and (count = 1)) = false):
-            return the bim refused id
-        set modelValue to @intrinsic("dereference", target)
+            if styleCode = 8:
+                return no bim steel connection saying (the string form of "Select one steel member for an end cap")
+            return no bim steel connection saying (the string form of "Select the supporting member, then the member that ends on it")
         loop cursor from 0 to count:
             if (the bim linear index of (the item at cursor in identities) in modelValue)'s valid = false:
-                return the bim refused id
+                return no bim steel connection saying (the string form of "A steel recipe joins columns, beams and other linear members")
         set primaryHost to the item at (the bim linear index of (the item at 0 in identities) in modelValue)'s position in (modelValue's linears's values)
         set primaryFrame to the bim frame of linear primaryHost in modelValue
         set secondaryHost to primaryHost
@@ -110,12 +187,12 @@ function add bim steel connection among {a pointer to a list:identities} style {
                 # A plate or cleat recipe also takes an end beside the axis
                 # within the primary's section (a top-flush floor beam).
                 if (styleCode < 3) or (styleCode > 5):
-                    return the bim refused id
+                    return no bim steel connection saying (the string form of "The second member must end on the first member's axis for this recipe")
                 set endSpot to secondaryFrame's first
                 if secondaryEnd = 1:
                     set endSpot to secondaryFrame's last
                 if (bim connection point endSpot lies in the section of primaryHost around anchor in modelValue) = false:
-                    return the bim refused id
+                    return no bim steel connection saying (the string form of "The second member ends too far from the first: within 30 mm of its section is a joint")
         set primaryEnd to 2
         set positionValue to (the cad dot of (the cad difference of anchor and primaryFrame's first) and primaryFrame's along) / primaryFrame's length
         if (the cad distance from anchor to primaryFrame's first) <= 0.001:
@@ -134,29 +211,44 @@ function add bim steel connection among {a pointer to a list:identities} style {
         append (@intrinsic("construct", a connection member, primaryHost's id, primaryEnd, 0.0, positionValue)) to (members's values)
         if count = 2:
             append (@intrinsic("construct", a connection member, secondaryHost's id, secondaryEnd, 0.0, 0.0)) to (members's values)
-        set sectionType to the bim type of linear secondaryHost in modelValue
-        set shape to the bim profile of linear type sectionType in modelValue
-        set webSize to shape's web
-        if (webSize <= 0.0) or (shape's kind != bim i shape profile):
-            set webSize to sectionType's width
-        set recipeAdditions to the steel connection parts for style styleCode on secondaryHost's id wide sectionType's width deep sectionType's depth web webSize
-        if (styleCode = 3) or (styleCode = 5):
-            # Axial fasteners attach plates/cleat feet to the primary.
-            loop cursor from 0 to the length of (recipeAdditions's values):
-                set bolts to the item at cursor in (recipeAdditions's values)
-                if (bolts's kind = 1) and ((the absolute value of bolts's axis's z) > 0.999):
-                    set bolts's memberId to primaryHost's id
-                    replace item at index cursor in (recipeAdditions's values) with bolts
-        if (count = 2) and ((styleCode >= 3) and (styleCode <= 5)):
-            set copeValue to the bim connection cope of secondaryHost end secondaryEnd at primaryHost in modelValue
-            if copeValue's state = 1:
-                fit steel connection parts (recipeAdditions's values) between copeValue's low and copeValue's high
-        set label to ((the steel connection style name of styleCode) + (the string form of " ")) + (the string form of target's nextId)
-        set spec to @intrinsic("construct", a connection definition, the bim refused id, primaryHost's levelId, label, 1, styleCode, anchor, members, recipeAdditions)
+        set recipeAdditions to the bim steel recipe parts for style styleCode joining primaryHost to end secondaryEnd of secondaryHost paired (count = 2) in modelValue
+        set label to ((the steel connection style name of styleCode) + (the string form of " ")) + (the string form of modelValue's nextId)
+        # Parametric: the parts follow the members (`follow bim steel recipes`).
+        set spec to @intrinsic("construct", a connection definition, the bim refused id, primaryHost's levelId, label, 2, styleCode, anchor, members, recipeAdditions)
+        return spec
+
+function add bim steel connection among {a pointer to a list:identities} style {integer:styleCode} in {a pointer to a bim model record:target}:
+    execute:
+        set spec to the bim steel connection draft among identities style styleCode in (@intrinsic("dereference", target))
+        if spec's category < 0:
+            return the bim refused id
         return store bim connection spec in target
+
+# Why `add bim steel connection among` makes no joint of these members, in
+# words for the user; empty when it would make one.
+function the bim steel connection objection among {a pointer to a list:identities} style {integer:styleCode} in {bim model record:modelValue}:
+    execute:
+        set spec to the bim steel connection draft among identities style styleCode in modelValue
+        if spec's category < 0:
+            return spec's name
+        set generated to the bim connection evaluation of spec in modelValue
+        if generated's valid = false:
+            return generated's message
+        loop nodeCursor from 0 to the length of (modelValue's connections's values):
+            set other to the item at nodeCursor in (modelValue's connections's values)
+            loop memberCursor from 0 to the length of (other's members's values):
+                set existing to the item at memberCursor in (other's members's values)
+                loop candidateCursor from 0 to the length of (spec's members's values):
+                    set candidate to the item at candidateCursor in (spec's members's values)
+                    if ((existing's elementId = candidate's elementId) and (existing's end = candidate's end)) and (candidate's end != 2):
+                        return (the string form of "That member end already has a connection: ") + other's name
+        return the string form of ""
+
 
 # Capture edited local recipes as named model types. Definitions own their lists;
 # instances remain editable copies, so changing one cannot mutate another/undo.
+# A type saved from a Parametric node stays Parametric: applied, it gives each
+# joint the recipe's parts for that joint's own members.
 function save bim connection {a 64 bit integer:nodeId} as type named {a string:typeName} in {a pointer to a bim model record:target}:
     execute:
         set found to the bim connection index of nodeId in (@intrinsic("dereference", target))
@@ -208,14 +300,21 @@ function apply bim connection type {a 64 bit integer:typeId} among {a pointer to
             return the bim refused id
         set nodeFound to the bim connection index of nodeId in scratch
         set spec to the item at nodeFound's position in (scratch's connections's values)
-        set spec's additions to the cad clone of template's additions
+        # A Parametric type keeps the recipe's own parts for these members;
+        # any other gives the joint its edited parts.
+        set typedParts to the cad clone of spec's additions
+        if (template's category != 2) or (template's style < 3):
+            set spec's category to 1
+            set typedParts to the cad clone of template's additions
+        set spec's additions to typedParts
         loop cursor from 0 to the length of (spec's additions's values):
             set part to the item at cursor in (spec's additions's values)
             set slot to (part's memberId as an integer) - 1
-            if (slot < 0) or (slot >= (the length of identities)):
-                return the bim refused id
-            set part's memberId to the item at slot in identities
-            replace item at index cursor in (spec's additions's values) with part
+            if spec's category = 1:
+                if (slot < 0) or (slot >= (the length of identities)):
+                    return the bim refused id
+                set part's memberId to the item at slot in identities
+                replace item at index cursor in (spec's additions's values) with part
         set spec's members to the cad clone of spec's members
         loop cursor from 0 to the length of (spec's members's values):
             set memberValue to the item at cursor in (spec's members's values)
