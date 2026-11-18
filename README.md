@@ -34,17 +34,17 @@ It opens a two-storey building on piles with grids, layered walls, windows and d
 
 ## Download
 
-Every preview is on the [releases page](https://github.com/OpenAEC-Foundation/open-bim-studio/releases). The latest is [0.1.1](https://github.com/OpenAEC-Foundation/open-bim-studio/releases/tag/v0.1.1).
+Every preview is on the [releases page](https://github.com/OpenAEC-Foundation/open-bim-studio/releases). The latest is [2026.47.0](https://github.com/OpenAEC-Foundation/open-bim-studio/releases/tag/v2026.47.0).
 
 | Platform | Installer |
 |----------|-----------|
-| **Linux** (x86-64) | `Open-BIM-Studio-0.1.1-linux-x86_64.run` |
+| **Linux** (x86-64) | `Open-BIM-Studio-2026.47.0-linux-x86_64.run` |
 | **Windows** | Not in a release yet; see [Windows release](docs/notes/windows-release.md) |
 | **macOS** | Not available |
 
-To install or update, run `bash Open-BIM-Studio-0.1.1-linux-x86_64.run`. It replaces `~/.local/share/open-bim-studio` and its launcher; your project files are stored apart from it. Back up projects before trying a preview.
+To install or update, run `bash Open-BIM-Studio-2026.47.0-linux-x86_64.run`. It replaces `~/.local/share/open-bim-studio` and its launcher; your project files are stored apart from it. Back up projects before trying a preview.
 
-The installer is signed with the OpenAEC OpenPGP key (`.asc`, with the public key and fingerprint in the release) and listed in `SHA256SUMS`; `VERIFICATION.txt` explains the check. Linux needs glibc 2.38 or newer, an X11 session (or XWayland) and Vulkan support.
+The 2026.47.0 installer is not signed; it is listed in `SHA256SUMS`, and `VERIFICATION.txt` explains the check. Previews up to 0.1.1 are signed with the OpenAEC OpenPGP key. Linux needs glibc 2.38 or newer, an X11 session (or XWayland) and Vulkan support.
 
 ## Why use it?
 
