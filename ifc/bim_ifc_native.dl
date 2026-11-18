@@ -44,7 +44,16 @@
 # IfcCableCarrierSegment) and members (IfcMember: mullions, studs) become
 # linear elements too, of the pipe, duct, cable tray and frame roles. A
 # segment is hollow: it counts by its outline, round when no corner lies
-# outside the circle in its box, else the rectangle of its box.
+# outside the circle in its box, else the rectangle of its box. With ports
+# (IfcDistributionPort) it runs from the one end port to the other, also
+# where it is shorter than it is wide.
+#
+# Their fittings (IfcPipeFitting, IfcDuctFitting, IfcCableCarrierFitting)
+# are not kept: the model derives a fitting where the ends of segments
+# meet. The segments on a fitting are drawn on to where their axes meet
+# and the fitting is left out, its GlobalId listed as taken over into the
+# first of them; a segment a take-off stands on is cut in two there (see
+# `join bim ifc segments at the fittings of`).
 #
 # A door or window that stands between two pieces of wall on one line (the
 # file gives the wall in pieces round its frame: one either side, maybe one
@@ -138,6 +147,11 @@ class:
         # For each wall the wall it was made part of (a piece beside a door
         # or window joined to the piece on its other side), or -1.
         wallAbsorbed as the type of (a cad topology list of an integer)
+        # The fittings whose segments were drawn on to meet (the model
+        # derives its fitting there), and for each the linear element (its
+        # index in `linears`) it is listed as taken over into.
+        fittingSources as the type of (a cad topology list of an integer)
+        fittingInto as the type of (a cad topology list of an integer)
 
 # The extrusions of a representation in the world: the corners of each
 # one's profile at its start (`bottoms`) and its sweep (`sweeps`); `found`
@@ -998,6 +1012,14 @@ class:
 
 function the bim ifc member measured in {a pointer to a list:cornerList} standing {boolean:isStanding}:
     execute:
+        return the bim ifc member measured in cornerList standing isStanding lying on (a cad vector3 with x 0.0, y 0.0 and z 0.0)
+
+# The same with the member's axis known (`knownAxis` a unit vector, or zero
+# for none): a segment's ports say which way it runs, where a duct shorter
+# than it is wide has its longest edges across.
+function the bim ifc member measured in {a pointer to a list:cornerList} standing {boolean:isStanding} lying on {cad vector3:knownAxis}:
+    execute:
+        set axisKnown to (the cad length of knownAxis) > 0.5
         set nowhere to a cad vector3 with x 0.0, y 0.0 and z 0.0
         set memberResult to @intrinsic("construct", a bim ifc measured member record, 0, nowhere, nowhere, 0.0, 0.0, 0.0, 0.0, false, false, false)
         set cornerCount to the length of cornerList
@@ -1010,7 +1032,9 @@ function the bim ifc member measured in {a pointer to a list:cornerList} standin
             set memberAxis to upward
             if attempt = 1:
                 set memberAxis to the bim ifc main run of cornerList seen in plan false
-            if (attempt = 0) and (isStanding = false):
+                if axisKnown:
+                    set memberAxis to knownAxis
+            if (attempt = 0) and ((isStanding = false) or axisKnown):
                 set trying to false
             if (the cad length of memberAxis) < 0.5:
                 set trying to false
@@ -1083,10 +1107,348 @@ function the bim ifc member measured in {a pointer to a list:cornerList} standin
                             set memberResult's webbed to nearMiddle > 0
         return memberResult
 
+# The element each port is a port of (by instance, -1 for none), from
+# IfcRelNests and IfcRelConnectsPortToElement.
+function the bim ifc port owners of {bim step file record:stepFile}:
+    execute:
+        set instanceCount to the length of (stepFile's starts)
+        set portOwner to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to portOwner
+        record bim ifc containers of type (the string form of "IFCRELNESTS") holding 5 in 4 in stepFile into portOwner
+        set relations to the bim step instances of type (the string form of "IFCRELCONNECTSPORTTOELEMENT") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set relatingPort to the bim step reference of (the bim step argument 4 of relation) in relation
+            set relatedElement to the bim step reference of (the bim step argument 5 of relation) in relation
+            if (relatingPort >= 0) and (relatingPort < instanceCount):
+                replace item at index relatingPort in portOwner with relatedElement
+            free bim step instance relation
+        free relations
+        return portOwner
+
+# The fittings of pipes, ducts and cable carriers. The model keeps no
+# fitting: it derives one where the ends of segments meet (within a
+# millimetre). A file ends each segment where its fitting begins, so the
+# segments on a fitting are drawn on to the spot their axes meet in, inside
+# the fitting, and the fitting itself is left out of the import. Fittings
+# joined port to port (a tee with a reducer on a leg) count as one. What
+# connects to what is read from the ports (IfcRelNests or
+# IfcRelConnectsPortToElement, and IfcRelConnectsPorts). A fitting stays an
+# imported element when one of its ports is open or leads to anything but a
+# segment made native, or when the axes do not meet within two millimetres
+# (an eccentric reducer). A take-off stands on a segment's side: that
+# segment is cut in two where its own port for the take-off lies on its
+# axis, and the branch drawn on to there, so the three ends make a
+# junction; both pieces keep the segment's GlobalId and properties. How
+# many fittings were taken over.
+function join bim ifc segments at the fittings of {bim step file record:stepFile} with ports of {a pointer to a list:portOwner} read by {a pointer to a bim ifc reader record:reader} in {a pointer to a bim ifc native set record:nativeSet}:
+    execute:
+        set instanceCount to the length of (stepFile's starts)
+        set portPeer to an empty list of an integer
+        set linearAt to an empty list of an integer
+        set fittingAt to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to portPeer
+            append -1 to linearAt
+            append -1 to fittingAt
+        set relations to the bim step instances of type (the string form of "IFCRELCONNECTSPORTS") in stepFile
+        loop relationCursor from 0 to the length of relations:
+            set relation to the bim step instance (the item at relationCursor in relations) in stepFile
+            set relatingPort to the bim step reference of (the bim step argument 4 of relation) in relation
+            set relatedPort to the bim step reference of (the bim step argument 5 of relation) in relation
+            if ((relatingPort >= 0) and (relatingPort < instanceCount)) and ((relatedPort >= 0) and (relatedPort < instanceCount)):
+                replace item at index relatingPort in portPeer with relatedPort
+                replace item at index relatedPort in portPeer with relatingPort
+            free bim step instance relation
+        free relations
+        loop linearCursor from 0 to the length of (nativeSet's linearSources's values):
+            replace item at index (the item at linearCursor in (nativeSet's linearSources's values)) in linearAt with linearCursor
+        set fittingIds to an empty list of an integer
+        loop classCursor from 0 to 4:
+            set className to the string form of "IFCDUCTFITTING"
+            if classCursor = 1:
+                set className to the string form of "IFCPIPEFITTING"
+            if classCursor = 2:
+                set className to the string form of "IFCCABLECARRIERFITTING"
+            if classCursor = 3:
+                set className to the string form of "IFCFLOWFITTING"
+            set classIds to the bim step instances of type className in stepFile
+            loop cursor from 0 to the length of classIds:
+                replace item at index (the item at cursor in classIds) in fittingAt with (the length of fittingIds)
+                append (the item at cursor in classIds) to fittingIds
+            free classIds
+        set takenOver to 0
+        if (the length of fittingIds) = 0:
+            free fittingIds
+            free portPeer
+            free linearAt
+            free fittingAt
+            return takenOver
+        # Fittings joined port to port are one cluster, named by its root.
+        set clusterOf to an empty list of an integer
+        set clusterBlocked to an empty list of a boolean
+        loop fittingCursor from 0 to the length of fittingIds:
+            append fittingCursor to clusterOf
+            append false to clusterBlocked
+        set portIds to the bim step instances of type (the string form of "IFCDISTRIBUTIONPORT") in stepFile
+        loop portCursor from 0 to the length of portIds:
+            set portId to the item at portCursor in portIds
+            set ownerId to the item at portId in portOwner
+            set peerId to the item at portId in portPeer
+            if ((ownerId >= 0) and (ownerId < instanceCount)) and (peerId >= 0):
+                set peerOwner to the item at peerId in portOwner
+                if (peerOwner >= 0) and (peerOwner < instanceCount):
+                    set ownFitting to the item at ownerId in fittingAt
+                    set peerFitting to the item at peerOwner in fittingAt
+                    if (ownFitting >= 0) and (peerFitting >= 0):
+                        set ownRoot to ownFitting
+                        loop while (the item at ownRoot in clusterOf) != ownRoot:
+                            set ownRoot to the item at ownRoot in clusterOf
+                        set peerRoot to peerFitting
+                        loop while (the item at peerRoot in clusterOf) != peerRoot:
+                            set peerRoot to the item at peerRoot in clusterOf
+                        if ownRoot != peerRoot:
+                            replace item at index peerRoot in clusterOf with ownRoot
+        loop fittingCursor from 0 to the length of fittingIds:
+            set ownRoot to fittingCursor
+            loop while (the item at ownRoot in clusterOf) != ownRoot:
+                set ownRoot to the item at ownRoot in clusterOf
+            replace item at index fittingCursor in clusterOf with ownRoot
+        # The segment ends on each cluster: the cluster, the linear element
+        # and where the fitting's port is.
+        set endCluster to an empty list of an integer
+        set endLinear to an empty list of an integer
+        set endSpots to an empty list of a cad vector3
+        set endPeerSpots to an empty list of a cad vector3
+        loop portCursor from 0 to the length of portIds:
+            set portId to the item at portCursor in portIds
+            set ownerId to the item at portId in portOwner
+            set ownFitting to -1
+            if (ownerId >= 0) and (ownerId < instanceCount):
+                set ownFitting to the item at ownerId in fittingAt
+            if ownFitting >= 0:
+                set ownRoot to the item at ownFitting in clusterOf
+                set peerId to the item at portId in portPeer
+                set peerOwner to -1
+                if peerId >= 0:
+                    set peerOwner to the item at peerId in portOwner
+                if (peerOwner < 0) or (peerOwner >= instanceCount):
+                    replace item at index ownRoot in clusterBlocked with true
+                else if (the item at peerOwner in fittingAt) < 0:
+                    set onLinear to the item at peerOwner in linearAt
+                    if onLinear < 0:
+                        replace item at index ownRoot in clusterBlocked with true
+                    else:
+                        set portValue to the bim step instance portId in stepFile
+                        set portFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of portValue) in portValue) in reader
+                        free bim step instance portValue
+                        append ownRoot to endCluster
+                        append onLinear to endLinear
+                        append portFrame's origin to endSpots
+                        set peerValue to the bim step instance peerId in stepFile
+                        set peerFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of peerValue) in peerValue) in reader
+                        free bim step instance peerValue
+                        append peerFrame's origin to endPeerSpots
+        free portIds
+        # A segment a take-off stands on is cut in two where it does; each
+        # piece names the next one of the same segment.
+        set pieceNext to an empty list of an integer
+        loop linearCursor from 0 to the length of (nativeSet's linears's values):
+            append -1 to pieceNext
+        # The members of a cluster: the piece, what it is (0 or 1 the end of
+        # the piece to draw on, 2 a spot the piece already ends in, 3 a spot
+        # to cut the piece in), its tip or that spot, its direction out of
+        # the piece, and where the fitting's port is.
+        set memberLinears to an empty list of an integer
+        set memberEnds to an empty list of an integer
+        set memberTips to an empty list of a cad vector3
+        set memberOutward to an empty list of a cad vector3
+        set memberPorts to an empty list of a cad vector3
+        loop clusterCursor from 0 to the length of fittingIds:
+            set clusterSound to ((the item at clusterCursor in clusterOf) = clusterCursor) and ((the item at clusterCursor in clusterBlocked) = false)
+            set endCount to 0
+            set fixedCount to 0
+            set cutCount to 0
+            set fixedSpot to a cad vector3 with x 0.0, y 0.0 and z 0.0
+            set sideRoom to 0.0
+            if clusterSound:
+                clear memberLinears
+                clear memberEnds
+                clear memberTips
+                clear memberOutward
+                clear memberPorts
+                loop endCursor from 0 to the length of endCluster:
+                    if (the item at endCursor in endCluster) = clusterCursor:
+                        set portSpot to the item at endCursor in endSpots
+                        set peerSpot to the item at endCursor in endPeerSpots
+                        # The piece of the segment that ends nearest the port.
+                        set nearPiece to -1
+                        set nearEnd to 0
+                        set nearDistance to 1e30
+                        set walker to the item at endCursor in endLinear
+                        loop while walker >= 0:
+                            set segment to the item at walker in (nativeSet's linears's values)
+                            set toStart to the cad distance from portSpot to segment's start
+                            set toFinish to the cad distance from portSpot to segment's finish
+                            if toStart < nearDistance:
+                                set nearDistance to toStart
+                                set nearPiece to walker
+                                set nearEnd to 0
+                            if toFinish < nearDistance:
+                                set nearDistance to toFinish
+                                set nearPiece to walker
+                                set nearEnd to 1
+                            set walker to the item at walker in pieceNext
+                        if nearDistance <= 0.005:
+                            set segment to the item at nearPiece in (nativeSet's linears's values)
+                            set tipSpot to segment's start
+                            set farSpot to segment's finish
+                            if nearEnd = 1:
+                                set tipSpot to segment's finish
+                                set farSpot to segment's start
+                            set segmentLong to the cad distance from tipSpot to farSpot
+                            if segmentLong < 0.001:
+                                set clusterSound to false
+                            else:
+                                append nearPiece to memberLinears
+                                append nearEnd to memberEnds
+                                append tipSpot to memberTips
+                                append ((the cad difference of tipSpot and farSpot) scaled by (1.0 / segmentLong)) to memberOutward
+                                append portSpot to memberPorts
+                                set endCount to endCount + 1
+                        else:
+                            # A port on the segment's side (a take-off): the
+                            # segment's own port, on its axis, says where.
+                            set sidePiece to -1
+                            set sideKind to 3
+                            set sideSpot to peerSpot
+                            set walker to the item at endCursor in endLinear
+                            loop while walker >= 0:
+                                set segment to the item at walker in (nativeSet's linears's values)
+                                set segmentLong to the cad distance from segment's start to segment's finish
+                                if (sidePiece < 0) and (segmentLong > 0.001):
+                                    set segmentUnit to (the cad difference of segment's finish and segment's start) scaled by (1.0 / segmentLong)
+                                    set fromStart to the cad difference of peerSpot and segment's start
+                                    set aheadDistance to the cad dot of fromStart and segmentUnit
+                                    set asideDistance to the cad length of (the cad difference of fromStart and (segmentUnit scaled by aheadDistance))
+                                    if (asideDistance <= 0.002) and ((aheadDistance >= -0.001) and (aheadDistance <= (segmentLong + 0.001))):
+                                        set sidePiece to walker
+                                        set sideSpot to the cad sum of segment's start and (segmentUnit scaled by aheadDistance)
+                                        if aheadDistance <= 0.001:
+                                            set sideKind to 2
+                                            set sideSpot to segment's start
+                                        if aheadDistance >= (segmentLong - 0.001):
+                                            set sideKind to 2
+                                            set sideSpot to segment's finish
+                                        set sideRoom to the maximum of sideRoom and (the maximum of segment's width and segment's depth)
+                                set walker to the item at walker in pieceNext
+                            if sidePiece < 0:
+                                set clusterSound to false
+                            else:
+                                if (fixedCount > 0) and ((the cad distance from fixedSpot to sideSpot) > 0.001):
+                                    set clusterSound to false
+                                set fixedCount to fixedCount + 1
+                                set fixedSpot to sideSpot
+                                if sideKind = 3:
+                                    set cutCount to cutCount + 1
+                                append sidePiece to memberLinears
+                                append sideKind to memberEnds
+                                append sideSpot to memberTips
+                                append (a cad vector3 with x 0.0, y 0.0 and z 0.0) to memberOutward
+                                append portSpot to memberPorts
+                # No piece twice, and no more than one cut.
+                loop memberCursor from 0 to the length of memberLinears:
+                    loop otherCursor from 0 to memberCursor:
+                        if (the item at memberCursor in memberLinears) = (the item at otherCursor in memberLinears):
+                            set clusterSound to false
+                if cutCount > 1:
+                    set clusterSound to false
+            if clusterSound and ((endCount >= 1) and ((endCount + fixedCount) >= 2)):
+                # Where the axes meet: the spot on a segment's side when there
+                # is one, else between the nearest points of the first two
+                # that are not in line, or, all in line, in the middle.
+                set widestGap to 0.0
+                set meetingSpot to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                loop memberCursor from 0 to the length of memberLinears:
+                    set meetingSpot to the cad sum of meetingSpot and ((the item at memberCursor in memberTips) scaled by (1.0 / ((the length of memberLinears) as a 64 bit floating-point number)))
+                    loop otherCursor from 0 to memberCursor:
+                        set widestGap to the maximum of widestGap and (the cad distance from (the item at memberCursor in memberPorts) to (the item at otherCursor in memberPorts))
+                if fixedCount > 0:
+                    set meetingSpot to fixedSpot
+                else:
+                    set leadTip to the item at 0 in memberTips
+                    set leadOutward to the item at 0 in memberOutward
+                    set crossed to false
+                    loop memberCursor from 1 to the length of memberLinears:
+                        if crossed = false:
+                            set otherTip to the item at memberCursor in memberTips
+                            set otherOutward to the item at memberCursor in memberOutward
+                            if (the cad length of (the cad cross of leadOutward and otherOutward)) > 0.02:
+                                set crossed to true
+                                set between to the cad difference of leadTip and otherTip
+                                set mixed to the cad dot of leadOutward and otherOutward
+                                set leadShare to the cad dot of leadOutward and between
+                                set otherShare to the cad dot of otherOutward and between
+                                set spreadValue to 1.0 - (mixed * mixed)
+                                set leadStep to ((mixed * otherShare) - leadShare) / spreadValue
+                                set otherStep to (otherShare - (mixed * leadShare)) / spreadValue
+                                set leadNear to the cad sum of leadTip and (leadOutward scaled by leadStep)
+                                set otherNear to the cad sum of otherTip and (otherOutward scaled by otherStep)
+                                set meetingSpot to (the cad sum of leadNear and otherNear) scaled by 0.5
+                loop memberCursor from 0 to the length of memberLinears:
+                    if (the item at memberCursor in memberEnds) < 2:
+                        set toMeeting to the cad difference of meetingSpot and (the item at memberCursor in memberTips)
+                        set aheadDistance to the cad dot of toMeeting and (the item at memberCursor in memberOutward)
+                        set asideDistance to the cad length of (the cad difference of toMeeting and ((the item at memberCursor in memberOutward) scaled by aheadDistance))
+                        if ((asideDistance > 0.002) or (aheadDistance < -0.001)) or (aheadDistance > ((widestGap + sideRoom) + 0.001)):
+                            set clusterSound to false
+                if clusterSound:
+                    loop memberCursor from 0 to the length of memberLinears:
+                        set onLinear to the item at memberCursor in memberLinears
+                        set memberKind to the item at memberCursor in memberEnds
+                        set segment to the item at onLinear in (nativeSet's linears's values)
+                        if memberKind = 0:
+                            set segment's start to meetingSpot
+                        if memberKind = 1:
+                            set segment's finish to meetingSpot
+                        if memberKind = 3:
+                            # The rest of the segment, a piece of its own.
+                            set laterPiece to segment
+                            set laterPiece's start to meetingSpot
+                            set segment's finish to meetingSpot
+                            append (the item at onLinear in pieceNext) to pieceNext
+                            replace item at index onLinear in pieceNext with (the length of (nativeSet's linears's values))
+                            append laterPiece to (nativeSet's linears's values)
+                            append (the item at onLinear in (nativeSet's linearSources's values)) to (nativeSet's linearSources's values)
+                        replace item at index onLinear in (nativeSet's linears's values) with segment
+                    loop fittingCursor from 0 to the length of fittingIds:
+                        if (the item at fittingCursor in clusterOf) = clusterCursor:
+                            append (the item at fittingCursor in fittingIds) to (nativeSet's fittingSources's values)
+                            append (the item at 0 in memberLinears) to (nativeSet's fittingInto's values)
+                            set takenOver to takenOver + 1
+        free pieceNext
+        free memberPorts
+        free endPeerSpots
+        free memberLinears
+        free memberEnds
+        free memberTips
+        free memberOutward
+        free endCluster
+        free endLinear
+        free endSpots
+        free clusterOf
+        free clusterBlocked
+        free fittingIds
+        free portPeer
+        free linearAt
+        free fittingAt
+        return takenOver
+
 # The native walls and slabs of `stepFile` (see the top of this file).
 function the bim ifc natives of {bim step file record:stepFile}:
     execute:
-        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer)
+        set nativeSet to @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer)
         if stepFile's valid = false:
             return nativeSet
         set reader to a fresh bim ifc reading of stepFile
@@ -1530,6 +1892,52 @@ function the bim ifc natives of {bim step file record:stepFile}:
                 append (the item at cursor in classIds) to memberIds
                 append roleCode to memberRoles
             free classIds
+        # The ports of each segment: how many, and the two farthest apart
+        # (its ends; the others, for take-offs, lie between them).
+        set portOwner to the bim ifc port owners of stepFile
+        set memberAt to an empty list of an integer
+        loop instanceCursor from 0 to instanceCount:
+            append -1 to memberAt
+        set memberPortCount to an empty list of an integer
+        set memberPortLow to an empty list of a cad vector3
+        set memberPortHigh to an empty list of a cad vector3
+        loop memberCursor from 0 to the length of memberIds:
+            set memberRole to the item at memberCursor in memberRoles
+            if ((memberRole = bim pipe role) or (memberRole = bim duct role)) or (memberRole = bim cable tray role):
+                replace item at index (the item at memberCursor in memberIds) in memberAt with memberCursor
+            append 0 to memberPortCount
+            append (a cad vector3 with x 0.0, y 0.0 and z 0.0) to memberPortLow
+            append (a cad vector3 with x 0.0, y 0.0 and z 0.0) to memberPortHigh
+        set portIds to the bim step instances of type (the string form of "IFCDISTRIBUTIONPORT") in stepFile
+        loop portCursor from 0 to the length of portIds:
+            set portId to the item at portCursor in portIds
+            set ownerId to the item at portId in portOwner
+            set ownerMember to -1
+            if (ownerId >= 0) and (ownerId < instanceCount):
+                set ownerMember to the item at ownerId in memberAt
+            if ownerMember >= 0:
+                set portValue to the bim step instance portId in stepFile
+                set portFrame to the bim ifc object axes (the bim step reference of (the bim step argument 5 of portValue) in portValue) in r
+                free bim step instance portValue
+                set portSpot to portFrame's origin
+                set countBefore to the item at ownerMember in memberPortCount
+                if countBefore = 0:
+                    replace item at index ownerMember in memberPortLow with portSpot
+                else if countBefore = 1:
+                    replace item at index ownerMember in memberPortHigh with portSpot
+                else:
+                    set lowSpot to the item at ownerMember in memberPortLow
+                    set highSpot to the item at ownerMember in memberPortHigh
+                    set heldLong to the cad distance from lowSpot to highSpot
+                    set fromLow to the cad distance from lowSpot to portSpot
+                    set fromHigh to the cad distance from highSpot to portSpot
+                    if (fromLow > heldLong) and (fromLow >= fromHigh):
+                        replace item at index ownerMember in memberPortHigh with portSpot
+                    else if fromHigh > heldLong:
+                        replace item at index ownerMember in memberPortLow with portSpot
+                replace item at index ownerMember in memberPortCount with (countBefore + 1)
+        free portIds
+        free memberAt
         loop memberCursor from 0 to the length of memberIds:
             set memberId to the item at memberCursor in memberIds
             set memberValue to the bim step instance memberId in stepFile
@@ -1543,6 +1951,10 @@ function the bim ifc natives of {bim step file record:stepFile}:
                 set memberMaterial to the string form of "concrete"
                 if (the length of (memberLayers's values)) > 0:
                     set memberMaterial to (the item at 0 in (memberLayers's values))'s material
+                # A segment with no material in the file is taken to be steel.
+                set extrudedRole to the item at memberCursor in memberRoles
+                if (((extrudedRole = bim pipe role) or (extrudedRole = bim duct role)) or (extrudedRole = bim cable tray role)) and ((the item at memberId in materialOf) < 0):
+                    set memberMaterial to the string form of "steel"
                 # A standing member turns its profile about its axis.
                 set memberTurn to 0.0
                 if (the absolute value of section's sweep's z) >= (0.99 * (the cad length of section's sweep)):
@@ -1554,8 +1966,24 @@ function the bim ifc natives of {bim step file record:stepFile}:
             else:
                 # Any other body, measured from its triangles.
                 set memberCorners to the bim ifc corners of representation (the bim ifc body of shape shapeId in stepFile) through frame in r
-                set measuredMember to the bim ifc member measured in memberCorners standing ((the item at memberCursor in memberRoles) = bim column role)
+                set portedAxis to a cad vector3 with x 0.0, y 0.0 and z 0.0
+                set lowSpot to the item at memberCursor in memberPortLow
+                set highSpot to the item at memberCursor in memberPortHigh
+                set portedLong to the cad distance from lowSpot to highSpot
+                set isPorted to ((the item at memberCursor in memberPortCount) >= 2) and (portedLong > 0.01)
+                if isPorted:
+                    set portedAxis to (the cad difference of highSpot and lowSpot) scaled by (1.0 / portedLong)
+                set measuredMember to the bim ifc member measured in memberCorners standing ((the item at memberCursor in memberRoles) = bim column role) lying on portedAxis
                 free memberCorners
+                # Its ends are its end ports when the body agrees with them
+                # (within 30 mm): the ports are what the fittings join.
+                if isPorted and (measuredMember's kind > 0):
+                    if ((the cad distance from measuredMember's start to lowSpot) <= 0.03) and ((the cad distance from measuredMember's finish to highSpot) <= 0.03):
+                        set measuredMember's start to lowSpot
+                        set measuredMember's finish to highSpot
+                    else if ((the cad distance from measuredMember's start to highSpot) <= 0.03) and ((the cad distance from measuredMember's finish to lowSpot) <= 0.03):
+                        set measuredMember's start to highSpot
+                        set measuredMember's finish to lowSpot
                 # A segment is hollow: it counts by its outline. With no
                 # material in the file it is taken to be steel.
                 set memberRole to the item at memberCursor in memberRoles
@@ -1581,6 +2009,16 @@ function the bim ifc natives of {bim step file record:stepFile}:
                         append memberId to (nativeSet's linearSources's values)
                         append memberId to (nativeSet's skipped's values)
         free memberIds
+        # The fittings between them: the segments meet, the fittings go.
+        ignore join bim ifc segments at the fittings of stepFile with ports of portOwner read by r in (the address of nativeSet)
+        free portOwner
+        free memberPortCount
+        free memberPortLow
+        free memberPortHigh
+        loop fittingCursor from 0 to the length of (nativeSet's fittingSources's values):
+            set fittingId to the item at fittingCursor in (nativeSet's fittingSources's values)
+            note bim ifc attributes of fittingId in stepFile to (nativeSet's psets's values)
+            append fittingId to (nativeSet's skipped's values)
         # The property sets of what was made native and of the storeys.
         set wanted to an empty list of a boolean
         loop instanceCursor from 0 to instanceCount:
@@ -1824,9 +2262,13 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                     note bim guid slabGuid first promoted as fresh besides notedIds in target
                     ignore set bim slab fresh material to nativeSlab's material in target
                     ignore set bim plate fresh top to (nativeSlab's top - levelElevation) pitch 0.0 heading 0.0 in target
+        # The element each linear became, for the fittings between segments
+        # to be listed as taken over into the first of them.
+        set linearElements to an empty list of a 64 bit integer
         loop linearCursor from 0 to the length of (nativeSet's linears's values):
             set nativeLinear to the item at linearCursor in (nativeSet's linears's values)
             set linearSource to the item at linearCursor in (nativeSet's linearSources's values)
+            append (the bim refused id) to linearElements
             set linearGuid to the bim ifc global id of indexed source linearSource through psetIndex of (nativeSet's psets's values)
             if (bim guid linearGuid is among takenIds) = false:
                 set levelId to the bim level for ifc storey nativeLinear's storey of nativeSet in target counting (the address of counts)
@@ -1839,6 +2281,14 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                     set counts's linears to counts's linears + 1
                     hand bim ifc psets of source linearSource through psetIndex of (nativeSet's psets's values) to freshLinear in target
                     note bim guid linearGuid first promoted as freshLinear besides notedIds in target
+                    replace item at index linearCursor in linearElements with freshLinear
+        loop fittingCursor from 0 to the length of (nativeSet's fittingSources's values):
+            set intoElement to the item at (the item at fittingCursor in (nativeSet's fittingInto's values)) in linearElements
+            if intoElement != the bim refused id:
+                set fittingGuid to the bim ifc global id of indexed source (the item at fittingCursor in (nativeSet's fittingSources's values)) through psetIndex of (nativeSet's psets's values)
+                if (bim guid fittingGuid is among takenIds) = false:
+                    note bim guid fittingGuid first promoted as intoElement besides notedIds in target
+        free linearElements
         free takenIds
         free notedIds
         free bim pset index psetIndex
@@ -1875,7 +2325,7 @@ function the bim ifc natives {bim ifc native set record:nativeSet} made in {a po
 # No natives (nothing to make native).
 function no bim ifc natives:
     execute:
-        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer)
+        return @intrinsic("construct", a bim ifc native set record, a cad topology list of a string, a cad topology list of a 64 bit floating-point number, a cad topology list of a bim ifc native wall record, a cad topology list of a bim ifc native slab record, a cad topology list of a bim ifc native linear record, a cad topology list of a bim ifc native grid record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of a bim pset entry record, a cad topology list of a bim ifc native linear record, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer, a cad topology list of an integer)
 
 # What was made native, for a message: "12 walls, 30 openings, 4 floors
 # made native, 2 storeys added; ".
