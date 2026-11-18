@@ -40,6 +40,11 @@
 # IfcOpeningElements, as an extruded wall does: it is its box less those
 # openings when its volume says so, its ends maybe cut for a join.
 #
+# A measured wall that is not its box but a prism through its thickness (a
+# gable, a wall under a sloped roof, a stepped foot) takes the outline of
+# its face as the model's face contour (`the bim ifc face outline of`),
+# when its volume is that outline's less its openings.
+#
 # Pipe, duct and cable carrier segments (IfcPipeSegment, IfcDuctSegment,
 # IfcCableCarrierSegment) and members (IfcMember: mullions, studs) become
 # linear elements too, of the pipe, duct, cable tray and frame roles. A
@@ -87,6 +92,10 @@ class:
         head as a 64 bit floating-point number
         layers as the type of (a cad topology list of a bim layer record)
         openings as the type of (a cad topology list of a bim ifc native opening record)
+        # The outline of its face when that is not its rectangle (a sloped
+        # or stepped top, a stepped foot): along it from its start (x) and
+        # its height in the world (y), anticlockwise. Empty for none.
+        contour as the type of (a cad topology list of a cad vector2)
 
 class:
     patterns:
@@ -810,6 +819,9 @@ function bim ifc pieces {bim ifc native wall record:firstWall} and {bim ifc nati
     execute:
         if (the length of (firstWall's layers's values)) != (the length of (secondWall's layers's values)):
             return false
+        # A wall with an outline of its own is no piece of another.
+        if ((the length of (firstWall's contour's values)) > 0) or ((the length of (secondWall's contour's values)) > 0):
+            return false
         loop layerCursor from 0 to the length of (firstWall's layers's values):
             set firstLayer to the item at layerCursor in (firstWall's layers's values)
             set secondLayer to the item at layerCursor in (secondWall's layers's values)
@@ -972,7 +984,7 @@ function join bim ifc wall pieces round {a pointer to a list:fillings} in {a poi
                             if afterStretch's forward = false:
                                 set carriedAt to afterLong - carried's along
                             append (@intrinsic("construct", a bim ifc native opening record, (beforeLong + gapWide) + carriedAt, carried's width, carried's height, carried's sillHeight, carried's isDoor)) to (openingList's values)
-                        replace item at index beforeIndex in (nativeSet's walls's values) with (@intrinsic("construct", a bim ifc native wall record, beforeWall's storey, fromPoint, toPoint, beforeWall's foot, beforeWall's head, beforeWall's layers, openingList))
+                        replace item at index beforeIndex in (nativeSet's walls's values) with (@intrinsic("construct", a bim ifc native wall record, beforeWall's storey, fromPoint, toPoint, beforeWall's foot, beforeWall's head, beforeWall's layers, openingList, beforeWall's contour))
                         replace item at index afterIndex in (nativeSet's wallAbsorbed's values) with beforeIndex
                         if underIndex >= 0:
                             replace item at index underIndex in (nativeSet's wallAbsorbed's values) with beforeIndex
@@ -1106,6 +1118,244 @@ function the bim ifc member measured in {a pointer to a list:cornerList} standin
                             set memberResult's roundOutline to (farthest <= (0.53 * boxWidth)) and ((the absolute value of (boxWidth - boxDepth)) < (0.02 * boxWidth))
                             set memberResult's webbed to nearMiddle > 0
         return memberResult
+
+# How high (`wantTop`) or low the edges reach at `spot` along a wall's face,
+# just right of it (`rightward`) or just left: 1e30 or -1e30 when none
+# passes there. Each edge runs from its item in `edgeStarts` to the one in
+# `edgeEnds` (x along, y up).
+function the bim ifc edge height at {a 64 bit floating-point number:spot} rightward {boolean:rightward} wanting top {boolean:wantTop} among {a pointer to a list:edgeStarts} and {a pointer to a list:edgeEnds}:
+    execute:
+        set reachedHeight to 1.0e30
+        if wantTop:
+            set reachedHeight to -1.0e30
+        loop edgeCursor from 0 to the length of edgeStarts:
+            set edgeFrom to the item at edgeCursor in edgeStarts
+            set edgeTo to the item at edgeCursor in edgeEnds
+            if edgeFrom's x > edgeTo's x:
+                set edgeFrom to the item at edgeCursor in edgeEnds
+                set edgeTo to the item at edgeCursor in edgeStarts
+            set edgeWide to edgeTo's x - edgeFrom's x
+            if edgeWide > 0.000001:
+                set edgePasses to (edgeFrom's x < (spot - 0.0000001)) and (spot <= (edgeTo's x + 0.0000001))
+                if rightward:
+                    set edgePasses to (edgeFrom's x <= (spot + 0.0000001)) and (spot < (edgeTo's x - 0.0000001))
+                if edgePasses:
+                    set edgeHeight to edgeFrom's y + ((edgeTo's y - edgeFrom's y) * ((spot - edgeFrom's x) / edgeWide))
+                    if wantTop:
+                        set reachedHeight to the maximum of reachedHeight and edgeHeight
+                    else:
+                        set reachedHeight to the minimum of reachedHeight and edgeHeight
+        return reachedHeight
+
+# The area of `outline` (x, y), positive anticlockwise.
+function the bim ifc outline area of {a pointer to a list:outline}:
+    execute:
+        set doubledArea to 0.0
+        loop cursor from 0 to the length of outline:
+            set here to the item at cursor in outline
+            set following to the item at (the remainder of (cursor + 1) divided by (the length of outline)) in outline
+            set doubledArea to doubledArea + ((here's x * following's y) - (following's x * here's y))
+        return doubledArea * 0.5
+
+# The area of `outline` inside the upright rectangle from `lowX` to `highX`
+# and `lowY` to `highY`: the outline cut by each side in turn.
+function the bim ifc outline area of {a pointer to a list:outline} within {a 64 bit floating-point number:lowX} to {a 64 bit floating-point number:highX} by {a 64 bit floating-point number:lowY} to {a 64 bit floating-point number:highY}:
+    execute:
+        set keptOutline to an empty list of a cad vector2
+        loop cursor from 0 to the length of outline:
+            append (the item at cursor in outline) to keptOutline
+        loop sideCursor from 0 to 4:
+            set cutOutline to an empty list of a cad vector2
+            loop cursor from 0 to the length of keptOutline:
+                set here to the item at cursor in keptOutline
+                set following to the item at (the remainder of (cursor + 1) divided by (the length of keptOutline)) in keptOutline
+                # How far each lies inside this side.
+                set hereInside to here's x - lowX
+                set followingInside to following's x - lowX
+                if sideCursor = 1:
+                    set hereInside to highX - here's x
+                    set followingInside to highX - following's x
+                if sideCursor = 2:
+                    set hereInside to here's y - lowY
+                    set followingInside to following's y - lowY
+                if sideCursor = 3:
+                    set hereInside to highY - here's y
+                    set followingInside to highY - following's y
+                if hereInside >= 0.0:
+                    append here to cutOutline
+                if ((hereInside > 0.0) and (followingInside < 0.0)) or ((hereInside < 0.0) and (followingInside > 0.0)):
+                    set crossShare to hereInside / (hereInside - followingInside)
+                    append (a cad vector2 with x (here's x + ((following's x - here's x) * crossShare)) and y (here's y + ((following's y - here's y) * crossShare))) to cutOutline
+            free keptOutline
+            set keptOutline to cutOutline
+        set insideArea to 0.0
+        if (the length of keptOutline) >= 3:
+            set insideArea to the absolute value of (the bim ifc outline area of keptOutline)
+        free keptOutline
+        return insideArea
+
+# The outline of the face of a wall measured as `boxedWall` (its box found)
+# from the triangles in `cornerList`: along the wall from its start (x) and
+# its height in the world (y), anticlockwise. The wall must be a prism
+# through its thickness (every corner on one of its two faces), and its
+# face one stretch between a foot and a top line that each have one height
+# at every spot along it (a sloped, gabled or stepped top, a stepped foot;
+# no overhang). The triangles on the one face give those two lines. An
+# opening of `openingList` that cuts into the foot (a door) or the top (a
+# window up to the eaves) is no part of the outline: the line runs straight
+# on over it. Empty when the body is no such prism.
+function the bim ifc face outline of {a pointer to a list:cornerList} boxed as {bim ifc measured wall record:boxedWall} over {a pointer to a list:openingList}:
+    execute:
+        set faceOutline to an empty list of a cad vector2
+        set runX to boxedWall's finish's x - boxedWall's start's x
+        set runY to boxedWall's finish's y - boxedWall's start's y
+        set runLong to the square root of ((runX * runX) + (runY * runY))
+        if (runLong < 0.01) or ((the length of cornerList) < 12):
+            return faceOutline
+        set runX to runX / runLong
+        set runY to runY / runLong
+        set startAlong to (boxedWall's start's x * runX) + (boxedWall's start's y * runY)
+        set faceAcross to ((boxedWall's start's y * runX) - (boxedWall's start's x * runY)) - (boxedWall's thickness * 0.5)
+        # The edges of the triangles on the one face.
+        set edgeStarts to an empty list of a cad vector2
+        set edgeEnds to an empty list of a cad vector2
+        set isPrism to true
+        set firstCorner to 0
+        loop while (firstCorner + 2) < (the length of cornerList):
+            set onFace to 0
+            loop cornerCursor from 0 to 3:
+                set spot to the item at (firstCorner + cornerCursor) in cornerList
+                set acrossValue to ((spot's y * runX) - (spot's x * runY)) - faceAcross
+                if (the absolute value of acrossValue) < 0.0005:
+                    set onFace to onFace + 1
+                else if (the absolute value of (acrossValue - boxedWall's thickness)) >= 0.0005:
+                    set isPrism to false
+            if onFace = 3:
+                loop cornerCursor from 0 to 3:
+                    set spot to the item at (firstCorner + cornerCursor) in cornerList
+                    set nextSpot to the item at (firstCorner + (the remainder of (cornerCursor + 1) divided by 3)) in cornerList
+                    append (a cad vector2 with x (((spot's x * runX) + (spot's y * runY)) - startAlong) and y spot's z) to edgeStarts
+                    append (a cad vector2 with x (((nextSpot's x * runX) + (nextSpot's y * runY)) - startAlong) and y nextSpot's z) to edgeEnds
+            set firstCorner to firstCorner + 3
+        if (isPrism = false) or ((the length of edgeStarts) = 0):
+            free edgeStarts
+            free edgeEnds
+            return faceOutline
+        # Where the lines may turn: under and over every corner.
+        set turnSpots to an empty list of a 64 bit floating-point number
+        loop edgeCursor from 0 to the length of edgeStarts:
+            set turnAt to (the item at edgeCursor in edgeStarts)'s x
+            set slot to 0
+            set alreadyKnown to false
+            loop cursor from 0 to the length of turnSpots:
+                set heldSpot to the item at cursor in turnSpots
+                if (the absolute value of (heldSpot - turnAt)) < 0.0005:
+                    set alreadyKnown to true
+                if heldSpot < (turnAt - 0.0005):
+                    set slot to cursor + 1
+            if alreadyKnown = false:
+                insert turnAt into turnSpots at index slot
+        set lowestSpot to the item at 0 in turnSpots
+        set highestSpot to the last item of turnSpots
+        # The stretches an opening takes out of the foot line and the top line.
+        set footGapLows to an empty list of a 64 bit floating-point number
+        set footGapHighs to an empty list of a 64 bit floating-point number
+        set topGapLows to an empty list of a 64 bit floating-point number
+        set topGapHighs to an empty list of a 64 bit floating-point number
+        loop openingCursor from 0 to the length of openingList:
+            set cutOpening to the item at openingCursor in openingList
+            set meshTop to the bim ifc edge height at cutOpening's along rightward true wanting top true among edgeStarts and edgeEnds
+            set meshFoot to the bim ifc edge height at cutOpening's along rightward true wanting top false among edgeStarts and edgeEnds
+            if meshFoot >= ((cutOpening's sillHeight + cutOpening's height) - 0.002):
+                append (cutOpening's along - (cutOpening's width * 0.5)) to footGapLows
+                append (cutOpening's along + (cutOpening's width * 0.5)) to footGapHighs
+            if meshTop <= (cutOpening's sillHeight + 0.002):
+                append (cutOpening's along - (cutOpening's width * 0.5)) to topGapLows
+                append (cutOpening's along + (cutOpening's width * 0.5)) to topGapHighs
+        set outlineSound to true
+        # The foot from the start to the finish, then the top back.
+        loop lineCursor from 0 to 2:
+            set wantTop to lineCursor = 1
+            set linePoints to an empty list of a cad vector2
+            loop turnCursor from 0 to the length of turnSpots:
+                set turnAt to the item at turnCursor in turnSpots
+                if wantTop:
+                    set turnAt to the item at (((the length of turnSpots) - 1) - turnCursor) in turnSpots
+                set leftGone to turnAt <= (lowestSpot + 0.0005)
+                set rightGone to turnAt >= (highestSpot - 0.0005)
+                set gapCount to the length of footGapLows
+                if wantTop:
+                    set gapCount to the length of topGapLows
+                loop gapCursor from 0 to gapCount:
+                    set gapLow to 0.0
+                    set gapHigh to 0.0
+                    if wantTop:
+                        set gapLow to the item at gapCursor in topGapLows
+                        set gapHigh to the item at gapCursor in topGapHighs
+                    else:
+                        set gapLow to the item at gapCursor in footGapLows
+                        set gapHigh to the item at gapCursor in footGapHighs
+                    if (turnAt > (gapLow + 0.0005)) and (turnAt <= (gapHigh + 0.0005)):
+                        set leftGone to true
+                    if (turnAt >= (gapLow - 0.0005)) and (turnAt < (gapHigh - 0.0005)):
+                        set rightGone to true
+                loop sideCursor from 0 to 2:
+                    # The foot runs rightward: left of the spot first. The
+                    # top runs back: right of it first.
+                    set takeRight to sideCursor = 1
+                    if wantTop:
+                        set takeRight to sideCursor = 0
+                    set sideGone to leftGone
+                    if takeRight:
+                        set sideGone to rightGone
+                    if sideGone = false:
+                        set lineHeight to the bim ifc edge height at turnAt rightward takeRight wanting top wantTop among edgeStarts and edgeEnds
+                        if (lineHeight > 1.0e29) or (lineHeight < -1.0e29):
+                            set outlineSound to false
+                        else:
+                            append (a cad vector2 with x turnAt and y lineHeight) to linePoints
+            if (the length of linePoints) = 0:
+                set outlineSound to false
+            else:
+                # A line an opening at the wall's end cut short runs level
+                # to that end.
+                set firstPoint to the item at 0 in linePoints
+                set lastPoint to the last item of linePoints
+                set fromSpot to lowestSpot
+                set toSpot to highestSpot
+                if wantTop:
+                    set fromSpot to highestSpot
+                    set toSpot to lowestSpot
+                if (the absolute value of (firstPoint's x - fromSpot)) > 0.0005:
+                    append (a cad vector2 with x fromSpot and y firstPoint's y) to faceOutline
+                loop cursor from 0 to the length of linePoints:
+                    append (the item at cursor in linePoints) to faceOutline
+                if (the absolute value of (lastPoint's x - toSpot)) > 0.0005:
+                    append (a cad vector2 with x toSpot and y lastPoint's y) to faceOutline
+            free linePoints
+        free edgeStarts
+        free edgeEnds
+        free turnSpots
+        free footGapLows
+        free footGapHighs
+        free topGapLows
+        free topGapHighs
+        # No corner twice, none on a straight stretch.
+        set cornerCursor to 0
+        loop while outlineSound and ((cornerCursor < (the length of faceOutline)) and ((the length of faceOutline) >= 3)):
+            set cornerCount to the length of faceOutline
+            set priorCorner to the item at (the remainder of ((cornerCursor + cornerCount) - 1) divided by cornerCount) in faceOutline
+            set thisCorner to the item at cornerCursor in faceOutline
+            set nextCorner to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in faceOutline
+            set cornerTurn to ((thisCorner's x - priorCorner's x) * (nextCorner's y - thisCorner's y)) - ((thisCorner's y - priorCorner's y) * (nextCorner's x - thisCorner's x))
+            if ((the cad distance from priorCorner to thisCorner) < 0.0005) or ((the absolute value of cornerTurn) < 0.000001):
+                remove item cornerCursor from faceOutline
+                set cornerCursor to 0
+            else:
+                set cornerCursor to cornerCursor + 1
+        if (outlineSound = false) or ((the length of faceOutline) < 3):
+            clear faceOutline
+        return faceOutline
 
 # The element each port is a port of (by instance, -1 for none), from
 # IfcRelNests and IfcRelConnectsPortToElement.
@@ -1630,7 +1880,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
                         if (the absolute value of (layerSum - thickness)) > 0.005:
                             set layerList to a cad topology list of a bim layer record
                             append (@intrinsic("construct", a bim layer record, the string form of "concrete", thickness)) to (layerList's values)
-                        set nativeWall to @intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), startPoint, finishPoint, foot, head, layerList, a cad topology list of a bim ifc native opening record)
+                        set nativeWall to @intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), startPoint, finishPoint, foot, head, layerList, a cad topology list of a bim ifc native opening record, a cad topology list of a cad vector2)
                         # Its openings, where their bodies cross it.
                         set openingAt to the item at wallId in firstOpening
                         loop while openingAt >= 0:
@@ -1681,7 +1931,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
             if made = false:
                 set wallCorners to the bim ifc corners of representation bodyId through frame in r
                 set measuredWall to the bim ifc wall measured in wallCorners
-                free wallCorners
+                set givenContour to a cad topology list of a cad vector2
                 # A mesh with its openings cut: the openings the file gives it.
                 set givenOpenings to a cad topology list of a bim ifc native opening record
                 set givenFillers to an empty list of an integer
@@ -1738,6 +1988,33 @@ function the bim ifc natives of {bim step file record:stepFile}:
                     set wholeFits to (measuredWall's volume >= (0.98 * wholeVolume)) and (measuredWall's volume <= (1.02 * wholeVolume))
                     if ((the length of givenIds) > 0) and (cutFits or wholeFits):
                         set byGiven to true
+                # A wall that is not its box: the outline of its face (a sloped,
+                # gabled or stepped top), when its volume is that outline's
+                # less the openings in it, through its thickness.
+                if (measuredWall's boxed and (measuredWall's found = false)) and (byGiven = false):
+                    set faceCorners to the bim ifc face outline of wallCorners boxed as measuredWall over (givenOpenings's values)
+                    if (the length of faceCorners) >= 3:
+                        set outlineArea to the bim ifc outline area of faceCorners
+                        loop givenCursor from 0 to the length of (givenOpenings's values):
+                            set givenOpening to the item at givenCursor in (givenOpenings's values)
+                            set outlineArea to outlineArea - (the bim ifc outline area of faceCorners within (givenOpening's along - (givenOpening's width * 0.5)) to (givenOpening's along + (givenOpening's width * 0.5)) by givenOpening's sillHeight to (givenOpening's sillHeight + givenOpening's height))
+                        set outlinedVolume to outlineArea * measuredWall's thickness
+                        if (outlinedVolume > 0.0) and ((measuredWall's volume >= (0.97 * outlinedVolume)) and (measuredWall's volume <= (1.03 * outlinedVolume))):
+                            set byGiven to true
+                            # Its rectangle is no outline of its own.
+                            set outlineLong to the cad distance from measuredWall's start to measuredWall's finish
+                            set isRectangle to (the length of faceCorners) = 4
+                            loop cornerCursor from 0 to the length of faceCorners:
+                                set faceCorner to the item at cornerCursor in faceCorners
+                                set atEnd to ((the absolute value of faceCorner's x) < 0.001) or ((the absolute value of (faceCorner's x - outlineLong)) < 0.001)
+                                set atLevel to ((the absolute value of (faceCorner's y - measuredWall's foot)) < 0.001) or ((the absolute value of (faceCorner's y - measuredWall's head)) < 0.001)
+                                if (atEnd and atLevel) = false:
+                                    set isRectangle to false
+                            if isRectangle = false:
+                                loop cornerCursor from 0 to the length of faceCorners:
+                                    append (the item at cornerCursor in faceCorners) to (givenContour's values)
+                    free faceCorners
+                free wallCorners
                 if byGiven:
                     set layerList to the bim ifc layers of material (the item at wallId in materialOf) thick measuredWall's thickness in r
                     set layerSum to 0.0
@@ -1754,7 +2031,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
                             if (the item at givenFiller in fillingAt) >= 0:
                                 set takenBox to the item at (the item at givenFiller in fillingAt) in fillings
                                 replace item at index (the item at givenFiller in fillingAt) in fillings with (@intrinsic("construct", a bim ifc filling record, takenBox's source, takenBox's isDoor, takenBox's centre, takenBox's direction, takenBox's halfLong, takenBox's halfDeep, takenBox's foot, takenBox's head, true))
-                    append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, givenOpenings)) to (nativeSet's walls's values)
+                    append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, givenOpenings, givenContour)) to (nativeSet's walls's values)
                     append wallId to (nativeSet's wallSources's values)
                     append -1 to (nativeSet's wallAbsorbed's values)
                     note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
@@ -1810,7 +2087,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
                             set takenBox to the item at (the item at usedCursor in holeFillings) in fillings
                             replace item at index (the item at usedCursor in holeFillings) in fillings with (@intrinsic("construct", a bim ifc filling record, takenBox's source, takenBox's isDoor, takenBox's centre, takenBox's direction, takenBox's halfLong, takenBox's halfDeep, takenBox's foot, takenBox's head, true))
                             append takenBox's source to (nativeSet's skipped's values)
-                        append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, holeOpenings)) to (nativeSet's walls's values)
+                        append (@intrinsic("construct", a bim ifc native wall record, (the bim ifc storey of wallId among containerOf and storeyAt), measuredWall's start, measuredWall's finish, measuredWall's foot, measuredWall's head, layerList, holeOpenings, a cad topology list of a cad vector2)) to (nativeSet's walls's values)
                         append wallId to (nativeSet's wallSources's values)
                         append -1 to (nativeSet's wallAbsorbed's values)
                         note bim ifc attributes of wallId in stepFile to (nativeSet's psets's values)
@@ -1823,7 +2100,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
         loop wallCursor from 0 to the length of (nativeSet's walls's values):
             set stackedWall to the item at wallCursor in (nativeSet's walls's values)
             if (the length of (stackedWall's openings's values)) > 1:
-                replace item at index wallCursor in (nativeSet's walls's values) with (@intrinsic("construct", a bim ifc native wall record, stackedWall's storey, stackedWall's start, stackedWall's finish, stackedWall's foot, stackedWall's head, stackedWall's layers, the bim ifc openings (stackedWall's openings) with the stacked ones made one))
+                replace item at index wallCursor in (nativeSet's walls's values) with (@intrinsic("construct", a bim ifc native wall record, stackedWall's storey, stackedWall's start, stackedWall's finish, stackedWall's foot, stackedWall's head, stackedWall's layers, the bim ifc openings (stackedWall's openings) with the stacked ones made one, stackedWall's contour))
         free fillings
         free fillingAt
         # The slabs (a roof's too).
@@ -2234,6 +2511,14 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                         if openingTypeId != the bim refused id:
                             if (add bim opening typed openingTypeId in fresh at nativeOpening's along to target) != the bim refused id:
                                 set counts's openings to counts's openings + 1
+                    # The outline of its face, up from its storey.
+                    if (the length of (nativeWall's contour's values)) >= 3:
+                        set storeyContour to an empty list of a cad vector2
+                        loop cornerCursor from 0 to the length of (nativeWall's contour's values):
+                            set contourCorner to the item at cornerCursor in (nativeWall's contour's values)
+                            append (a cad vector2 with x contourCorner's x and y (contourCorner's y - levelElevation)) to storeyContour
+                        keep bim face contour storeyContour of fresh in target
+                        free storeyContour
         loop wallCursor from 0 to the length of (nativeSet's wallAbsorbed's values):
             set intoWall to the item at wallCursor in (nativeSet's wallAbsorbed's values)
             if intoWall >= 0:
