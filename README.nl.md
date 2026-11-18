@@ -34,17 +34,17 @@ Je ziet een gebouw van twee verdiepingen op palen, met stramien, gelaagde wanden
 
 ## Download
 
-Elke preview staat op de [releasepagina](https://github.com/OpenAEC-Foundation/open-bim-studio/releases). De nieuwste is [0.1.1](https://github.com/OpenAEC-Foundation/open-bim-studio/releases/tag/v0.1.1).
+Elke preview staat op de [releasepagina](https://github.com/OpenAEC-Foundation/open-bim-studio/releases). De nieuwste is [2026.47.0](https://github.com/OpenAEC-Foundation/open-bim-studio/releases/tag/v2026.47.0).
 
 | Platform | Installer |
 |----------|-----------|
-| **Linux** (x86-64) | `Open-BIM-Studio-0.1.1-linux-x86_64.run` |
+| **Linux** (x86-64) | `Open-BIM-Studio-2026.47.0-linux-x86_64.run` |
 | **Windows** | Nog niet in een release; zie [Windows release](docs/notes/windows-release.md) |
 | **macOS** | Niet beschikbaar |
 
-Installeren of bijwerken doe je met `bash Open-BIM-Studio-0.1.1-linux-x86_64.run`. De installer vervangt `~/.local/share/open-bim-studio` en de starter; je projectbestanden staan daar los van. Maak een back-up van je projecten voordat je een preview probeert.
+Installeren of bijwerken doe je met `bash Open-BIM-Studio-2026.47.0-linux-x86_64.run`. De installer vervangt `~/.local/share/open-bim-studio` en de starter; je projectbestanden staan daar los van. Maak een back-up van je projecten voordat je een preview probeert.
 
-De installer is ondertekend met de OpenPGP-sleutel van OpenAEC (`.asc`, met de publieke sleutel en de vingerafdruk in de release) en staat in `SHA256SUMS`; `VERIFICATION.txt` legt de controle uit. Linux heeft glibc 2.38 of nieuwer nodig, een X11-sessie (of XWayland) en Vulkan.
+De installer van 2026.47.0 is niet ondertekend; hij staat in `SHA256SUMS`, en `VERIFICATION.txt` legt de controle uit. De previews tot en met 0.1.1 zijn ondertekend met de OpenPGP-sleutel van OpenAEC. Linux heeft glibc 2.38 of nieuwer nodig, een X11-sessie (of XWayland) en Vulkan.
 
 ## Waarom gebruiken?
 
