@@ -886,6 +886,146 @@ local function the bim profile prism of {a pointer to a list:contour} along {bim
         free flatProfile
         return extruded
 
+# Whether `spot` lies inside the ring `ring` (not on it).
+local function bim spot {cad vector2:spot} lies inside ring {a pointer to a list:ring}:
+    execute:
+        set isInside to false
+        set ringCount to the length of ring
+        loop cursor from 0 to ringCount:
+            set here to the item at cursor in ring
+            set there to the item at (the remainder of (cursor + 1) divided by ringCount) in ring
+            if (here's y > spot's y) != (there's y > spot's y):
+                if spot's x < (here's x + (((there's x - here's x) * (spot's y - here's y)) / (there's y - here's y))):
+                    set isInside to (isInside = false)
+        return isInside
+
+# Whether the stretch from `here` to `there` has a point in the upright
+# rectangle from `lowX` to `highX` and `lowY` to `highY`, its rim counted.
+local function bim stretch {cad vector2:here} to {cad vector2:there} enters {a 64 bit floating-point number:lowX} to {a 64 bit floating-point number:highX} by {a 64 bit floating-point number:lowY} to {a 64 bit floating-point number:highY}:
+    execute:
+        set enterAt to 0.0
+        set leaveAt to 1.0
+        loop sideCursor from 0 to 4:
+            set advance to there's x - here's x
+            set slack to here's x - lowX
+            if sideCursor = 1:
+                set advance to here's x - there's x
+                set slack to highX - here's x
+            if sideCursor = 2:
+                set advance to there's y - here's y
+                set slack to here's y - lowY
+            if sideCursor = 3:
+                set advance to here's y - there's y
+                set slack to highY - here's y
+            # Inside this side where slack + t * advance >= 0.
+            if advance = 0.0:
+                if slack < 0.0:
+                    return false
+            else if advance > 0.0:
+                set enterAt to the maximum of enterAt and ((0.0 - slack) / advance)
+            else:
+                set leaveAt to the minimum of leaveAt and ((0.0 - slack) / advance)
+        return enterAt <= leaveAt
+
+# A straight wall with a contour and square ends built directly: the prism
+# of its contour (along it and up from its storey at `storeyElevation`)
+# through its thickness, an opening inside the contour a hole in it and a
+# door on a level stretch of its foot a notch. Refused (for the kernel to
+# cut it) when the contour leaves the wall's box, when an opening crosses
+# the contour or another opening, or when the contour is no simple ring.
+# `openings` give their sills from the wall's base.
+local function the bim fast profiled wall of {a pointer to a list:contour} along {bim wall record:wallValue} wide {a 64 bit floating-point number:breadth} from {a 64 bit floating-point number:storeyElevation} with {a pointer to a list:openings}:
+    execute:
+        set refusal to @intrinsic("construct", a fast prism result record, fast prism degenerate, an empty fast polyhedron)
+        set direction to the bim direction of wallValue
+        set wallLength to the bim centreline length of wallValue
+        set boxLow to wallValue's baseOffset
+        set boxHigh to wallValue's baseOffset + wallValue's height
+        set wallRing to an empty list of a cad vector2
+        loop cursor from 0 to the length of contour:
+            set corner to the item at cursor in contour
+            if (the absolute value of corner's x) < 0.001:
+                set corner to a cad vector2 with x 0.0 and y corner's y
+            else if (the absolute value of (corner's x - wallLength)) < 0.001:
+                set corner to a cad vector2 with x wallLength and y corner's y
+            if ((corner's x < 0.0) or (corner's x > wallLength)) or ((corner's y < (boxLow - 0.000001)) or (corner's y > (boxHigh + 0.000001))):
+                free wallRing
+                return refusal
+            append corner to wallRing
+        if (bim outline wallRing is simple) = false:
+            free wallRing
+            return refusal
+        set holeRings to an empty list of the type of (an empty list of a cad vector2)
+        set fits to true
+        loop cursor from 0 to the length of openings:
+            set opening to the item at cursor in openings
+            set leftSide to opening's along - (opening's width * 0.5)
+            set rightSide to opening's along + (opening's width * 0.5)
+            set footLevel to opening's sill + boxLow
+            set headLevel to footLevel + opening's height
+            # Clear of the openings before it.
+            loop earlier from 0 to cursor:
+                set other to the item at earlier in openings
+                if ((leftSide <= (other's along + (other's width * 0.5))) and (rightSide >= (other's along - (other's width * 0.5)))) and ((footLevel <= ((other's sill + boxLow) + other's height)) and (headLevel >= (other's sill + boxLow))):
+                    set fits to false
+            # The level stretch of the foot it stands on, if any.
+            set standsOn to -1
+            set ringCount to the length of wallRing
+            loop edgeCursor from 0 to ringCount:
+                set here to the item at edgeCursor in wallRing
+                set there to the item at (the remainder of (edgeCursor + 1) divided by ringCount) in wallRing
+                if ((the absolute value of (here's y - footLevel)) < 0.000001) and ((the absolute value of (there's y - footLevel)) < 0.000001):
+                    if ((the minimum of here's x and there's x) < (leftSide - 0.000001)) and ((the maximum of here's x and there's x) > (rightSide + 0.000001)):
+                        set standsOn to edgeCursor
+            # No other stretch of the contour may enter it.
+            loop edgeCursor from 0 to ringCount:
+                if edgeCursor != standsOn:
+                    set here to the item at edgeCursor in wallRing
+                    set there to the item at (the remainder of (edgeCursor + 1) divided by ringCount) in wallRing
+                    set clearFoot to footLevel
+                    if standsOn >= 0:
+                        set clearFoot to footLevel + 0.000001
+                    if bim stretch here to there enters leftSide to rightSide by clearFoot to headLevel:
+                        set fits to false
+            if (bim spot (a cad vector2 with x opening's along and y ((footLevel + headLevel) * 0.5)) lies inside ring wallRing) = false:
+                set fits to false
+            if fits:
+                if standsOn >= 0:
+                    set here to the item at standsOn in wallRing
+                    set there to the item at (the remainder of (standsOn + 1) divided by ringCount) in wallRing
+                    set nearSide to leftSide
+                    set farSide to rightSide
+                    if here's x > there's x:
+                        set nearSide to rightSide
+                        set farSide to leftSide
+                    insert (a cad vector2 with x nearSide and y footLevel) into wallRing at index (standsOn + 1)
+                    insert (a cad vector2 with x nearSide and y headLevel) into wallRing at index (standsOn + 2)
+                    insert (a cad vector2 with x farSide and y headLevel) into wallRing at index (standsOn + 3)
+                    insert (a cad vector2 with x farSide and y footLevel) into wallRing at index (standsOn + 4)
+                else:
+                    set holeRing to an empty list of a cad vector2
+                    append (a cad vector2 with x leftSide and y footLevel) to holeRing
+                    append (a cad vector2 with x rightSide and y footLevel) to holeRing
+                    append (a cad vector2 with x rightSide and y headLevel) to holeRing
+                    append (a cad vector2 with x leftSide and y headLevel) to holeRing
+                    append holeRing to holeRings
+        set built to refusal
+        if fits:
+            set upright to the fast prism over wallRing with holes holeRings from 0.0 rising breadth within the bim fast tolerance
+            if upright's reason = fast prism built:
+                # Its x runs along the wall, its y up and its z across it, from
+                # the wall's left face to its right.
+                set rightward to a cad vector3 with x direction's y, y (0.0 - direction's x) and z 0.0
+                set alongAxis to a cad vector3 with x direction's x, y direction's y and z 0.0
+                set upAxis to a cad vector3 with x 0.0, y 0.0 and z 1.0
+                set leftFoot to a cad vector3 with x (wallValue's start's x - (rightward's x * (breadth * 0.5))), y (wallValue's start's y - (rightward's y * (breadth * 0.5))) and z storeyElevation
+                set built to @intrinsic("construct", a fast prism result record, fast prism built, (the fast polyhedron (upright's shape) placed at leftFoot along alongAxis, upAxis and rightward))
+        loop cursor from 0 to the length of holeRings:
+            free (the item at cursor in holeRings)
+        free holeRings
+        free wallRing
+        return built
+
 function the bim solid of {bim wall record:wallValue} in {bim model record:modelValue} using {bim join index record:index} through {bim hosted index record:hostedIndex} preferring fast {boolean:preferringFast}:
     execute:
         set footprint to the bim footprint of wallValue in modelValue using index
@@ -981,6 +1121,17 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
                 free hosted
                 free fastOpenings
                 return @intrinsic("construct", a bim solid record, 0, an empty kernel body, true, direct's shape)
+        # A wall with a contour and square ends (no join shaped them) is its
+        # contour's prism, built directly.
+        if preferringFast and profiled:
+            set endsSquare to ((the absolute value of (((footprint's startExterior's x - wallValue's start's x) * direction's x) + ((footprint's startExterior's y - wallValue's start's y) * direction's y))) < 0.000000001) and ((the absolute value of (((footprint's startInterior's x - wallValue's start's x) * direction's x) + ((footprint's startInterior's y - wallValue's start's y) * direction's y))) < 0.000000001)
+            set endsSquare to endsSquare and (((the absolute value of (((footprint's finishExterior's x - wallValue's finish's x) * direction's x) + ((footprint's finishExterior's y - wallValue's finish's y) * direction's y))) < 0.000000001) and ((the absolute value of (((footprint's finishInterior's x - wallValue's finish's x) * direction's x) + ((footprint's finishInterior's y - wallValue's finish's y) * direction's y))) < 0.000000001))
+            if endsSquare:
+                set profiledWall to the bim fast profiled wall of contour along wallValue wide breadth from (elevation - wallValue's baseOffset) with fastOpenings
+                if profiledWall's reason = fast prism built:
+                    free hosted
+                    free fastOpenings
+                    return @intrinsic("construct", a bim solid record, 0, an empty kernel body, true, profiledWall's shape)
         free fastOpenings
         set outline to the bim outline of wallValue with footprint wide breadth
         set profile to the bim profile along outline
