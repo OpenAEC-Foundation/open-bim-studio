@@ -38,12 +38,14 @@
 # A wall given as a mesh with its openings already cut (as IFC4 exports
 # write a wall that hosts doors or windows) takes its openings from its
 # IfcOpeningElements, as an extruded wall does: it is its box less those
-# openings when its volume says so, its ends maybe cut for a join.
+# openings when its volume says so, its ends maybe cut for a join. An
+# opening nothing fills that lies on the wall's rim (cut for a join, a step
+# in its foot) is no opening but part of the outline of its face.
 #
-# A measured wall that is not its box but a prism through its thickness (a
-# gable, a wall under a sloped roof, a stepped foot) takes the outline of
-# its face as the model's face contour (`the bim ifc face outline of`),
-# when its volume is that outline's less its openings.
+# A measured wall that is not its box (a gable, a wall under a sloped roof,
+# a stepped foot) takes the outline of its face as the model's face contour
+# (`the bim ifc face outline of`), when its volume is that outline's less
+# its openings through its thickness.
 #
 # Pipe, duct and cable carrier segments (IfcPipeSegment, IfcDuctSegment,
 # IfcCableCarrierSegment) and members (IfcMember: mullions, studs) become
@@ -407,6 +409,10 @@ function the bim ifc corners of representation {integer:representationId} throug
 
 # The direction most of the edges of the triangles `cornerList` run in, by
 # their length (seen in plan when `onPlan`); of length 0 when there is none.
+# Edges count as one direction only when they are parallel to within a
+# third of a millimetre a metre: the diagonal of a long, narrow face (a
+# wall's top, 20 m by 0.2 m) is no edge along it, and would turn the box
+# measured along it.
 function the bim ifc main run of {a pointer to a list:cornerList} seen in plan {boolean:onPlan}:
     execute:
         set runList to an empty list of a cad vector3
@@ -427,14 +433,14 @@ function the bim ifc main run of {a pointer to a list:cornerList} seen in plan {
                     set matched to -1
                     loop runCursor from 0 to the length of runList:
                         if matched < 0:
-                            if (the absolute value of (the cad dot of (the item at runCursor in runList) and unitEdge)) > 0.9999:
+                            if (the absolute value of (the cad dot of (the item at runCursor in runList) and unitEdge)) > 0.99999995:
                                 set matched to runCursor
                     if matched >= 0:
                         replace item at index matched in weightList with ((the item at matched in weightList) + edgeLength)
                         if edgeLength > (the item at matched in longestList):
                             replace item at index matched in longestList with edgeLength
                             replace item at index matched in runList with unitEdge
-                    else if (the length of runList) < 64:
+                    else if (the length of runList) < 256:
                         append unitEdge to runList
                         append edgeLength to weightList
                         append edgeLength to longestList
@@ -851,7 +857,9 @@ function the bim ifc stretch of {bim ifc native wall record:nativeWall} along {c
 # (the same place and width along the wall) and touch or overlap made one
 # opening over both heights: a strip of glazing through several storeys is
 # given storey by storey, but the wall has one hole there. The lower one
-# says whether it is a door.
+# says whether it is a door. Two of one kind that stand right beside one
+# another (the same sill and height) and touch are made one over both
+# widths likewise: windows side by side leave no wall between them.
 function the bim ifc openings {cad topology list:openingList} with the stacked ones made one:
     execute:
         set merged to a cad topology list of a bim ifc native opening record
@@ -861,14 +869,27 @@ function the bim ifc openings {cad topology list:openingList} with the stacked o
             loop while absorbing:
                 set absorbing to false
                 set takenAt to -1
+                set takenAbreast to false
                 loop mergedCursor from 0 to the length of (merged's values):
                     if takenAt < 0:
                         set standing to the item at mergedCursor in (merged's values)
                         set samePlace to ((the absolute value of (standing's along - arriving's along)) < 0.005) and ((the absolute value of (standing's width - arriving's width)) < 0.005)
                         set touching to (arriving's sillHeight <= ((standing's sillHeight + standing's height) + 0.002)) and ((arriving's sillHeight + arriving's height) >= (standing's sillHeight - 0.002))
+                        set sameRow to ((the absolute value of (standing's sillHeight - arriving's sillHeight)) < 0.005) and (((the absolute value of (standing's height - arriving's height)) < 0.005) and (standing's isDoor = arriving's isDoor))
+                        set abreast to ((arriving's along - (arriving's width * 0.5)) <= ((standing's along + (standing's width * 0.5)) + 0.002)) and ((arriving's along + (arriving's width * 0.5)) >= ((standing's along - (standing's width * 0.5)) - 0.002))
                         if samePlace and touching:
                             set takenAt to mergedCursor
-                if takenAt >= 0:
+                        else if sameRow and abreast:
+                            set takenAt to mergedCursor
+                            set takenAbreast to true
+                if (takenAt >= 0) and takenAbreast:
+                    set standing to the item at takenAt in (merged's values)
+                    set rowLeft to the minimum of (standing's along - (standing's width * 0.5)) and (arriving's along - (arriving's width * 0.5))
+                    set rowRight to the maximum of (standing's along + (standing's width * 0.5)) and (arriving's along + (arriving's width * 0.5))
+                    set arriving to @intrinsic("construct", a bim ifc native opening record, (rowLeft + rowRight) * 0.5, rowRight - rowLeft, standing's height, standing's sillHeight, standing's isDoor)
+                    remove item takenAt from (merged's values)
+                    set absorbing to true
+                else if takenAt >= 0:
                     set standing to the item at takenAt in (merged's values)
                     set lowest to the minimum of standing's sillHeight and arriving's sillHeight
                     set highest to the maximum of (standing's sillHeight + standing's height) and (arriving's sillHeight + arriving's height)
@@ -1196,11 +1217,12 @@ function the bim ifc outline area of {a pointer to a list:outline} within {a 64 
 
 # The outline of the face of a wall measured as `boxedWall` (its box found)
 # from the triangles in `cornerList`: along the wall from its start (x) and
-# its height in the world (y), anticlockwise. The wall must be a prism
-# through its thickness (every corner on one of its two faces), and its
-# face one stretch between a foot and a top line that each have one height
-# at every spot along it (a sloped, gabled or stepped top, a stepped foot;
-# no overhang). The triangles on the one face give those two lines. An
+# its height in the world (y), anticlockwise. Its face must be one stretch
+# between a foot and a top line that each have one height at every spot
+# along it (a sloped, gabled or stepped top, a stepped foot; no overhang).
+# The triangles on its two faces give those two lines: the lower foot and
+# the higher top where the faces differ (layers that end at different
+# heights under a roof), for the caller to hold its volume against. An
 # opening of `openingList` that cuts into the foot (a door) or the top (a
 # window up to the eaves) is no part of the outline: the line runs straight
 # on over it. Empty when the body is no such prism.
@@ -1219,25 +1241,25 @@ function the bim ifc face outline of {a pointer to a list:cornerList} boxed as {
         # The edges of the triangles on the one face.
         set edgeStarts to an empty list of a cad vector2
         set edgeEnds to an empty list of a cad vector2
-        set isPrism to true
         set firstCorner to 0
         loop while (firstCorner + 2) < (the length of cornerList):
             set onFace to 0
+            set onFarFace to 0
             loop cornerCursor from 0 to 3:
                 set spot to the item at (firstCorner + cornerCursor) in cornerList
                 set acrossValue to ((spot's y * runX) - (spot's x * runY)) - faceAcross
                 if (the absolute value of acrossValue) < 0.0005:
                     set onFace to onFace + 1
-                else if (the absolute value of (acrossValue - boxedWall's thickness)) >= 0.0005:
-                    set isPrism to false
-            if onFace = 3:
+                else if (the absolute value of (acrossValue - boxedWall's thickness)) < 0.0005:
+                    set onFarFace to onFarFace + 1
+            if (onFace = 3) or (onFarFace = 3):
                 loop cornerCursor from 0 to 3:
                     set spot to the item at (firstCorner + cornerCursor) in cornerList
                     set nextSpot to the item at (firstCorner + (the remainder of (cornerCursor + 1) divided by 3)) in cornerList
                     append (a cad vector2 with x (((spot's x * runX) + (spot's y * runY)) - startAlong) and y spot's z) to edgeStarts
                     append (a cad vector2 with x (((nextSpot's x * runX) + (nextSpot's y * runY)) - startAlong) and y nextSpot's z) to edgeEnds
             set firstCorner to firstCorner + 3
-        if (isPrism = false) or ((the length of edgeStarts) = 0):
+        if (the length of edgeStarts) = 0:
             free edgeStarts
             free edgeEnds
             return faceOutline
@@ -1936,6 +1958,9 @@ function the bim ifc natives of {bim step file record:stepFile}:
                 set givenOpenings to a cad topology list of a bim ifc native opening record
                 set givenFillers to an empty list of an integer
                 set givenIds to an empty list of an integer
+                set rimIds to an empty list of an integer
+                set rimCut to false
+                set boxFits to false
                 set byGiven to false
                 if measuredWall's boxed and ((the item at wallId in firstOpening) >= 0):
                     set runX to measuredWall's finish's x - measuredWall's start's x
@@ -1970,14 +1995,22 @@ function the bim ifc natives of {bim step file record:stepFile}:
                             set openingFoot to the maximum of openingFoot and measuredWall's foot
                             set openingHead to the minimum of openingHead and measuredWall's head
                             if ((openingHigh - openingLow) >= 0.1) and ((openingHead - openingFoot) >= 0.1):
-                                set cutArea to cutArea + ((openingHigh - openingLow) * (openingHead - openingFoot))
                                 set givenFiller to the item at openingAt in fillerOf
-                                set givenDoor to false
-                                if givenFiller >= 0:
-                                    set givenDoor to bim step instance givenFiller is a "IFCDOOR" in stepFile
-                                append (@intrinsic("construct", a bim ifc native opening record, ((openingLow + openingHigh) * 0.5), openingHigh - openingLow, openingHead - openingFoot, openingFoot, givenDoor)) to (givenOpenings's values)
-                                append givenFiller to givenFillers
-                                append openingAt to givenIds
+                                set atRim to ((openingLow <= 0.001) or (openingHigh >= (runLong - 0.001))) or ((openingFoot <= (measuredWall's foot + 0.001)) or (openingHead >= (measuredWall's head - 0.001)))
+                                if (givenFiller < 0) and atRim:
+                                    # Cut from the wall's rim with nothing in it (for
+                                    # a join, a step in its foot): part of the
+                                    # outline of its face, no opening.
+                                    set rimCut to true
+                                    append openingAt to rimIds
+                                else:
+                                    set cutArea to cutArea + ((openingHigh - openingLow) * (openingHead - openingFoot))
+                                    set givenDoor to false
+                                    if givenFiller >= 0:
+                                        set givenDoor to bim step instance givenFiller is a "IFCDOOR" in stepFile
+                                    append (@intrinsic("construct", a bim ifc native opening record, ((openingLow + openingHigh) * 0.5), openingHigh - openingLow, openingHead - openingFoot, openingFoot, givenDoor)) to (givenOpenings's values)
+                                    append givenFiller to givenFillers
+                                    append openingAt to givenIds
                         free openingCorners
                         set openingAt to the item at openingAt in nextOpening
                     # Its box less the openings, but for what a join cut from its
@@ -1986,12 +2019,15 @@ function the bim ifc natives of {bim step file record:stepFile}:
                     set wholeVolume to measuredWall's thickness * (runLong * (measuredWall's head - measuredWall's foot))
                     set cutFits to (measuredWall's volume >= (0.88 * boxedVolume)) and (measuredWall's volume <= (1.02 * boxedVolume))
                     set wholeFits to (measuredWall's volume >= (0.98 * wholeVolume)) and (measuredWall's volume <= (1.02 * wholeVolume))
-                    if ((the length of givenIds) > 0) and (cutFits or wholeFits):
+                    # A cut from its rim: its outline below, if that holds its
+                    # volume; its box, as one cut for a join, if not.
+                    set boxFits to (((the length of givenIds) > 0) or rimCut) and (cutFits or wholeFits)
+                    if boxFits and (rimCut = false):
                         set byGiven to true
                 # A wall that is not its box: the outline of its face (a sloped,
                 # gabled or stepped top), when its volume is that outline's
                 # less the openings in it, through its thickness.
-                if (measuredWall's boxed and (measuredWall's found = false)) and (byGiven = false):
+                if (measuredWall's boxed and ((measuredWall's found = false) or rimCut)) and (byGiven = false):
                     set faceCorners to the bim ifc face outline of wallCorners boxed as measuredWall over (givenOpenings's values)
                     if (the length of faceCorners) >= 3:
                         set outlineArea to the bim ifc outline area of faceCorners
@@ -2014,6 +2050,8 @@ function the bim ifc natives of {bim step file record:stepFile}:
                                 loop cornerCursor from 0 to the length of faceCorners:
                                     append (the item at cornerCursor in faceCorners) to (givenContour's values)
                     free faceCorners
+                if (byGiven = false) and (rimCut and boxFits):
+                    set byGiven to true
                 free wallCorners
                 if byGiven:
                     set layerList to the bim ifc layers of material (the item at wallId in materialOf) thick measuredWall's thickness in r
@@ -2023,6 +2061,8 @@ function the bim ifc natives of {bim step file record:stepFile}:
                     if (the absolute value of (layerSum - measuredWall's thickness)) > 0.005:
                         set layerList to a cad topology list of a bim layer record
                         append (@intrinsic("construct", a bim layer record, the string form of "concrete", measuredWall's thickness)) to (layerList's values)
+                    loop rimCursor from 0 to the length of rimIds:
+                        append (the item at rimCursor in rimIds) to (nativeSet's skipped's values)
                     loop givenCursor from 0 to the length of givenIds:
                         append (the item at givenCursor in givenIds) to (nativeSet's skipped's values)
                         set givenFiller to the item at givenCursor in givenFillers
@@ -2038,6 +2078,7 @@ function the bim ifc natives of {bim step file record:stepFile}:
                     append wallId to (nativeSet's skipped's values)
                 free givenFillers
                 free givenIds
+                free rimIds
                 if measuredWall's found and (byGiven = false):
                     set layerList to the bim ifc layers of material (the item at wallId in materialOf) thick measuredWall's thickness in r
                     set layerSum to 0.0
@@ -2514,10 +2555,22 @@ function add bim ifc natives {bim ifc native set record:nativeSet} to {a pointer
                     # The outline of its face, up from its storey.
                     if (the length of (nativeWall's contour's values)) >= 3:
                         set storeyContour to an empty list of a cad vector2
+                        # The model keeps it to the millimetre: the wall stands
+                        # from its lowest to its highest corner as kept, for a
+                        # top a fraction of a millimetre off the outline's is
+                        # no top the kernel can cut it at.
+                        set keptLow to 1.0e30
+                        set keptHigh to -1.0e30
                         loop cornerCursor from 0 to the length of (nativeWall's contour's values):
                             set contourCorner to the item at cornerCursor in (nativeWall's contour's values)
                             append (a cad vector2 with x contourCorner's x and y (contourCorner's y - levelElevation)) to storeyContour
+                            set keptHeight to (@intrinsic("ceil", ((contourCorner's y - levelElevation) * 1000.0) - 0.5)) / 1000.0
+                            if keptHeight = 0.0:
+                                set keptHeight to 0.0
+                            set keptLow to the minimum of keptLow and keptHeight
+                            set keptHigh to the maximum of keptHigh and keptHeight
                         keep bim face contour storeyContour of fresh in target
+                        ignore set bim wall fresh base to keptLow and height to (keptHigh - keptLow) in target
                         free storeyContour
         loop wallCursor from 0 to the length of (nativeSet's wallAbsorbed's values):
             set intoWall to the item at wallCursor in (nativeSet's wallAbsorbed's values)
