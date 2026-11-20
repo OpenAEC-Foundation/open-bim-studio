@@ -4338,26 +4338,54 @@ class:
 function the bim welding of {fast mesh record:shape}:
     execute:
         set points to shape's positions's values
+        # The distinct spots first, found by a hash of each corner (a mesh
+        # repeats each some six times), so that only those are sorted.
+        set bucketCount to ((the length of points) * 2) + 1
+        set bucketHeads to an empty list of an integer
+        loop bucketCursor from 0 to bucketCount:
+            append -1 to bucketHeads
+        set chainNext to an empty list of an integer
         set sorted to an empty list of a bim gpu corner record
+        set distinctOf to an empty list of an integer
         loop point from 0 to the length of points:
             set spot to the item at point in points
-            append (@intrinsic("construct", a bim gpu corner record, spot's x, spot's y, spot's z, point)) to sorted
+            set hashedSpot to (((@intrinsic("ceil", spot's x * 100000.0)) as a 64 bit integer) * (73856093 as a 64 bit integer)) + ((((@intrinsic("ceil", spot's y * 100000.0)) as a 64 bit integer) * (19349663 as a 64 bit integer)) + (((@intrinsic("ceil", spot's z * 100000.0)) as a 64 bit integer) * (83492791 as a 64 bit integer)))
+            if hashedSpot < (0 as a 64 bit integer):
+                set hashedSpot to (0 as a 64 bit integer) - hashedSpot
+            set bucketAt to (the remainder of hashedSpot divided by (bucketCount as a 64 bit integer)) as an integer
+            set heldAt to the item at bucketAt in bucketHeads
+            set foundAt to -1
+            loop while (heldAt >= 0) and (foundAt < 0):
+                set held to the item at heldAt in sorted
+                if ((held's x = spot's x) and (held's y = spot's y)) and (held's z = spot's z):
+                    set foundAt to heldAt
+                else:
+                    set heldAt to the item at heldAt in chainNext
+            if foundAt < 0:
+                set foundAt to the length of sorted
+                append (@intrinsic("construct", a bim gpu corner record, spot's x, spot's y, spot's z, foundAt)) to sorted
+                append (the item at bucketAt in bucketHeads) to chainNext
+                replace item at index bucketAt in bucketHeads with foundAt
+            append foundAt to distinctOf
+        free bucketHeads
+        free chainNext
+        # In ascending order (x, then y, then z), as they are numbered.
         set comparator to the function named "bim gpu corner ordering $ and $"
         sort native array at ((the data of sorted) as a pointer) with ((the length of sorted) as a word sized unsigned integer) items of ((the size of a bim gpu corner record) as a word sized unsigned integer) bytes using comparator
-        set remapped to an empty list of an integer
+        set rankOf to an empty list of an integer
         loop point from 0 to the length of sorted:
-            append 0 to remapped
+            append 0 to rankOf
         set distinctSpots to an empty list of a cad vector3
         loop point from 0 to the length of sorted:
             set here to the item at point in sorted
-            set fresh to true
-            if point > 0:
-                set before to the item at (point - 1) in sorted
-                set fresh to ((here's x != before's x) or (here's y != before's y)) or (here's z != before's z)
-            if fresh:
-                append (a cad vector3 with x here's x, y here's y and z here's z) to distinctSpots
-            replace item at index here's index in remapped with ((the length of distinctSpots) - 1)
+            append (a cad vector3 with x here's x, y here's y and z here's z) to distinctSpots
+            replace item at index here's index in rankOf with point
         free sorted
+        set remapped to an empty list of an integer
+        loop point from 0 to the length of distinctOf:
+            append (the item at (the item at point in distinctOf) in rankOf) to remapped
+        free distinctOf
+        free rankOf
         set spotCorners to an empty list of an integer
         loop corner from 0 to the length of (shape's triangles's values):
             append (the item at (the item at corner in (shape's triangles's values)) in remapped) to spotCorners
@@ -4385,9 +4413,21 @@ function append bim feature edges of {fast mesh record:shape} to {a pointer to a
 # by one triangle, or between two whose faces turn by more than 15 degrees.
 function append bim feature edge pairs of {a pointer to a list:points} and {a pointer to a list:corners} to {a pointer to a list:pairs}:
     execute:
-        set records to an empty list of a bim gpu edge record
-        set normals to an empty list of a cad vector3
+        # Each edge once, found by a hash of its two corners, with how many
+        # triangles use it and the first two of them; only the edges kept
+        # are sorted (by their corners, as they are listed).
         set triangleCount to (the length of corners) / 3
+        set bucketCount to (triangleCount * 6) + 1
+        set bucketHeads to an empty list of an integer
+        loop bucketCursor from 0 to bucketCount:
+            append -1 to bucketHeads
+        set chainNext to an empty list of an integer
+        set edgeLows to an empty list of an integer
+        set edgeHighs to an empty list of an integer
+        set edgeUses to an empty list of an integer
+        set edgeFaces to an empty list of an integer
+        set edgeOthers to an empty list of an integer
+        set normals to an empty list of a cad vector3
         loop face from 0 to triangleCount:
             set ia to the item at (face * 3) in corners
             set ib to the item at ((face * 3) + 1) in corners
@@ -4398,35 +4438,57 @@ function append bim feature edge pairs of {a pointer to a list:points} and {a po
             if size > 0.0:
                 set turned to turned scaled by (1.0 / size)
             append turned to normals
-            append (@intrinsic("construct", a bim gpu edge record, the minimum of ia and ib, the maximum of ia and ib, face)) to records
-            append (@intrinsic("construct", a bim gpu edge record, the minimum of ib and ic, the maximum of ib and ic, face)) to records
-            append (@intrinsic("construct", a bim gpu edge record, the minimum of ic and ia, the maximum of ic and ia, face)) to records
+            loop side from 0 to 3:
+                set lowCorner to the minimum of ia and ib
+                set highCorner to the maximum of ia and ib
+                if side = 1:
+                    set lowCorner to the minimum of ib and ic
+                    set highCorner to the maximum of ib and ic
+                if side = 2:
+                    set lowCorner to the minimum of ic and ia
+                    set highCorner to the maximum of ic and ia
+                set bucketAt to (the remainder of (((lowCorner as a 64 bit integer) * (73856093 as a 64 bit integer)) + ((highCorner as a 64 bit integer) * (19349663 as a 64 bit integer))) divided by (bucketCount as a 64 bit integer)) as an integer
+                set heldAt to the item at bucketAt in bucketHeads
+                set foundAt to -1
+                loop while (heldAt >= 0) and (foundAt < 0):
+                    if ((the item at heldAt in edgeLows) = lowCorner) and ((the item at heldAt in edgeHighs) = highCorner):
+                        set foundAt to heldAt
+                    else:
+                        set heldAt to the item at heldAt in chainNext
+                if foundAt < 0:
+                    append lowCorner to edgeLows
+                    append highCorner to edgeHighs
+                    append 1 to edgeUses
+                    append face to edgeFaces
+                    append face to edgeOthers
+                    append (the item at bucketAt in bucketHeads) to chainNext
+                    replace item at index bucketAt in bucketHeads with ((the length of edgeLows) - 1)
+                else:
+                    if (the item at foundAt in edgeUses) = 1:
+                        replace item at index foundAt in edgeOthers with face
+                    replace item at index foundAt in edgeUses with ((the item at foundAt in edgeUses) + 1)
+        set records to an empty list of a bim gpu edge record
+        loop cursor from 0 to the length of edgeLows:
+            set keep to (the item at cursor in edgeUses) != 2
+            if keep = false:
+                set keep to (the cad dot of (the item at (the item at cursor in edgeFaces) in normals) and (the item at (the item at cursor in edgeOthers) in normals)) < 0.966
+            if keep:
+                append (@intrinsic("construct", a bim gpu edge record, the item at cursor in edgeLows, the item at cursor in edgeHighs, 0)) to records
         set comparator to the function named "bim gpu edge ordering $ and $"
         sort native array at ((the data of records) as a pointer) with ((the length of records) as a word sized unsigned integer) items of ((the size of a bim gpu edge record) as a word sized unsigned integer) bytes using comparator
-        set cursor to 0
-        loop while cursor < the length of records:
+        loop cursor from 0 to the length of records:
             set here to the item at cursor in records
-            set groupEnd to cursor + 1
-            set scanning to true
-            loop while scanning:
-                if groupEnd >= the length of records:
-                    set scanning to false
-                else:
-                    set candidate to the item at groupEnd in records
-                    if (candidate's first = here's first) and (candidate's second = here's second):
-                        set groupEnd to groupEnd + 1
-                    else:
-                        set scanning to false
-            set keep to (groupEnd - cursor) != 2
-            if keep = false:
-                set other to the item at (cursor + 1) in records
-                set keep to (the cad dot of (the item at here's triangle in normals) and (the item at other's triangle in normals)) < 0.966
-            if keep:
-                append here's first to pairs
-                append here's second to pairs
-            set cursor to groupEnd
+            append here's first to pairs
+            append here's second to pairs
         free records
         free normals
+        free bucketHeads
+        free chainNext
+        free edgeLows
+        free edgeHighs
+        free edgeUses
+        free edgeFaces
+        free edgeOthers
 
 class:
     patterns:
