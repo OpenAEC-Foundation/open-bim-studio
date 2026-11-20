@@ -646,6 +646,16 @@ def grid_tool(arguments: dict) -> dict:
                        number(arguments["low"], "low"), number(arguments["high"], "high")))
 
 
+@tool("place_view", "Place the plan, section or elevation named `view` on the sheet `sheet` (its number such as "
+      "'A-101', or its name), centred x, y millimetres from the sheet's lower left corner. A view sits on one "
+      "sheet; returns how many viewports the sheet then has.",
+      {"sheet": {"type": "string"}, "view": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}},
+      ["sheet", "view", "x", "y"])
+def place_view_tool(arguments: dict) -> dict:
+    return text_result(current_modeller().request("placeview", arguments["sheet"], arguments["view"],
+                       number(arguments["x"], "x"), number(arguments["y"], "y")))
+
+
 @tool("repeat_grid", "Repeat a grid by spacing pattern, e.g. '5000 3000 3x5400'. "
       "source is its numeric element id as a string or 'selected'. Optional unit_code: 0 mm, 1 cm, 2 m; "
       "otherwise the project length unit. Returns count/ids; one native undo step.",
