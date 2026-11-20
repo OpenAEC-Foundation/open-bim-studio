@@ -3602,6 +3602,7 @@ function draw bim folded components in plan of {bim editor record:editor} among 
     execute:
         set modelValue to editor's documentValue's current
         set foldedMeshes to a cad topology list of a bim scene mesh record
+        set foldedPlacements to a cad topology list of a bim instance record
         loop cursor from 0 to the length of sceneMeshes:
             set entry to the item at cursor in sceneMeshes
             set placementFound to the bim instance index of entry's elementId in modelValue
@@ -3611,9 +3612,52 @@ function draw bim folded components in plan of {bim editor record:editor} among 
                 if (placement's levelId = editor's levelId) and definitionFound's valid:
                     if bim component (the item at definitionFound's position in (modelValue's components's values)) is folded:
                         append entry to (foldedMeshes's values)
+                        append placement to (foldedPlacements's values)
         set cutLines to an empty list of a cad vector2
         set belowLines to an empty list of a cad vector2
-        append bim plan lines of (foldedMeshes's values) cut at ((the bim storey elevation of editor) + (the bim plan cut height of editor)) into cutLines and belowLines
+        set cutHeight to (the bim storey elevation of editor) + (the bim plan cut height of editor)
+        # The feature edges of a component are found once, on its first
+        # instance, and kept in the component's own coordinates (that
+        # instance's placement undone); every further instance places them
+        # anew. Finding them is the costly part for a mesh of thousands of
+        # triangles placed many times.
+        set knownComponents to an empty list of a 64 bit integer
+        set knownStarts to an empty list of an integer
+        set knownCounts to an empty list of an integer
+        set localEdges to an empty list of a cad vector3
+        loop cursor from 0 to the length of (foldedMeshes's values):
+            set entry to the item at cursor in (foldedMeshes's values)
+            set placement to the item at cursor in (foldedPlacements's values)
+            append bim plan slices of (entry's shape) parted at cutHeight to cutLines
+            set lift to (the bim storey elevation of editor) + (the bim rise of instance placement's id in modelValue)
+            set cosine to the cosine of placement's angle
+            set sine to the sine of placement's angle
+            set knownAt to -1
+            loop knownCursor from 0 to the length of knownComponents:
+                if (the item at knownCursor in knownComponents) = placement's componentId:
+                    set knownAt to knownCursor
+            set features to an empty list of a cad vector3
+            if knownAt < 0:
+                append bim feature edges of entry's shape to features
+                append placement's componentId to knownComponents
+                append (the length of localEdges) to knownStarts
+                append (the length of features) to knownCounts
+                loop featureCursor from 0 to the length of features:
+                    set placedSpot to the item at featureCursor in features
+                    set offX to placedSpot's x - placement's origin's x
+                    set offY to placedSpot's y - placement's origin's y
+                    append (a cad vector3 with x ((offX * cosine) + (offY * sine)), y ((offY * cosine) - (offX * sine)) and z (placedSpot's z - lift)) to localEdges
+            else:
+                set edgeStart to the item at knownAt in knownStarts
+                loop featureCursor from 0 to (the item at knownAt in knownCounts):
+                    set localSpot to the item at (edgeStart + featureCursor) in localEdges
+                    append (a cad vector3 with x (((localSpot's x * cosine) - (localSpot's y * sine)) + placement's origin's x), y (((localSpot's x * sine) + (localSpot's y * cosine)) + placement's origin's y) and z (localSpot's z + lift)) to features
+            append bim plan underlines features beneath cutHeight to belowLines
+            free features
+        free knownComponents
+        free knownStarts
+        free knownCounts
+        free localEdges
         record bim plan lines cutLines and belowLines through transform on canvas
         free belowLines
         free cutLines
@@ -3627,37 +3671,49 @@ function append bim plan lines of {a pointer to a list:sceneMeshes} cut at {a 64
     execute:
         loop cursor from 0 to the length of sceneMeshes:
             set entry to the item at cursor in sceneMeshes
-            set points to entry's shape's positions's values
-            set triangleCorners to entry's shape's triangles's values
-            set triangle to 0
-            loop while (triangle + 2) < the length of triangleCorners:
-                set crossings to an empty list of a cad vector2
-                loop side from 0 to 3:
-                    set from to the item at (the item at (triangle + side) in triangleCorners) in points
-                    set onto to the item at (the item at (triangle + (the remainder of (side + 1) divided by 3)) in triangleCorners) in points
-                    if ((from's z - cutHeight) * (onto's z - cutHeight)) < 0.0:
-                        set fraction to (cutHeight - from's z) / (onto's z - from's z)
-                        append (a cad vector2 with x (from's x + ((onto's x - from's x) * fraction)) and y (from's y + ((onto's y - from's y) * fraction))) to crossings
-                if (the length of crossings) = 2:
-                    append (the item at 0 in crossings) to cutLines
-                    append (the item at 1 in crossings) to cutLines
-                free crossings
-                set triangle to triangle + 3
+            append bim plan slices of (entry's shape) parted at cutHeight to cutLines
             set features to an empty list of a cad vector3
             append bim feature edges of entry's shape to features
-            set featureCursor to 0
-            loop while (featureCursor + 1) < the length of features:
-                set from to the item at featureCursor in features
-                set onto to the item at (featureCursor + 1) in features
-                if (from's z <= cutHeight) or (onto's z <= cutHeight):
-                    if from's z > cutHeight:
-                        set from to the cad sum of onto and ((the cad difference of from and onto) scaled by ((cutHeight - onto's z) / (from's z - onto's z)))
-                    if onto's z > cutHeight:
-                        set onto to the cad sum of from and ((the cad difference of onto and from) scaled by ((cutHeight - from's z) / (onto's z - from's z)))
-                    append (a cad vector2 with x from's x and y from's y) to belowLines
-                    append (a cad vector2 with x onto's x and y onto's y) to belowLines
-                set featureCursor to featureCursor + 2
+            append bim plan underlines features beneath cutHeight to belowLines
             free features
+
+# Appends, as pairs of plan points, where the horizontal plane at
+# `cutHeight` passes through the triangles of `shape`.
+function append bim plan slices of {fast mesh record:shape} parted at {a 64 bit floating-point number:cutHeight} to {a pointer to a list:cutLines}:
+    execute:
+        set points to shape's positions's values
+        set triangleCorners to shape's triangles's values
+        set triangle to 0
+        loop while (triangle + 2) < the length of triangleCorners:
+            set crossings to an empty list of a cad vector2
+            loop side from 0 to 3:
+                set from to the item at (the item at (triangle + side) in triangleCorners) in points
+                set onto to the item at (the item at (triangle + (the remainder of (side + 1) divided by 3)) in triangleCorners) in points
+                if ((from's z - cutHeight) * (onto's z - cutHeight)) < 0.0:
+                    set fraction to (cutHeight - from's z) / (onto's z - from's z)
+                    append (a cad vector2 with x (from's x + ((onto's x - from's x) * fraction)) and y (from's y + ((onto's y - from's y) * fraction))) to crossings
+            if (the length of crossings) = 2:
+                append (the item at 0 in crossings) to cutLines
+                append (the item at 1 in crossings) to cutLines
+            free crossings
+            set triangle to triangle + 3
+
+# Appends, as pairs of plan points, what of the edges `features` (pairs of
+# points) lies at or under `cutHeight`.
+function append bim plan underlines {a pointer to a list:features} beneath {a 64 bit floating-point number:cutHeight} to {a pointer to a list:belowLines}:
+    execute:
+        set featureCursor to 0
+        loop while (featureCursor + 1) < the length of features:
+            set from to the item at featureCursor in features
+            set onto to the item at (featureCursor + 1) in features
+            if (from's z <= cutHeight) or (onto's z <= cutHeight):
+                if from's z > cutHeight:
+                    set from to the cad sum of onto and ((the cad difference of from and onto) scaled by ((cutHeight - onto's z) / (from's z - onto's z)))
+                if onto's z > cutHeight:
+                    set onto to the cad sum of from and ((the cad difference of onto and from) scaled by ((cutHeight - from's z) / (onto's z - from's z)))
+                append (a cad vector2 with x from's x and y from's y) to belowLines
+                append (a cad vector2 with x onto's x and y onto's y) to belowLines
+            set featureCursor to featureCursor + 2
 
 # Records the plan lines of `append bim plan lines of`: the cut black, the
 # edges below it thin and grey, as the plan shows linear elements.
