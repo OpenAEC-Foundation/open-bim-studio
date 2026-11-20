@@ -284,3 +284,152 @@ function the bim join gap after {a 64 bit floating-point number:gapMetres}:
         if gapMillimetres < 50:
             return 0.050
         return 0.0
+
+# ---------------------------------------------------------------- profiles
+#
+# The profile of a join: how the two ends meet across their thickness, as
+# a library of stepped shapes (a half lap, a lip, a stepped lap), for
+# panels such as cross-laminated timber. A profile shapes a butt join at an
+# L corner: the end that runs through and the end that stops each follow
+# their half of it, so that the two fill the corner between them without
+# overlap. An end stores the profile's code; absent, the join is straight.
+#
+# A half of a profile is a list of steps across the end's thickness, from
+# the corner's outer side (0) to its inner side (1): each step reaches
+# across to `across` and stands `depth` into the other wall's thickness
+# (0 at its near face, 1 at its far face).
+function bim join profile start setting:
+    replacement:
+        2402604
+function bim join profile finish setting:
+    replacement:
+        2402605
+
+function bim straight join profile:
+    replacement:
+        0
+# Half lap: each end keeps half its thickness over the other's half.
+function bim half lap join profile:
+    replacement:
+        1
+# Lip: the end that runs through keeps a lip of a third of its thickness
+# over the end that stops, which is rebated for it.
+function bim lip join profile:
+    replacement:
+        2
+# Stepped lap: two steps of a third each.
+function bim stepped lap join profile:
+    replacement:
+        3
+
+function the bim join profile count:
+    replacement:
+        4
+
+class:
+    patterns:
+        [a|] bim join step record
+    members:
+        across as a 64 bit floating-point number
+        depth as a 64 bit floating-point number
+
+function the bim join profile name of {integer:profileCode}:
+    execute:
+        if profileCode = bim half lap join profile:
+            return the string form of "Half lap"
+        if profileCode = bim lip join profile:
+            return the string form of "Lip (one third)"
+        if profileCode = bim stepped lap join profile:
+            return the string form of "Stepped lap"
+        return the string form of "Straight"
+
+# The steps of profile `profileCode` for the end that runs through
+# (`runsThrough`) or the end that stops; empty for a straight join. The
+# caller frees the list.
+function the bim join profile steps of {integer:profileCode} running through {boolean:runsThrough}:
+    execute:
+        set stepList to an empty list of a bim join step record
+        set oneThird to 1.0 / 3.0
+        if profileCode = bim half lap join profile:
+            if runsThrough:
+                append (@intrinsic("construct", a bim join step record, 0.5, 1.0)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, 0.5)) to stepList
+            else:
+                append (@intrinsic("construct", a bim join step record, 0.5, 0.5)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, 0.0)) to stepList
+        if profileCode = bim lip join profile:
+            if runsThrough:
+                append (@intrinsic("construct", a bim join step record, 2.0 * oneThird, 1.0)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, 2.0 * oneThird)) to stepList
+            else:
+                append (@intrinsic("construct", a bim join step record, oneThird, oneThird)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, 0.0)) to stepList
+        if profileCode = bim stepped lap join profile:
+            if runsThrough:
+                append (@intrinsic("construct", a bim join step record, oneThird, 1.0)) to stepList
+                append (@intrinsic("construct", a bim join step record, 2.0 * oneThird, 2.0 * oneThird)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, oneThird)) to stepList
+            else:
+                append (@intrinsic("construct", a bim join step record, oneThird, 2.0 * oneThird)) to stepList
+                append (@intrinsic("construct", a bim join step record, 2.0 * oneThird, oneThird)) to stepList
+                append (@intrinsic("construct", a bim join step record, 1.0, 0.0)) to stepList
+        return stepList
+
+function the bim join profile setting at finish {boolean:atFinish}:
+    execute:
+        if atFinish:
+            return bim join profile finish setting
+        return bim join profile start setting
+
+# The profile end `elementId` gives itself, or -1 when it gives none.
+function the bim own join profile of end {a 64 bit integer:elementId} at finish {boolean:atFinish} in {bim model record:modelValue}:
+    execute:
+        set profileReading to the bim setting (the bim join profile setting at finish atFinish) of elementId in modelValue
+        if profileReading's found:
+            set profileValue to profileReading's value as an integer
+            if (profileValue > bim straight join profile) and (profileValue < (the bim join profile count)):
+                return profileValue
+        return -1
+
+# The profile of end `elementId` at an L join with end `partnerId`: its
+# own, else its partner's, else straight.
+function the bim join profile of end {a 64 bit integer:elementId} at finish {boolean:atFinish} beside {a 64 bit integer:partnerId} finishing {boolean:partnerAtFinish} in {bim model record:modelValue}:
+    execute:
+        set ownProfile to the bim own join profile of end elementId at finish atFinish in modelValue
+        if ownProfile >= 0:
+            return ownProfile
+        set partnerProfile to the bim own join profile of end partnerId at finish partnerAtFinish in modelValue
+        if partnerProfile >= 0:
+            return partnerProfile
+        return bim straight join profile
+
+# The profile of `joinValue`: straight at any join but an L join.
+function the bim profile of join {bim join record:joinValue} in {bim model record:modelValue}:
+    execute:
+        if joinValue's kind != bim l join kind:
+            return bim straight join profile
+        return the bim join profile of end joinValue's firstId at finish joinValue's firstAtFinish beside joinValue's secondId finishing joinValue's secondAtFinish in modelValue
+
+# L join `joinValue` given profile `profileCode` on both its ends
+# (straight removes it). A profile shapes a butt: a join that is no butt
+# yet becomes one, its first wall running through. Each changed setting is
+# journalled; the caller holds the transaction.
+function give bim join {bim join record:joinValue} profile {integer:profileCode} in {a pointer to a bim model record:target}:
+    execute:
+        if joinValue's kind != bim l join kind:
+            return nothing
+        set profileKept to profileCode != bim straight join profile
+        set bim setting (the bim join profile setting at finish joinValue's firstAtFinish) of joinValue's firstId to (profileCode as a 64 bit integer) keeping profileKept in target
+        set bim setting (the bim join profile setting at finish joinValue's secondAtFinish) of joinValue's secondId to (profileCode as a 64 bit integer) keeping profileKept in target
+        if profileKept:
+            set styleNow to the bim style of join joinValue in (@intrinsic("dereference", target))
+            if (styleNow != bim butt through join style) and (styleNow != bim butt stopped join style):
+                give bim join joinValue style (bim butt through join style) in target
+
+# The next profile a click on the Profile row gives: Straight, Half lap,
+# Lip, Stepped lap and round again.
+function the bim join profile after {integer:profileCode}:
+    execute:
+        if (profileCode + 1) >= (the bim join profile count):
+            return bim straight join profile
+        return profileCode + 1

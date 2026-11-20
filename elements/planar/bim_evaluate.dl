@@ -473,6 +473,93 @@ local function the bim end corners of {bim wall record:wallValue} at finish {boo
             set interiorCorner to the bim point interiorOrigin shifted squareReach along direction
         return @intrinsic("construct", a bim end corners record, exteriorCorner, interiorCorner, host's id)
 
+# The profile that shapes end `atFinish` of `wallValue` at its L join with
+# `partner` (bim/bim_joins.dl), or straight: only a butt between two
+# straight walls of one layer each takes a profile.
+local function the bim shaping profile of {bim wall record:wallValue} at finish {boolean:atFinish} beside {bim wall record:partner} finishing {boolean:partnerAtFinish} styled {integer:styleCode} in {bim model record:modelValue}:
+    execute:
+        if (styleCode != bim butt through join style) and (styleCode != bim butt stopped join style):
+            return bim straight join profile
+        if ((the absolute value of wallValue's bulge) > 0.0) or ((the absolute value of partner's bulge) > 0.0):
+            return bim straight join profile
+        set ownType to the bim wall type index of wallValue's typeId in modelValue
+        set partnerType to the bim wall type index of partner's typeId in modelValue
+        if (ownType's valid = false) or (partnerType's valid = false):
+            return bim straight join profile
+        set ownLayers to (the item at ownType's position in (modelValue's wallTypes's values))'s layers
+        set partnerLayers to (the item at partnerType's position in (modelValue's wallTypes's values))'s layers
+        if ((the length of (ownLayers's values)) != 1) or ((the length of (partnerLayers's values)) != 1):
+            return bim straight join profile
+        return the bim join profile of end wallValue's id at finish atFinish beside partner's id finishing partnerAtFinish in modelValue
+
+# The points of one end of a wall that follows profile `profileCode`
+# against `host`, from its exterior corner to its interior corner, into
+# `endPoints`: two for every step of its half of the profile (the first
+# and the last are the end's corners). Nothing is appended when a side
+# does not cross the host's lines.
+local function append bim profiled end of {bim wall record:wallValue} at finish {boolean:atFinish} against {bim wall record:host} styled {integer:styleCode} apart by {a 64 bit floating-point number:joinGap} following {integer:profileCode} in {bim model record:modelValue} to {a pointer to a list:endPoints}:
+    execute:
+        set direction to the bim direction of wallValue
+        set normal to a cad vector2 with x (direction's y) and y (0.0 - direction's x)
+        set half to (the bim wall thickness of wallValue in modelValue) * 0.5
+        set endPoint to wallValue's start
+        set farPoint to wallValue's finish
+        if atFinish:
+            set endPoint to wallValue's finish
+            set farPoint to wallValue's start
+        set hostDirection to the bim direction of host
+        set hostNormal to the bim exterior normal of host
+        set hostHalf to (the bim wall thickness of host in modelValue) * 0.5
+        if (the absolute value of ((direction's x * hostDirection's y) - (direction's y * hostDirection's x))) < (bim join parallel sine):
+            return nothing
+        # The host's near face lies toward this wall's body.
+        set towardBody to ((farPoint's x - host's start's x) * hostNormal's x) + ((farPoint's y - host's start's y) * hostNormal's y)
+        set nearSign to 1.0
+        if towardBody < 0.0:
+            set nearSign to -1.0
+        # The corner's outer side lies away from the host's body.
+        set hostFar to host's finish
+        if (the cad distance from host's finish to endPoint) < (the cad distance from host's start to endPoint):
+            set hostFar to host's start
+        set towardHost to ((hostFar's x - endPoint's x) * normal's x) + ((hostFar's y - endPoint's y) * normal's y)
+        set outerSign to 1.0
+        if towardHost > 0.0:
+            set outerSign to -1.0
+        set runsThrough to bim join style styleCode runs through
+        set stepList to the bim join profile steps of profileCode running through runsThrough
+        set ownGap to joinGap
+        if runsThrough:
+            set ownGap to 0.0
+        set crossedPoints to an empty list of a cad vector2
+        set allCrossed to true
+        set acrossFrom to 0.0
+        loop stepCursor from 0 to the length of stepList:
+            set stepValue to the item at stepCursor in stepList
+            set faceOffset to nearSign * ((hostHalf * (1.0 - (2.0 * stepValue's depth))) + ownGap)
+            set faceOrigin to the bim point host's start shifted faceOffset along hostNormal
+            loop sideCursor from 0 to 2:
+                set acrossNow to acrossFrom
+                if sideCursor = 1:
+                    set acrossNow to stepValue's across
+                set sideOrigin to the bim point endPoint shifted ((outerSign * half) * (1.0 - (2.0 * acrossNow))) along normal
+                set sideCrossing to the bim crossing of sideOrigin toward direction with faceOrigin toward hostDirection
+                if sideCrossing's valid:
+                    append sideCrossing's point to crossedPoints
+                else:
+                    set allCrossed to false
+            set acrossFrom to stepValue's across
+        free stepList
+        if allCrossed:
+            if outerSign > 0.0:
+                loop foundCursor from 0 to the length of crossedPoints:
+                    append (the item at foundCursor in crossedPoints) to endPoints
+            else:
+                set foundCursor to (the length of crossedPoints) - 1
+                loop while foundCursor >= 0:
+                    append (the item at foundCursor in crossedPoints) to endPoints
+                    set foundCursor to foundCursor - 1
+        free crossedPoints
+
 # The corners of one end of a wall, by how the end joins
 # (`the bim end join of`) and the style the ends give the join
 # (bim/bim_joins.dl). Automatic, as before there were styles: at an L join
@@ -503,6 +590,17 @@ function the bim end corners of {bim wall record:wallValue} at finish {boolean:a
             if styleCode = bim not joined style:
                 return square
             set joinGap to the bim join gap of end wallValue's id at finish atFinish beside partner's id finishing endJoin's partnerAtFinish in modelValue
+            set profileCode to the bim shaping profile of wallValue at finish atFinish beside partner finishing endJoin's partnerAtFinish styled styleCode in modelValue
+            if profileCode != bim straight join profile:
+                # A profiled end: its corners are the profile's first and
+                # last points (`the bim end steps of` gives those between).
+                set shapedEnd to an empty list of a cad vector2
+                append bim profiled end of wallValue at finish atFinish against partner styled styleCode apart by joinGap following profileCode in modelValue to shapedEnd
+                if (the length of shapedEnd) >= 2:
+                    set shapedCorners to @intrinsic("construct", a bim end corners record, the item at 0 in shapedEnd, the item at ((the length of shapedEnd) - 1) in shapedEnd, partner's id)
+                    free shapedEnd
+                    return shapedCorners
+                free shapedEnd
             if (styleCode != bim automatic join style) and (styleCode != bim mitre join style):
                 return the bim end corners of wallValue at finish atFinish cut against partner styled styleCode apart by joinGap in modelValue
             set partnerDirection to the bim direction of partner
@@ -636,6 +734,56 @@ function the bim outline of {bim wall record:wallValue} with {bim footprint reco
         append footprint's startInterior to corners
         return corners
 
+# The points of a profiled end of a wall between its exterior and its
+# interior corner (`append bim profiled end of`), in that order; empty for
+# an end that is straight. The caller frees the list.
+function the bim end steps of {bim wall record:wallValue} at finish {boolean:atFinish} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set betweenPoints to an empty list of a cad vector2
+        set endJoin to the bim end join of wallValue at finish atFinish in modelValue using index
+        if endJoin's kind != bim l join kind:
+            return betweenPoints
+        set partner to the item at endJoin's partnerPosition in (modelValue's walls's values)
+        set styleCode to the bim joined style of end wallValue's id at finish atFinish beside partner's id finishing endJoin's partnerAtFinish in modelValue
+        set profileCode to the bim shaping profile of wallValue at finish atFinish beside partner finishing endJoin's partnerAtFinish styled styleCode in modelValue
+        if profileCode = bim straight join profile:
+            return betweenPoints
+        set joinGap to the bim join gap of end wallValue's id at finish atFinish beside partner's id finishing endJoin's partnerAtFinish in modelValue
+        set shapedEnd to an empty list of a cad vector2
+        append bim profiled end of wallValue at finish atFinish against partner styled styleCode apart by joinGap following profileCode in modelValue to shapedEnd
+        loop shapedCursor from 1 to ((the length of shapedEnd) - 1):
+            append (the item at shapedCursor in shapedEnd) to betweenPoints
+        free shapedEnd
+        return betweenPoints
+
+# The plan outline of a wall with the steps of its profiled ends: `the bim
+# outline of … with … wide`, the finish's steps between its two corners
+# and the start's after the last corner, back toward the first.
+function the bim stepped outline of {bim wall record:wallValue} with {bim footprint record:footprint} wide {a 64 bit floating-point number:breadth} in {bim model record:modelValue} using {bim join index record:index}:
+    execute:
+        set plainOutline to the bim outline of wallValue with footprint wide breadth
+        set startSteps to the bim end steps of wallValue at finish false in modelValue using index
+        set finishSteps to the bim end steps of wallValue at finish true in modelValue using index
+        if ((the length of startSteps) + (the length of finishSteps)) = 0:
+            free startSteps
+            free finishSteps
+            return plainOutline
+        set steppedRing to an empty list of a cad vector2
+        loop plainCursor from 0 to the length of plainOutline:
+            set plainPoint to the item at plainCursor in plainOutline
+            append plainPoint to steppedRing
+            if (the cad distance from plainPoint to footprint's finishExterior) < 0.000000001:
+                loop stepCursor from 0 to the length of finishSteps:
+                    append (the item at stepCursor in finishSteps) to steppedRing
+        set stepCursor to (the length of startSteps) - 1
+        loop while stepCursor >= 0:
+            append (the item at stepCursor in startSteps) to steppedRing
+            set stepCursor to stepCursor - 1
+        free plainOutline
+        free startSteps
+        free finishSteps
+        return steppedRing
+
 # For a single lookup; indexes the whole model first.
 function the bim footprint of {bim wall record:wallValue} in {bim model record:modelValue}:
     execute:
@@ -742,6 +890,12 @@ function the bim signature of {bim wall record:wallValue} in {bim model record:m
             set written to (written + (the string form of ";b")) + (the bim number text of wallValue's bulge)
         if (wallValue's lean != 0.0) or (wallValue's rise != 0.0):
             set written to (written + (the string form of ";l")) + ((the bim number text of wallValue's lean) + ((the string form of ";r") + (the bim number text of wallValue's rise)))
+        # The steps of its profiled ends.
+        loop endCursor from 0 to 2:
+            set signedSteps to the bim end steps of wallValue at finish (endCursor = 1) in modelValue using index
+            loop stepCursor from 0 to the length of signedSteps:
+                set written to (written + (the string form of ";s")) + (the bim point text of (the item at stepCursor in signedSteps))
+            free signedSteps
         # A joined end follows its partner's shape.
         loop endCursor from 0 to 2:
             set endPartner to (the bim end corners of wallValue at finish (endCursor = 1) in modelValue using index)'s partner
@@ -1080,7 +1234,14 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
         # the general solid cut to the contour across its thickness.
         set contour to the bim face contour of wallValue's id in modelValue
         set profiled to ((the length of contour) >= 3) and (curved = false)
-        set fastWanted to preferringFast and (profiled = false)
+        # A wall with a profiled end (a lapped join) is the extrusion of its
+        # stepped outline.
+        set startSteps to the bim end steps of wallValue at finish false in modelValue using index
+        set finishSteps to the bim end steps of wallValue at finish true in modelValue using index
+        set steppedEnds to (((the length of startSteps) + (the length of finishSteps)) > 0) and (curved = false)
+        free startSteps
+        free finishSteps
+        set fastWanted to (preferringFast and (profiled = false)) and (steppedEnds = false)
         # A wall whose layers have feet or tops of their own (`the bim layer
         # reach of layer`) is its layer solids in one polyhedron, a shell
         # each, so that a plan or section meets every layer where it
@@ -1164,9 +1325,9 @@ function the bim solid of {bim wall record:wallValue} in {bim model record:model
                     free fastOpenings
                     return @intrinsic("construct", a bim solid record, 0, an empty kernel body, true, profiledWall's shape)
         free fastOpenings
-        set outline to the bim outline of wallValue with footprint wide breadth
-        set profile to the bim profile along outline
-        free outline
+        set steppedOutline to the bim stepped outline of wallValue with footprint wide breadth in modelValue using index
+        set profile to the bim profile along steppedOutline
+        free steppedOutline
         set extruded to the kernel extrusion of profile on (the bim plane at height elevation) along (a cad vector3 with x 0.0, y 0.0 and z wallValue's height)
         free profile
         if extruded's valid = false:
