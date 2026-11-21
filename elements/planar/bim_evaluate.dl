@@ -475,7 +475,7 @@ local function the bim end corners of {bim wall record:wallValue} at finish {boo
 
 # The profile that shapes end `atFinish` of `wallValue` at its L join with
 # `partner` (bim/bim_joins.dl), or straight: only a butt between two
-# straight walls of one layer each takes a profile.
+# straight walls takes a profile.
 local function the bim shaping profile of {bim wall record:wallValue} at finish {boolean:atFinish} beside {bim wall record:partner} finishing {boolean:partnerAtFinish} styled {integer:styleCode} in {bim model record:modelValue}:
     execute:
         if (styleCode != bim butt through join style) and (styleCode != bim butt stopped join style):
@@ -486,15 +486,11 @@ local function the bim shaping profile of {bim wall record:wallValue} at finish 
         set partnerType to the bim wall type index of partner's typeId in modelValue
         if (ownType's valid = false) or (partnerType's valid = false):
             return bim straight join profile
-        set ownLayers to (the item at ownType's position in (modelValue's wallTypes's values))'s layers
-        set partnerLayers to (the item at partnerType's position in (modelValue's wallTypes's values))'s layers
-        if ((the length of (ownLayers's values)) != 1) or ((the length of (partnerLayers's values)) != 1):
-            return bim straight join profile
         return the bim join profile of end wallValue's id at finish atFinish beside partner's id finishing partnerAtFinish in modelValue
 
 # The profile that shapes end `atFinish` of `wallValue` where it ends on
 # `host`'s side (a T join), or straight: the end's own profile, between two
-# straight walls of one layer each. The end is let into the host as the
+# straight walls. The end is let into the host as the
 # profile's stopping half says, and the host is rebated for it.
 local function the bim tee profile of {bim wall record:wallValue} at finish {boolean:atFinish} on {bim wall record:host} in {bim model record:modelValue}:
     execute:
@@ -504,14 +500,50 @@ local function the bim tee profile of {bim wall record:wallValue} at finish {boo
         set hostType to the bim wall type index of host's typeId in modelValue
         if (ownType's valid = false) or (hostType's valid = false):
             return bim straight join profile
-        set ownLayers to (the item at ownType's position in (modelValue's wallTypes's values))'s layers
-        set hostLayers to (the item at hostType's position in (modelValue's wallTypes's values))'s layers
-        if ((the length of (ownLayers's values)) != 1) or ((the length of (hostLayers's values)) != 1):
-            return bim straight join profile
         set ownProfile to the bim own join profile of end wallValue's id at finish atFinish in modelValue
         if ownProfile < 0:
             return bim straight join profile
         return ownProfile
+
+# `share` of a wall's thickness (0 at the face named, 1 at the other)
+# moved to the nearest boundary between two of the wall's layers, so that
+# a profile's steps fall between layers and not through one. `fromExterior`
+# tells which face the share is measured from; the boundaries are taken
+# from the exterior face in both cases (the lower of two equally near), so
+# that both walls of a join choose the same one. A wall of one layer, and
+# a share at a face, stay as they are.
+local function the bim layer share nearest {a 64 bit floating-point number:shareValue} of {bim wall record:wallValue} from exterior {boolean:fromExterior} in {bim model record:modelValue}:
+    execute:
+        if (shareValue <= 0.000001) or (shareValue >= 0.999999):
+            return shareValue
+        set typeFound to the bim wall type index of wallValue's typeId in modelValue
+        if typeFound's valid = false:
+            return shareValue
+        set layerList to (the item at typeFound's position in (modelValue's wallTypes's values))'s layers
+        set layerCount to the length of (layerList's values)
+        if layerCount < 2:
+            return shareValue
+        set wholeThickness to 0.0
+        loop layerCursor from 0 to layerCount:
+            set wholeThickness to wholeThickness + (the item at layerCursor in (layerList's values))'s thickness
+        if wholeThickness <= 0.0:
+            return shareValue
+        set wanted to shareValue
+        if fromExterior = false:
+            set wanted to 1.0 - shareValue
+        set chosenShare to wanted
+        set nearestGap to 2.0
+        set reached to 0.0
+        loop layerCursor from 0 to (layerCount - 1):
+            set reached to reached + (the item at layerCursor in (layerList's values))'s thickness
+            set layerEdge to reached / wholeThickness
+            set edgeGap to the absolute value of (layerEdge - wanted)
+            if edgeGap < (nearestGap - 0.000000001):
+                set nearestGap to edgeGap
+                set chosenShare to layerEdge
+        if fromExterior = false:
+            return 1.0 - chosenShare
+        return chosenShare
 
 # The points of one end of a wall that follows profile `profileCode`
 # against `host`, from its exterior corner to its interior corner, into
@@ -547,7 +579,29 @@ local function append bim profiled end of {bim wall record:wallValue} at finish 
         if towardHost > 0.0:
             set outerSign to -1.0
         set runsThrough to bim join style styleCode runs through
-        set stepList to the bim join profile steps of profileCode running through runsThrough
+        # The profile as the end that runs through follows it, its steps
+        # moved to the layers' boundaries: across this wall's layers and
+        # into the host's for an end that runs through; for an end that
+        # stops the complement of it, which fills the corner exactly.
+        set libraryList to the bim join profile steps of profileCode running through true
+        set stepList to an empty list of a bim join step record
+        set ownFromExterior to outerSign > 0.0
+        set hostFromExterior to nearSign > 0.0
+        set stepCount to the length of libraryList
+        if runsThrough:
+            loop stepCursor from 0 to stepCount:
+                set libraryStep to the item at stepCursor in libraryList
+                append (@intrinsic("construct", a bim join step record, (the bim layer share nearest libraryStep's across of wallValue from exterior ownFromExterior in modelValue), (the bim layer share nearest libraryStep's depth of host from exterior hostFromExterior in modelValue))) to stepList
+        else if stepCount > 0:
+            set firstStep to the item at 0 in libraryList
+            if firstStep's depth < 0.999999:
+                append (@intrinsic("construct", a bim join step record, (the bim layer share nearest (1.0 - firstStep's depth) of wallValue from exterior ownFromExterior in modelValue), 1.0)) to stepList
+            loop stepCursor from 0 to (stepCount - 1):
+                set libraryStep to the item at stepCursor in libraryList
+                set followingStep to the item at (stepCursor + 1) in libraryList
+                append (@intrinsic("construct", a bim join step record, (the bim layer share nearest (1.0 - followingStep's depth) of wallValue from exterior ownFromExterior in modelValue), (the bim layer share nearest (1.0 - libraryStep's across) of host from exterior hostFromExterior in modelValue))) to stepList
+            append (@intrinsic("construct", a bim join step record, 1.0, 0.0)) to stepList
+        free libraryList
         set ownGap to joinGap
         if runsThrough:
             set ownGap to 0.0
@@ -556,19 +610,21 @@ local function append bim profiled end of {bim wall record:wallValue} at finish 
         set acrossFrom to 0.0
         loop stepCursor from 0 to the length of stepList:
             set stepValue to the item at stepCursor in stepList
-            set faceOffset to nearSign * ((hostHalf * (1.0 - (2.0 * stepValue's depth))) + ownGap)
-            set faceOrigin to the bim point host's start shifted faceOffset along hostNormal
-            loop sideCursor from 0 to 2:
-                set acrossNow to acrossFrom
-                if sideCursor = 1:
-                    set acrossNow to stepValue's across
-                set sideOrigin to the bim point endPoint shifted ((outerSign * half) * (1.0 - (2.0 * acrossNow))) along normal
-                set sideCrossing to the bim crossing of sideOrigin toward direction with faceOrigin toward hostDirection
-                if sideCrossing's valid:
-                    append sideCrossing's point to crossedPoints
-                else:
-                    set allCrossed to false
-            set acrossFrom to stepValue's across
+            # A step no layer boundary leaves any width is left out.
+            if (stepValue's across - acrossFrom) > 0.000001:
+                set faceOffset to nearSign * ((hostHalf * (1.0 - (2.0 * stepValue's depth))) + ownGap)
+                set faceOrigin to the bim point host's start shifted faceOffset along hostNormal
+                loop sideCursor from 0 to 2:
+                    set acrossNow to acrossFrom
+                    if sideCursor = 1:
+                        set acrossNow to stepValue's across
+                    set sideOrigin to the bim point endPoint shifted ((outerSign * half) * (1.0 - (2.0 * acrossNow))) along normal
+                    set sideCrossing to the bim crossing of sideOrigin toward direction with faceOrigin toward hostDirection
+                    if sideCrossing's valid:
+                        append sideCrossing's point to crossedPoints
+                    else:
+                        set allCrossed to false
+                set acrossFrom to stepValue's across
         free stepList
         if allCrossed:
             if outerSign > 0.0:
