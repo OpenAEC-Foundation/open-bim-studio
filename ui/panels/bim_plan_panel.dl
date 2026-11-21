@@ -297,6 +297,63 @@ function draw bim hatch of {a pointer to a list:piece} in {bim hatch band record
         free segments
         free corners
 
+# The parts of the cut edge from `edgeFrom` to `edgeTo` that lie outside
+# every wall's cut face in `viewValue` (a section: a wall takes precedence
+# over the floor or roof that runs into it), as point pairs into `pieces`.
+local function append bim parts of edge from {cad vector2:edgeFrom} to {cad vector2:edgeTo} clear of the walls of {bim view record:viewValue} in {bim model record:modelValue} into {a pointer to a list:pieces}:
+    execute:
+        set spanX to edgeTo's x - edgeFrom's x
+        set spanY to edgeTo's y - edgeFrom's y
+        # Where the edge crosses a wall's outline, as shares of its length,
+        # ascending.
+        set crossingShares to an empty list of a 64 bit floating-point number
+        append 0.0 to crossingShares
+        loop wallSourceCursor from 0 to the length of (viewValue's sources's values):
+            set wallSource to the item at wallSourceCursor in (viewValue's sources's values)
+            if (the bim category of element wallSource's id in modelValue) = bim wall category:
+                loop faceCursor from 0 to the length of (wallSource's polygons's values):
+                    set faceRing to (the item at faceCursor in (wallSource's polygons's values))'s points's values
+                    set faceCount to the length of faceRing
+                    loop faceCorner from 0 to faceCount:
+                        set faceFrom to the item at faceCorner in faceRing
+                        set faceTo to the item at (the remainder of (faceCorner + 1) divided by faceCount) in faceRing
+                        set faceX to faceTo's x - faceFrom's x
+                        set faceY to faceTo's y - faceFrom's y
+                        set denominator to (spanX * faceY) - (spanY * faceX)
+                        if (the absolute value of denominator) > 0.000000000001:
+                            set edgeShare to (((faceFrom's x - edgeFrom's x) * faceY) - ((faceFrom's y - edgeFrom's y) * faceX)) / denominator
+                            set faceShare to (((faceFrom's x - edgeFrom's x) * spanY) - ((faceFrom's y - edgeFrom's y) * spanX)) / denominator
+                            if (((edgeShare > 0.000001) and (edgeShare < 0.999999)) and (faceShare >= 0.0)) and (faceShare <= 1.0):
+                                set slot to the length of crossingShares
+                                set seeking to true
+                                loop shareCursor from 0 to the length of crossingShares:
+                                    if seeking and ((the item at shareCursor in crossingShares) > edgeShare):
+                                        set slot to shareCursor
+                                        set seeking to false
+                                if slot = (the length of crossingShares):
+                                    append edgeShare to crossingShares
+                                else:
+                                    insert edgeShare into crossingShares at index slot
+        append 1.0 to crossingShares
+        loop shareCursor from 0 to ((the length of crossingShares) - 1):
+            set lowShare to the item at shareCursor in crossingShares
+            set highShare to the item at (shareCursor + 1) in crossingShares
+            if (highShare - lowShare) > 0.000001:
+                set middleShare to (lowShare + highShare) * 0.5
+                set middleSpot to a cad vector2 with x (edgeFrom's x + (spanX * middleShare)) and y (edgeFrom's y + (spanY * middleShare))
+                set insideWall to false
+                loop wallSourceCursor from 0 to the length of (viewValue's sources's values):
+                    set wallSource to the item at wallSourceCursor in (viewValue's sources's values)
+                    if (insideWall = false) and ((the bim category of element wallSource's id in modelValue) = bim wall category):
+                        loop faceCursor from 0 to the length of (wallSource's polygons's values):
+                            if insideWall = false:
+                                if bim flat point middleSpot lies in ((the item at faceCursor in (wallSource's polygons's values))'s points's values):
+                                    set insideWall to true
+                if insideWall = false:
+                    append (a cad vector2 with x (edgeFrom's x + (spanX * lowShare)) and y (edgeFrom's y + (spanY * lowShare))) to pieces
+                    append (a cad vector2 with x (edgeFrom's x + (spanX * highShare)) and y (edgeFrom's y + (spanY * highShare))) to pieces
+        free crossingShares
+
 # Cut faces as a drawing shows them, following `viewRules`: each visible
 # element's cut divided into its layers, filled and hatched by material, and
 # outlined; halftone categories drawn faint. What is shown, halftone, and
@@ -345,7 +402,18 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
         set ownOutlines to an empty list of a cad vector2
         set ownColours to an empty list of a 64 bit integer
         set ownWidths to an empty list of a 64 bit floating-point number
-        loop sourceCursor from 0 to the length of (viewValue's sources's values):
+        # In a section the walls are drawn last: a wall takes precedence
+        # over a floor or roof that runs into it, its hatch over theirs.
+        set drawOrder to an empty list of an integer
+        loop orderRound from 0 to 2:
+            loop sourceCursor from 0 to the length of (viewValue's sources's values):
+                set orderedWall to (the bim category of element (the item at sourceCursor in (viewValue's sources's values))'s id in modelValue) = bim wall category
+                if asSection = false:
+                    set orderedWall to false
+                if orderedWall = (orderRound = 1):
+                    append sourceCursor to drawOrder
+        loop orderCursor from 0 to the length of drawOrder:
+            set sourceCursor to the item at orderCursor in drawOrder
             set source to the item at sourceCursor in (viewValue's sources's values)
             set elementCategory to the bim category of element source's id in modelValue
             set shown to true
@@ -393,6 +461,9 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
                                 loop seamCursor from 0 to the length of seamPieces:
                                     append (the bim pixel of (the item at seamCursor in seamPieces) through transform) to seamLines
                                 free seamPieces
+                        else if asSection:
+                            # What no wall's cut face covers.
+                            append bim parts of edge from cornerHere to cornerNext clear of the walls of viewValue in modelValue into pieces
                         else:
                             append cornerHere to pieces
                             append cornerNext to pieces
@@ -440,6 +511,7 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
         free apartPairs
         free seamPairs
         free seamLines
+        free drawOrder
 
 # Records the strokes between the pixel pairs `pairs`, each pair in its
 # colour of `colourList` (packed, `the bim pen colour`) and its width of
