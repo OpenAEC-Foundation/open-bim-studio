@@ -329,6 +329,104 @@ function draw bim hatch of {a pointer to a list:piece} in {bim hatch band record
         free segments
         free corners
 
+# The part of the convex polygon `corners` (canvas points) where `heights`
+# (one value a corner) is at least `limit`, or at most it when `below`: the
+# polygon and its values are replaced by the part kept.
+local function keep bim polygon {a pointer to a list:corners} valued {a pointer to a list:heights} beside {a 64 bit floating-point number:limit} below {boolean:below}:
+    execute:
+        set keptCorners to an empty list of a cad vector2
+        set keptHeights to an empty list of a 64 bit floating-point number
+        set cornerCount to the length of corners
+        loop cornerCursor from 0 to cornerCount:
+            set fromCorner to the item at cornerCursor in corners
+            set toCorner to the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in corners
+            set fromHeight to (the item at cornerCursor in heights) - limit
+            set toHeight to (the item at (the remainder of (cornerCursor + 1) divided by cornerCount) in heights) - limit
+            if below:
+                set fromHeight to 0.0 - fromHeight
+                set toHeight to 0.0 - toHeight
+            if fromHeight >= 0.0:
+                append fromCorner to keptCorners
+                append (the item at cornerCursor in heights) to keptHeights
+            if ((fromHeight > 0.0) and (toHeight < 0.0)) or ((fromHeight < 0.0) and (toHeight > 0.0)):
+                set crossShare to fromHeight / (fromHeight - toHeight)
+                append (a cad vector2 with x (fromCorner's x + ((toCorner's x - fromCorner's x) * crossShare)) and y (fromCorner's y + ((toCorner's y - fromCorner's y) * crossShare))) to keptCorners
+                append limit to keptHeights
+        clear corners
+        clear heights
+        loop cornerCursor from 0 to the length of keptCorners:
+            append (the item at cornerCursor in keptCorners) to corners
+            append (the item at cornerCursor in keptHeights) to heights
+        free keptCorners
+        free keptHeights
+
+# The fill of one layer band over a cut face of many corners (a wall with a
+# stepped end or a rebate in its side): the whole face in triangles, each
+# cut to the band, so that a band the face's steps part in two is filled
+# as both parts. `draw bim hatch of` fills the band's own ring, which for
+# such a face can close on itself and leave the fill out.
+function record bim band fill of face {a pointer to a list:faceRing} in {bim hatch band record:band} through {bim drawing transform record:transform} faint {boolean:isFaint} plain {boolean:isPlain} under {integer:standardCode} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        set pattern to the bim hatch pattern of material band's material under standardCode
+        if isPlain:
+            set pattern to the bim plain form of hatch pattern
+        set faceTriangles to an empty list of a cad vector2
+        append bim fill of ring faceRing through transform to faceTriangles
+        # A canvas point's place across the band: the drawing transform is
+        # affine, so its inverse is taken from three points.
+        set originPixel to the bim pixel of (a cad vector2 with x 0.0 and y 0.0) through transform
+        set rightPixel to the bim pixel of (a cad vector2 with x 1.0 and y 0.0) through transform
+        set upPixel to the bim pixel of (a cad vector2 with x 0.0 and y 1.0) through transform
+        set rightX to rightPixel's x - originPixel's x
+        set rightY to rightPixel's y - originPixel's y
+        set upX to upPixel's x - originPixel's x
+        set upY to upPixel's y - originPixel's y
+        set spread to (rightX * upY) - (rightY * upX)
+        set bandFill to an empty list of a cad vector2
+        if (the absolute value of spread) > 0.000000000001:
+            loop triangleCursor from 0 to ((the length of faceTriangles) / 3):
+                set triangleCorners to an empty list of a cad vector2
+                loop cornerCursor from 0 to 3:
+                    append (the item at ((triangleCursor * 3) + cornerCursor) in faceTriangles) to triangleCorners
+                loop limitCursor from 0 to 4:
+                    # The limits: the band's two sides, then its wedge's.
+                    set limitNormal to band's normal
+                    set limitValue to band's low
+                    set limitBelow to false
+                    if limitCursor = 1:
+                        set limitValue to band's high
+                        set limitBelow to true
+                    if limitCursor = 2:
+                        set limitNormal to band's firstNormal
+                        set limitValue to band's firstLimit
+                    if limitCursor = 3:
+                        set limitNormal to band's secondNormal
+                        set limitValue to band's secondLimit
+                    set limited to ((limitNormal's x * limitNormal's x) + (limitNormal's y * limitNormal's y)) > 0.000000000001
+                    if (limitValue > (0.0 - (1.0 / 0.0))) = false:
+                        set limited to false
+                    if (limitValue < (1.0 / 0.0)) = false:
+                        set limited to false
+                    if limited and ((the length of triangleCorners) >= 3):
+                        set cornerHeights to an empty list of a 64 bit floating-point number
+                        loop cornerCursor from 0 to the length of triangleCorners:
+                            set canvasSpot to the item at cornerCursor in triangleCorners
+                            set offX to canvasSpot's x - originPixel's x
+                            set offY to canvasSpot's y - originPixel's y
+                            set modelX to ((offX * upY) - (offY * upX)) / spread
+                            set modelY to ((rightX * offY) - (rightY * offX)) / spread
+                            append ((modelX * limitNormal's x) + (modelY * limitNormal's y)) to cornerHeights
+                        keep bim polygon triangleCorners valued cornerHeights beside limitValue below limitBelow
+                        free cornerHeights
+                loop cornerCursor from 1 to ((the length of triangleCorners) - 1):
+                    append (the item at 0 in triangleCorners) to bandFill
+                    append (the item at cornerCursor in triangleCorners) to bandFill
+                    append (the item at (cornerCursor + 1) in triangleCorners) to bandFill
+                free triangleCorners
+        record bim triangles bandFill coloured (the bim halftone of channel pattern's fillRed when isFaint), (the bim halftone of channel pattern's fillGreen when isFaint) and (the bim halftone of channel pattern's fillBlue when isFaint) on canvas
+        free bandFill
+        free faceTriangles
+
 # The parts of the cut edge from `edgeFrom` to `edgeTo` that lie outside
 # every wall's cut face in `viewValue` (a section: a wall takes precedence
 # over the floor or roof that runs into it), as point pairs into `pieces`.
@@ -475,6 +573,10 @@ function draw bim hatched cut faces of {bim view record:viewValue} for {bim edit
                         set band to the item at bandCursor in (bands's values)
                         set piece to the bim ring ring within band
                         if (((the length of piece) >= 3) and (phaseLook != bim phase demolished look)) and (shownDisplay != bim wireframe display):
+                            # A face of many corners (stepped ends, a
+                            # rebate): its bands filled from its triangles.
+                            if (the length of ring) > 4:
+                                record bim band fill of face ring in band through transform faint isFaint plain plainCuts under drawingStandard on canvas
                             draw bim hatch of piece in band through transform faint isFaint plain plainCuts along hatchAlong under drawingStandard on canvas
                         free piece
                     set count to the length of ring
