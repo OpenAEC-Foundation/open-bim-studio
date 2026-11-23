@@ -57,10 +57,13 @@ class:
         outlined as a boolean
         finishes as the type of (a cad topology list of a string)
         faceFinishes as the type of (a cad topology list of an integer)
+        # Whether the view's plane, where it passes through the mesh, draws
+        # the outline of what it cuts (`append bim plane outline of`).
+        cutOutlined as a boolean
 
 function a bim projection mesh of {a 64 bit integer:elementId} shaped {fast mesh record:meshShape} outlined {boolean:drawsEdges}:
     execute:
-        return @intrinsic("construct", a bim projection mesh record, elementId, meshShape, drawsEdges, a cad topology list of a string, a cad topology list of an integer)
+        return @intrinsic("construct", a bim projection mesh record, elementId, meshShape, drawsEdges, a cad topology list of a string, a cad topology list of an integer, false)
 
 # The same mesh with every face showing `finishName`.
 function a bim projection mesh of {a 64 bit integer:elementId} shaped {fast mesh record:meshShape} outlined {boolean:drawsEdges} finished {a string:finishName}:
@@ -907,6 +910,47 @@ local function append bim drawn edges of {bim projection mesh record:meshEntry} 
         free faceNormals
         free sideKeys
 
+# Where the view's plane (depth 0) passes through a mesh, the lines along
+# which it cuts the mesh's faces: the outline of what the plane cuts of a
+# stair's treads or a railing's posts, whose faces toward the viewer lie
+# before the plane and draw nothing. Only for a mesh that asks for it
+# (`cutOutlined`); an element among the cuts of `cutView` (a wall, a plate)
+# has its cut drawn from there and gets none here.
+local function append bim plane outline of {bim projection mesh record:meshEntry} numbered {integer:meshNumber} at {a pointer to a list:viewCorners} offset {integer:cornerOffset} behind {bim view record:cutView} into {a pointer to a list:candidateEdges}:
+    execute:
+        set cornerCount to the length of (meshEntry's shape's positions's values)
+        if (cornerCount = 0) or (meshEntry's cutOutlined = false):
+            return nothing
+        set leastDepth to 1e300
+        set mostDepth to -1e300
+        loop cornerCursor from 0 to cornerCount:
+            set cornerDepth to (the item at (cornerOffset + cornerCursor) in viewCorners)'s z
+            set leastDepth to the minimum of leastDepth and cornerDepth
+            set mostDepth to the maximum of mostDepth and cornerDepth
+        if (leastDepth >= 0.0) or (mostDepth <= 0.0):
+            return nothing
+        loop sourceCursor from 0 to the length of (cutView's sources's values):
+            if (the item at sourceCursor in (cutView's sources's values))'s id = meshEntry's elementId:
+                return nothing
+        set indices to meshEntry's shape's triangles's values
+        set triangleCount to (the length of indices) / 3
+        set flatNormal to a cad vector3 with x 0.0, y 0.0 and z 0.0
+        set crossings to an empty list of a cad vector3
+        loop triangleCursor from 0 to triangleCount:
+            clear crossings
+            loop sideCursor from 0 to 3:
+                set nextSide to sideCursor + 1
+                if nextSide = 3:
+                    set nextSide to 0
+                set hereCorner to the item at (cornerOffset + (the item at ((triangleCursor * 3) + sideCursor) in indices)) in viewCorners
+                set thereCorner to the item at (cornerOffset + (the item at ((triangleCursor * 3) + nextSide) in indices)) in viewCorners
+                if ((hereCorner's z < 0.0) and (thereCorner's z >= 0.0)) or ((hereCorner's z >= 0.0) and (thereCorner's z < 0.0)):
+                    set fraction to hereCorner's z / (hereCorner's z - thereCorner's z)
+                    append (a cad vector3 with x (hereCorner's x + ((thereCorner's x - hereCorner's x) * fraction)), y (hereCorner's y + ((thereCorner's y - hereCorner's y) * fraction)) and z 0.0) to crossings
+            if (the length of crossings) = 2:
+                append (@intrinsic("construct", a bim projection stroke record, meshEntry's elementId, the item at 0 in crossings, the item at 1 in crossings, false, meshNumber, the string form of "", flatNormal, flatNormal)) to candidateEdges
+        free crossings
+
 # The turn the flush hash gives every line before it keys its angle, so
 # that the angles 0 and pi, where a line's key changes ends, fall on no
 # usual direction (any odd angle will do), and half a turn.
@@ -1193,6 +1237,7 @@ local function the bim projected edges of {a pointer to a list:meshes} on {cad p
             if (projectionMesh's outlined) and givesEdges:
                 set cornerOffset to the item at meshCursor in cornerOffsets
                 append bim drawn edges of projectionMesh numbered meshCursor at viewCorners offset cornerOffset counted (the length of (projectionMesh's shape's positions's values)) on viewPlane deep along depthAxis into candidateEdges
+                append bim plane outline of projectionMesh numbered meshCursor at viewCorners offset cornerOffset behind cutView into candidateEdges
         set flushKeys to the bim flush keys of candidateEdges around hashOrigin
         set edgeNumber to 0 as a 64 bit integer
         set pieceStarts to an empty list of a 64 bit floating-point number
