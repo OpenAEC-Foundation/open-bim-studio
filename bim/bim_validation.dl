@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: MPL-2.0
+# The model-wide checks a reader runs once it has filled a model's records:
+# what single records cannot show. A reader that accepts an id, a reference or
+# a connection member without checking it as it reads calls these once the
+# whole model is in place, so every reader -- the native `.bim` text parser and
+# the IfcX importer alike -- applies the same domain rules instead of carrying
+# its own copy of them.
+#
+# Owned by the `bim` module (`docs/OWNERS.md`): these are model invariants, not
+# a property of one file format.
+import bim/bim_index.dl
+
+local function the bim dimension feature {integer:featureKind} fits {a 64 bit integer:elementId} in {bim model record:modelValue}:
+    execute:
+        if (the bim wall index of elementId in modelValue)'s valid:
+            set ownFeature to (featureKind >= bim wall start feature) and (featureKind <= bim wall interior feature)
+            set masonryEnd to (featureKind = (bim masonry near end feature)) or (featureKind = (bim masonry far end feature))
+            return (ownFeature or masonryEnd) or (featureKind >= (bim masonry line feature))
+        if (the bim opening index of elementId in modelValue)'s valid:
+            set edge to (featureKind = bim opening left feature) or (featureKind = bim opening right feature)
+            return edge or ((featureKind = bim opening sill feature) or (featureKind = bim opening head feature))
+        if (the bim grid index of elementId in modelValue)'s valid:
+            return featureKind = bim grid line feature
+        if (the bim level index of elementId in modelValue)'s valid:
+            return featureKind = bim level height feature
+        if (the bim slab index of elementId in modelValue)'s valid:
+            return featureKind = bim plate top feature
+        return false
+
+# Checks what single lines cannot: unique ids below `next`, references to
+# existing elements, and walls with layers. Empty when the model is sound.
+function the bim reference fault of {bim model record:modelValue}:
+    execute:
+        set ids to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (modelValue's connectionTypes's values):
+            set spec to the item at cursor in (modelValue's connectionTypes's values)
+            append spec's id to ids
+            set issue to the connection issue of spec
+            if issue != (the string form of ""):
+                free ids
+                return issue
+            if (spec's category < 1) or (spec's style < 2):
+                free ids
+                return the string form of "Connection types require a steel recipe in local coordinates"
+            loop memberCursor from 0 to the length of (spec's members's values):
+                if (the item at memberCursor in (spec's members's values))'s elementId != ((memberCursor + 1) as a 64 bit integer):
+                    free ids
+                    return the string form of "Connection type member slots are out of order"
+        loop cursor from 0 to the length of (modelValue's connections's values):
+            set spec to the item at cursor in (modelValue's connections's values)
+            append spec's id to ids
+            set issue to the connection issue of spec
+            if issue != (the string form of ""):
+                free ids
+                return issue
+            if (the bim level index of spec's levelId in modelValue)'s valid = false:
+                free ids
+                return the string form of "connection refers to a missing level"
+            loop memberCursor from 0 to the length of (spec's members's values):
+                if (the bim linear index of (the item at memberCursor in (spec's members's values))'s elementId in modelValue)'s valid = false:
+                    free ids
+                    return the string form of "connection refers to a missing member"
+                set memberValue to the item at memberCursor in (spec's members's values)
+                loop previous from 0 to cursor:
+                    set otherNode to the item at previous in (modelValue's connections's values)
+                    loop otherCursor from 0 to the length of (otherNode's members's values):
+                        set otherMember to the item at otherCursor in (otherNode's members's values)
+                        if ((otherMember's elementId = memberValue's elementId) and (otherMember's end = memberValue's end)) and (memberValue's end != 2):
+                            free ids
+                            return the string form of "a member end belongs to multiple connection nodes"
+        loop cursor from 0 to the length of (modelValue's reinforcements's values):
+            set spec to the item at cursor in (modelValue's reinforcements's values)
+            append spec's id to ids
+            if (the bim level index of spec's levelId in modelValue)'s valid = false:
+                free ids
+                return the string form of "reinforcement refers to a missing level"
+            if spec's hostId != the bim refused id:
+                set hostExists to (the bim linear index of spec's hostId in modelValue)'s valid
+                if (spec's kind = 2) or (spec's kind = 5):
+                    set hostExists to ((the bim wall index of spec's hostId in modelValue)'s valid) or ((the bim slab index of spec's hostId in modelValue)'s valid)
+                if hostExists = false:
+                    free ids
+                    return the string form of "reinforcement refers to a missing host"
+        loop cursor from 0 to the length of (modelValue's levels's values):
+            append (the item at cursor in (modelValue's levels's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's wallTypes's values):
+            set wallType to the item at cursor in (modelValue's wallTypes's values)
+            append wallType's id to ids
+            if (the length of (wallType's layers's values)) = 0:
+                free ids
+                return (the string form of "wall type ") + ((the string form of wallType's id) + (the string form of " has no layers"))
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            append wallValue's id to ids
+            if ((the bim wall type index of wallValue's typeId in modelValue)'s valid = false) or ((the bim level index of wallValue's levelId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "wall ") + ((the string form of wallValue's id) + (the string form of " refers to a missing type or level"))
+        loop cursor from 0 to the length of (modelValue's openingTypes's values):
+            append (the item at cursor in (modelValue's openingTypes's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's openings's values):
+            set openingValue to the item at cursor in (modelValue's openings's values)
+            append openingValue's id to ids
+            if ((the bim opening type index of openingValue's typeId in modelValue)'s valid = false) or (((the bim wall index of openingValue's hostId in modelValue)'s valid = false) and ((the bim curtain index of openingValue's hostId in modelValue)'s valid = false)):
+                free ids
+                return (the string form of "opening ") + ((the string form of openingValue's id) + (the string form of " refers to a missing type or host"))
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set dimension to the item at cursor in (modelValue's dimensions's values)
+            append dimension's id to ids
+            set firstFits to the bim dimension feature (dimension's first's feature) fits (dimension's first's elementId) in modelValue
+            set secondFits to the bim dimension feature (dimension's second's feature) fits (dimension's second's elementId) in modelValue
+            if (firstFits and secondFits) = false:
+                free ids
+                return (the string form of "dimension ") + ((the string form of dimension's id) + (the string form of " refers to a missing element or feature"))
+        loop cursor from 0 to the length of (modelValue's slabs's values):
+            set slabValue to the item at cursor in (modelValue's slabs's values)
+            append slabValue's id to ids
+            if (bim plate openings of slabValue are valid in modelValue) = false:
+                free ids
+                return the string form of "slab has invalid opening settings or geometry"
+            if (the bim level index of slabValue's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "slab ") + ((the string form of slabValue's id) + (the string form of " refers to a missing level"))
+        loop cursor from 0 to the length of (modelValue's grids's values):
+            append (the item at cursor in (modelValue's grids's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's sketches's values):
+            set sketch to the item at cursor in (modelValue's sketches's values)
+            append sketch's id to ids
+            if (the bim level index of sketch's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "sketch ") + ((the string form of sketch's id) + (the string form of " refers to a missing level"))
+        loop cursor from 0 to the length of (modelValue's components's values):
+            append (the item at cursor in (modelValue's components's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's instances's values):
+            set placement to the item at cursor in (modelValue's instances's values)
+            append placement's id to ids
+            if ((the bim level index of placement's levelId in modelValue)'s valid = false) or ((the bim component index of placement's componentId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "instance ") + ((the string form of placement's id) + (the string form of " refers to a missing level or component"))
+        loop cursor from 0 to the length of (modelValue's linearTypes's values):
+            append (the item at cursor in (modelValue's linearTypes's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's linears's values):
+            set linearValue to the item at cursor in (modelValue's linears's values)
+            append linearValue's id to ids
+            if ((the bim level index of linearValue's levelId in modelValue)'s valid = false) or ((the bim linear type index of linearValue's typeId in modelValue)'s valid = false):
+                free ids
+                return (the string form of "linear ") + ((the string form of linearValue's id) + (the string form of " refers to a missing level or type"))
+        loop cursor from 0 to the length of (modelValue's pileTipLevels's values):
+            append (the item at cursor in (modelValue's pileTipLevels's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's spaceObjects's values):
+            set spaceValue to the item at cursor in (modelValue's spaceObjects's values)
+            append spaceValue's id to ids
+            if (the bim level index of spaceValue's levelId in modelValue)'s valid = false:
+                free ids
+                return the string form of "a space refers to a missing level"
+        loop cursor from 0 to the length of (modelValue's tags's values):
+            append (the item at cursor in (modelValue's tags's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's views's values):
+            append (the item at cursor in (modelValue's views's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's sheets's values):
+            append (the item at cursor in (modelValue's sheets's values))'s id to ids
+        # A sheetview's pages are sheets, each in one book at most, and its
+        # contents page is one of them.
+        set pagesSeen to an empty list of a 64 bit integer
+        loop cursor from 0 to the length of (modelValue's sheetviews's values):
+            set bookValue to the item at cursor in (modelValue's sheetviews's values)
+            append bookValue's id to ids
+            set contentsFound to (bookValue's contentsId = the bim refused id)
+            loop pageCursor from 0 to the length of (bookValue's pages's values):
+                set pageId to the item at pageCursor in (bookValue's pages's values)
+                append pageId to pagesSeen
+                if pageId = bookValue's contentsId:
+                    set contentsFound to true
+                if (the bim sheet index of pageId in modelValue)'s valid = false:
+                    free ids
+                    free pagesSeen
+                    return (the string form of "sheetview ") + ((the string form of bookValue's id) + (the string form of " has a page that is no sheet"))
+            if contentsFound = false:
+                free ids
+                free pagesSeen
+                return (the string form of "sheetview ") + ((the string form of bookValue's id) + (the string form of " lists its contents on a sheet outside it"))
+        set pagesTotal to the length of pagesSeen
+        sort and deduplicate bim ids pagesSeen
+        set pagesShared to (the length of pagesSeen) != pagesTotal
+        free pagesSeen
+        if pagesShared:
+            free ids
+            return the string form of "a sheet is a page of two sheetviews"
+        loop cursor from 0 to the length of (modelValue's stairs's values):
+            append (the item at cursor in (modelValue's stairs's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's railings's values):
+            append (the item at cursor in (modelValue's railings's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's curtains's values):
+            append (the item at cursor in (modelValue's curtains's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's systems's values):
+            append (the item at cursor in (modelValue's systems's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's drawingTypes's values):
+            append (the item at cursor in (modelValue's drawingTypes's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's phases's values):
+            append (the item at cursor in (modelValue's phases's values))'s id to ids
+        loop cursor from 0 to the length of (modelValue's meshes's values):
+            set meshValue to the item at cursor in (modelValue's meshes's values)
+            append meshValue's id to ids
+            if (the bim level index of meshValue's levelId in modelValue)'s valid = false:
+                free ids
+                return (the string form of "mesh ") + ((the string form of meshValue's id) + (the string form of " refers to a missing level"))
+        set total to the length of ids
+        sort and deduplicate bim ids ids
+        set problem to the string form of ""
+        if (the length of ids) != total:
+            set problem to the string form of "an id is used twice"
+        else if (the length of ids) > 0:
+            if ((the item at 0 in ids) <= (0 as a 64 bit integer)) or ((the item at ((the length of ids) - 1) in ids) >= modelValue's nextId):
+                set problem to the string form of "an id is not between 1 and next"
+        free ids
+        return problem
