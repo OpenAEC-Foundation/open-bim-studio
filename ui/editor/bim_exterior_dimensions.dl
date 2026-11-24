@@ -10,8 +10,10 @@
 # wall face, a wall end, an opening edge), so the chains follow the model
 # when a wall or an opening moves. The chains lie 8, 14 and 20 mm off the
 # outer face on paper, whatever the scale of the view that draws them.
-# A storey without outer walls (a structural plan of columns and beams)
-# gets chains between the grids instead (`add bim grid dimensions`).
+# Building systems that stand as outer walls get chains of their own
+# (`add bim system exterior dimensions`). A storey without outer walls or
+# systems (a structural plan of columns and beams) gets chains between the
+# grids instead (`add bim grid dimensions`).
 import ui/editor/bim_editor_core.dl
 
 # How far outside the outer face the three chains lie, in millimetres on
@@ -97,6 +99,10 @@ local function bim plans measure the walls of level {a 64 bit integer:levelId} i
                 set wallFound to the bim wall index of hostId in modelValue
                 if wallFound's valid:
                     if (the item at wallFound's position in (modelValue's walls's values))'s levelId = levelId:
+                        return true
+                set systemFound to the bim curtain index of hostId in modelValue
+                if systemFound's valid:
+                    if (the item at systemFound's position in (modelValue's curtains's values))'s levelId = levelId:
                         return true
         return false
 
@@ -352,6 +358,102 @@ local function add bim exterior chains of facade {a pointer to a list:facadeWall
         free wallStops
         return made
 
+# Whether building system `systemValue` stands as a wall: upright on a
+# straight line of half a metre or more, not a layer of another system and
+# not standing in a wall's opening.
+local function bim system {bim curtain record:systemValue} stands as a wall in {bim model record:modelValue}:
+    execute:
+        if (the absolute value of systemValue's bulge) > 1e-9:
+            return false
+        if (the cad distance from systemValue's start to systemValue's finish) < 0.5:
+            return false
+        if (the bim setting (bim layer host setting) of systemValue's id in modelValue)'s found:
+            return false
+        if (the bim system orientation of systemValue's id in modelValue) != bim vertical orientation:
+            return false
+        return (the bim system systemValue hosted in its opening in modelValue)'s valid = false
+
+# Whether the ray from `origin` along `heading` meets the line of building
+# system `systemValue` within 100 m.
+local function the bim ray from {cad vector2:origin} heading {cad vector2:heading} meets system {bim curtain record:systemValue}:
+    execute:
+        set run to the cad difference of systemValue's finish and systemValue's start
+        set denominator to (heading's x * run's y) - (heading's y * run's x)
+        if (the absolute value of denominator) < 1e-12:
+            return false
+        set offsetX to systemValue's start's x - origin's x
+        set offsetY to systemValue's start's y - origin's y
+        set rayReach to ((offsetX * run's y) - (offsetY * run's x)) / denominator
+        set segmentReach to ((offsetX * heading's y) - (offsetY * heading's x)) / denominator
+        return ((rayReach > 0.0) and (rayReach < 100.0)) and ((segmentReach >= 0.0) and (segmentReach <= 1.0))
+
+# The chains along the building systems that stand as outer walls on level
+# `levelId` (a timber frame house has no wall): beside each one nothing
+# stands beyond, from end to end of its line,
+# - the openings: every window and door edge in it, 8 mm on paper off it;
+# - the whole: its two ends, 20 mm off.
+# The chains stand off the system's line by 100 mm, about half a frame
+# wall. The number of dimensions made.
+function add bim system exterior dimensions on level {a 64 bit integer:levelId} to {a pointer to a bim model record:target}:
+    execute:
+        set modelValue to @intrinsic("dereference", target)
+        set index to the bim join index of modelValue
+        set storeySystems to an empty list of a bim curtain record
+        set centreX to 0.0
+        set centreY to 0.0
+        loop cursor from 0 to the length of (modelValue's curtains's values):
+            set systemValue to the item at cursor in (modelValue's curtains's values)
+            if systemValue's levelId = levelId:
+                if bim system systemValue stands as a wall in modelValue:
+                    append systemValue to storeySystems
+                    set centreX to centreX + ((systemValue's start's x + systemValue's finish's x) * 0.5)
+                    set centreY to centreY + ((systemValue's start's y + systemValue's finish's y) * 0.5)
+        set systemCount to the length of storeySystems
+        if systemCount = 0:
+            free storeySystems
+            return 0
+        set centre to a cad vector2 with x (centreX / (systemCount as a 64 bit floating-point number)) and y (centreY / (systemCount as a 64 bit floating-point number))
+        set total to 0
+        loop systemCursor from 0 to systemCount:
+            set outerSystem to the item at systemCursor in storeySystems
+            set run to the cad difference of outerSystem's finish and outerSystem's start
+            set span to the square root of ((run's x * run's x) + (run's y * run's y))
+            set lineDir to a cad vector2 with x (run's x / span) and y (run's y / span)
+            set outwardDir to a cad vector2 with x (0.0 - lineDir's y) and y lineDir's x
+            set middle to a cad vector2 with x ((outerSystem's start's x + outerSystem's finish's x) * 0.5) and y ((outerSystem's start's y + outerSystem's finish's y) * 0.5)
+            if (the bim dot of outwardDir and (the cad difference of middle and centre)) < 0.0:
+                set outwardDir to a cad vector2 with x (0.0 - outwardDir's x) and y (0.0 - outwardDir's y)
+            set probe to the cad sum of middle and (outwardDir scaled by 0.2)
+            set covered to false
+            loop otherCursor from 0 to systemCount:
+                if otherCursor != systemCursor:
+                    if the bim ray from probe heading outwardDir meets system (the item at otherCursor in storeySystems):
+                        set covered to true
+            if covered = false:
+                set alongDir to the bim facade direction of outwardDir
+                set origin to outerSystem's start
+                set firstStop to a bim chain stop of outerSystem's id feature (bim wall start feature) at (the bim station of outerSystem's id feature (bim wall start feature) from origin along alongDir in modelValue using index)
+                set lastStop to a bim chain stop of outerSystem's id feature (bim wall finish feature) at (the bim station of outerSystem's id feature (bim wall finish feature) from origin along alongDir in modelValue using index)
+                set openingStops to an empty list of a bim chain stop record
+                loop cursor from 0 to the length of (modelValue's openings's values):
+                    set openingValue to the item at cursor in (modelValue's openings's values)
+                    if openingValue's hostId = outerSystem's id:
+                        append (a bim chain stop of openingValue's id feature (bim opening left feature) at (the bim station of openingValue's id feature (bim opening left feature) from origin along alongDir in modelValue using index)) to openingStops
+                        append (a bim chain stop of openingValue's id feature (bim opening right feature) at (the bim station of openingValue's id feature (bim opening right feature) from origin along alongDir in modelValue using index)) to openingStops
+                set faceOrigin to the cad sum of origin and (outwardDir scaled by 0.1)
+                if (the length of openingStops) > 0:
+                    append firstStop to openingStops
+                    append lastStop to openingStops
+                    set total to total + (add bim chain openingStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 0) to target)
+                set wholeStops to an empty list of a bim chain stop record
+                append firstStop to wholeStops
+                append lastStop to wholeStops
+                set total to total + (add bim chain wholeStops beside faceOrigin along alongDir outward outwardDir at (bim exterior chain offset 2) to target)
+                free wholeStops
+                free openingStops
+        free storeySystems
+        return total
+
 # Chains between the grids ("stramienmaten"), as a structural plan of
 # columns and beams has them where no outer wall gives a facade to
 # dimension. Per family of parallel grids with more than one line, beyond
@@ -427,6 +529,7 @@ function add bim editor exterior dimensions in {a pointer to a bim editor record
     execute:
         begin bim transaction in (the address of (editor's documentValue))
         set made to add bim exterior dimensions on level editor's levelId to (the address of (editor's documentValue's current))
+        set made to made + (add bim system exterior dimensions on level editor's levelId to (the address of (editor's documentValue's current)))
         if made = 0:
             # Pressed again: the chains made before stand, none is doubled.
             if bim plans measure the walls of level editor's levelId in editor's documentValue's current:
