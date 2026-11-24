@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
-# Spaces derived from the walls around them. The footprint sides of every wall
+# Spaces derived from the walls around them, building systems that stand as
+# walls among them. The footprint sides of every wall
 # on a level are put into the kernel's 2D arrangement, which returns every
 # bounded region they enclose. A region whose interior lies inside a wall
 # footprint is wall; every other region is a space. A space is identified by
@@ -11,6 +12,8 @@
 import elements/planar/bim_evaluate.dl
 import kernel/planar/arrangement2.dl
 import kernel/planar/triangulate2.dl
+import architectural/stairs/bim_stair.dl
+import viewer/bim_scene.dl
 
 # `outline` runs counter-clockwise; `boundingWalls` is ascending.
 class:
@@ -102,6 +105,64 @@ function the bim void area on level {a 64 bit integer:levelId} inside {a pointer
                 free bim plate holes holeRings
         return voidTotal
 
+# The building systems that stand as walls on level `levelId` (a timber
+# frame wall, a curtain wall): each one's footprint, the box of its parts
+# and its layers' in plan along its line, appended to `systemRings`, and
+# the footprint's sides, tagged with the system's id, to `taggedLines`. A
+# system's layers go with it; a system standing in a wall's opening (a
+# window), one lying level or tilted and a curved one are left out.
+function append bim system walls of {bim model record:modelValue} on level {a 64 bit integer:levelId} to {a pointer to a list:systemRings} bounding {a pointer to a list:taggedLines}:
+    execute:
+        loop hostCursor from 0 to the length of (modelValue's curtains's values):
+            set hostValue to the item at hostCursor in (modelValue's curtains's values)
+            set wallRun to the cad distance from hostValue's start to hostValue's finish
+            set standsAsWall to ((hostValue's levelId = levelId) and (wallRun > 1e-9)) and ((the absolute value of hostValue's bulge) <= 1e-9)
+            if standsAsWall:
+                if (the bim setting (bim layer host setting) of hostValue's id in modelValue)'s found:
+                    set standsAsWall to false
+            if standsAsWall:
+                if (the bim system orientation of hostValue's id in modelValue) != bim vertical orientation:
+                    set standsAsWall to false
+            if standsAsWall:
+                if (the bim system hostValue hosted in its opening in modelValue)'s valid:
+                    set standsAsWall to false
+            if standsAsWall:
+                set runX to (hostValue's finish's x - hostValue's start's x) / wallRun
+                set runY to (hostValue's finish's y - hostValue's start's y) / wallRun
+                set lowAlong to 1e300
+                set highAlong to -1e300
+                set lowAcross to 1e300
+                set highAcross to -1e300
+                loop layerCursor from 0 to the length of (modelValue's curtains's values):
+                    set layerValue to the item at layerCursor in (modelValue's curtains's values)
+                    set belongs to layerValue's id = hostValue's id
+                    if belongs = false:
+                        set layerHost to the bim setting (bim layer host setting) of layerValue's id in modelValue
+                        set belongs to layerHost's found and (layerHost's value = hostValue's id)
+                    if belongs:
+                        set layerParts to the bim parts of curtain wall layerValue in modelValue with glazing detail false
+                        loop partCursor from 0 to the length of (layerParts's values):
+                            set layerPart to the item at partCursor in (layerParts's values)
+                            set partOutline to the bim plan outline of linear layerPart's element typed layerPart's kind in modelValue
+                            loop cornerCursor from 0 to the length of partOutline:
+                                set corner to the item at cornerCursor in partOutline
+                                set alongValue to ((corner's x - hostValue's start's x) * runX) + ((corner's y - hostValue's start's y) * runY)
+                                set acrossValue to ((corner's y - hostValue's start's y) * runX) - ((corner's x - hostValue's start's x) * runY)
+                                set lowAlong to the minimum of lowAlong and alongValue
+                                set highAlong to the maximum of highAlong and alongValue
+                                set lowAcross to the minimum of lowAcross and acrossValue
+                                set highAcross to the maximum of highAcross and acrossValue
+                if (highAlong > lowAlong) and (highAcross > lowAcross):
+                    set systemRing to an empty list of a cad vector2
+                    append (a cad vector2 with x ((hostValue's start's x + (runX * lowAlong)) - (runY * lowAcross)) and y ((hostValue's start's y + (runY * lowAlong)) + (runX * lowAcross))) to systemRing
+                    append (a cad vector2 with x ((hostValue's start's x + (runX * highAlong)) - (runY * lowAcross)) and y ((hostValue's start's y + (runY * highAlong)) + (runX * lowAcross))) to systemRing
+                    append (a cad vector2 with x ((hostValue's start's x + (runX * highAlong)) - (runY * highAcross)) and y ((hostValue's start's y + (runY * highAlong)) + (runX * highAcross))) to systemRing
+                    append (a cad vector2 with x ((hostValue's start's x + (runX * lowAlong)) - (runY * highAcross)) and y ((hostValue's start's y + (runY * lowAlong)) + (runX * highAcross))) to systemRing
+                    loop ringSide from 0 to 4:
+                        set sideLine to a cad line2 from (the item at ringSide in systemRing) to (the item at (the remainder of (ringSide + 1) divided by 4) in systemRing)
+                        append (a cad tagged line2 from sideLine with tag (hostValue's id as a 64 bit unsigned integer)) to taggedLines
+                    append systemRing to systemRings
+
 # The spaces of level `levelId`, in the arrangement's order. `index` must index
 # the walls of `modelValue`.
 function the bim spaces of {bim model record:modelValue} on level {a 64 bit integer:levelId} using {bim join index record:index}:
@@ -126,6 +187,9 @@ function the bim spaces of {bim model record:modelValue} on level {a 64 bit inte
                         set line to a cad line2 from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by sides) in ring)
                         append (a cad tagged line2 from line with tag (wallValue's id as a 64 bit unsigned integer)) to tagged
             append ring to rings
+        # Building systems that stand as walls bound rooms as walls do.
+        set systemRings to an empty list of the type of (an empty list of a cad vector2)
+        append bim system walls of modelValue on level levelId to systemRings bounding tagged
         # Room separation lines bound rooms too, as lines without thickness
         # (an open kitchen apart from the living room); they are not walls,
         # so they do not count among a room's bounding walls.
@@ -175,6 +239,9 @@ function the bim spaces of {bim model record:modelValue} on level {a 64 bit inte
                         if bim ring candidateRing encloses probe:
                             set inWall to true
                 free candidates
+                loop systemCursor from 0 to the length of systemRings:
+                    if bim ring (the item at systemCursor in systemRings) encloses probe:
+                        set inWall to true
                 if inWall = false:
                     sort and deduplicate bim ids (bounding's values)
                     # Less the voids in its floor: a stairwell is no floor.
@@ -184,6 +251,9 @@ function the bim spaces of {bim model record:modelValue} on level {a 64 bit inte
         loop cursor from 0 to the length of rings:
             free (the item at cursor in rings)
         free rings
+        loop cursor from 0 to the length of systemRings:
+            free (the item at cursor in systemRings)
+        free systemRings
         return result
 
 # ---------------------------------------------------------------- NEN 2580
@@ -232,6 +302,8 @@ function the bim area measures of {bim model record:modelValue} on level {a 64 b
                         set line to a cad line2 from (the item at side in ring) to (the item at (the remainder of (side + 1) divided by sides) in ring)
                         append (a cad tagged line2 from line with tag (wallValue's id as a 64 bit unsigned integer)) to tagged
             append ring to rings
+        set systemRings to an empty list of the type of (an empty list of a cad vector2)
+        append bim system walls of modelValue on level levelId to systemRings bounding tagged
         set regions to the cad bounded face edges of tagged within (a cad tolerance of the bim join tolerance)
         free tagged
         # Every face edge, with the face it belongs to.
@@ -254,6 +326,9 @@ function the bim area measures of {bim model record:modelValue} on level {a 64 b
                     if (the length of candidateRing) >= 4:
                         if bim ring candidateRing encloses probe:
                             set inWall to true
+                loop systemCursor from 0 to the length of systemRings:
+                    if bim ring (the item at systemCursor in systemRings) encloses probe:
+                        set inWall to true
                 set faceIndex to the length of faceAreas
                 append faceArea to faceAreas
                 append inWall to faceInWall
@@ -280,6 +355,27 @@ function the bim area measures of {bim model record:modelValue} on level {a 64 b
             set face to the item at cursor in edgeFaces
             if ((the item at cursor in across) < 0) and (the item at face in faceInWall):
                 replace item at index face in outerWall with true
+        # A wall face that meets no room and lies against an outer wall's
+        # face is of that outer wall too: the piece two footprints share
+        # where they overlap at a corner, as building systems' do.
+        set spreading to true
+        loop while spreading:
+            set spreading to false
+            loop faceCursor from 0 to the length of faceAreas:
+                if (the item at faceCursor in faceInWall) and ((the item at faceCursor in outerWall) = false):
+                    set meetsRoom to false
+                    set meetsOuter to false
+                    loop cursor from 0 to the length of edgeStarts:
+                        if (the item at cursor in edgeFaces) = faceCursor:
+                            set beyond to the item at cursor in across
+                            if beyond >= 0:
+                                if (the item at beyond in faceInWall) = false:
+                                    set meetsRoom to true
+                                if the item at beyond in outerWall:
+                                    set meetsOuter to true
+                    if meetsOuter and (meetsRoom = false):
+                        replace item at index faceCursor in outerWall with true
+                        set spreading to true
         set gross to 0.0
         set net to 0.0
         set outerWalls to 0.0
@@ -310,6 +406,9 @@ function the bim area measures of {bim model record:modelValue} on level {a 64 b
         loop cursor from 0 to the length of rings:
             free (the item at cursor in rings)
         free rings
+        loop cursor from 0 to the length of systemRings:
+            free (the item at cursor in systemRings)
+        free systemRings
         # The voids in the storey's floors are floor area in none of them.
         set noRing to an empty list of a cad vector2
         set voidArea to the bim void area on level levelId inside noRing in modelValue
