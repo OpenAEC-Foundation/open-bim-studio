@@ -18,6 +18,7 @@ import viewer/bim_canvas.dl
 import bim/bim_pens.dl
 import views/sheets/bim_sheet.dl
 import elements/connection/bim_connections.dl
+import ui/panels/bim_plan_panel.dl
 
 # Whether view `viewId` draws element `elementId` of category
 # `categoryCode` (-1: none known) under `viewRules`: its category shown,
@@ -284,6 +285,140 @@ function record bim elevation {bim view definition record:viewValue} of {bim edi
         set levelsShown's sectionViewId to viewValue's id
         draw bim levels in section of levelsShown spanning (run - (the bim elevation line margin)) until run between -1e300 and 1e300 through transform on canvas
 
+# One part of a building system as a section's plane cuts it: the cut's
+# outline in section coordinates (along the line from its start, height),
+# anticlockwise or clockwise, the part's material and its system.
+class:
+    patterns:
+        [a|] bim section cut face record
+    members:
+        elementId as a 64 bit integer
+        material as a string
+        points as the type of (a cad topology list of a cad vector2)
+
+# The closed outlines the stroke pairs `strokeSpots` (two spots a stroke)
+# make end to end, appended to `outlines` as lists of spots: from an
+# unused stroke on to the unused stroke that starts or ends where the last
+# one ended, until the first spot is met again. A chain that does not close
+# is left out. The cut of a mesh of several parts gives one outline a part.
+function append bim outlines of strokes {a pointer to a list:strokeSpots} to {a pointer to a list:outlines}:
+    execute:
+        set strokeCount to (the length of strokeSpots) / 2
+        set taken to an empty list of a boolean
+        loop strokeCursor from 0 to strokeCount:
+            append false to taken
+        loop strokeCursor from 0 to strokeCount:
+            if (the item at strokeCursor in taken) = false:
+                replace item at index strokeCursor in taken with true
+                set chain to a cad topology list of a cad vector2
+                set chainStart to the item at (strokeCursor * 2) in strokeSpots
+                set chainEnd to the item at ((strokeCursor * 2) + 1) in strokeSpots
+                append chainStart to (chain's values)
+                set closed to false
+                set growing to true
+                loop while growing:
+                    set growing to false
+                    if (the cad distance from chainEnd to chainStart) <= 0.000001:
+                        set closed to true
+                    else:
+                        append chainEnd to (chain's values)
+                        set nextCursor to 0
+                        loop while (nextCursor < strokeCount) and (growing = false):
+                            if (the item at nextCursor in taken) = false:
+                                set strokeFrom to the item at (nextCursor * 2) in strokeSpots
+                                set strokeTo to the item at ((nextCursor * 2) + 1) in strokeSpots
+                                if (the cad distance from strokeFrom to chainEnd) <= 0.000001:
+                                    replace item at index nextCursor in taken with true
+                                    set chainEnd to strokeTo
+                                    set growing to true
+                                else if (the cad distance from strokeTo to chainEnd) <= 0.000001:
+                                    replace item at index nextCursor in taken with true
+                                    set chainEnd to strokeFrom
+                                    set growing to true
+                            set nextCursor to nextCursor + 1
+                if closed and ((the length of (chain's values)) >= 3):
+                    append chain to outlines
+        free taken
+
+# What the plane of the section along the plan line from `lineStart` to
+# `lineFinish` cuts of the building systems' parts among the scene's meshes
+# `sceneMeshes` that view `viewId` projects under `viewRules`: a face for
+# each closed outline the plane cuts of a mesh, within the line's length.
+function the bim section cut faces of {bim editor record:editor} among {a pointer to a list:sceneMeshes} in view {a 64 bit integer:viewId} under {bim view rules record:viewRules} from {cad vector2:lineStart} to {cad vector2:lineFinish}:
+    execute:
+        set cutFaces to a cad topology list of a bim section cut face record
+        set modelValue to editor's documentValue's current
+        set lineRun to the cad distance from lineStart to lineFinish
+        if lineRun <= 1e-9:
+            return cutFaces
+        set lineX to (lineFinish's x - lineStart's x) / lineRun
+        set lineY to (lineFinish's y - lineStart's y) / lineRun
+        set crossings to an empty list of a cad vector2
+        loop meshCursor from 0 to the length of sceneMeshes:
+            set entry to the item at meshCursor in sceneMeshes
+            set takesPart to (bim scene mesh entry draws lines) = false
+            if takesPart:
+                set takesPart to (the bim curtain index of entry's elementId in modelValue)'s valid
+            if takesPart:
+                set takesPart to bim view viewId for editor projects entry's elementId in category entry's category under viewRules
+            if takesPart:
+                clear crossings
+                set corners to entry's shape's positions's values
+                set indices to entry's shape's triangles's values
+                set lowAlong to 1e300
+                set highAlong to -1e300
+                loop triangleCursor from 0 to ((the length of indices) / 3):
+                    loop sideCursor from 0 to 3:
+                        set nextSide to sideCursor + 1
+                        if nextSide = 3:
+                            set nextSide to 0
+                        set hereCorner to the item at (the item at ((triangleCursor * 3) + sideCursor) in indices) in corners
+                        set thereCorner to the item at (the item at ((triangleCursor * 3) + nextSide) in indices) in corners
+                        set hereDepth to ((hereCorner's y - lineStart's y) * lineX) - ((hereCorner's x - lineStart's x) * lineY)
+                        set thereDepth to ((thereCorner's y - lineStart's y) * lineX) - ((thereCorner's x - lineStart's x) * lineY)
+                        if ((hereDepth < 0.0) and (thereDepth >= 0.0)) or ((hereDepth >= 0.0) and (thereDepth < 0.0)):
+                            set fraction to hereDepth / (hereDepth - thereDepth)
+                            set crossX to hereCorner's x + ((thereCorner's x - hereCorner's x) * fraction)
+                            set crossY to hereCorner's y + ((thereCorner's y - hereCorner's y) * fraction)
+                            set alongValue to ((crossX - lineStart's x) * lineX) + ((crossY - lineStart's y) * lineY)
+                            set lowAlong to the minimum of lowAlong and alongValue
+                            set highAlong to the maximum of highAlong and alongValue
+                            # Two sides of a triangle the plane passes through
+                            # cross it: one stroke a triangle.
+                            append (a cad vector2 with x alongValue and y (hereCorner's z + ((thereCorner's z - hereCorner's z) * fraction))) to crossings
+                # A mesh the plane runs along (thousands of strokes) is left
+                # to its projected outline.
+                if (((the length of crossings) >= 6) and ((the length of crossings) <= 8000)) and ((highAlong >= 0.0) and (lowAlong <= lineRun)):
+                    set faceOutlines to an empty list of the type of (a cad topology list of a cad vector2)
+                    append bim outlines of strokes crossings to faceOutlines
+                    loop outlineCursor from 0 to the length of faceOutlines:
+                        set faceOutline to the item at outlineCursor in faceOutlines
+                        if (the absolute value of (the cad signed area of (faceOutline's values))) > 0.000001:
+                            append (@intrinsic("construct", a bim section cut face record, entry's elementId, entry's material, faceOutline)) to (cutFaces's values)
+                    free faceOutlines
+        free crossings
+        return cutFaces
+
+# The cut faces `cutFaces` of building systems' parts in section view
+# `viewId` on `canvas`: each hatched as its material (plain where the view
+# draws in black on white), its outline in the cut pen.
+function draw bim system cut faces {a pointer to a list:cutFaces} of view {a 64 bit integer:viewId} in {bim model record:modelValue} through {bim drawing transform record:transform} on {a pointer to a bim canvas record:canvas}:
+    execute:
+        if (the length of cutFaces) = 0:
+            return nothing
+        set plainCuts to ((the bim display of view viewId in modelValue) = bim hidden line display) or (bim view viewId draws technically on canvas in modelValue)
+        set cutEdges to an empty list of a cad vector2
+        loop faceCursor from 0 to the length of cutFaces:
+            set cutFace to the item at faceCursor in cutFaces
+            set faceRing to cutFace's points's values
+            set sides to the length of faceRing
+            draw bim hatch of faceRing in (the bim hatch band across faceRing of cutFace's material) through transform faint false plain plainCuts on canvas
+            loop corner from 0 to sides:
+                append (the bim pixel of (the item at corner in faceRing) through transform) to cutEdges
+                append (the bim pixel of (the item at (the remainder of (corner + 1) divided by sides) in faceRing) through transform) to cutEdges
+        record bim pen (bim cut pen) strokes cutEdges coloured 0, 0 and 0 wide 1.0 on canvas
+        free cutEdges
+
 # The projected edges of the section the editor shows, kept until the
 # model, the evaluation, the section's view or its line change: computed
 # again only then, not every frame.
@@ -298,11 +433,14 @@ class:
         lineFinish as a cad vector2
         meshCount as an integer
         edges as the type of (a cad topology list of a bim projected edge record)
+        # What the section's plane cuts of the building systems' parts
+        # (`the bim section cut faces of`).
+        faces as the type of (a cad topology list of a bim section cut face record)
 
 function a new bim section projection cache:
     execute:
         set nowhere to a cad vector2 with x 0.0 and y 0.0
-        return @intrinsic("construct", a bim section projection cache record, (-1) as a 64 bit integer, (-1) as a 64 bit integer, the bim refused id, nowhere, nowhere, -1, a cad topology list of a bim projected edge record)
+        return @intrinsic("construct", a bim section projection cache record, (-1) as a 64 bit integer, (-1) as a 64 bit integer, the bim refused id, nowhere, nowhere, -1, a cad topology list of a bim projected edge record, a cad topology list of a bim section cut face record)
 
 # Brings `cache` up to the section `editor` shows, among the scene's meshes
 # `sceneMeshes`; no edges when it shows none.
@@ -321,6 +459,7 @@ function refresh bim section projection in {a pointer to a bim section projectio
         set cache's lineStart to editor's sectionFirst
         set cache's lineFinish to editor's sectionSecond
         set cache's meshCount to the length of sceneMeshes
+        set cache's faces to a cad topology list of a bim section cut face record
         if editor's hasSection = false:
             set cache's edges to a cad topology list of a bim projected edge record
             return nothing
@@ -329,3 +468,4 @@ function refresh bim section projection in {a pointer to a bim section projectio
         if viewFound's valid:
             set viewDepth to (the item at viewFound's position in (editor's documentValue's current's views's values))'s depth
         set cache's edges to the bim projected edges of editor among sceneMeshes in view editor's sectionViewId under editor's sectionRules from editor's sectionFirst to editor's sectionSecond within viewDepth behind editor's section
+        set cache's faces to the bim section cut faces of editor among sceneMeshes in view editor's sectionViewId under editor's sectionRules from editor's sectionFirst to editor's sectionSecond
