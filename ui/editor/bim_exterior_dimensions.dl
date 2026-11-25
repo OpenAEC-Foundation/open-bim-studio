@@ -522,6 +522,93 @@ function add bim grid dimensions to {a pointer to a bim model record:target}:
         free gridHeadings
         return total
 
+# The grids lengthened where an end stands in the way of the exterior
+# chains of level `levelId`, as a draughtsman pulls the grid heads out past
+# the dimensions: an end that lies less than 26 mm on paper (the outermost
+# chain at 20 mm, its figures and the head's own radius) beyond the storey's
+# walls and wall-like building systems, at a drawing scale of 1 to
+# `denominator`, moves out to there along its line. An end well inside the
+# building stays. The chains between the grids, which stand beyond the
+# grids' ends, move out with them. The number of grids lengthened.
+function lengthen bim grids past the exterior chains of level {a 64 bit integer:levelId} drawn at 1 to {a 64 bit floating-point number:denominator} in {a pointer to a bim model record:target}:
+    execute:
+        set modelValue to @intrinsic("dereference", target)
+        set lowX to 1e300
+        set lowY to 1e300
+        set highX to -1e300
+        set highY to -1e300
+        loop cursor from 0 to the length of (modelValue's walls's values):
+            set wallValue to the item at cursor in (modelValue's walls's values)
+            if wallValue's levelId = levelId:
+                set lowX to the minimum of lowX and (the minimum of wallValue's start's x and wallValue's finish's x)
+                set lowY to the minimum of lowY and (the minimum of wallValue's start's y and wallValue's finish's y)
+                set highX to the maximum of highX and (the maximum of wallValue's start's x and wallValue's finish's x)
+                set highY to the maximum of highY and (the maximum of wallValue's start's y and wallValue's finish's y)
+        loop cursor from 0 to the length of (modelValue's curtains's values):
+            set systemValue to the item at cursor in (modelValue's curtains's values)
+            if systemValue's levelId = levelId:
+                if bim system systemValue stands as a wall in modelValue:
+                    set lowX to the minimum of lowX and (the minimum of systemValue's start's x and systemValue's finish's x)
+                    set lowY to the minimum of lowY and (the minimum of systemValue's start's y and systemValue's finish's y)
+                    set highX to the maximum of highX and (the maximum of systemValue's start's x and systemValue's finish's x)
+                    set highY to the maximum of highY and (the maximum of systemValue's start's y and systemValue's finish's y)
+        if highX < lowX:
+            return 0
+        set clearance to (26.0 * denominator) / 1000.0
+        set lengthened to 0
+        loop gridCursor from 0 to the length of (modelValue's grids's values):
+            set gridValue to the item at gridCursor in (target's grids's values)
+            set gridRun to the cad distance from gridValue's start to gridValue's finish
+            if gridRun > 1e-9:
+                set headingX to (gridValue's finish's x - gridValue's start's x) / gridRun
+                set headingY to (gridValue's finish's y - gridValue's start's y) / gridRun
+                set freshStart to gridValue's start
+                set freshFinish to gridValue's finish
+                set moved to false
+                loop endCursor from 0 to 2:
+                    set endSpot to gridValue's finish
+                    set wayX to headingX
+                    set wayY to headingY
+                    if endCursor = 0:
+                        set endSpot to gridValue's start
+                        set wayX to 0.0 - headingX
+                        set wayY to 0.0 - headingY
+                    # How far the end lies beyond the building that way.
+                    set furthest to the maximum of ((lowX * wayX) + (lowY * wayY)) and ((highX * wayX) + (lowY * wayY))
+                    set furthest to the maximum of furthest and (the maximum of ((lowX * wayX) + (highY * wayY)) and ((highX * wayX) + (highY * wayY)))
+                    set beyond to ((endSpot's x * wayX) + (endSpot's y * wayY)) - furthest
+                    if (beyond > -0.3) and (beyond < (clearance - 0.000001)):
+                        set pushed to a cad vector2 with x (endSpot's x + (wayX * (clearance - beyond))) and y (endSpot's y + (wayY * (clearance - beyond)))
+                        set moved to true
+                        if endCursor = 0:
+                            set freshStart to pushed
+                        else:
+                            set freshFinish to pushed
+                if moved:
+                    if move bim grid gridValue's id to freshStart and freshFinish in target:
+                        set lengthened to lengthened + 1
+        if lengthened = 0:
+            return 0
+        # The chains between the grids stand off the ends of their grids.
+        loop cursor from 0 to the length of (target's dimensions's values):
+            set kept to the item at cursor in (target's dimensions's values)
+            if ((kept's viewId = the bim refused id) and (kept's first's feature = bim grid line feature)) and (kept's paperOffset > 0.0):
+                set reach to -1e300
+                loop sideCursor from 0 to 2:
+                    set gridId to kept's first's elementId
+                    if sideCursor = 1:
+                        set gridId to kept's second's elementId
+                    set gridFound to the bim grid index of gridId in (@intrinsic("dereference", target))
+                    if gridFound's valid:
+                        set keptGrid to the item at gridFound's position in (target's grids's values)
+                        set reach to the maximum of reach and (the maximum of (the bim dot of keptGrid's start and kept's outward) and (the bim dot of keptGrid's finish and kept's outward))
+                if reach > -1e299:
+                    set shift to reach - (the bim dot of kept's place and kept's outward)
+                    if (the absolute value of shift) > 0.000001:
+                        replace item at index cursor in (target's dimensions's values) with (@intrinsic("construct", a bim dimension record, kept's id, kept's first, kept's second, kept's placed, (a cad vector2 with x (kept's place's x + (kept's outward's x * shift)) and y (kept's place's y + (kept's outward's y * shift))), kept's paperOffset, kept's outward, kept's viewId))
+                        note bim change of kept's id in target
+        return lengthened
+
 # 2461 (Annotate > Exterior dimensions): the chains of the active storey, as
 # one undo step. A storey without outer walls gets the chains between the
 # grids instead.
@@ -548,6 +635,13 @@ function add bim editor exterior dimensions in {a pointer to a bim editor record
             set editor's viewsDirty to true
             set editor's message to ((the string form of "Exterior dimensions: ") + (the string form of gridMade)) + (the string form of " dimensions in chains between the grids")
             return nothing
+        # Grid heads in the way of the chains move out past them.
+        set planScale to the bim scale of view editor's planViewId in editor's documentValue's current
+        if planScale <= 0.0:
+            set planScale to 100.0
+        set lengthened to lengthen bim grids past the exterior chains of level editor's levelId drawn at 1 to planScale in (the address of (editor's documentValue's current))
         commit bim transaction in (the address of (editor's documentValue))
         set editor's viewsDirty to true
         set editor's message to ((the string form of "Exterior dimensions: ") + (the string form of made)) + (the string form of " dimensions in chains along the outer walls")
+        if lengthened > 0:
+            set editor's message to ((editor's message + (the string form of ", ")) + (the string form of lengthened)) + (the string form of " grids lengthened past them")
