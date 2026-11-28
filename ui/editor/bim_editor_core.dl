@@ -29,6 +29,7 @@ import ui/editor/bim_grid_handles.dl
 import bim/bim_grid_height.dl
 import bim/bim_element_lock.dl
 import ui/editor/bim_join_handles.dl
+import ui/editor/bim_dimension_tools.dl
 
 function bim select tool:
     replacement:
@@ -2277,42 +2278,8 @@ function the bim feature name of {integer:featureKind}:
             return the string form of "masonry module line"
         return the string form of "opening edge"
 
-function start bim editor dimension tool in {a pointer to a bim editor record:editor}:
-    execute:
-        set editor's tool to bim dimension tool
-        set editor's moveStage to 0
-        set editor's message to the string form of "Dimension: click a wall face, a wall end, a masonry line or an opening edge"
-
-# A click of the dimension tool at `point`: the first feature, the second,
-# then where its line goes.
-function place bim editor dimension at {cad vector2:point} in {a pointer to a bim editor record:editor}:
-    execute:
-        if editor's moveStage < 2:
-            set picked to the bim reference at point in (@intrinsic("dereference", editor)) within (editor's pickTolerance * 2.0)
-            if picked's feature < 0:
-                set editor's message to the string form of "Dimension: no wall face, wall end or opening edge there"
-                return nothing
-            if editor's moveStage = 0:
-                set editor's dimensionFirst to picked
-                set editor's moveStage to 1
-                set editor's message to ((the string form of "Dimension from the ") + (the bim feature name of picked's feature)) + (the string form of ": click the second feature")
-                return nothing
-            set editor's dimensionSecond to picked
-            set editor's moveStage to 2
-            set editor's message to the string form of "Dimension: click where its line goes"
-            return nothing
-        begin bim transaction in (the address of (editor's documentValue))
-        set made to add bim dimension from editor's dimensionFirst to editor's dimensionSecond through point to (the address of (editor's documentValue's current))
-        set found to the bim dimension index of made in editor's documentValue's current
-        set measured to the bim measure of (the item at found's position in (editor's documentValue's current's dimensions's values)) in editor's documentValue's current
-        if measured's valid = false:
-            roll back bim transaction in (the address of (editor's documentValue))
-            set editor's moveStage to 0
-            set editor's message to the string form of "Dimension refused: those features are not parallel"
-            return nothing
-        commit bim transaction in (the address of (editor's documentValue))
-        set editor's moveStage to 0
-        set editor's message to (the string form of "Dimension ") + (the bim length measured's value in units editor's lengthUnit)
+# The dimension tools themselves (aligned, linear, chain), the selection
+# of a dimension and its handles are in `bim_dimension_tools.dl`.
 
 # ---------------------------------------------------------------- building services
 
@@ -4051,6 +4018,11 @@ function select bim editor element at {cad vector2:location} in {a pointer to a 
         if sectionId != the bim refused id:
             select bim editor section sectionId in editor
             return nothing
+        # A dimension's line or extension lines, drawn over the model too.
+        set dimensionId to the bim dimension near location in (@intrinsic("dereference", editor)) within editor's pickTolerance
+        if dimensionId != the bim refused id:
+            select bim editor bim dimension picked numbered dimensionId in editor
+            return nothing
         loop nodeCursor from 0 to the length of (editor's documentValue's current's connections's values):
             set nodeValue to the item at nodeCursor in (editor's documentValue's current's connections's values)
             if (nodeValue's levelId = editor's levelId) and ((bim editor hides (nodeValue's id) in plan of (@intrinsic("dereference", editor))) = false):
@@ -4743,6 +4715,8 @@ function the bim unmarked selection description of {bim editor record:editor}:
         set modelValue to editor's documentValue's current
         if editor's selectionKind = bim join picked:
             return the bim join description of editor
+        if editor's selectionKind = bim dimension picked:
+            return the bim dimension description of editor
         if editor's selectionKind = 30:
             set rebarFound to the bim reinforcement index of editor's selectionId in modelValue
             if rebarFound's valid:
@@ -5278,6 +5252,12 @@ function move bim editor pointer to {cad vector2:location} within {a 64 bit floa
             if editor's dragMoved or (((wholeX * wholeX) + (wholeY * wholeY)) >= ((editor's pickTolerance * 0.5) * (editor's pickTolerance * 0.5))):
                 apply bim editor move by (a cad vector2 with x wholeX and y wholeY) in editor
                 set editor's dragMoved to true
+            return nothing
+        if (editor's handleDrag >= 0) and (editor's selectionKind = bim dimension picked):
+            set stack to editor's documentValue's undoStack's values
+            if (the length of stack) > 0:
+                if drag bim editor dimension handle to target from (the item at ((the length of stack) - 1) in stack) in editor:
+                    set editor's dragMoved to true
             return nothing
         if editor's handleDrag >= 0:
             # A shape handle: that control point follows the pointer across
@@ -5952,7 +5932,7 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
         if editor's tool = bim solid tool:
             place bim editor solid at point in editor
             return nothing
-        if editor's tool = bim dimension tool:
+        if bim tool editor's tool places dimensions:
             place bim editor dimension at point in editor
             return nothing
         if editor's tool = bim tag tool:
@@ -6369,6 +6349,14 @@ function press bim editor pointer in {a pointer to a bim editor record:editor}:
                 set editor's dragMoved to false
                 select bim editor bim grid picked numbered editor's gridDragId in editor
                 return nothing
+        # A handle of the selected dimension: its line's middle drags the
+        # line, an end drags that end onto another feature.
+        set editor's handleDrag to the bim dimension handle near editor's pointerLocation in (@intrinsic("dereference", editor)) within editor's pickTolerance
+        if editor's handleDrag >= 0:
+            begin bim transaction in (the address of (editor's documentValue))
+            set editor's dragging to true
+            set editor's dragMoved to false
+            return nothing
         # A shape handle of the selected building system or linear element.
         set editor's handleDrag to -1
         if (editor's selectionKind = bim curtain picked) or (editor's selectionKind = bim linear picked):
@@ -6534,7 +6522,10 @@ function release bim editor pointer in {a pointer to a bim editor record:editor}
         set editor's dragging to false
         if editor's dragMoved:
             commit bim transaction in (the address of (editor's documentValue))
-            if editor's handleDrag >= 0:
+            if (editor's handleDrag >= 0) and (editor's selectionKind = bim dimension picked):
+                # The drag reported the dimension's line or its new value.
+                set editor's message to editor's message
+            else if editor's handleDrag >= 0:
                 set editor's message to the string form of "Shape changed"
             else if editor's handleDrag = bim whole drag:
                 set editor's message to the string form of "Moved"

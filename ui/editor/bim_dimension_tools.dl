@@ -1,0 +1,354 @@
+# SPDX-License-Identifier: MPL-2.0
+# The dimension tools of the plan, with the click flow of Open 2D Studio:
+# the first feature, the second, then a click that places the dimension
+# line on the pointer's side at the pointer's distance; the tool stays
+# active for the next dimension.
+#
+# - Aligned (DI, `bim dimension tool`): between two points it measures
+#   point to point, its line parallel to them.
+# - Linear (DL, `bim linear dimension tool`): between two points it
+#   measures horizontally when they lie further apart across the plan than
+#   up it, else vertically, as Open 2D Studio chooses.
+# - Chain (DH, `bim chain dimension tool`): after the first dimension every
+#   further click adds the next one from the last feature, on the same
+#   line; Enter ends the chain, Esc leaves the tool. Each is a dimension of
+#   its own and one undo step.
+#
+# A dimension here refers to semantic features (wall faces and ends,
+# masonry lines, opening edges), not to free points, so it stays
+# associative: what is picked is the feature under the pointer. Where a
+# face is one of the two, the measuring direction is the face's (square to
+# it) under every tool.
+#
+# A dimension is selected by a click on its line or an extension line
+# (`bim dimension picked`) and then shows three handles (`the bim dimension
+# handles of`): the middle of its line, which drags the line to another
+# offset, and its two ends, each of which drags that end onto another
+# feature. Delete removes it. A drag is one undo step.
+import views/drawings/bim_drawing.dl
+import ui/editor/bim_editor_core.dl
+
+# Places a linear dimension: horizontal or vertical between two points.
+function bim linear dimension tool:
+    replacement:
+        95
+# Places dimensions in a chain on one line.
+function bim chain dimension tool:
+    replacement:
+        96
+
+# The selection kind of a dimension (after the reinforcement's 30 and the
+# connection's 31).
+function bim dimension picked:
+    replacement:
+        32
+
+# The handles of a selected dimension, in the order of `the bim dimension
+# handles of`.
+function bim dimension line handle:
+    replacement:
+        0
+function bim dimension start handle:
+    replacement:
+        1
+function bim dimension finish handle:
+    replacement:
+        2
+
+# Whether tool `toolCode` places dimensions.
+function bim tool {integer:toolCode} places dimensions:
+    execute:
+        return ((toolCode = bim dimension tool) or (toolCode = bim linear dimension tool)) or (toolCode = bim chain dimension tool)
+
+function the bim dimension tool title of {integer:toolCode}:
+    execute:
+        if toolCode = bim linear dimension tool:
+            return the string form of "Linear dimension"
+        if toolCode = bim chain dimension tool:
+            return the string form of "Chain dimension"
+        return the string form of "Aligned dimension"
+
+function start bim editor dimension tool numbered {integer:toolCode} in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's tool to toolCode
+        set editor's moveStage to 0
+        set editor's message to (the bim dimension tool title of toolCode) + (the string form of ": Select first point")
+
+function start bim editor dimension tool in {a pointer to a bim editor record:editor}:
+    execute:
+        start bim editor dimension tool numbered (bim dimension tool) in editor
+
+# Enter in a dimension tool: ends the chain or the dimension begun; the
+# tool waits for a first feature again.
+function finish bim editor dimension in {a pointer to a bim editor record:editor}:
+    execute:
+        set editor's moveStage to 0
+        set editor's message to (the bim dimension tool title of editor's tool) + (the string form of ": Select first point")
+
+local function no bim editor dimension:
+    execute:
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        # No grid has the refused id: the reference resolves to nothing.
+        set unpicked to a bim reference to (the bim refused id) feature (bim grid line feature)
+        return @intrinsic("construct", a bim dimension record, the bim refused id, unpicked, unpicked, false, nowhere, 0.0, nowhere, the bim refused id)
+
+local function bim reference {bim reference record:one} equals {bim reference record:other}:
+    execute:
+        return (one's elementId = other's elementId) and (one's feature = other's feature)
+
+# The dimension a click at `spot` would place with the dimension tool as it
+# stands, without an id: with both features chosen, the dimension between
+# them through `spot`; in a chain, the next one from the chain's last
+# feature to the feature under `spot`, on the line of the last dimension.
+# Its first reference names the refused id when a click there places none
+# (no feature there, or the chain's last dimension is gone).
+function the bim editor dimension through {cad vector2:spot} in {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set nowhere to a cad vector2 with x 0.0 and y 0.0
+        set squareWay to nowhere
+        if editor's moveStage = 2:
+            if editor's tool = bim linear dimension tool:
+                set fromAnchor to the bim feature of editor's dimensionFirst in modelValue using editor's evaluation's index
+                set ontoAnchor to the bim feature of editor's dimensionSecond in modelValue using editor's evaluation's index
+                if (fromAnchor's valid and ontoAnchor's valid) and ((fromAnchor's isLine or ontoAnchor's isLine) = false):
+                    # Horizontal when the points lie further apart across
+                    # the plan than up it, else vertical.
+                    set squareWay to a cad vector2 with x 1.0 and y 0.0
+                    if (the absolute value of (ontoAnchor's origin's x - fromAnchor's origin's x)) > (the absolute value of (ontoAnchor's origin's y - fromAnchor's origin's y)):
+                        set squareWay to a cad vector2 with x 0.0 and y 1.0
+            return @intrinsic("construct", a bim dimension record, the bim refused id, editor's dimensionFirst, editor's dimensionSecond, true, spot, 0.0, squareWay, the bim refused id)
+        if editor's moveStage != 3:
+            return no bim editor dimension
+        set placedCount to the length of (modelValue's dimensions's values)
+        if placedCount = 0:
+            return no bim editor dimension
+        set previous to the item at (placedCount - 1) in (modelValue's dimensions's values)
+        if ((bim reference previous's second equals editor's dimensionFirst) = false) or (previous's paperOffset > 0.0):
+            return no bim editor dimension
+        set previousShape to the bim dimension line of previous in modelValue using editor's evaluation's index
+        if previousShape's valid = false:
+            return no bim editor dimension
+        set picked to the bim reference at spot in editor within (editor's pickTolerance * 2.0)
+        if (picked's feature < 0) or (bim reference picked equals editor's dimensionFirst):
+            return no bim editor dimension
+        # Between two points the next dimension measures along the chain's
+        # line, wherever the new point lies.
+        set fromAnchor to the bim feature of editor's dimensionFirst in modelValue using editor's evaluation's index
+        set ontoAnchor to the bim feature of picked in modelValue using editor's evaluation's index
+        set run to the cad distance from previousShape's start to previousShape's finish
+        if ((fromAnchor's valid and ontoAnchor's valid) and ((fromAnchor's isLine or ontoAnchor's isLine) = false)) and (run > 1e-9):
+            set squareWay to a cad vector2 with x (0.0 - ((previousShape's finish's y - previousShape's start's y) / run)) and y ((previousShape's finish's x - previousShape's start's x) / run)
+        return @intrinsic("construct", a bim dimension record, the bim refused id, editor's dimensionFirst, picked, true, previousShape's finish, 0.0, squareWay, the bim refused id)
+
+# A click of a dimension tool at `point`: the first feature, the second,
+# then where its line goes; in a chain every further click is the next
+# feature.
+function place bim editor dimension at {cad vector2:point} in {a pointer to a bim editor record:editor}:
+    execute:
+        set toolTitle to the bim dimension tool title of editor's tool
+        if editor's moveStage != 2:
+            set picked to the bim reference at point in (@intrinsic("dereference", editor)) within (editor's pickTolerance * 2.0)
+            if picked's feature < 0:
+                set editor's message to toolTitle + (the string form of ": no wall face, wall end or opening edge there")
+                return nothing
+            if editor's moveStage = 0:
+                set editor's dimensionFirst to picked
+                set editor's moveStage to 1
+                set editor's message to toolTitle + (the string form of ": Select second point")
+                return nothing
+            if bim reference picked equals editor's dimensionFirst:
+                return nothing
+            if editor's moveStage = 1:
+                set editor's dimensionSecond to picked
+                set editor's moveStage to 2
+                set editor's message to toolTitle + (the string form of ": Click to position dimension line")
+                return nothing
+        set wanted to the bim editor dimension through point in (@intrinsic("dereference", editor))
+        if wanted's first's elementId = the bim refused id:
+            # The chain's last dimension is gone (undone): the chain ends.
+            set editor's moveStage to 0
+            set editor's message to toolTitle + (the string form of ": Select first point")
+            return nothing
+        set target to the address of (editor's documentValue's current)
+        begin bim transaction in (the address of (editor's documentValue))
+        set made to the bim refused id
+        if bim linear measure applies to wanted:
+            set made to add bim dimension from wanted's first to wanted's second through wanted's place square to wanted's outward to target
+        else:
+            set made to add bim dimension from wanted's first to wanted's second through wanted's place to target
+        set found to the bim dimension index of made in editor's documentValue's current
+        set placedValue to the item at found's position in (editor's documentValue's current's dimensions's values)
+        set measured to the bim measure of placedValue in editor's documentValue's current
+        set shape to the bim dimension line of placedValue in editor's documentValue's current using (the bim join index of editor's documentValue's current)
+        if (measured's valid = false) or (shape's valid = false):
+            roll back bim transaction in (the address of (editor's documentValue))
+            if editor's moveStage = 2:
+                set editor's moveStage to 0
+            if measured's valid = false:
+                set editor's message to toolTitle + (the string form of " refused: those features are not parallel")
+            else:
+                set editor's message to toolTitle + (the string form of " refused: no distance to measure between those points")
+            return nothing
+        commit bim transaction in (the address of (editor's documentValue))
+        set told to (toolTitle + (the string form of " ")) + (the bim length measured's value in units editor's lengthUnit)
+        if editor's tool = bim chain dimension tool:
+            set editor's dimensionFirst to wanted's second
+            set editor's moveStage to 3
+            set editor's message to told + (the string form of ": Select next point (Enter ends the chain)")
+            return nothing
+        set editor's moveStage to 0
+        set editor's message to told + (the string form of ": Select first point")
+
+# ---------------------------------------------------------------- selection
+
+# Whether dimension `shownValue` belongs to the plan of level `levelId`:
+# what it measures from is a wall or a building system of that storey, an
+# opening in one, or a grid; a section's dimensions are its own.
+local function bim dimension {bim dimension record:shownValue} lies on level {a 64 bit integer:levelId} in {bim model record:modelValue}:
+    execute:
+        if shownValue's viewId != the bim refused id:
+            return false
+        if shownValue's first's feature = bim grid line feature:
+            return (the bim grid index of shownValue's first's elementId in modelValue)'s valid
+        set hostId to shownValue's first's elementId
+        set openingFound to the bim opening index of hostId in modelValue
+        if openingFound's valid:
+            set hostId to (the item at openingFound's position in (modelValue's openings's values))'s hostId
+        set wallFound to the bim wall index of hostId in modelValue
+        if wallFound's valid:
+            return (the item at wallFound's position in (modelValue's walls's values))'s levelId = levelId
+        set systemFound to the bim curtain index of hostId in modelValue
+        if systemFound's valid:
+            return (the item at systemFound's position in (modelValue's curtains's values))'s levelId = levelId
+        return false
+
+# Dimension `dimensionId` as the plan shown draws it (at its view's scale);
+# not valid when there is none or it no longer resolves.
+function the bim editor dimension line of {a 64 bit integer:dimensionId} in {bim editor record:editor}:
+    execute:
+        set modelValue to editor's documentValue's current
+        set found to the bim dimension index of dimensionId in modelValue
+        if found's valid = false:
+            set nowhere to a cad vector2 with x 0.0 and y 0.0
+            return @intrinsic("construct", a bim dimension line record, false, 0.0, nowhere, nowhere, nowhere, nowhere)
+        return the bim dimension line of (the item at found's position in (modelValue's dimensions's values)) in modelValue using (the bim join index of modelValue) at drawing scale (the bim scale of view editor's planViewId in modelValue)
+
+# The dimension of the active storey's plan whose line or extension lines
+# pass within `tolerance` of `location`, or the refused id; none while
+# dimensions are hidden in the plan.
+function the bim dimension near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        set best to the bim refused id
+        set bestGap to tolerance
+        set modelValue to editor's documentValue's current
+        if ((the length of (modelValue's dimensions's values)) = 0) or ((bim category bim dimension category is visible in editor's planRules) = false):
+            return best
+        set index to the bim join index of modelValue
+        set denominator to the bim scale of view editor's planViewId in modelValue
+        loop cursor from 0 to the length of (modelValue's dimensions's values):
+            set shownValue to the item at cursor in (modelValue's dimensions's values)
+            if (bim dimension shownValue lies on level editor's levelId in modelValue) and ((bim editor hides (shownValue's id) in plan of editor) = false):
+                set shape to the bim dimension line of shownValue in modelValue using index at drawing scale denominator
+                if shape's valid:
+                    set gap to the cad distance from location to the segment from shape's start to shape's finish
+                    set gap to the minimum of gap and (the cad distance from location to the segment from shape's startFoot to shape's start)
+                    set gap to the minimum of gap and (the cad distance from location to the segment from shape's finishFoot to shape's finish)
+                    if gap <= bestGap:
+                        set best to shownValue's id
+                        set bestGap to gap
+        return best
+
+# The handles of dimension `dimensionId` in the plan shown: the middle of
+# its line (`bim dimension line handle`), then the line's ends at its first
+# and second feature; none when it does not resolve.
+function the bim dimension handles of {a 64 bit integer:dimensionId} in {bim editor record:editor}:
+    execute:
+        set spots to a cad topology list of a cad vector2
+        set shape to the bim editor dimension line of dimensionId in editor
+        if shape's valid:
+            append (a cad vector2 with x ((shape's start's x + shape's finish's x) * 0.5) and y ((shape's start's y + shape's finish's y) * 0.5)) to (spots's values)
+            append shape's start to (spots's values)
+            append shape's finish to (spots's values)
+        return spots
+
+# The handle of the selected dimension within `tolerance` of `location`
+# (the line's middle before its ends), or -1.
+function the bim dimension handle near {cad vector2:location} in {bim editor record:editor} within {a 64 bit floating-point number:tolerance}:
+    execute:
+        if editor's selectionKind != bim dimension picked:
+            return -1
+        set spots to the bim dimension handles of editor's selectionId in editor
+        loop cursor from 0 to the length of (spots's values):
+            if (the cad distance from location to (the item at cursor in (spots's values))) <= tolerance:
+                return cursor
+        return -1
+
+function the bim dimension description of {bim editor record:editor}:
+    execute:
+        set shape to the bim editor dimension line of editor's selectionId in editor
+        if shape's valid = false:
+            return the string form of "Dimension"
+        return ((the string form of "Dimension ") + (the bim length shape's value in units editor's lengthUnit)) + (the string form of ": drag its line or an end; Delete removes it")
+
+# The handle being dragged (`handleDrag`) of the selected dimension follows
+# the pointer to `wanted`, from the dimension as it stood in `original`
+# when the drag began. The line's handle moves the line there: a dimension
+# kept a paper distance off its base gets the paper distance of `wanted`
+# beyond that base, any other passes through `wanted`. An end's handle
+# takes the feature under `wanted` as that end's reference, when the
+# dimension still measures something then. False when nothing changes.
+function drag bim editor dimension handle to {cad vector2:wanted} from {bim model record:original} in {a pointer to a bim editor record:editor}:
+    execute:
+        set target to the address of (editor's documentValue's current)
+        set before to the bim dimension index of editor's selectionId in original
+        set found to the bim dimension index of editor's selectionId in editor's documentValue's current
+        if (before's valid = false) or (found's valid = false):
+            return false
+        set kept to the item at before's position in (original's dimensions's values)
+        set fromEnd to kept's first
+        set ontoEnd to kept's second
+        set linePlace to kept's place
+        set paperGap to kept's paperOffset
+        set isPlaced to kept's placed
+        if editor's handleDrag = bim dimension line handle:
+            if kept's paperOffset > 0.0:
+                set denominator to the bim scale of view editor's planViewId in original
+                set paperGap to ((((wanted's x - kept's place's x) * kept's outward's x) + ((wanted's y - kept's place's y) * kept's outward's y)) * 1000.0) / denominator
+                # The line stays beyond its base, a millimetre at least.
+                if paperGap < 1.0:
+                    return false
+            else:
+                set linePlace to wanted
+                set isPlaced to true
+        else:
+            set picked to the bim reference at wanted in (@intrinsic("dereference", editor)) within (editor's pickTolerance * 2.0)
+            if picked's feature < 0:
+                return false
+            if editor's handleDrag = bim dimension start handle:
+                set fromEnd to picked
+            else:
+                set ontoEnd to picked
+        set changed to @intrinsic("construct", a bim dimension record, kept's id, fromEnd, ontoEnd, isPlaced, linePlace, paperGap, kept's outward, kept's viewId)
+        set shape to the bim dimension line of changed in original using (the bim join index of original)
+        if shape's valid = false:
+            return false
+        replace item at index found's position in (target's dimensions's values) with changed
+        note bim change of kept's id in target
+        if editor's handleDrag = bim dimension line handle:
+            set editor's message to the string form of "Dimension line moved"
+        else:
+            set editor's message to (the string form of "Dimension ") + (the bim length shape's value in units editor's lengthUnit)
+        return true
+
+# Delete on a selected dimension: it goes, as one undo step.
+function delete bim editor dimension in {a pointer to a bim editor record:editor}:
+    execute:
+        begin bim transaction in (the address of (editor's documentValue))
+        if delete bim dimension editor's selectionId from (the address of (editor's documentValue's current)):
+            commit bim transaction in (the address of (editor's documentValue))
+            set editor's message to the string form of "Deleted"
+        else:
+            roll back bim transaction in (the address of (editor's documentValue))
+        set editor's selectionKind to bim nothing picked
+        set editor's selectionId to the bim refused id
