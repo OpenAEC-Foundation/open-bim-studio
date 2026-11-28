@@ -27,6 +27,7 @@ import ui/editor/bim_pile_tip_tool.dl
 import ui/editor/bim_crop_sketch.dl
 import ui/editor/bim_grid_handles.dl
 import bim/bim_grid_height.dl
+import bim/bim_element_lock.dl
 import ui/editor/bim_join_handles.dl
 
 function bim select tool:
@@ -779,13 +780,19 @@ function the bim snap segments near {cad vector2:location} within {a 64 bit floa
         return result
 
 # The point drawing tracks from: the last point of the chain, rectangle,
-# grid, section line or move under way; `found` is false when there is none.
+# linear element, stair, railing, grid, section line or move under way; `found` is false when there is none.
 function the bim tracking origin of {bim editor record:editor}:
     execute:
         set none to @intrinsic("construct", a bim snap candidate record, editor's pointerLocation, the string form of "", 0, 0.0, false, 0)
-        if (editor's tool = bim wall tool) and editor's chainActive:
+        # A beam or any other lying linear element tracks from its first
+        # point as a wall does: Shift or F8 keeps it horizontal or vertical.
+        if ((editor's tool = bim wall tool) or (editor's tool = bim linear tool)) and editor's chainActive:
             return @intrinsic("construct", a bim snap candidate record, editor's chainStart, the string form of "", 0, 0.0, true, 0)
         set chain to editor's sketchChain's values
+        if (editor's tool = bim railing tool) and ((the length of chain) > 0):
+            return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true, 0)
+        if (editor's tool = bim stair tool) and (editor's moveStage = 1):
+            return @intrinsic("construct", a bim snap candidate record, editor's solidCorner, the string form of "", 0, 0.0, true, 0)
         if ((((editor's tool = bim line tool) or (editor's tool = bim rectangle tool)) or (editor's tool = bim split tool)) or (editor's tool = bim room separator tool)) and ((the length of chain) > 0):
             return @intrinsic("construct", a bim snap candidate record, the item at ((the length of chain) - 1) in chain, the string form of "", 0, 0.0, true, 0)
         if (editor's tool = bim curtain tool) and (editor's moveStage = 1):
@@ -4352,6 +4359,8 @@ function raise bim editor handle drag to {a 64 bit floating-point number:height}
         set stack to editor's documentValue's undoStack's values
         if (editor's handleDrag < 0) or ((the length of stack) = 0):
             return nothing
+        if bim editor selection is locked (@intrinsic("dereference", editor)):
+            return nothing
         set original to the item at ((the length of stack) - 1) in stack
         if editor's selectionKind = bim grid picked:
             set gridFound to the bim grid index of editor's selectionId in original
@@ -4662,7 +4671,15 @@ function the bim length {a 64 bit floating-point number:value} in units {integer
         return the substring of buffer from 0 spanning written bytes
 
 # A one-line description of the selection; empty when nothing (still) exists.
+# What is selected, in words; a locked selection says so.
 function the bim selection description of {bim editor record:editor}:
+    execute:
+        set described to the bim unmarked selection description of editor
+        if bim editor selection is locked editor:
+            return described + (the string form of " [locked, UP unlocks]")
+        return described
+
+function the bim unmarked selection description of {bim editor record:editor}:
     execute:
         set modelValue to editor's documentValue's current
         if editor's selectionKind = bim join picked:
@@ -5167,6 +5184,10 @@ function move bim editor pointer to {cad vector2:location} within {a 64 bit floa
             apply bim editor move by (a cad vector2 with x (editor's snap's point's x - editor's moveBase's x) and y (editor's snap's point's y - editor's moveBase's y)) in editor
             show bim editor preview in editor
         if editor's dragging = false:
+            return nothing
+        # A locked selection keeps its place: the drag moves nothing.
+        if bim editor selection is locked (@intrinsic("dereference", editor)):
+            set editor's message to the string form of "Locked: UP unlocks the selection"
             return nothing
         set target to editor's snap's point
         # A press that has not yet travelled half the pick tolerance from
@@ -6962,6 +6983,37 @@ function copy bim modify wall shape of {bim wall record:sourceWall} to {a 64 bit
             ignore hold bim wall freshId top at level sourceWall's topLevelId in target
         copy bim modify settings of sourceWall's id to freshId in target
 
+# Whether a member of the selection is locked (`bim element … is locked
+# in`): the selection then keeps its place.
+function bim editor selection is locked {bim editor record:editor}:
+    execute:
+        if editor's selectionKind = bim nothing picked:
+            return false
+        set ids to the bim selection members of editor
+        set fastened to false
+        loop cursor from 0 to the length of ids:
+            if bim element (the item at cursor in ids) is locked in editor's documentValue's current:
+                set fastened to true
+        free ids
+        return fastened
+
+# Locks the selection (PN), or with `fastened` false unlocks it (UP), as
+# one edit.
+function keep bim editor selection locked {boolean:fastened} in {a pointer to a bim editor record:editor}:
+    execute:
+        if editor's selectionKind = bim nothing picked:
+            set editor's message to the string form of "Lock: select an element first"
+            return nothing
+        set ids to the bim selection members of (@intrinsic("dereference", editor))
+        begin bim transaction in (the address of (editor's documentValue))
+        loop cursor from 0 to the length of ids:
+            keep bim element (the item at cursor in ids) locked fastened in (the address of (editor's documentValue's current))
+        commit bim transaction in (the address of (editor's documentValue))
+        set editor's message to the string form of "Unlocked (PN locks)"
+        if fastened:
+            set editor's message to the string form of "Locked: it keeps its place until UP unlocks it"
+        free ids
+
 function reposition bim editor selection by {bim transform record:change} in {a pointer to a bim editor record:editor}:
     execute:
         ignore place bim editor selection by change in editor
@@ -6970,6 +7022,9 @@ function place bim editor selection by {bim transform record:change} in {a point
     execute:
         if (change's kind = bim mirror transform kind) and (bim editor selection contains a component instance (@intrinsic("dereference", editor))):
             set editor's message to the string form of "Mirror refused: component instances cannot store reflected geometry"
+            return false
+        if bim editor selection is locked (@intrinsic("dereference", editor)):
+            set editor's message to the string form of "Locked: UP unlocks the selection"
             return false
         set stack to editor's documentValue's undoStack's values
         if (the length of stack) = 0:
@@ -7187,6 +7242,8 @@ function drag bim editor gizmo by {cad vector2:offset} lifting {a 64 bit floatin
 # building system) rises through them, as before.
 function lift bim editor selection by {a 64 bit floating-point number:rise} in {a pointer to a bim editor record:editor}:
     execute:
+        if bim editor selection is locked (@intrinsic("dereference", editor)):
+            return nothing
         set stack to editor's documentValue's undoStack's values
         if (the length of stack) = 0:
             return nothing
@@ -7441,6 +7498,9 @@ function tilt bim editor selection about {cad vector3:axis} through {cad vector3
 # through `pivot` (height absolute) from where it was when the drag began.
 function drag bim editor gizmo tilting {a 64 bit floating-point number:turnAngle} about {cad vector3:axis} through {cad vector3:pivot} in {a pointer to a bim editor record:editor}:
     execute:
+        if bim editor selection is locked (@intrinsic("dereference", editor)):
+            set editor's message to the string form of "Locked: UP unlocks the selection"
+            return nothing
         if tilt bim editor selection about axis through pivot by turnAngle in editor:
             set editor's message to (the string form of "Tilt ") + ((the string form of ((the floor of (((turnAngle * 180.0) / 3.141592653589793) + 0.5)) as an integer)) + (the string form of " deg"))
         else:
