@@ -9,7 +9,7 @@
       compiled in). With --check it only reports whether that file is current.
 
 A series file holds one series: its code (the order of the catalogue, and for
-the European steel series 1 to 13 the code `bim steel series setting` keeps
+the steel series 1 to 13 and 18 on the code `bim steel series setting` keeps
 on a type), its short name, title, standard, material, IFC profile kind,
 whether its profiles are columns too, whether a type made from one keeps
 the profile's name ("type_name": "catalogue") or takes the naming rules' name
