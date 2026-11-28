@@ -103,6 +103,20 @@ int64_t obs_platform_set_environment(const char *name, const char *value) {
 #endif
 }
 
+/* A size of the user interface kept for the running application (pixels;
+ * 0 while none is set): slot 0 the browser's width, slot 1 the properties
+ * panel's. A negative value reads the slot; another one is stored. */
+static int64_t obs_ui_sizes[8];
+int64_t obs_platform_ui_size(int64_t slot, int64_t value) {
+    if (slot < 0 || slot >= 8) {
+        return 0;
+    }
+    if (value >= 0) {
+        obs_ui_sizes[slot] = value;
+    }
+    return obs_ui_sizes[slot];
+}
+
 /* Seconds since 1970-01-01 UTC. */
 int64_t obs_platform_wall_seconds(void) {
 #ifdef _WIN32
